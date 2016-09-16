@@ -64,7 +64,7 @@ echo
 echo "Compiling..."
 ./makefne
 echo "done"
-echo "Generating input file 'testfile'..."
+echo "Generating input file 'testfile' (this will take some time)..."
 dd if=/dev/urandom of=testfile bs=10M count=20
 echo "done"
 echo
@@ -92,15 +92,15 @@ while [[ $cnt -lt $ITER ]]; do
    #sleep 1
 
    bsz=$RANDOM
-   let "bsz %= 1024"
+   let "bsz %= 1024 * bsz"
    offset=$RANDOM
    offset=$(( offset * bsz ))
-   let "offset %= 20470"
+   let "offset %= 20470000"
    bsz=$RANDOM
-   let "bsz %= 1024"
+   let "bsz %= 1024 * bsz"
    len=$RANDOM
    len=$(( len * bsz ))
-   bsz=$(( 20480 - offset ))
+   bsz=$(( 20480000 - offset ))
    let "len %= $bsz"
 
    bsz=$RANDOM
@@ -171,7 +171,7 @@ while [[ $cnt -lt $ITER ]]; do
 
    #sleep 1
    
-   echo "Generating a matching file usind dd..."
+   echo "Generating a matching file using dd..."
    #sleep 1
    dd if=testfile of=cmpout bs=1 count=$len skip=$offset
    echo "...done"
