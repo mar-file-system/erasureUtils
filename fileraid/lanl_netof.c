@@ -459,14 +459,14 @@ int main(int argc, char* argv[]) {
        
        endchunk = ((offset+length) - (startstripe*numchunks*chunksize*1024) ) / (chunksize*1024);
 
-       if ( endchunk > ntot ) {
-          endchunk = mtot;
+       if ( endchunk >= ntot ) {
+          endchunk = mtot - 1;
        }     
  
        /**** set seek positions for initial reading ****/
        if (startchunk > maxNerr  ||  endchunk < minNerr ) {  //if not reading from corrupted chunks, we can just set these normally
           fprintf(stderr,"startchunk = %d, endchunk = %d\n   This stipe does not contain any corrupted blocks...\n", startchunk, endchunk);
-          for ( counter = 0; counter < endchunk; counter++ ) {
+          for ( counter = 0; counter <= endchunk; counter++ ) {
              if (counter < startchunk) {
                 seekamt = (startstripe*chunksize*1024) + (chunksize*1024); 
              }
