@@ -1,0 +1,203 @@
+#!/bin/sh
+
+#Copyright (c) 2015, Los Alamos National Security, LLC
+#All rights reserved.
+#
+#Copyright 2015.  Los Alamos National Security, LLC. This software was produced
+#under U.S. Government contract DE-AC52-06NA25396 for Los Alamos National
+#Laboratory (LANL), which is operated by Los Alamos National Security, LLC for
+#the U.S. Department of Energy. The U.S. Government has rights to use, reproduce,
+#and distribute this software.  NEITHER THE GOVERNMENT NOR LOS ALAMOS NATIONAL
+#SECURITY, LLC MAKES ANY WARRANTY, EXPRESS OR IMPLIED, OR ASSUMES ANY LIABILITY
+#FOR THE USE OF THIS SOFTWARE.  If software is modified to produce derivative
+#works, such modified software should be clearly marked, so as not to confuse it
+#with the version available from LANL.
+# 
+#Additionally, redistribution and use in source and binary forms, with or without
+#modification, are permitted provided that the following conditions are met:
+#1. Redistributions of source code must retain the above copyright notice, this
+#list of conditions and the following disclaimer.
+#
+#2. Redistributions in binary form must reproduce the above copyright notice,
+#this list of conditions and the following disclaimer in the documentation
+#and/or other materials provided with the distribution.
+#3. Neither the name of Los Alamos National Security, LLC, Los Alamos National
+#Laboratory, LANL, the U.S. Government, nor the names of its contributors may be
+#used to endorse or promote products derived from this software without specific
+#prior written permission.
+#
+#THIS SOFTWARE IS PROVIDED BY LOS ALAMOS NATIONAL SECURITY, LLC AND CONTRIBUTORS
+#"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+#THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+#ARE DISCLAIMED. IN NO EVENT SHALL LOS ALAMOS NATIONAL SECURITY, LLC OR
+#CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+#OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+#SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+#INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+#STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+#OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+#-----
+#NOTE:
+#-----
+#Although these files reside in a seperate repository, they fall under the MarFS copyright and license.
+#
+#MarFS is released under the BSD license.
+#
+#MarFS was reviewed and released by LANL under Los Alamos Computer Code identifier:
+#LA-CC-15-039.
+#
+#These erasure utilites make use of the Intel Intelligent Storage Acceleration Library (Intel ISA-L), which can be found at https://github.com/01org/isa-l and is under its own license.
+#
+#MarFS uses libaws4c for Amazon S3 object communication. The original version
+#is at https://aws.amazon.com/code/Amazon-S3/2601 and under the LGPL license.
+#LANL added functionality to the original work. The original work plus
+#LANL contributions is found at https://github.com/jti-lanl/aws4c.
+#
+#GNU licenses can be found at http://www.gnu.org/licenses/.
+
+#clean up
+rm testin
+rm testout*
+rm testcmp*
+
+./makeem
+
+# create an odd shaped input file
+dd if=/dev/urandom of=testin bs=1 count=1717171
+echo
+
+# show that we can read from a pipe and create 10 + P 64k chunksize
+echo "FtoNQP just P : "
+./lanl_ftone testin testout 10 64 1
+# see what we created incuding the xattrs
+echo
+ls -l test*
+echo
+xattr -l testout.0
+xattr -l testout.2
+xattr -l testout.3
+xattr -l testout.4
+xattr -l testout.5
+xattr -l testout.6
+xattr -l testout.7
+xattr -l testout.8
+xattr -l testout.9
+xattr -l testout.e0
+echo
+
+# save a copy of e0 
+cp testout.e0 testcmp.e0
+echo "testout.e0 -> testcmp.e0"
+
+# remove e0 and e1 and run again to create 10+ e0 and e1 but this time directly from testin file
+rm testout*
+echo
+echo "Ftone build e0 and e1 : "
+./lanl_ftone testin testout 10 64 2
+# see we created 10 + e0 and e1
+echo
+ls -l test*
+echo
+#save a copy of e1 
+cp testout.e1 testcmp.e1
+echo "testout.e1 -> testcmp.e1"
+echo
+
+# compare the e0 created from the first run to the 2nd
+echo "cmp/diff : testout.e0 testcmp.e0"
+cmp testout.e0 testcmp.e0
+diff testout.e0 testcmp.e0
+echo
+
+# remove e0 and e1 
+#rm testout.e0
+#rm testout.e1
+
+#copy N = 3 file
+cp testout.3 testcmp.3
+echo "testout.3 -> testcmp.3"
+echo
+#remove N = 3 file
+rm testout.3
+# rebuild N=3 file from xor with e0 and the other N parts
+echo "Rebuild1N_from_e0 : "
+./lanl_rebuild1n_from_e0 testout 3
+# make sure we got a good N=3 file built
+echo
+echo "cmp/diff : testout.3 testcmp.3"
+cmp testout.3 testcmp.3
+diff testout.3 testcmp.3
+echo
+# see what we did
+ls -l test*
+echo
+echo "xattr testcmp.3 :"
+xattr -l testcmp.3
+echo "xattr testout.3 :"
+xattr -l testout.3
+echo
+
+rm testcmp
+rm testout.e0
+rm testout.e1
+
+# make a new P and Q and output file from the N parts
+echo "Ntofe : "
+./lanl_ntofe testout testcmp 2
+echo
+
+# see what we did
+echo
+ls -l test*
+echo
+
+# compare the first input file to this outputfile and P and Q from parts vs P and Q from file
+echo "cmp/diff : testin testcmp"
+cmp testin testcmp
+diff testin testcmp
+echo "cmp/diff : testcmp.e0 testout.e0"
+cmp testcmp.e0 testout.e0
+diff testcmp.e0 testout.e0
+echo "cmp/diff : testcmp.e1 testout.e1"
+cmp testcmp.e1 testout.e1
+diff testcmp.e1 testout.e1
+echo
+echo "xattr testout.e0 :"
+xattr -l testout.e0
+echo "xattr testcmp.e0 :"
+xattr -l testcmp.e0
+echo "xattr testout.e1 :"
+xattr -l testout.e1
+echo "xattr testcmp.e1 :"
+xattr -l testcmp.e1
+echo
+
+echo "remove data 2 and erasure 0"
+rm testcmp*
+mv testout.2 testcmp.2
+mv testout.e0 testcmp.e0
+echo "rebuildne data stripe 2 and erasure stripe 0"
+./lanl_rebuildne testout 0.0.1.0.0.0.0.0.0.0 1.0
+echo "did we create testout.e0 and testout.2"
+ls -l test*
+echo "xattr of testout.2 and testcmp.2"
+xattr -l testout.2
+xattr -l testcmp.2
+echo "xattr of testout.e0 and testcmp.e0"
+xattr -l testout.e0
+xattr -l testcmp.e0
+echo "compare testout.2 and testcmp.2"
+cmp testout.2 testcmp.2
+diff testout.2 testcmp.2
+echo "compare testout.e0and testcmp.e0"
+cmp testout.e0 testcmp.e0
+diff testout.e0 testcmp.e0
+
+
+exit
+
+echo “Health Check of testout p/q : “
+# run health check on testout parts p and q
+./lanl_npqhealth testout 10 64 1717171 2
+
