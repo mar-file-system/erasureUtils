@@ -256,10 +256,10 @@ int main(int argc, char* argv[]) {
         fprintf (stderr," filexattr %d , chunksize must be between 1 and %d (in k)\n",chunksize,MAXBUF); 
         return 1;
     }
-    if (missing > numchunks) {
+    /*if (missing > numchunks) {
         fprintf (stderr," missing %d , must be from 0 to numchunks %d\n",missing,numchunks); 
         return 1;
-    }
+    }*/
     if (erasure < 1) {
         fprintf (stderr," erasure %d , must be from 1 to 4\n",erasure); 
         return 1;
