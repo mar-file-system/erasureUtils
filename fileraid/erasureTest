@@ -56,7 +56,8 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-ITER=10 # Number of iterations to perform
+ITER=3 # Number of N+E file arrays to generate
+INITER=3 # Number of error patterns to test for each file array
 
 echo
 echo "Test of generalized erasure code : ftone and netof"
@@ -64,8 +65,8 @@ echo
 echo "Compiling..."
 ./makefne
 echo "done"
-echo "Generating input file 'testfile' (this will take some time)..."
-dd if=/dev/urandom of=testfile bs=10M count=20
+echo "Generating input file 'testfile.$$' (this will take some time)..."
+dd if=/dev/urandom of=testfile.$$ bs=10M count=20
 echo "done"
 echo
 
@@ -83,44 +84,82 @@ while [[ $cnt -lt $ITER ]]; do
    echo
    echo "FtoNE : Generating $n+$e striping with at block size of ""$bsz""K..."
    #sleep 1
-   ./lanl_ftone testfile testout $n $bsz $e > /dev/null 2>&1
+   ./lanl_ftone testfile.$$ testout.$$ $n $bsz $e > /dev/null 2>&1
    echo "...done"
    #sleep 1
    echo
-   ls testout*
+   ls testout.$$*
    echo
    #sleep 1
 
-   bsz=$RANDOM
-   let "bsz %= 1024 * bsz"
-   offset=$RANDOM
-   offset=$(( offset * bsz ))
-   let "offset %= 20470000"
-   bsz=$RANDOM
-   let "bsz %= 1024 * bsz"
-   len=$RANDOM
-   len=$(( len * bsz ))
-   bsz=$(( 20480000 - offset ))
-   let "len %= $bsz"
+   echo "Checking the health of the generated files..."
+   ./lanl_health testout.$$ $n $bsz 209715200 $e > /dev/null 2>&1
+   ret=$?
+   if [[ $ret -ne 0 ]]; then
+      echo -e "\033[0;31mFAIL - faulty health check returned $ret\033[0m"
+      echo "./lanl_health testout.$$ $n $bsz 209715200 $e"
+      ./lanl_health testout.$$ $n $bsz 209715200 $e
+      exit $?
+   fi
+   echo "...done.  Health check passed."
+   echo
 
-   bsz=$RANDOM
-   let "bsz %= $e"
-   bsz=$(( bsz + 1 ))
+   incnt=0
+   while [[ $incnt -lt $INITER ]]; do
+
+   if [[ $incnt -ne 0 ]]; then
+      echo "Continuing with the same $n+$e striping..."
+      echo
+   fi
+
+   tmp=$RANDOM
+   let "tmp %= 1024 * tmp"
+   offset=$RANDOM
+   offset=$(( offset * tmp ))
+   let "offset %= 20470000"
+   tmp=$RANDOM
+   let "tmp %= 1024 * tmp"
+   len=$RANDOM
+   len=$(( len * tmp ))
+   tmp=$(( 20480000 - offset ))
+   let "len %= $tmp"
+
+   nerr=$RANDOM
+   let "nerr %= $e"
+   nerr=$(( nerr + 1 ))
    npat=""
-   maxpos=$(( n + e - bsz ))
+   maxpos=$(( n + e - nerr ))
    oldpos=0
    errcnt=0
    errpos=-1
+
+   echo "$nerr error(s) are to be inserted..."
    
    {
 
-      while [[ $errcnt -lt $bsz ]]; do
+      while [[ $errcnt -lt $nerr ]]; do
          while [[ $errpos -lt $oldpos ]]; do
             errpos=$RANDOM
             let "errpos %= maxpos"
          done
 
-         echo "Placing error at $errpos"
+         echo "   placing error at $errpos""..."
+         if [[ $errpos -lt $n ]]; then
+            echo "   corrupting file testout.$$.$errpos"
+            dd if=/dev/urandom of=testout.$$.$errpos bs=1 count=1
+         else
+            echo "   corrupting file testout.$$.e$(( errpos - n ))"
+            dd if=/dev/urandom of=testout.$$.e$(( errpos - n )) bs=1 count=1
+         fi
+         ./lanl_health testout.$$ $n $bsz 209715200 $e > /dev/null 2>&1
+         ret=$?
+         if [[ $ret -eq 0 ]]; then
+            echo -e "\033[0;31mFAIL - health check failed to find corruption\033[0m"
+            echo "./lanl_health testout.$$ $n $bsz 209715200 $e"
+            ./lanl_health testout.$$ $n $bsz 209715200 $e
+            exit $?
+         fi
+         echo "   health check successfully indicated corruption"
 
          while [[ $oldpos -lt $errpos ]]; do
             if [[ $npat == "" ]]; then
@@ -135,8 +174,8 @@ while [[ $cnt -lt $ITER ]]; do
             npat="1"
          else
             npat="$npat"".1"
-         fi
-         echo "   Error placed"
+         fi #here
+         echo "   error insertion successful"
          oldpos=$(( oldpos + 1 ))
          
          errcnt=$(( errcnt + 1 ))
@@ -161,19 +200,42 @@ while [[ $cnt -lt $ITER ]]; do
       oldpos=$(( e * 2 ))
       npat=${npat::-$oldpos}
 
-      echo "Performing a read of $len from data/erasure files with offset = $offset with N error pattern $npat and E error pattern $epat..."
-      ./lanl_netof testout $npat $epat $offset $len outfile > /dev/null 2>&1
+      echo "...errors inserted."
+      echo
 
+      echo "Performing a read of $len from data/erasure files with offset = $offset with N error pattern $npat and E error pattern $epat..."
+      ./lanl_netof testout.$$ $npat $epat $offset $len outfile > /dev/null 2>&1
       echo "...done"
       echo
+
+      echo "Attempting error recovery..."
+      ./lanl_rebuildne testout.$$ $npat $epat > /dev/null 2>&1
+      if [[ $? -ne 0 ]]; then
+         echo -e "\033[0;31mFAIL - rebuild has failed\033[0m"
+         echo "./lanl_rebuildne testout.$$ $npat $epat"
+         ./lanl_rebuildne testout.$$ $npat $epat
+         exit $?
+      fi
+      echo "...done"
+      
    }
 
+   ./lanl_health testout.$$ $n $bsz 209715200 $e > /dev/null 2>&1
+   ret=$?
+   if [[ $ret -ne 0 ]]; then
+      echo -e "\033[0;31mFAIL - health check failed after rebuild\033[0m"
+      echo "./lanl_health testout.$$ $n $bsz 209715200 $e"
+      ./lanl_health testout.$$ $n $bsz 209715200 $e
+      exit $?
+   fi
+   echo "Health check confirms corruption absent"
+   echo
 
    #sleep 1
    
-   echo "Generating a matching file using dd..."
+   echo "Generating a matching file using dd (this may take awhile)..."
    #sleep 1
-   dd if=testfile of=cmpout bs=1 count=$len skip=$offset
+   dd if=testfile.$$ of=cmpout bs=1 count=$len skip=$offset
    echo "...done"
    echo
    echo "Performing comparison..."
@@ -181,23 +243,27 @@ while [[ $cnt -lt $ITER ]]; do
    cmp cmpout outfile
 
    if [[ ! $? -eq 0 ]]; then
-      echo -e "\033[0;31mFAIL\033[0m"
+      echo -e "\033[0;31mFAIL - output does not match expected data\033[0m"
       echo "Terminating premeturely..."
       exit 1
    else
-      echo -e "\033[0;32mPASS\033[0m"
+      echo -e "\033[0;32mPASS - output matches expected data\033[0m"
    fi
 
-   sleep 2
+   sleep 1
    
    echo "Cleaining up outputs..."
-   rm testout.*
    rm outfile cmpout
+
+   incnt=$(( incnt + 1 ))
+   done
+
+   echo "Cleaining up file array..."
+   rm testout.$$.*
 
    cnt=$(( cnt + 1 ))
 done
 
-#./lanl_ftone testfile testout 8 64 3
 echo "done"
 echo
 
@@ -206,4 +272,4 @@ echo
 
 echo "Cleaning up..."
 
-rm testfile lanl_netof lanl_ftone lanl_rebuildne
+rm testfile.$$ lanl_netof lanl_ftone lanl_rebuildne lanl_health
