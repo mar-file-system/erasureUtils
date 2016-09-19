@@ -60,7 +60,7 @@ ITER=3 # Number of N+E file arrays to generate
 INITER=3 # Number of error patterns to test for each file array
 
 echo
-echo "Test of generalized erasure code : ftone and netof"
+echo "Tests of generalized erasure code"
 echo
 echo "Compiling..."
 ./makefne
@@ -144,13 +144,15 @@ while [[ $cnt -lt $ITER ]]; do
          done
 
          echo "   placing error at $errpos""..."
-         if [[ $errpos -lt $n ]]; then
-            echo "   corrupting file testout.$$.$errpos"
-            dd if=/dev/urandom of=testout.$$.$errpos bs=1 count=1
-         else
-            echo "   corrupting file testout.$$.e$(( errpos - n ))"
-            dd if=/dev/urandom of=testout.$$.e$(( errpos - n )) bs=1 count=1
+
+         efile="testout.$$.$errpos"
+
+         if [[ ! $errpos -lt $n ]]; then
+            efile="testout.$$.e$(( errpos - n ))"
          fi
+         echo "   corrupting file $efile"
+         dd if=/dev/urandom of=$efile bs=1 count=1
+
          ./lanl_health testout.$$ $n $bsz 209715200 $e > /dev/null 2>&1
          ret=$?
          if [[ $ret -eq 0 ]]; then
@@ -160,6 +162,17 @@ while [[ $cnt -lt $ITER ]]; do
             exit $?
          fi
          echo "   health check successfully indicated corruption"
+
+         ./lanl_singleHealth $efile $n $bsz 209715200 $e > /dev/null 2>&1
+         ret=$?
+         if [[ $ret -eq 0 ]]; then
+            echo -e "\033[0;31mFAIL - single file health check failed to find corruption\033[0m"
+            echo "./lanl_singleHealth $efile $n $bsz 209715200 $e"
+            ./lanl_singleHealth $efile $n $bsz 209715200 $e
+            exit $?
+         fi
+         echo "   single file health successfully indicated corruption"
+
 
          while [[ $oldpos -lt $errpos ]]; do
             if [[ $npat == "" ]]; then
@@ -218,7 +231,6 @@ while [[ $cnt -lt $ITER ]]; do
       fi
       echo "...done"
       
-   }
 
    ./lanl_health testout.$$ $n $bsz 209715200 $e > /dev/null 2>&1
    ret=$?
@@ -247,8 +259,12 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Terminating premeturely..."
       exit 1
    else
-      echo -e "\033[0;32mPASS - output matches expected data\033[0m"
+      echo -e "\033[0;32mPASS - $n+$e with $bsz""K"
+      echo -e "     read of $len at $offset"
+      echo -e "     through error pattern $npat $epat\033[0m"
    fi
+
+   }
 
    sleep 1
    
@@ -264,12 +280,13 @@ while [[ $cnt -lt $ITER ]]; do
    cnt=$(( cnt + 1 ))
 done
 
-echo "done"
+echo "...done"
 echo
 
 
 
 
-echo "Cleaning up..."
+echo "Cleaning up remaining files..."
+rm testfile.$$ lanl_netof lanl_ftone lanl_rebuildne lanl_health lanl_singleHealth
+echo "...done"
 
-rm testfile.$$ lanl_netof lanl_ftone lanl_rebuildne lanl_health
