@@ -59,7 +59,7 @@
 #cc lanl_ftonpq.c -I. pq_gen_sse.o xor_gen_sse.o -o lanl_ftonpq
 cc lanl_ftone.c -I. -l isal -L ../usr/lib  -o lanl_ftone
 #cc lanl_ntofpq.c -I. pq_gen_sse.o xor_gen_sse.o -o lanl_ntofpq
-#cc lanl_ntofe.c -I. -l isal -L ../usr/lib -o lanl_ntofe
+cc lanl_ntofe.c -I. -l isal -L ../usr/lib -o lanl_ntofe
 #cc lanl_rebuild1n_from_p.c -I. pq_gen_sse.o xor_gen_sse.o -o lanl_rebuild1n_from_p
 #cc lanl_rebuild1n_from_e0.c -I. -l isal -L ../usr/lib -o lanl_rebuild1n_from_e0
 cc lanl_rebuildne.c -I. -l isal -L ../usr/lib -o lanl_rebuildne

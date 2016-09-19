@@ -111,28 +111,77 @@ int main(int argc, char* argv[]) {
    ssize_t ret_in, tret_in, ret_out;   /* Number of bytes returned by read() and write() */
    char xattrval[200];         /* used to format xattr value */
    long long totsize;         /* used to sum total size of the input file/stream */
+   char inchar[100];            /* in characters */
    void *buff;               /* general buf ptr */
    void *tbuff;              /* general buf ptr */
    unsigned char *buffs[MAXPARTS];     /* array of buffs for the parts and erasure */
    void *ebuf;               /* handy pointer for p buff */
-   int erasure;              /* num erasure stripes */
+   int inlen;                /* input len */
+   int in;                   /* general int */
+   int nerr;                 /* number of missing erasures */
    int numtot;               /* numchunks + numerasure stripes */
+   int etot;                    /* tot e */
    unsigned long csum;         /* long for summing */
    int loops;               /* general counter for loops */
    unsigned char *encode_matrix, *decode_matrix, *invert_matrix, *g_tbls;
    u32 crc;                 /* crc 32 */
+   unsigned char src_in_err[MAXPARTS];    /* stripe error map */
+   unsigned char src_err_list[MAXPARTS];  /* stripe error list */
  
    /* print usage */
-   if(argc != 4){
-      printf ("Usage: %s inputfilespref outputfile numerasures\n",argv[0]); 
+   if( argc > 4  ||  argc < 3 ){
+      printf ("Usage: %s inputfilespref outputfile epattern(i.e. 0.1.0)\n",argv[0]); 
       return 1;
    }
-   /* get numchunks from input */
-   erasure = atoi (argv[3]);
-   if (erasure < 0 || erasure > 4 ) {
-      printf (" you entered %d , erasure must be between 0 and 4\n",erasure); 
+
+//start cp
+   if ( argc == 3 ) {
+      inlen = 0;
+   }
+   else {
+      inlen = strlen(argv[3]);
+   }
+   nerr = 0;
+   etot = 0;
+   counter = 0;
+   //fprintf(stderr,"processing starting erasure input etot %d inlen %d arg %s\n”,etot,inlen,argv[3]);
+
+   //parse through epattern
+   while (counter < inlen) {
+      bzero(inchar,sizeof(inchar));
+      strncpy(inchar, argv[3]+counter,1); 
+      in = atoi(inchar);
+      if (in < 0) {
+          fprintf(stderr,"epattern character must be 0 or 1 %d\n",in);
+          exit(-1);
+      }
+      if (in > 1) {
+         fprintf(stderr,"epattern character must be 0 or 1 %d\n",in);
+         exit(-1);
+      }
+      if (in == 1) {
+         src_in_err[etot] = 1;
+         src_err_list[nerr] = etot;
+         nerr++; 
+      }
+      //fprintf(stderr,"processing erasure input counter %d etot %d\n",counter,etot);
+      etot++;
+      counter++;
+      counter++;
+   }
+   fprintf(stderr,"nerr %d etot %d\n",nerr, etot);
+   fprintf(stderr,"src_in_err:\n");
+   dump(src_in_err,MAXPARTS);
+   fprintf(stderr,"src_err_list:\n");
+   dump(src_err_list,MAXPARTS);
+//end cp
+
+   if (etot < 0 || etot > 4 ) {
+      printf (" you entered %s , but the number of erasure files must be between 0 and 4\n",argv[3]); 
       return 1;
    }
+
+   exit(0);
    
    /* Create output file descriptor. if stdin set that up*/
    if (!strncmp(argv[2],"-",1)) {
@@ -170,7 +219,7 @@ int main(int argc, char* argv[]) {
    counter = 0;
    printf("opening files");
    fflush(stdout);
-   while (counter < numchunks+erasure) {
+   while (counter < numchunks+etot) {
       sum[counter] = 0;
       nsz[counter] = 0;
       ncompsz[counter] = 0;
@@ -199,7 +248,7 @@ int main(int argc, char* argv[]) {
    }
    printf("\n");
 
-   numtot=numchunks+erasure;
+   numtot=numchunks+etot;
 
 
    /* loop until the file input ends */
@@ -236,7 +285,7 @@ int main(int argc, char* argv[]) {
          counter++;
       }
 
-      /* calculate and write p and q */
+      /* calculate and write erasure */
       //printf("\n");
       printf("calc erasure\n");
       // Generate encode matrix encode_matrix
@@ -254,18 +303,21 @@ int main(int argc, char* argv[]) {
 
       ecounter = 0;
       printf("counter = %d, ret_in = %zd, numchunks = %d\n",counter,ret_in,numchunks);
-      while (ecounter < erasure) {
+      while (ecounter < etot) {
          crc = crc32_ieee(TEST_SEED, buffs[counter+ecounter], chunksize*1024); 
          sum[counter+ecounter] = sum[counter+ecounter] + crc; 
          nsz[counter+ecounter]=nsz[counter+ecounter]+chunksize*1024;
          ncompsz[counter+ecounter]=ncompsz[counter+ecounter]+chunksize*1024;
-         write(output_fd[1+ecounter],buffs[counter+ecounter],chunksize*1024); 
-         /* testing
+         if (src_in_err[ecounter] == 1) {
+            fprintf(stderr, "Outputting to file %s.e%d...", argv[1], ecounter);
+            write(output_fd[1+ecounter],buffs[counter+ecounter],chunksize*1024); 
+         }
+         
          int ret = xor_check(counter+1,chunksize*1024,buffs);
          if (ret != 0) {
             fprintf(stderr, "P does not match xor for iteration %d\n",loops);
          }
-         testing */
+
          ecounter++;
       } 
       loops++;
@@ -275,9 +327,9 @@ int main(int argc, char* argv[]) {
    if (strncmp(argv[2],"-",1)) close(output_fd[0]);
    counter = 0;
    while (counter < numtot) {
-      if ( counter >= numchunks ) { //set xattrs for erasure files
+      if ( counter >= numchunks  &&  src_in_err[counter-numchunks] == 1 ) { //set xattrs for erasure files
          bzero(xattrval,sizeof(xattrval));
-         sprintf(xattrval,"%d %d %d %d %d %lu %lld",numchunks,erasure,chunksize,nsz[counter],ncompsz[counter],sum[counter],totsize);
+         sprintf(xattrval,"%d %d %d %d %d %lu %lld",numchunks,etot,chunksize,nsz[counter],ncompsz[counter],sum[counter],totsize);
          fsetxattr(output_fd[1+counter-numchunks],XATTRKEY, xattrval,strlen(xattrval),0);
          close(output_fd[1+counter-numchunks]);
       }
@@ -299,7 +351,7 @@ int main(int argc, char* argv[]) {
    }
    free(buff);
    counter = 0;
-   while (counter < erasure) {
+   while (counter < etot) {
      free(buffs[counter+numchunks]);
      counter++;
    }

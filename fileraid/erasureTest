@@ -287,6 +287,6 @@ echo
 
 
 echo "Cleaning up remaining files..."
-rm testfile.$$ lanl_netof lanl_ftone lanl_rebuildne lanl_health lanl_singleHealth
+rm testfile.$$ lanl_netof lanl_ftone lanl_rebuildne lanl_health lanl_singleHealth lanl_ntofe
 echo "...done"
 
