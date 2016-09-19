@@ -65,3 +65,4 @@ cc lanl_ftone.c -I. -l isal -L ../usr/lib  -o lanl_ftone
 cc lanl_rebuildne.c -I. -l isal -L ../usr/lib -o lanl_rebuildne
 cc lanl_netof.c -I. -l isal -L ../usr/lib -o lanl_netof
 cc lanl_health.c -I. -l isal -L /usr/lib -o lanl_health
+cc lanl_singleHealth.c -I. -l isal -L /usr/lib -o lanl_singleHealth
