@@ -56,7 +56,7 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-ITER=3 # Number of N+E file arrays to generate
+ITER=5 # Number of N+E file arrays to generate
 INITER=3 # Number of error patterns to test for each file array
 
 echo
@@ -222,47 +222,67 @@ while [[ $cnt -lt $ITER ]]; do
       echo
 
       echo "Attempting error recovery..."
-      ./lanl_rebuildne testout.$$ $npat $epat > /dev/null 2>&1
-      if [[ $? -ne 0 ]]; then
-         echo -e "\033[0;31mFAIL - rebuild has failed\033[0m"
-         echo "./lanl_rebuildne testout.$$ $npat $epat"
-         ./lanl_rebuildne testout.$$ $npat $epat
-         exit $?
+      if [[ $npat == *"1"* ]]; then
+         echo "   errors exist within N, using \"rebuildne\"..."
+         ./lanl_rebuildne testout.$$ $npat $epat > /dev/null 2>&1
+         if [[ $? -ne 0 ]]; then
+            echo -e "\033[0;31mFAIL - rebuild (rebuildne) has failed\033[0m"
+            echo "Rerunning - ./lanl_rebuildne testout.$$ $npat $epat"
+            ./lanl_rebuildne testout.$$ $npat $epat
+            exit $?
+         fi
+      else
+         echo "   no errors exist within N, using \"ntofe\"..."
+         ./lanl_ntofe testout.$$ cmpfile.$$ $epat > /dev/null 2>&1
+         if [[ $? -ne 0 ]]; then
+            echo -e "\033[0;31mFAIL - rebuild (ntofe) has failed\033[0m"
+            echo "Rerunning - ./lanl_ntofe testout.$$ cmpfile.$$ $epat"
+            ./lanl_ntofe testout.$$ cmpfile.$$ $epat
+            exit $?
+         fi
+         cmp testfile.$$ cmpfile.$$
+         ret=$?
+         if [[ $ret -ne 0 ]]; then
+            echo -e "\033[0;31mFAIL - output file of \"ntofe\" does not match original file\033[0m"
+            exit $ret
+         fi
+         echo "   outfile matches orignal input"
+         rm cmpfile.$$
       fi
+         
       echo "...done"
       
 
-   ./lanl_health testout.$$ $n $bsz 209715200 $e > /dev/null 2>&1
-   ret=$?
-   if [[ $ret -ne 0 ]]; then
-      echo -e "\033[0;31mFAIL - health check failed after rebuild\033[0m"
-      echo "./lanl_health testout.$$ $n $bsz 209715200 $e"
-      ./lanl_health testout.$$ $n $bsz 209715200 $e
-      exit $?
-   fi
-   echo "Health check confirms corruption absent"
-   echo
+      ./lanl_health testout.$$ $n $bsz 209715200 $e > /dev/null 2>&1
+      if [[ $? -ne 0 ]]; then
+         echo -e "\033[0;31mFAIL - health check failed after rebuild\033[0m"
+         echo "./lanl_health testout.$$ $n $bsz 209715200 $e"
+         ./lanl_health testout.$$ $n $bsz 209715200 $e
+         exit $?
+      fi
+      echo "Health check confirms corruption absent"
+      echo
 
-   #sleep 1
-   
-   echo "Generating a matching file using dd (this may take awhile)..."
-   #sleep 1
-   dd if=testfile.$$ of=cmpout bs=1 count=$len skip=$offset
-   echo "...done"
-   echo
-   echo "Performing comparison..."
-   #sleep 1
-   cmp cmpout outfile
+      #sleep 1
+      
+      echo "Generating a matching file using dd (this may take awhile)..."
+      #sleep 1
+      dd if=testfile.$$ of=cmpout bs=1 count=$len skip=$offset
+      echo "...done"
+      echo
+      echo "Performing comparison..."
+      #sleep 1
+      cmp cmpout outfile
 
-   if [[ ! $? -eq 0 ]]; then
-      echo -e "\033[0;31mFAIL - output does not match expected data\033[0m"
-      echo "Terminating premeturely..."
-      exit 1
-   else
-      echo -e "\033[0;32mPASS - $n+$e with $bsz""K"
-      echo -e "     read of $len at $offset"
-      echo -e "     through error pattern $npat $epat\033[0m"
-   fi
+      if [[ ! $? -eq 0 ]]; then
+         echo -e "\033[0;31mFAIL - output does not match expected data\033[0m"
+         echo "Terminating premeturely..."
+         exit 1
+      else
+         echo -e "\033[0;32mPASS - $n+$e with $bsz""K"
+         echo -e "     read of $len at $offset"
+         echo -e "     through error pattern $npat $epat\033[0m"
+      fi
 
    }
 
