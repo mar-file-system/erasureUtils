@@ -181,8 +181,6 @@ int main(int argc, char* argv[]) {
       return 1;
    }
 
-   exit(0);
-   
    /* Create output file descriptor. if stdin set that up*/
    if (!strncmp(argv[2],"-",1)) {
       output_fd[0] = STDOUT_FILENO;
@@ -219,7 +217,7 @@ int main(int argc, char* argv[]) {
    counter = 0;
    printf("opening files");
    fflush(stdout);
-   while (counter < numchunks+etot) {
+   while ( counter < numchunks+etot ) {
       sum[counter] = 0;
       nsz[counter] = 0;
       ncompsz[counter] = 0;
@@ -237,11 +235,13 @@ int main(int argc, char* argv[]) {
          sprintf(infile,"%s.e%d",argv[1],counter-numchunks);
          posix_memalign(&ebuf,32,chunksize*1024);
          buffs[counter]=ebuf;
-         output_fd[1+counter-numchunks] = open(infile, O_WRONLY | O_CREAT, 0644);
-         if (output_fd[1+counter-numchunks] == -1) {
-            perror("Failed to open e output file");
-            exit(-9);
-         } 
+         if ( src_in_err[counter-numchunks] == 1 ) {
+            output_fd[1+counter-numchunks] = open(infile, O_WRONLY | O_CREAT, 0644);
+            if (output_fd[1+counter-numchunks] == -1) {
+               perror("Failed to open e output file");
+               exit(-9);
+            }
+         }
       }
       printf(" %s ",infile);
       counter++;
@@ -296,7 +296,7 @@ int main(int argc, char* argv[]) {
       // Generate g_tbls from encode matrix encode_matrix
       ec_init_tables(numchunks, numtot - numchunks, &encode_matrix[numchunks * numchunks], g_tbls);
 
-      printf("erasure_code_test: caculating %d recovery stripes from %d data stripes\n",numtot-numchunks,numchunks);
+      printf("erasure_code_test: calculating %d recovery stripes from %d data stripes, and writing %d erasure stripes out\n",numtot-numchunks,numchunks,nerr);
       // Perform matrix dot_prod for EC encoding
       // using g_tbls from encode matrix encode_matrix
       ec_encode_data(chunksize*1024, numchunks, numtot - numchunks, g_tbls, buffs, &buffs[numchunks]);
@@ -333,7 +333,7 @@ int main(int argc, char* argv[]) {
          fsetxattr(output_fd[1+counter-numchunks],XATTRKEY, xattrval,strlen(xattrval),0);
          close(output_fd[1+counter-numchunks]);
       }
-      else {  //verify crc and then close input files
+      else if (counter < numchunks){  //verify crc and then close input files
          sprintf(infile,"%s.%d",argv[1],counter);
          bzero(xattrval,sizeof(xattrval));
          ret_in = getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval));
