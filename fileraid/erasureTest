@@ -56,8 +56,9 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-ITER=5 # Number of N+E file arrays to generate
+ITER=3 # Number of N+E file arrays to generate
 INITER=3 # Number of error patterns to test for each file array
+POSTSLEEP=2 # Number of seconds the program should sleep after a test
 
 echo
 echo "Tests of generalized erasure code"
@@ -221,6 +222,28 @@ while [[ $cnt -lt $ITER ]]; do
       echo "...done"
       echo
 
+      #sleep 1
+      
+      echo "Generating a matching file using dd (this may take awhile)..."
+      #sleep 1
+      dd if=testfile.$$ of=cmpout bs=1 count=$len skip=$offset
+      echo "...done"
+      echo
+      echo "Performing comparison..."
+      #sleep 1
+      cmp cmpout outfile
+
+      if [[ ! $? -eq 0 ]]; then
+         echo -e "\033[0;31mFAIL - output does not match expected data\033[0m"
+         echo "Terminating premeturely..."
+         exit 1
+      fi
+      echo "Comparison passed"
+   
+      echo "Cleaining up outputs..."
+      rm outfile cmpout
+      echo
+
       echo "Attempting error recovery..."
       if [[ $npat == *"1"* ]]; then
          echo "   errors exist within N, using \"rebuildne\"..."
@@ -247,12 +270,12 @@ while [[ $cnt -lt $ITER ]]; do
             exit $ret
          fi
          echo "   outfile matches orignal input"
+         echo "   deleting outfile"
          rm cmpfile.$$
       fi
          
       echo "...done"
       
-
       ./lanl_health testout.$$ $n $bsz 209715200 $e > /dev/null 2>&1
       if [[ $? -ne 0 ]]; then
          echo -e "\033[0;31mFAIL - health check failed after rebuild\033[0m"
@@ -263,33 +286,14 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Health check confirms corruption absent"
       echo
 
-      #sleep 1
-      
-      echo "Generating a matching file using dd (this may take awhile)..."
-      #sleep 1
-      dd if=testfile.$$ of=cmpout bs=1 count=$len skip=$offset
-      echo "...done"
-      echo
-      echo "Performing comparison..."
-      #sleep 1
-      cmp cmpout outfile
-
-      if [[ ! $? -eq 0 ]]; then
-         echo -e "\033[0;31mFAIL - output does not match expected data\033[0m"
-         echo "Terminating premeturely..."
-         exit 1
-      else
-         echo -e "\033[0;32mPASS - $n+$e with $bsz""K"
-         echo -e "     read of $len at $offset"
-         echo -e "     through error pattern $npat $epat\033[0m"
-      fi
+      #All tests passed for this iteration
+      echo -e "\033[0;32mPASS - $n+$e with bsize $bsz""K"
+      echo -e "     read of $len at $offset"
+      echo -e "     and error pattern   N( $npat )  E( $epat )\033[0m"
 
    }
 
-   sleep 1
-   
-   echo "Cleaining up outputs..."
-   rm outfile cmpout
+   sleep $POSTSLEEP
 
    incnt=$(( incnt + 1 ))
    done
