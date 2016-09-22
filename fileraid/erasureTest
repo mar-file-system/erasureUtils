@@ -56,8 +56,8 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-ITER=20 # Number of N+E file arrays to generate
-INITER=10 # Number of error patterns to test for each file array
+ITER=5 # Number of N+E file arrays to generate
+INITER=5 # Number of error patterns to test for each file array
 POSTSLEEP=0 # Number of seconds the program should sleep after a test
 LOGFILE=log_errTests.$$ # Name of the test logfile
 
@@ -239,29 +239,29 @@ while [[ $cnt -lt $ITER ]]; do
 
       echo "Performing a read of $len from data/erasure files with offset = $offset with N error pattern $npat and E error pattern $epat..."
       echo "Performing read of $len with offset $offset""..." >> $LOGFILE
-      ./lanl_netof testout.$$ $npat $epat $offset $len outfile > /dev/null 2>&1
-      echo "...done"
-      echo "...done" >> $LOGFILE
+      ./lanl_netof testout.$$ $npat $epat $offset $len outfile.$$ > /dev/null 2>&1
+      echo "...done.  Output file is \"outfile.$$\""
+      echo "...done.  Output file is \"outfile.$$\"" >> $LOGFILE
       echo
 
       #sleep 1
       
-      echo "Generating a matching file using dd (this may take awhile)..."
+      echo "Generating a matching file \"cmpout.$$\" using dd (this may take awhile)..."
       echo "Generating matching file using dd..." >> $LOGFILE
       #sleep 1
-      dd if=testfile.$$ of=cmpout bs=1 count=$len skip=$offset
+      dd if=testfile.$$ of=cmpout.$$ bs=1 count=$len skip=$offset
       echo "...done"
       echo "...done" >> $LOGFILE
       echo
       echo "Performing comparison..."
       echo "Performing comparison..." >> $LOGFILE
       #sleep 1
-      cmp cmpout outfile
+      cmp cmpout.$$ outfile.$$
 
       if [[ ! $? -eq 0 ]]; then
          echo -e "\033[0;31mFAIL - output does not match expected data\033[0m"
          echo "   FAILURE: output of netof does not match the expected data" >> $LOGFILE
-         echo "Terminating premeturely..."
+         echo "CMD = cmp cmpout.$$ outfile.$$"
          exit -1
       fi
       echo "Comparison passed"
@@ -269,7 +269,7 @@ while [[ $cnt -lt $ITER ]]; do
    
       echo "Cleaining up outputs..."
       echo "Cleaining up outputs..." >> $LOGFILE
-      rm outfile cmpout
+      rm outfile.$$ cmpout.$$
       echo
 
       echo "Attempting error recovery..."
