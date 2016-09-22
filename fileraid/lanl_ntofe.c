@@ -302,7 +302,7 @@ int main(int argc, char* argv[]) {
       ec_encode_data(chunksize*1024, numchunks, numtot - numchunks, g_tbls, buffs, &buffs[numchunks]);
 
       ecounter = 0;
-      printf("counter = %d, ret_in = %zd, numchunks = %d\n",counter,ret_in,numchunks);
+      printf("counter = %d, ret_in = %zd, numchunks = %d, loops = %d\n",counter,ret_in,numchunks,loops);
       while (ecounter < etot) {
          crc = crc32_ieee(TEST_SEED, buffs[counter+ecounter], chunksize*1024); 
          sum[counter+ecounter] = sum[counter+ecounter] + crc; 

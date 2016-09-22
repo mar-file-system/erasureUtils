@@ -230,12 +230,17 @@ int main(int argc, char* argv[]) {
           tbuff = tbuff + tret_in;
           tbuflen = tbuflen - tret_in;
           ret_in = ret_in + tret_in;
-          printf("reading stdin  file returned total of %zd \n",ret_in);
+          printf("reading stdin  file returned %zd \n",ret_in);
         }
       } else {
         ret_in = read(input_fd,buff,numchunks*chunksize*1024);
       } 
-      printf("reading input file returned total of %zd\n",ret_in);
+      printf("reading input returned total of %zd\n",ret_in);
+      if ( ret_in < 1 ) {
+         printf("reading of input is now complete\n");
+         break;
+      }
+
       totsize=totsize+ret_in;
       counter = 0;
       /* loop over the parts and write the parts, sum and count bytes per part etc. */
