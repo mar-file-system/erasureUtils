@@ -83,16 +83,10 @@ To fill in the trailing zeros, this program uses truncate - punching a hole in t
 
 ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 {
-   return ne_open( path, mode, erasure_offset, N, E, BLKSZ );
-}
-
-
-
-ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E, int bsz )
-{
 
    char file[MAXNAME];       /* array name of files */
    int counter;
+   int bsz = BLKSZ;
 
    ne_handle handle = malloc( sizeof( struct handle ) );
 
@@ -106,11 +100,11 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E, i
       errno = EINVAL;
       return NULL;
    }
-   if ( bsz < 0 ) {
-      fprintf( stderr, "improper bsz arguement received - %d\n", bsz );
-      errno = EINVAL;
-      return NULL;
-   }
+//   if ( bsz < 0 ) {
+//      fprintf( stderr, "improper bsz arguement received - %d\n", bsz );
+//      errno = EINVAL;
+//      return NULL;
+//   }
    if ( erasure_offset < 0  ||  erasure_offset >= N+E ) {
       fprintf( stderr, "improper erasure_offset arguement received - %d\n", erasure_offset );
       errno = EINVAL;
@@ -194,8 +188,8 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    char file[MAXNAME];
    char rebuild = 0;
    int goodfile = 999;
-   int minNerr = strlen(argv[2]); //note, greater than N
-   int maxNerr = -1;              //note, less than N
+   int minNerr = handle->N+1;  // greater than N
+   int maxNerr = -1;   // less than N
    int nsrcerr = 0;
    int counter;
    char xattrval[strlen(XATTRKEY)+50];
@@ -206,6 +200,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    unsigned long datasz[ MAXN + MAXE ];
    int ret_in;
    int tmp;
+   unsigned int decode_index[ MAXN + MAXE ];
    u32 llcounter;
    u32 readsize;
    u32 startoffset;
@@ -213,6 +208,8 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    u32 startstripe;
    u64 csum;
    u64 totsz;
+   ssize_t ret_out;
+   off_t seekamt;
 
    if ( handle->mode != NE_RDONLY  &&  handle->mode != NE_REBUILD ) {
       fprintf( stderr, "ne_read: handle is in improper mode for reading!\n" );
@@ -222,7 +219,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 
 
    for ( counter = 0; counter < mtot; counter++ ) {
-      if ( src_in_err[counter] ) {
+      if ( handle->src_in_err[counter] ) {
          nerr++;
          if ( counter < N ) { 
             nsrcerr++;
@@ -300,7 +297,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
       ec_init_tables(N, E, &(handle->encode_matrix[N * N]), handle->g_tbls);
 
       ret_in = gf_gen_decode_matrix( handle->encode_matrix, handle->decode_matrix,
-         handle->invert_matrix, handle->decode_index, handle->src_err_list, handle->src_in_err,
+         handle->invert_matrix, decode_index, handle->src_err_list, handle->src_in_err,
          handle->nerr, nsrcerr, N, mtot);
 
       if (ret_in != 0) {
@@ -347,7 +344,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    counter = 0;
    fprintf(stderr,"ne_read: honor read request with len = %lld\n",nbytes);
    while ( counter < N  &&  nsrcerr == 0 ) {
-      if (counter < startpart) seekamt = (startstripe*bsz*1024) + (chunksize*1024); 
+      if (counter < startpart) seekamt = ((startstripe+1)*bsz*1024); 
       if (counter == startpart) seekamt = (startstripe*bsz*1024) + startoffset; 
       if (counter > startpart) seekamt = (startstripe*bsz*1024); 
       tmp = lseek(handle->FDArray[counter],seekamt,SEEK_SET);
@@ -412,7 +409,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
       /**** write ****/
       counter = 0;
       while ( counter < N ) {
-         buffer = memcpy( buffer, buffs[counter], datasz[counter] );
+         buffer = memcpy( buffer, handle->buffs[counter], datasz[counter] );
          fprintf(stderr,"ne_read: wrote out %lu to buffer\n",datasz);
          ret_in -= datasz[counter];
          if( counter >= N ) counter = 0;
@@ -690,7 +687,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 //
 //      } //end of generating loop for each stripe
 //
-   } //end of "Read with rebuild" case
+//   } //end of "Read with rebuild" case
 
    return (EXIT_SUCCESS); 
 }
@@ -759,7 +756,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 
       /* check for any data remaining within the handle buffer */
       if ( handle->rem_buff ) {
-         writesize = N*bsz*1024 - rem_buff;
+         writesize = N*bsz*1024 - handle->rem_buff;
          if ( totsize + writesize > nbytes ) { writesize = nbytes-totsize; }
          printf("ne_write: reading input for %lu bytes\n",writesize);
          handle->buffer = memcpy ( handle->buffer + handle->rem_buff, buffer, writesize);
@@ -869,7 +866,7 @@ int ne_close( ne_handle handle )
    int tmp;
 
    /* flush the handle buffer if necessary */
-   if ( handle->mode == WR_ONLY  &&  handle->rem_buff ) {
+   if ( handle->mode == NE_WRONLY  &&  handle->rem_buff ) {
       //zero the buffer to the end of the stripe
       bzero(handle->buffer+handle->rem_buff, (N*bsz*1024) - handle->rem_buff );
       tmp = ne_write( handle, handle->buffer + handle->rem_buff, (N*bsz*1024) - handle->rem_buff ); //make ne_write do all the work
@@ -882,7 +879,7 @@ int ne_close( ne_handle handle )
    }
 
    /* Close file descriptors and free bufs and set xattrs for written files */
-   int counter = 0;
+   counter = 0;
    while (counter < N+E) {
       if ( handle->FDArray[counter] != -1 ) { close(handle->FDArray[counter]); }
       if ( handle->mode == NE_WRONLY ) { 

@@ -83,6 +83,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define MAXE 5
 #define MAXNAME 1024 
 #define MAXBUF 4096 
+#define MAXBLKSZ 256
 #define BLKSZ 64
 #define TEST_SEED 57
 #define NE_RDONLY 0
@@ -90,6 +91,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define NE_REBUILD 2
 
 #define XATTRKEY "user.n.e.bsz.nsz.ncompsz.ncrcsum.totsz"
+#define MAXPARTS MAXN + MAXE
 
 typedef uint32_t u32;
 typedef uint64_t u64;
@@ -102,9 +104,10 @@ typedef struct handle {
    int bsz;
 
    /* Read/Write Info and Structures */
+   ne_mode mode;
    u64 totsz;
    void *buffer;
-   char *buffs[ MAXN + MAXE ];
+   unsigned char *buffs[ MAXN + MAXE ];
    unsigned long rem_buff;
    int FDArray[ MAXN + MAXE ];
 
@@ -128,8 +131,7 @@ typedef struct handle {
 } *ne_handle;
 
 /* Erasure Utility Functions */
-ne_handle open( char *path, ne_mode mode, int start_position, int N, int E );
-ne_handle open( char *path, ne_mode mode, int start_position, int N, int E, int bsz );
+ne_handle ne_open( char *path, ne_mode mode, int start_position, int N, int E );
 int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset );
 int ne_write( ne_handle handle, void *buffer, int nbytes );
 int ne_close( ne_handle handle );
