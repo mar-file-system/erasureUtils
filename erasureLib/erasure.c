@@ -123,11 +123,11 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E, i
       handle->src_err_list[counter] = 0;
    }
    handle->nerr = 0;
-   handle->path = path;
    handle->totsz = 0;
    handle->N = N;
    handle->E = E;
    handle->bsz = bsz;
+   handle->erasure_offset = erasure_offset;
    handle->mode = mode;
    handle->e_ready = 0;
    handle->rem_buff = 0;
@@ -142,7 +142,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E, i
    }
 
    /* allocate a big buffer for all the N chunks plus a bit extra for reading in crcs */
-   posix_memalign( &(handle->buffer), 64, ((N+E)*(handle->bsz)*1024)+(sizeof(u32)*(N+E))  );
+   posix_memalign( &(handle->buffer), 64, (N+E)*(handle->bsz*1024+sizeof(u32)) );
 
    /* allocate matrices */
    handle->encode_matrix = malloc(MAXPARTS * MAXPARTS);
@@ -160,7 +160,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E, i
       handle->ncompsz[counter] = 0;
       bzero( file, MAXNAME );
       sprintf( file, path, (counter+erasure_offset)%(N+E) );
-      handle->buffs[counter] = handle->buffer + counter*(bsz*1024 + sizeof(u32)); //make space for block and its associated crc
+      handle->buffs[counter] = handle->buffer + counter*(bsz*1024 ); //make space for block TODO and its associated crc
 
       if( mode == NE_WRONLY  ||  (mode == NE_REBUILD && handle->src_in_err[counter]) ) {
          fprintf( stderr, "   opening %s for write\n", file );
@@ -732,6 +732,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
    N = handle->N;
    E = handle->E;
    bsz = handle->bsz;
+   handle->totsz = nbytes; //as it is impossible to write at an offset, this will be the total file size
  
    /* verify bounds for N */
    if (N < 2  ||  N > MAXPARTS) {
@@ -761,7 +762,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
          writesize = N*bsz*1024 - rem_buff;
          if ( totsize + writesize > nbytes ) { writesize = nbytes-totsize; }
          printf("ne_write: reading input for %lu bytes\n",writesize);
-         handle->buffer = memcpy ( handle->bufferi + handle->rem_buff, buffer, writesize);
+         handle->buffer = memcpy ( handle->buffer + handle->rem_buff, buffer, writesize);
          if ( writesize < 1 ) {
             printf("ne_write: reading of input is now complete\n");
             break;
@@ -854,45 +855,59 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
       fprintf( stderr, "ne_write: completed iteration for stripe %d\n", loops );
    }
  
-   /* Close file descriptors write xattr for each part and p and q and free buffers */
-//   if (strncmp(argv[1],"-",1)) close(input_fd);
-//   counter = 0;
-//   while (counter < N+E) {
-//      bzero(xattrval,sizeof(xattrval));
-//      sprintf(xattrval,"%d %d %d %d %d %lu %lld",N,E,bsz,nsz[counter],ncompsz[counter],csum[counter],totsize);
-//      fsetxattr(output_fd[counter],XATTRKEY, xattrval,strlen(xattrval),0);
-//      close(output_fd[counter]);
-//      counter++;
-//   }
-//   free(buff);
-//   counter = 0;
-//   while (counter < E) {
-//      free(buffs[counter+N]);
-//      counter++;
-//   }
- 
    return (EXIT_SUCCESS);
 }
 
 int ne_close( ne_handle handle ) 
 {
-         /* if the part is not a full write, poke a hole in the file using truncate */
-         /* also fill the rest of the buffer with nulls so the pq calc will be correct */
-         if (buflen < bsz*1024) {
-            //printf("truncating file %d to %d\n",counter, output_size[counter] + (bsz*1024)-buflen);
-            printf("truncating file %d to %d\n",counter, (loops+1)*bsz*1024);
-            ftruncate(output_fd[counter], ((loops+1)*bsz*1024));
-            bzero(buffs[counter]+buflen,(bsz*1024)-buflen);
-            printf("zeroing from %d to %d in %d\n",buflen,bsz*1024,counter);
+   int counter;
+   char xattrval[strlen(XATTRKEY)+50];
+   int N = handle->N;
+   int E = handle->E;
+   int bsz = handle->bsz;
+   int ret = EXIT_SUCCESS;
+   int tmp;
+
+   /* flush the handle buffer if necessary */
+   if ( handle->mode == WR_ONLY  &&  handle->rem_buff ) {
+      //zero the buffer to the end of the stripe
+      bzero(handle->buffer+handle->rem_buff, (N*bsz*1024) - handle->rem_buff );
+      tmp = ne_write( handle, handle->buffer + handle->rem_buff, (N*bsz*1024) - handle->rem_buff ); //make ne_write do all the work
+      
+      if ( tmp != EXIT_SUCCESS ) {
+         fprintf( stderr, "ne_close: failed to flush handle buffer\n" );
+         ret = -1;
+      }
+
+   }
+
+   /* Close file descriptors and free bufs and set xattrs for written files */
+   int counter = 0;
+   while (counter < N+E) {
+      if ( handle->FDArray[counter] != -1 ) { close(handle->FDArray[counter]); }
+      if ( handle->mode == NE_WRONLY ) { 
+         bzero(xattrval,sizeof(xattrval));
+         sprintf(xattrval,"%d %d %d %d %d %lu %llu",N,E,bsz,handle->nsz[counter],handle->ncompsz[counter],handle->csum[counter],handle->totsz);
+         tmp = fsetxattr(handle->FDArray[counter],XATTRKEY, xattrval,strlen(xattrval),0); 
+         
+         if ( tmp != EXIT_SUCCESS ) {
+            fprintf( stderr, "ne_close: failed to set xattr for file %d\n", counter );
+            ret = -1;
          }
 
-   /* Close file descriptors and free bufs */ // TODO and set xattrs on written */
-   int counter = 0;
-   while (counter < handle->N + handle->E) {
-      if (handle->FDArray[counter] != -1) close(handle->FDArray[counter]);
+      }
       counter++;
    }
    free(handle->buffer);
+  
+   if ( ret == EXIT_SUCCESS ) { 
+      /* Encode any file errors into the return status */
+      for( counter = 0; counter < N+E; counter++ ) {
+         if ( handle->src_in_err[counter] ) { ret += ( 1 << (counter + handle->erasure_offset) % (N+E) ); }
+      }
+   }
    
+   return ret;
+
 }
 

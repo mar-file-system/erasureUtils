@@ -102,7 +102,6 @@ typedef struct handle {
    int bsz;
 
    /* Read/Write Info and Structures */
-   char *path;
    u64 totsz;
    void *buffer;
    char *buffs[ MAXN + MAXE ];
@@ -116,6 +115,8 @@ typedef struct handle {
 
    /* Error Pattern Info */
    int nerr;
+   int erasure_offset;
+   unsigned char e_ready;
    unsigned char src_in_err[ MAXN + MAXE ];
    unsigned char src_err_list[ MAXN + MAXE ];
 
