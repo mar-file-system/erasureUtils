@@ -100,10 +100,10 @@ typedef struct handle {
    int N;
    int E;
    int bsz;
-   int erasure_offset;
 
    /* Read/Write Info and Structures */
    char *path;
+   u64 totsz;
    void *buffer;
    char *buffs[ MAXN + MAXE ];
    unsigned long rem_buff;
