@@ -124,7 +124,6 @@ int main( int argc, const char* argv[] )
       toread = rand() % ( N * 64 * 1024 );
 
       while ( (nread = read( filefd, buff, toread )) != 0 ) {
-         printf("\nPerforming write of %d bytes\n\n", nread);
          if ( nread != ne_write( handle, buff, nread ) ) {
             fprintf( stderr, "libTest: unexpected # of bytes written by ne_write\n" );
             return -1;
