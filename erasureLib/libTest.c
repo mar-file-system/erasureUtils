@@ -1,5 +1,4 @@
-#ifndef __NE_H__
-#define __NE_H__
+#include <erasure.h>
 
 #ifndef __MARFS_COPYRIGHT_H__
 #define __MARFS_COPYRIGHT_H__
@@ -64,88 +63,14 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #endif
 
-#define DEBUG
-
-#include <sys/stat.h>
-#include <stdint.h>
 #include <stdio.h>
-#include <stdarg.h>
-#include <string.h>
 #include <stdlib.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <sys/uio.h>
-#include <sys/xattr.h>
 
-#define MAXN 15
-#define MAXE 5
-#define MAXNAME 1024 
-#define MAXBUF 4096 
-#define MAXBLKSZ 256
-#define BLKSZ 64
-#define TEST_SEED 57
-#define NE_RDONLY 0
-#define NE_WRONLY 1
-#define NE_REBUILD 2
+int main( int argc, const char* argv[] ) 
+{
+   ne_handle handle = ne_open( "testfile.%d", NE_WRONLY, 0, 3, 1 );
 
-#define XATTRKEY "user.n.e.bsz.nsz.ncompsz.ncrcsum.totsz"
-#define MAXPARTS MAXN + MAXE
-#define NO_INVERT_MATRIX -2
+   ne_close( handle );
 
-typedef uint32_t u32;
-typedef uint64_t u64;
-typedef unsigned char ne_mode;
-
-typedef struct handle {
-   /* Erasure Info */
-   int N;
-   int E;
-   int bsz;
-
-   /* Read/Write Info and Structures */
-   ne_mode mode;
-   u64 totsz;
-   void *buffer;
-   unsigned char *buffs[ MAXN + MAXE ];
-   unsigned long rem_buff;
-   int FDArray[ MAXN + MAXE ];
-
-   /* Per-part Info */
-   u64 csum[ MAXN + MAXE ];
-   unsigned long nsz[ MAXN + MAXE ];
-   unsigned long ncompsz[ MAXN + MAXE ];
-
-   /* Error Pattern Info */
-   int nerr;
-   int erasure_offset;
-   unsigned char e_ready;
-   unsigned char src_in_err[ MAXN + MAXE ];
-   unsigned char src_err_list[ MAXN + MAXE ];
-
-   /* Erasure Manipulation Structures */
-   unsigned char *encode_matrix;
-   unsigned char *decode_matrix;
-   unsigned char *invert_matrix;
-   unsigned char *g_tbls;
-} *ne_handle;
-
-/* Erasure Utility Functions */
-ne_handle ne_open( char *path, ne_mode mode, int start_position, int N, int E );
-int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset );
-int ne_write( ne_handle handle, void *buffer, int nbytes );
-int ne_close( ne_handle handle );
-
-extern void pq_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p and q */
-extern void xor_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern int pq_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern int xor_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern uint32_t crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
-extern void gf_gen_rs_matrix(unsigned char *a, int m, int k);
-extern void ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
-extern void gf_vect_mul_init(unsigned char c, unsigned char *tbl);
-extern unsigned char gf_mul(unsigned char a, unsigned char b);
-extern int gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);
-
-#endif
+   return EXIT_SUCCESS;
+}

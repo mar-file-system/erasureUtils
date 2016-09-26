@@ -80,6 +80,16 @@ To fill in the trailing zeros, this program uses truncate - punching a hole in t
 
 *********************************************************/
 
+void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls);
+void dump(unsigned char *buf, int len);
+static int gf_gen_decode_matrix(unsigned char *encode_matrix,
+				unsigned char *decode_matrix,
+				unsigned char *invert_matrix,
+				unsigned int *decode_index,
+				unsigned char *src_err_list,
+				unsigned char *src_in_err,
+				int nerrs, int nsrcerrs, int k, int m);
+
 
 ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 {
@@ -185,14 +195,14 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset ) 
 {
    int mtot = (handle->N)+(handle->E);
-   char file[MAXNAME];
-   char rebuild = 0;
+   //char file[MAXNAME];
+   //char rebuild = 0;
    int goodfile = 999;
    int minNerr = handle->N+1;  // greater than N
    int maxNerr = -1;   // less than N
    int nsrcerr = 0;
    int counter;
-   char xattrval[strlen(XATTRKEY)+50];
+   //char xattrval[strlen(XATTRKEY)+50];
    int N = handle->N;
    int E = handle->E;
    int bsz = handle->bsz;
@@ -206,8 +216,8 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    u32 startoffset;
    u32 startpart;
    u32 startstripe;
-   u64 csum;
-   u64 totsz;
+   //u64 csum;
+   //u64 totsz;
    ssize_t ret_out;
    off_t seekamt;
 
@@ -338,11 +348,11 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    startstripe = offset / (bsz*1024*N);
    startpart = (offset - (startstripe*bsz*1024*N))/(bsz*1024);
    startoffset = offset - (startstripe*bsz*1024*N) - (startpart*bsz*1024);
-   fprintf(stderr,"read from startstripe %d startpart %d and startoffset %d for nbytes %lld\n",startstripe,startpart,startoffset,nbytes);
+   fprintf(stderr,"read from startstripe %d startpart %d and startoffset %d for nbytes %d\n",startstripe,startpart,startoffset,nbytes);
 
    /******** Read Without Rebuild ********/  
    counter = 0;
-   fprintf(stderr,"ne_read: honor read request with len = %lld\n",nbytes);
+   fprintf(stderr,"ne_read: honor read request with len = %d\n",nbytes);
    while ( counter < N  &&  nsrcerr == 0 ) {
       if (counter < startpart) seekamt = ((startstripe+1)*bsz*1024); 
       if (counter == startpart) seekamt = (startstripe*bsz*1024) + startoffset; 
@@ -357,7 +367,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
          handle->e_ready = 0; //indicate that erasure structs require re-initialization
          break;
       }
-      fprintf(stderr,"ne_read: seek input file %d %lld\n",counter, seekamt);
+      fprintf(stderr,"ne_read: seek input file %d %zd\n",counter, seekamt);
       counter++;
    }
    llcounter = 0;
@@ -379,7 +389,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
             readsize = bsz*1024-startoffset;
          } 
          if ((nbytes-llcounter) < readsize) readsize = nbytes-llcounter;
-         fprintf(stderr,"ne_read: preparing to read %lu from datafile %d\n",readsize,counter);
+         fprintf(stderr,"ne_read: preparing to read %lu from datafile %d\n",(unsigned long)readsize,counter);
 
          /**** read ****/
          ret_out = read( handle->FDArray[counter], handle->buffs[counter], readsize );
@@ -410,13 +420,13 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
       counter = 0;
       while ( counter < N ) {
          buffer = memcpy( buffer, handle->buffs[counter], datasz[counter] );
-         fprintf(stderr,"ne_read: wrote out %lu to buffer\n",datasz);
+         fprintf(stderr,"ne_read: wrote out %lu to buffer\n",datasz[counter]);
          ret_in -= datasz[counter];
          if( counter >= N ) counter = 0;
          counter++;
       }
 
-      fprintf(stderr,"ne_read: total output = %llu\n",datasz);
+      fprintf( stderr, "ne_read: total output = %lu\n", (unsigned long)llcounter );
 
    }
 
@@ -696,27 +706,16 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 int ne_write( ne_handle handle, void *buffer, int nbytes )
 {
  
-   int output_fd[MAXN + MAXE];      /* array of file output file descriptors */
-   unsigned long sum[MAXN + MAXE];  /* array of sum (for summing each part)  */
-   int nsz[MAXN + MAXE];            /* array of for summing up the size of each part */
-   int ncompsz[MAXN + MAXE];        /* array of for summing the parts compressed (future)  */
    int N;                       /* number of raid parts not including E */ 
    int E;                       /* num erasure stripes */
    int bsz;                     /* chunksize in k */ 
    int counter;                 /* general counter */
    int ecounter;                /* general counter */
    int buflen;                   /* general int */
-   int tbuflen;                  /* general int */
-   ssize_t ret_in, tret_in, ret_out;    /* Number of bytes returned by read() and write() */
-   char xattrval[200];           /* used to format xattr value */
+   ssize_t ret_out;     /* Number of bytes returned by read() and write() */
    long long totsize;            /* used to sum total size of the input file/stream */
-   void *buff;                   /* general buf ptr */
-   void *tbuff;                  /* general buf ptr */
-   unsigned char *buffs[MAXN + MAXE];      /* array of buffs for the parts and p and q */
-   void *ebuf;                  /* handy pointer for p buff */
    int mtot;                   /* N + numerasure stripes */
    int loops;                    /* general counter for loops */
-   unsigned char *encode_matrix, *decode_matrix, *invert_matrix, *g_tbls;
    u32 writesize;
    u32 crc;                      /* crc 32 */
 
@@ -758,7 +757,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
       if ( handle->rem_buff ) {
          writesize = N*bsz*1024 - handle->rem_buff;
          if ( totsize + writesize > nbytes ) { writesize = nbytes-totsize; }
-         printf("ne_write: reading input for %lu bytes\n",writesize);
+         fprintf( stderr, "ne_write: reading input for %lu bytes\n", (unsigned long)writesize );
          handle->buffer = memcpy ( handle->buffer + handle->rem_buff, buffer, writesize);
          if ( writesize < 1 ) {
             printf("ne_write: reading of input is now complete\n");
@@ -769,7 +768,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
       else { //if none there, read all input from the buffer argument
          writesize = N*bsz*1024;
          if ( totsize + writesize > nbytes ) { writesize = nbytes-totsize; }
-         printf("ne_write: reading input for %lu bytes\n",writesize);
+         fprintf( stderr, "ne_write: reading input for %lu bytes\n", (unsigned long)writesize );
          handle->buffer = memcpy ( handle->buffer, buffer, writesize);
          if ( writesize < 1 ) {
             printf("ne_write: reading of input is now complete\n");
@@ -797,7 +796,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
             ret_out = write(handle->FDArray[counter],handle->buffs[counter],buflen); 
             
             if ( ret_out != buflen ) {
-               fprintf( stderr, "ne_write: write to file %d returned %d instead of expected %lu\n" , counter, ret_out, buflen );
+               fprintf( stderr, "ne_write: write to file %d returned %zd instead of expected %d\n" , counter, ret_out, buflen );
                handle->src_in_err[counter] = 1;
                handle->src_err_list[handle->nerr] = counter;
                handle->nerr++;
@@ -830,7 +829,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 
       ecounter = 0;
       while (ecounter < E) {
-         crc = crc32_ieee(TEST_SEED, buffs[counter+ecounter], bsz*1024); 
+         crc = crc32_ieee(TEST_SEED, handle->buffs[counter+ecounter], bsz*1024); 
          handle->csum[counter+ecounter] += crc; 
          handle->nsz[counter+ecounter] += bsz*1024;
          handle->ncompsz[counter+ecounter] += bsz*1024;
@@ -838,7 +837,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
          ret_out = write(handle->FDArray[counter+ecounter],handle->buffs[counter+ecounter],bsz*1024); 
          
          if ( ret_out != bsz*1024 ) {
-            fprintf( stderr, "ne_write: write to erasure file %d, returned %d instead of expected %lu\n" , ecounter, ret_out, bsz*1024 );
+            fprintf( stderr, "ne_write: write to erasure file %d, returned %zd instead of expected %d\n" , ecounter, ret_out, bsz*1024 );
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
@@ -881,10 +880,10 @@ int ne_close( ne_handle handle )
    /* Close file descriptors and free bufs and set xattrs for written files */
    counter = 0;
    while (counter < N+E) {
-      if ( handle->FDArray[counter] != -1 ) { close(handle->FDArray[counter]); }
       if ( handle->mode == NE_WRONLY ) { 
          bzero(xattrval,sizeof(xattrval));
-         sprintf(xattrval,"%d %d %d %d %d %lu %llu",N,E,bsz,handle->nsz[counter],handle->ncompsz[counter],handle->csum[counter],handle->totsz);
+         sprintf(xattrval,"%d %d %d %lu %lu %zu %zu",N,E,bsz,handle->nsz[counter],handle->ncompsz[counter],handle->csum[counter],handle->totsz);
+         fprintf( stderr, "file %d xattr = \"%s\"\n", counter, xattrval );
          tmp = fsetxattr(handle->FDArray[counter],XATTRKEY, xattrval,strlen(xattrval),0); 
          
          if ( tmp != EXIT_SUCCESS ) {
@@ -893,6 +892,7 @@ int ne_close( ne_handle handle )
          }
 
       }
+      if ( handle->FDArray[counter] != -1 ) { close(handle->FDArray[counter]); }
       counter++;
    }
    free(handle->buffer);
@@ -906,5 +906,113 @@ int ne_close( ne_handle handle )
    
    return ret;
 
+}
+
+
+void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls)
+{
+        int i, j;
+
+        for (i = 0; i < rows; i++) {
+                for (j = 0; j < k; j++) {
+                        gf_vect_mul_init(*a++, g_tbls);
+                        g_tbls += 32;
+                }
+        }
+}
+
+void dump(unsigned char *buf, int len)
+{
+        int i;
+        for (i = 0; i < len;) {
+                printf(" %2x", 0xff & buf[i++]);
+                if (i % 32 == 0)
+                        printf("\n");
+        }
+        printf("\n");
+}
+
+#define NO_INVERT_MATRIX -2
+// Generate decode matrix from encode matrix
+static int gf_gen_decode_matrix(unsigned char *encode_matrix,
+				unsigned char *decode_matrix,
+				unsigned char *invert_matrix,
+				unsigned int *decode_index,
+				unsigned char *src_err_list,
+				unsigned char *src_in_err,
+				int nerrs, int nsrcerrs, int k, int m)
+{
+	int i, j, p;
+	int r;
+	unsigned char *backup, *b, s;
+	int incr = 0;
+
+	b = malloc(MAXPARTS * MAXPARTS);
+	backup = malloc(MAXPARTS * MAXPARTS);
+
+	if (b == NULL || backup == NULL) {
+		printf("Test failure! Error with malloc\n");
+		free(b);
+		free(backup);
+		return -1;
+	}
+	// Construct matrix b by removing error rows
+	for (i = 0, r = 0; i < k; i++, r++) {
+		while (src_in_err[r])
+			r++;
+		for (j = 0; j < k; j++) {
+			b[k * i + j] = encode_matrix[k * r + j];
+			backup[k * i + j] = encode_matrix[k * r + j];
+		}
+		decode_index[i] = r;
+	}
+	incr = 0;
+	while (gf_invert_matrix(b, invert_matrix, k) < 0) {
+		if (nerrs == (m - k)) {
+			free(b);
+			free(backup);
+			printf("BAD MATRIX\n");
+			return NO_INVERT_MATRIX;
+		}
+		incr++;
+		memcpy(b, backup, MAXPARTS * MAXPARTS);
+		for (i = nsrcerrs; i < nerrs - nsrcerrs; i++) {
+			if (src_err_list[i] == (decode_index[k - 1] + incr)) {
+				// skip the erased parity line
+				incr++;
+				continue;
+			}
+		}
+		if (decode_index[k - 1] + incr >= m) {
+			free(b);
+			free(backup);
+			printf("BAD MATRIX\n");
+			return NO_INVERT_MATRIX;
+		}
+		decode_index[k - 1] += incr;
+		for (j = 0; j < k; j++)
+			b[k * (k - 1) + j] = encode_matrix[k * decode_index[k - 1] + j];
+
+	};
+
+	for (i = 0; i < nsrcerrs; i++) {
+		for (j = 0; j < k; j++) {
+			decode_matrix[k * i + j] = invert_matrix[k * src_err_list[i] + j];
+		}
+	}
+	/* src_err_list from encode_matrix * invert of b for parity decoding */
+	for (p = nsrcerrs; p < nerrs; p++) {
+		for (i = 0; i < k; i++) {
+			s = 0;
+			for (j = 0; j < k; j++)
+				s ^= gf_mul(invert_matrix[j * k + i],
+					    encode_matrix[k * src_err_list[p] + j]);
+
+			decode_matrix[k * p + i] = s;
+		}
+	}
+	free(b);
+	free(backup);
+	return 0;
 }
 
