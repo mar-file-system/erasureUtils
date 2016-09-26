@@ -713,7 +713,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
    int ecounter;                /* general counter */
    int buflen;                   /* general int */
    ssize_t ret_out;     /* Number of bytes returned by read() and write() */
-   long long totsize;            /* used to sum total size of the input file/stream */
+   unsigned long long totsize;            /* used to sum total size of the input file/stream */
    int mtot;                   /* N + numerasure stripes */
    int loops;                    /* general counter for loops */
    u32 writesize;
@@ -728,22 +728,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
    N = handle->N;
    E = handle->E;
    bsz = handle->bsz;
-   handle->totsz = nbytes; //as it is impossible to write at an offset, this will be the total file size
- 
-   /* verify bounds for N */
-   if (N < 2  ||  N > MAXPARTS) {
-      return EINVAL;
-   }
-
-   /* verify bounds for E */
-   if (E < 0  ||  E > MAXE ) {
-      return EINVAL;
-   }
-
-   /* verify bounds for bsz */
-   if (bsz < 1  ||  bsz > MAXBLKSZ ) {
-      return EINVAL;
-   }
+   handle->totsz += nbytes; //as it is impossible to write at an offset, the sum of writes will be the total size
 
    mtot=N+E;
 
@@ -752,28 +737,34 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
    totsize = 0;
    loops = 0;
    while (1) { 
-
+      fprintf(stderr, "ne_write: iteration %d for write of size %d\n", loops, nbytes);
+      
       /* check for any data remaining within the handle buffer */
       if ( handle->rem_buff ) {
          writesize = N*bsz*1024 - handle->rem_buff;
          if ( totsize + writesize > nbytes ) { writesize = nbytes-totsize; }
-         fprintf( stderr, "ne_write: reading input for %lu bytes\n", (unsigned long)writesize );
-         handle->buffer = memcpy ( handle->buffer + handle->rem_buff, buffer, writesize);
          if ( writesize < 1 ) {
             printf("ne_write: reading of input is now complete\n");
             break;
          }
+         fprintf( stderr, "ne_write: reading input for %lu bytes with offset of %llu\n          and writing to offset of %lu in handle buffer\n", (unsigned long)writesize, totsize, handle->rem_buff );
+         /*handle->buffer = */memcpy ( handle->buffer + handle->rem_buff, buffer+totsize, writesize);
+         fprintf(stderr, "ne_write:   ...copy compete.\n");
+         totsize += writesize;
          writesize += handle->rem_buff;
+         handle->rem_buff = 0;
       }
       else { //if none there, read all input from the buffer argument
          writesize = N*bsz*1024;
          if ( totsize + writesize > nbytes ) { writesize = nbytes-totsize; }
-         fprintf( stderr, "ne_write: reading input for %lu bytes\n", (unsigned long)writesize );
-         handle->buffer = memcpy ( handle->buffer, buffer, writesize);
          if ( writesize < 1 ) {
             printf("ne_write: reading of input is now complete\n");
             break;
          }
+         fprintf( stderr, "ne_write: reading input for %lu bytes with offset of %llu\n", (unsigned long)writesize, totsize );
+         /*handle->buffer = */memcpy ( handle->buffer, buffer+totsize, writesize);
+         fprintf(stderr, "ne_write:   ...copy compete.\n");
+         totsize+=writesize;
       }
       if ( writesize < N*bsz*1024 ) {  //if there is not enough data to write a full stripe, stash it in the handle buffer
          printf("ne_write: reading of input is complete, stashing %lu bytes in handle buffer\n", writesize-handle->rem_buff);
@@ -781,7 +772,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
          break;
       }
 
-      totsize=totsize+writesize;
+
       counter = 0;
       /* loop over the parts and write the parts, sum and count bytes per part etc. */
       while (counter < N) {
@@ -851,7 +842,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
       fprintf( stderr, "ne_write: completed iteration for stripe %d\n", loops );
    }
  
-   return (EXIT_SUCCESS);
+   return totsize;
 }
 
 int ne_close( ne_handle handle ) 
@@ -867,13 +858,14 @@ int ne_close( ne_handle handle )
    /* flush the handle buffer if necessary */
    if ( handle->mode == NE_WRONLY  &&  handle->rem_buff ) {
       //zero the buffer to the end of the stripe
-      bzero(handle->buffer+handle->rem_buff, (N*bsz*1024) - handle->rem_buff );
-      tmp = ne_write( handle, handle->buffer + handle->rem_buff, (N*bsz*1024) - handle->rem_buff ); //make ne_write do all the work
+      tmp = (N*bsz*1024) - handle->rem_buff;
+      bzero(handle->buffer+handle->rem_buff, tmp );
       
-      if ( tmp != EXIT_SUCCESS ) {
+      if ( tmp != ne_write( handle, handle->buffer + handle->rem_buff, tmp ) ) { //make ne_write do all the work
          fprintf( stderr, "ne_close: failed to flush handle buffer\n" );
          ret = -1;
       }
+      handle->totsz -= tmp; //decrement totsize to ignore zero fill
 
    }
 

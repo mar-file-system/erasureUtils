@@ -7,8 +7,14 @@ lib : erasure.c erasure.h
 	$(CC) $(CFLAGS) -c erasure.c
 
 test : libTest.c
-	$(CC) $(CFLAGS) libTest.c erasure.o -o erasureTest
+	$(CC) $(CFLAGS) libTest.c erasure.o -o libTest
 
-clean : 
-	rm erasure.o erasureTest testfile.*
+cleanLib : 
+	rm erasure.o 
+
+cleanTest :
+	rm libTest
+
+clean :
+	rm erasure.o libTest
 

@@ -63,12 +63,80 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #endif
 
-#include <stdio.h>
-#include <stdlib.h>
+#include <time.h>
 
 int main( int argc, const char* argv[] ) 
 {
-   ne_handle handle = ne_open( "testfile.%d", NE_WRONLY, 0, 3, 1 );
+   int nread;
+   void *buff;
+   int toread;
+   int start;
+   char write;
+   int filefd;
+   int N;
+   int E;
+
+   if ( argc < 2 ) {
+      fprintf( stderr, "libTest: no operation (read/write) was specified!\n");
+      return -1;
+   }
+
+   if ( strncmp( argv[1], "write", strlen(argv[1]) ) == 0 ) {
+      if ( argc < 7 ) { 
+         fprintf(stderr,"libTest: insufficient arguments for a write, expected %s %s input_file output_path N E start_file\n", argv[0], argv[1] ); 
+         return -1;
+      }
+      write = 1;
+   }
+   else if ( strncmp( argv[1], "read", strlen(argv[1]) ) == 0 ) {
+      if ( argc < 7 ) { 
+         fprintf(stderr,"libTest: insufficient arguments for a read, expected %s %s output_file erasure_path N E start_file\n", argv[0], argv[1] ); 
+         return -1;
+      }
+      write = 0;
+   }
+   else {
+      fprintf( stderr, "libTest: argument 1 not recognized, expecting \"read\" or \"write\"\n" );
+      return -1;
+   }
+   
+   N = atoi(argv[4]);
+   E = atoi(argv[5]);
+   start = atoi(argv[6]);
+   buff = malloc( sizeof(char) * (N+E) * 64 * 1024 );
+
+   filefd = open( argv[2], O_RDONLY );
+   if ( filefd == -1 ) {
+      fprintf( stderr, "libTest: failed to open file %s\n", argv[2] );
+      return -1;
+   }
+   
+   srand(time(NULL));
+   ne_handle handle;
+
+   if ( write ) {
+      handle = ne_open( (char *)argv[3], NE_WRONLY, start, N, E );
+      if ( handle == NULL ) {
+         fprintf( stderr, "libTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
+         return -1;
+      }
+
+      toread = rand() % ( N * 64 * 1024 );
+
+      while ( (nread = read( filefd, buff, toread )) != 0 ) {
+         printf("\nPerforming write of %d bytes\n\n", nread);
+         if ( nread != ne_write( handle, buff, nread ) ) {
+            fprintf( stderr, "libTest: unexpected # of bytes written by ne_write\n" );
+            return -1;
+         }
+
+         toread = rand() % ( N * 64 * 1024 );
+      }
+
+   }
+   else if ( ! write ) {
+      ;
+   }
 
    ne_close( handle );
 
