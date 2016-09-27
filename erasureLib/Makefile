@@ -1,10 +1,10 @@
 CC = gcc
 CFLAGS = -Wall -I. -l isal
 
-all : lib test
-
 lib : erasure.c erasure.h
 	$(CC) $(CFLAGS) -c erasure.c
+
+all : lib test
 
 test : libTest.c
 	$(CC) $(CFLAGS) libTest.c erasure.o -o libTest
