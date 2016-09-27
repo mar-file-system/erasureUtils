@@ -86,9 +86,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define MAXBLKSZ 256
 #define BLKSZ 64
 #define TEST_SEED 57
-#define NE_RDONLY 0
-#define NE_WRONLY 1
-#define NE_REBUILD 2
 
 #define XATTRKEY "user.n.e.bsz.nsz.ncompsz.ncrcsum.totsz"
 #define MAXPARTS MAXN + MAXE
@@ -96,7 +93,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 typedef uint32_t u32;
 typedef uint64_t u64;
-typedef unsigned char ne_mode;
+typedef enum {NE_RDONLY,NE_WRONLY,NE_REBUILD} ne_mode;
 
 typedef struct handle {
    /* Erasure Info */

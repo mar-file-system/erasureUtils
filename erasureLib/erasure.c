@@ -80,6 +80,9 @@ To fill in the trailing zeros, this program uses truncate - punching a hole in t
 
 *********************************************************/
 
+
+/* The following are defined here, so as to hide them from users of the library */
+int error_check( ne_handle handle, char *path );
 void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls);
 void dump(unsigned char *buf, int len);
 static int gf_gen_decode_matrix(unsigned char *encode_matrix,
@@ -91,12 +94,22 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 				int nerrs, int nsrcerrs, int k, int m);
 
 
+/**
+ * Opens a new handle for a specific erasure striping
+ * @param char* path : Name structure for the files of the desired striping.  This should contain a single "%d" field.
+ * @param ne_mode mode : Mode in which the file is to be opened.  Either NE_RDONLY, NE_WRONLY, or NE_REBUILD.
+ * @param int erasure_offset : Offset of the erasure stripe, defining the name of the first N file
+ * @param int N : Data width of the striping
+ * @param int E : Erasure width of the striping
+ * @return ne_handle : The new handle for the opened erasure striping
+ */
 ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 {
 
    char file[MAXNAME];       /* array name of files */
    int counter;
    int bsz = BLKSZ;
+   int ret;
 
    ne_handle handle = malloc( sizeof( struct handle ) );
 
@@ -137,16 +150,20 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
    handle->rem_buff = 0;
 
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
-      ; //TODO identify failure pattern
+      ret = error_check(handle,path); //idenfity a preliminary error pattern
+      if ( ret != 0 ) {
+         fprintf( stderr, "ne_open: error_check has failed\n" );
+         return NULL;
+      }
    }
-   else if ( mode != NE_WRONLY ) {
+   else if ( mode != NE_WRONLY ) { //reject improper mode arguments
       fprintf( stderr, "improper mode argument received - %d\n", mode );
       errno = EINVAL;
       return NULL;
    }
 
    /* allocate a big buffer for all the N chunks plus a bit extra for reading in crcs */
-   posix_memalign( &(handle->buffer), 64, (N+E)*(handle->bsz*1024+sizeof(u32)) );
+   posix_memalign( &(handle->buffer), 64, (N+E)*(bsz*1024+sizeof(u32)) );
 
    /* allocate matrices */
    handle->encode_matrix = malloc(MAXPARTS * MAXPARTS);
@@ -166,7 +183,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
       sprintf( file, path, (counter+erasure_offset)%(N+E) );
       handle->buffs[counter] = handle->buffer + counter*(bsz*1024 ); //make space for block TODO and its associated crc
 
-      if( mode == NE_WRONLY  ||  (mode == NE_REBUILD && handle->src_in_err[counter]) ) {
+      if( mode == NE_WRONLY  ||  (mode == NE_REBUILD  &&  handle->src_in_err[counter] == 1) ) {
          fprintf( stderr, "   opening %s for write\n", file );
          handle->FDArray[counter] = open( file, O_WRONLY | O_CREAT, 0666 );
       }
@@ -197,7 +214,6 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    int mtot = (handle->N)+(handle->E);
    //char file[MAXNAME];
    //char rebuild = 0;
-   int goodfile = 999;
    int minNerr = handle->N+1;  // greater than N
    int maxNerr = -1;   // less than N
    int nsrcerr = 0;
@@ -237,64 +253,14 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
             if ( counter < minNerr ) { minNerr = counter; }
          }
       }
-      else {
-         goodfile = counter;
-      }
    }
 
-   if ( handle->nerr != nerr  ||  goodfile == 999 ) {
+   if ( handle->nerr != nerr ) {
       fprintf( stderr, "ne_read: iconsistent internal state\n" );
       errno = EBADFD;
       return -1;
    }
 
-   //TODO 'goodfile' xattr check seems redundant here, may be useful in health check though.
-//   bzero(file,sizeof(file));
-//   sprintf(file,handle->path,goodfile);
-//
-//   /* go to the a good file depending on missing (there can only be one missing) and get the xattr to tell us how big the file is, num parts, chunk size, etc. */
-//   bzero( xattrval, sizeof(xattrval) );
-//   getxattr( file, XATTRKEY, &xattrval[0], sizeof(xattrval) );
-//   fprintf(stderr,"got xattr %s for %s\n",xattrval,file);
-//   sscanf(xattrval,"%d %d %d %d %d %llu %llu",N,E,bsz,nsz,ncompsz,csum,totsz);
-//
-//   /* edit stuff from xattr */
-//   fprintf(stderr,"total file size is %llu numparts %d ncompsize %d erasure %d blocksize %d\n",totsz,N,ncompsz,E,bsz);
-//   if ( N != handle->N ) {
-//      fprintf (stderr, "ne_read: filexattr N = %d did not match handle value  %d \n", N, handle->N); 
-//      errno = EBADFD;
-//      return -1;
-//   }
-//   if ( E != handle->E ) {
-//      fprintf (stderr, "ne_read: filexattr E = %d did not match handle value  %d \n", E, handle->E); 
-//      errno = EBADFD;
-//      return -1;
-//   }
-//   if ( bsz != handle->bsz ) {
-//      fprintf (stderr, "ne_read: filexattr bsz = %d did not match handle value  %d \n", bsz, handle->bsz); 
-//      errno = EBADFD;
-//      return -1;
-//   }
-//   if ( nsz != handle->nsz[goodfile] ) {
-//      fprintf (stderr, "ne_read: filexattr nsz = %d did not match handle value  %d \n", nsz, handle->nsz); 
-//      errno = EBADFD;
-//      return -1;
-//   }
-//   if ( ncompsz != handle->ncompsz[goodfile] ) {
-//      fprintf (stderr, "ne_read: filexattr ncompsz = %d did not match handle value  %d \n", ncompsz, handle->ncompsz); 
-//      errno = EBADFD;
-//      return -1;
-//   }
-//   if ( csum != handle->csum[goodfile] ) {
-//      fprintf (stderr, "ne_read: filexattr E = %llu did not match handle value  %llu \n", csum, handle->csum[goodfile]); 
-//      errno = EBADFD;
-//      return -1;
-//   }
-//   if ( totsz != handle->totsz ) {
-//      fprintf (stderr, "ne_read: filexattr totsz = %d did not match handle value  %d \n", totsz, handle->totsz); 
-//      errno = EBADFD;
-//      return -1;
-//   }
 
 
    if ( nsrcerr > 0  &&  ! handle->e_ready ) {
@@ -670,6 +636,13 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 }
 
 
+/**
+ * Writes nbytes from buffer into the erasure stiping specified by the provided handle
+ * @param ne_handle handle : Handle for the erasure striping to be written to
+ * @param void* buffer : Buffer containing the data to be written
+ * @param int nbytes : Number of data bytes to be written from buffer
+ * @return int : Number of bytes written, or -1 on error.
+ */
 int ne_write( ne_handle handle, void *buffer, int nbytes )
 {
  
@@ -812,6 +785,15 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
    return totsize;
 }
 
+
+/**
+ * Closes the erasure striping indicated by the provided handle and flushes the handle buffer, if necessary.
+ * @param ne_handle handle : Handle for the striping to be closed
+ * @return int : Status code.  Success is indicated by 0 and failure by -1.  A positive value indicates that the operation was sucessful, 
+ *               but that errors were encountered in the stipe.  The Least-Significant Bit of the return code corresponds to the first of 
+ *               the N data stripe files, while each subsequent bit corresponds to the next N files and then the E files.  A 1 in these 
+ *               positions indicates that an error was encountered while acessing that specific file.
+ */
 int ne_close( ne_handle handle ) 
 {
    int counter;
@@ -866,6 +848,87 @@ int ne_close( ne_handle handle )
    return ret;
 
 }
+
+
+/**
+ * Internal helper function intended to identify file error pattern ahead of ne_read or ne_rebuild operations.
+ * @param ne_handle handle : The handle for the current erasure striping
+ * @param char* path : Name structure for the files of the desired striping.  This should contain a single "%d" field.
+ * @return int : Status code, with 0 indicating success and -1 indicating failure
+ */
+int error_check( ne_handle handle, char *path ) 
+{
+   char file[MAXNAME];       /* array name of files */
+   int counter;
+   int ret;
+   char xattrval[strlen(XATTRKEY)+50];
+   int N = handle->N;
+   int E = handle->E;
+   int bsz = handle->bsz;
+   int goodfile = N+E;
+   u64 totsz;
+   struct stat* partstat = malloc (sizeof(struct stat));
+
+   for ( counter = 0; counter < N+E; counter++ ) {
+      bzero(file,sizeof(file));
+      sprintf( file, path, (counter+handle->erasure_offset)%(N+E) );
+      ret = stat( file, partstat );
+      fprintf( stderr, "error_check: stat of file %s returns %d\n", file, ret );
+      if ( ret != 0 ) {
+         fprintf( stderr, "error_check: file %s: failure of stat\n", file );
+         handle->src_in_err[counter] = 1;
+         handle->src_err_list[handle->nerr] = counter;
+         handle->nerr++;
+      }
+      else {
+         goodfile = counter;
+      }
+   }
+
+   free(partstat);
+
+   /* If no usable file was located or the number of errors is too great, notify of failure */
+   if ( goodfile == N+E  ||  handle->nerr > E ) {
+      return -1;
+   }
+
+   // TODO should this check be done for every file, or none?  It may be too performance heavy to bother with for every file.
+
+   bzero(file,sizeof(file));
+   sprintf(file,path,(goodfile+handle->erasure_offset)%(N+E));
+
+   /* go to the a good file depending on missing (there can only be one missing) and get the xattr to tell us how big the file is, num parts, chunk size, etc. */
+   bzero( xattrval, sizeof(xattrval) );
+   getxattr( file, XATTRKEY, &xattrval[0], sizeof(xattrval) );
+   fprintf(stderr,"error_check: got xattr %s for %s\n",xattrval,file);
+   sscanf(xattrval,"%d %d %d %*u %*u %*u %llu",&N,&E,&bsz,(unsigned long long *)&totsz);
+
+   /* verify xattr */
+   fprintf(stderr,"total file size is %llu numparts %d erasure %d blocksize %d\n",(unsigned long long)totsz,N,E,bsz);
+   if ( N != handle->N ) {
+      fprintf (stderr, "ne_read: filexattr N = %d did not match handle value  %d \n", N, handle->N); 
+      errno = EBADFD;
+      return -1;
+   }
+   if ( E != handle->E ) {
+      fprintf (stderr, "ne_read: filexattr E = %d did not match handle value  %d \n", E, handle->E); 
+      errno = EBADFD;
+      return -1;
+   }
+   if ( bsz != handle->bsz ) {
+      fprintf (stderr, "ne_read: filexattr bsz = %d did not match handle value  %d \n", bsz, handle->bsz); 
+      errno = EBADFD;
+      return -1;
+   }
+   if ( totsz != handle->totsz ) {
+      fprintf (stderr, "ne_read: filexattr totsz = %llu did not match handle value  %llu \n", (unsigned long long)totsz, (unsigned long long)handle->totsz); 
+      errno = EBADFD;
+      return -1;
+   }
+
+   return 0;
+}
+
 
 
 void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls)
