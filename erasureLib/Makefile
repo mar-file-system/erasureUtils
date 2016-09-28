@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -I. -l isal
+CFLAGS = -g -Wall -I. -l isal
 
 lib : erasure.c erasure.h
 	$(CC) $(CFLAGS) -c erasure.c

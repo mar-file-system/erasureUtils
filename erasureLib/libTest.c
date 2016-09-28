@@ -67,14 +67,15 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 int main( int argc, const char* argv[] ) 
 {
-   int nread;
+   unsigned long long nread;
    void *buff;
-   int toread;
+   unsigned long long toread;
    int start;
-   char write;
+   char wr;
    int filefd;
    int N;
    int E;
+   unsigned long long totbytes;
 
    if ( argc < 2 ) {
       fprintf( stderr, "libTest: no operation (read/write) was specified!\n");
@@ -83,17 +84,25 @@ int main( int argc, const char* argv[] )
 
    if ( strncmp( argv[1], "write", strlen(argv[1]) ) == 0 ) {
       if ( argc < 7 ) { 
-         fprintf(stderr,"libTest: insufficient arguments for a write, expected %s %s input_file output_path N E start_file\n", argv[0], argv[1] ); 
+         fprintf(stderr,"libTest: insufficient arguments for a write\nlibTest:   expected \'%s %s input_file output_path N E start_file\'\n", argv[0], argv[1] ); 
          return -1;
       }
-      write = 1;
+      wr = 1;
    }
    else if ( strncmp( argv[1], "read", strlen(argv[1]) ) == 0 ) {
-      if ( argc < 7 ) { 
-         fprintf(stderr,"libTest: insufficient arguments for a read, expected %s %s output_file erasure_path N E start_file\n", argv[0], argv[1] ); 
+      if ( argc < 8 ) { 
+         fprintf(stderr,"libTest: insufficient arguments for a read\nlibTest:   expected \'%s %s output_file erasure_path N E start_file total_bytes\'\n", argv[0], argv[1] ); 
          return -1;
       }
-      write = 0;
+      wr = 0;
+      totbytes = strtoll(argv[7],NULL,10); 
+   }
+   else if ( strncmp( argv[1], "rebuild", strlen(argv[1]) ) == 0 ) {
+      if ( argc < 7 ) { 
+         fprintf(stderr,"libTest: insufficient arguments for a rebuild\nlibTest:   expected \'%s %s output_file erasure_path N E start_file\'\n", argv[0], argv[1] ); 
+         return -1;
+      }
+      wr = 2;
    }
    else {
       fprintf( stderr, "libTest: argument 1 not recognized, expecting \"read\" or \"write\"\n" );
@@ -103,18 +112,22 @@ int main( int argc, const char* argv[] )
    N = atoi(argv[4]);
    E = atoi(argv[5]);
    start = atoi(argv[6]);
-   buff = malloc( sizeof(char) * (N+E) * 64 * 1024 );
-
-   filefd = open( argv[2], O_RDONLY );
-   if ( filefd == -1 ) {
-      fprintf( stderr, "libTest: failed to open file %s\n", argv[2] );
-      return -1;
-   }
    
    srand(time(NULL));
    ne_handle handle;
 
-   if ( write ) {
+   if ( wr == 1 ) { //write
+
+      buff = malloc( sizeof(char) * N * 64 * 1024 );
+
+      fprintf( stdout, "libTest: writing content of file %s to erasure striping (N=%d,E=%d,offset=%d)\n", argv[2], N, E, start );
+
+      filefd = open( argv[2], O_RDONLY );
+      if ( filefd == -1 ) {
+         fprintf( stderr, "libTest: failed to open file %s\n", argv[2] );
+         return -1;
+      }
+
       handle = ne_open( (char *)argv[3], NE_WRONLY, start, N, E );
       if ( handle == NULL ) {
          fprintf( stderr, "libTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
@@ -133,10 +146,53 @@ int main( int argc, const char* argv[] )
       }
 
    }
-   else if ( ! write ) {
+   else if ( wr == 0 ) { //read
+      fprintf( stdout, "libTest: reading %llu bytes from erasure striping (N=%d,E=%d,offset=%d) to file %s\n", totbytes, N, E, start, argv[2] );
+
+      buff = malloc( sizeof(char) * totbytes );
+      fprintf( stdout, "libTest: allocated buffer of size %llu\n", sizeof(char) * totbytes );
+
+      filefd = open( argv[2], O_WRONLY | O_CREAT, 0644 );
+      if ( filefd == -1 ) {
+         fprintf( stderr, "libTest: failed to open file %s\n", argv[2] );
+         return -1;
+      }
+
+      handle = ne_open( (char *)argv[3], NE_RDONLY, start, N, E );
+      if ( handle == NULL ) {
+         fprintf( stderr, "libTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
+         return -1;
+      }
+      
+      toread = (rand() % totbytes) + 1;
+      nread = 0;
+
+      while ( totbytes > 0 ) {
+         fprintf( stdout, "libTest: preparing to read %llu from erasure files with offset %llu\n", toread, nread );
+
+         unsigned long long tmp = ne_read( handle, buff, toread, nread );
+
+         if( toread != tmp ) {
+            fprintf( stderr, "libTest: unexpected # of bytes read by ne_read\nlibTest:  got %llu but expected %llu", tmp, toread );
+            return -1;
+         }
+
+         fprintf( stdout, "libTest: ...done.  Writing %llu to output file.\n", toread );
+         write( filefd, buff, toread );
+
+         totbytes -= toread;
+         nread += toread;
+         if ( totbytes != 0 )
+            toread = ( rand() % totbytes ) + 1;
+      }
+
+      free(buff); 
+   }
+   else if ( wr == 2 ) { //rebuild
       ;
    }
 
+   close(filefd);
    ne_close( handle );
 
    return EXIT_SUCCESS;

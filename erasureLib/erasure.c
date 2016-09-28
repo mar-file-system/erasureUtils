@@ -163,7 +163,8 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
    }
 
    /* allocate a big buffer for all the N chunks plus a bit extra for reading in crcs */
-   posix_memalign( &(handle->buffer), 64, (N+E)*(bsz*1024+sizeof(u32)) );
+   posix_memalign( &(handle->buffer), 64, (N+E)*((bsz*1024)+32) );
+   printf("ne_open: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n", (N+E)*((bsz*1024)+32), bsz, N, E);
 
    /* allocate matrices */
    handle->encode_matrix = malloc(MAXPARTS * MAXPARTS);
@@ -228,7 +229,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    int E = handle->E;
    int bsz = handle->bsz;
    int nerr = 0;
-   unsigned long datasz[ MAXPARTS ];
+   unsigned long datasz[ MAXPARTS ] = {0};
    unsigned long ret_in;
    int tmp;
    unsigned int decode_index[ MAXPARTS ];
@@ -336,6 +337,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
             break;
          }
          ret_in += tmp;
+         llcounter += tmp;
          if ( tmp == 0 ) {
             fprintf(stderr, "ne_read: Input exhausted\n");
             break;
@@ -346,15 +348,17 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
          break;
       }
 
-      llcounter = llcounter + ret_in;
+      //llcounter = llcounter + ret_in;
 
       /**** copy to buffer ****/
       counter = 0;
       while ( counter < N ) {
-         buffer = memcpy( buffer+llcounter-ret_in, handle->buffs[counter], datasz[counter] );
-         fprintf(stderr,"ne_read: wrote out %lu to buffer\n",datasz[counter]);
+         printf("counter = %d\n", counter);
+         fprintf(stderr,"ne_read: writing %lu to buffer at offset %lu\n",datasz[counter],(llcounter-ret_in));
+         memcpy( buffer+(llcounter-ret_in), handle->buffs[counter], datasz[counter] );
          ret_in -= datasz[counter];
-         if( counter >= N ) counter = 0;
+         datasz[counter] = 0;
+         //if( counter >= N ) counter = 0;
          counter++;
       }
 
@@ -855,6 +859,12 @@ int ne_close( ne_handle handle )
          if ( handle->src_in_err[counter] ) { ret += ( 1 << (counter + handle->erasure_offset) % (N+E) ); }
       }
    }
+
+   free(handle->encode_matrix);
+   free(handle->decode_matrix);
+   free(handle->invert_matrix);
+   free(handle->g_tbls);
+   free(handle);
    
    return ret;
 
@@ -931,11 +941,8 @@ int error_check( ne_handle handle, char *path )
       errno = EBADFD;
       return -1;
    }
-   if ( totsz != handle->totsz ) {
-      fprintf (stderr, "ne_read: filexattr totsz = %llu did not match handle value  %llu \n", (unsigned long long)totsz, (unsigned long long)handle->totsz); 
-      errno = EBADFD;
-      return -1;
-   }
+
+   handle->totsz = totsz;
 
    return 0;
 }
