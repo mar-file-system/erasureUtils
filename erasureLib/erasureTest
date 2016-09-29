@@ -56,7 +56,7 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-ITER=10 # Number of N+E file arrays to generate
+ITER=100 # Number of N+E file arrays to generate
 INITER=1 # (Must be 1 until regeneration is added to lib!!!)Number of error patterns to test for each file array
 POSTSLEEP=2 # Number of seconds the program should sleep after a test
 LOGFILE=log_errTests.$$ # Name of the test logfile
@@ -197,7 +197,7 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Errors inserted, pattern is  $npat" >> $LOGFILE
       echo
 
-      echo "Performing a read of all data from data/erasure files..."
+      echo "Performing a read of all data from striping..."
       echo "Performing read of all data from striping..." >> $LOGFILE
       ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 > /dev/null 2>&1
       if [[ ! $? -eq 0 ]]; then
@@ -207,10 +207,6 @@ while [[ $cnt -lt $ITER ]]; do
          echo "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
          exit -1
       fi
-      echo "...done"
-      echo "   stripe generation complete" >> $LOGFILE
-      #sleep 1
-      echo
       echo "...done.  Output file is \"outfile.$$\""
       echo "...done.  Output file is \"outfile.$$\"" >> $LOGFILE
       echo
@@ -233,7 +229,7 @@ while [[ $cnt -lt $ITER ]]; do
    
       echo "Cleaining up outputs..."
       echo "Cleaining up outputs..." >> $LOGFILE
-      rm outfile.$$ cmpout.$$
+      rm outfile.$$
       echo
 
 #      echo "Attempting error recovery..."
