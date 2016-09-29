@@ -58,8 +58,9 @@
 
 ITER=100 # Number of N+E file arrays to generate
 INITER=1 # (Must be 1 until regeneration is added to lib!!!)Number of error patterns to test for each file array
-POSTSLEEP=2 # Number of seconds the program should sleep after a test
+POSTSLEEP=0 # Number of seconds the program should sleep after a test
 LOGFILE=log_errTests.$$ # Name of the test logfile
+LIBTLOG=log_libTests.$$
 
 echo
 echo "Tests erasure library functions..."
@@ -91,9 +92,10 @@ while [[ $cnt -lt $ITER ]]; do
    echo
    echo "Generating $n+$e striping starting at file $start..."
    echo >> $LOGFILE
+   echo >> $LIBTLOG
    echo "Generating $n+$e striping starting at file $start""..." >> $LOGFILE
    #sleep 1
-   ./libTest write testfile.$$ testout.%d.$$ $n $e $start > /dev/null 2>&1
+   ./libTest write testfile.$$ testout.%d.$$ $n $e $start >> $LIBTLOG 2>&1
    if [[ ! $? -eq 0 ]]; then
       echo -e "\033[0;31mFAIL - write operation returned a non-zero status"
       echo -e "CMD = ./libTest write testfile.$$ testout.%d.$$ $n $e $start\033[0m"
@@ -197,9 +199,10 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Errors inserted, pattern is  $npat" >> $LOGFILE
       echo
 
+      echo >> $LIBTLOG
       echo "Performing a read of all data from striping..."
       echo "Performing read of all data from striping..." >> $LOGFILE
-      ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 > /dev/null 2>&1
+      ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 >> $LIBTLOG 2>&1
       if [[ ! $? -eq 0 ]]; then
          echo -e "\033[0;31mFAIL - read operation returned a non-zero status"
          echo -e "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
@@ -299,6 +302,9 @@ while [[ $cnt -lt $ITER ]]; do
 
    sleep $POSTSLEEP
 
+   echo "Removing libTest log file..."
+   rm $LIBTLOG
+
    incnt=$(( incnt + 1 ))
    done
 
@@ -317,7 +323,7 @@ echo
 echo "Cleaning up remaining files..."
 rm testfile.$$
 make clean
-echo "Removing log file..."
+echo "Removing log files..."
 rm $LOGFILE
 echo "...done"
 

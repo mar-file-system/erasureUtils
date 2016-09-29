@@ -70,12 +70,16 @@ int main( int argc, const char* argv[] )
    unsigned long long nread;
    void *buff;
    unsigned long long toread;
+   unsigned long long totdone = 0;
    int start;
    char wr;
    int filefd;
    int N;
    int E;
    unsigned long long totbytes;
+
+   fprintf(stdout, "libTest: Running.  Preparing to parse args...\n");
+
 
    if ( argc < 2 ) {
       fprintf( stderr, "libTest: no operation (read/write) was specified!\n");
@@ -137,15 +141,20 @@ int main( int argc, const char* argv[] )
       toread = rand() % ( N * 64 * 1024 );
 
       while ( (nread = read( filefd, buff, toread )) != 0 ) {
+         fprintf( stdout, "libTest: preparing to write %llu to erasure files...\n", nread );
          if ( nread != ne_write( handle, buff, nread ) ) {
             fprintf( stderr, "libTest: unexpected # of bytes written by ne_write\n" );
             return -1;
          }
+         fprintf( stdout, "libTest: write successful\n" );
+
+         totdone += nread;
 
          toread = rand() % ( N * 64 * 1024 );
       }
 
       free(buff);
+      fprintf( stdout, "libTest: all writes completed\nlibTest: total written = %llu\n", totdone );
 
    }
    else if ( wr == 0 ) { //read
@@ -186,11 +195,13 @@ int main( int argc, const char* argv[] )
 
          totbytes -= toread;
          nread += toread;
+         totdone += toread;
          if ( totbytes != 0 )
             toread = ( rand() % totbytes ) + 1;
       }
 
       free(buff); 
+      fprintf( stdout, "libTest: all reads completed\nlibTest: total read = %llu\n", totdone );
    }
    else if ( wr == 2 ) { //rebuild
       ;
@@ -199,5 +210,5 @@ int main( int argc, const char* argv[] )
    close(filefd);
    ne_close( handle );
 
-   return EXIT_SUCCESS;
+   return 0;
 }
