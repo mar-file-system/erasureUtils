@@ -1,0 +1,308 @@
+#! /bin/bash
+
+#Copyright (c) 2015, Los Alamos National Security, LLC
+#All rights reserved.
+#
+#Copyright 2015.  Los Alamos National Security, LLC. This software was produced
+#under U.S. Government contract DE-AC52-06NA25396 for Los Alamos National
+#Laboratory (LANL), which is operated by Los Alamos National Security, LLC for
+#the U.S. Department of Energy. The U.S. Government has rights to use, reproduce,
+#and distribute this software.  NEITHER THE GOVERNMENT NOR LOS ALAMOS NATIONAL
+#SECURITY, LLC MAKES ANY WARRANTY, EXPRESS OR IMPLIED, OR ASSUMES ANY LIABILITY
+#FOR THE USE OF THIS SOFTWARE.  If software is modified to produce derivative
+#works, such modified software should be clearly marked, so as not to confuse it
+#with the version available from LANL.
+# 
+#Additionally, redistribution and use in source and binary forms, with or without
+#modification, are permitted provided that the following conditions are met:
+#1. Redistributions of source code must retain the above copyright notice, this
+#list of conditions and the following disclaimer.
+#
+#2. Redistributions in binary form must reproduce the above copyright notice,
+#this list of conditions and the following disclaimer in the documentation
+#and/or other materials provided with the distribution.
+#3. Neither the name of Los Alamos National Security, LLC, Los Alamos National
+#Laboratory, LANL, the U.S. Government, nor the names of its contributors may be
+#used to endorse or promote products derived from this software without specific
+#prior written permission.
+#
+#THIS SOFTWARE IS PROVIDED BY LOS ALAMOS NATIONAL SECURITY, LLC AND CONTRIBUTORS
+#"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+#THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+#ARE DISCLAIMED. IN NO EVENT SHALL LOS ALAMOS NATIONAL SECURITY, LLC OR
+#CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+#OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+#SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+#INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+#STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+#OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+#-----
+#NOTE:
+#-----
+#Although these files reside in a seperate repository, they fall under the MarFS copyright and license.
+#
+#MarFS is released under the BSD license.
+#
+#MarFS was reviewed and released by LANL under Los Alamos Computer Code identifier:
+#LA-CC-15-039.
+#
+#These erasure utilites make use of the Intel Intelligent Storage Acceleration Library (Intel ISA-L), which can be found at https://github.com/01org/isa-l and is under its own license.
+#
+#MarFS uses libaws4c for Amazon S3 object communication. The original version
+#is at https://aws.amazon.com/code/Amazon-S3/2601 and under the LGPL license.
+#LANL added functionality to the original work. The original work plus
+#LANL contributions is found at https://github.com/jti-lanl/aws4c.
+#
+#GNU licenses can be found at http://www.gnu.org/licenses/.
+
+ITER=2 # Number of N+E file arrays to generate
+INITER=1 # Number of error patterns to test for each file array
+POSTSLEEP=2 # Number of seconds the program should sleep after a test
+LOGFILE=log_errTests.$$ # Name of the test logfile
+
+echo
+echo "Tests erasure library functions..."
+echo
+echo "Compiling..."
+make all
+echo "done"
+echo "Generating input file 'testfile.$$' (this will take some time)..."
+dd if=/dev/urandom of=testfile.$$ bs=10M count=20
+echo "done"
+echo
+
+echo "Created testfile.$$" >> $LOGFILE
+echo >> $LOGFILE
+
+cnt=0
+while [[ $cnt -lt $ITER ]]; do
+   n=$RANDOM
+   let "n %= 13"
+   n=$(( n + 2 ))
+   e=$RANDOM
+   let "e %= 3"
+   e=$(( e + 1 ))
+#   bsz=$RANDOM
+#   let "bsz %= 90"
+#   bsz=$(( bsz + 10 ))
+   start=$RANDOM
+   let "start %= $(( n + e ))"
+   echo
+   echo "FtoNE : Generating $n+$e striping starting at file $start..."
+   echo >> $LOGFILE
+   echo "Generating $n+$e striping starting at file $start..." >> $LOGFILE
+   #sleep 1
+   ./libTest write testfile.$$ testout.%d.$$ $n $e $start #> /dev/null 2>&1
+   echo "...done"
+   echo "   stripe generation complete" >> $LOGFILE
+   #sleep 1
+   echo
+   ls testout.*.$$
+   echo
+   #sleep 1
+
+   incnt=0
+   while [[ $incnt -lt $INITER ]]; do
+
+   if [[ $incnt -ne 0 ]]; then
+      echo "Continuing with the same $n+$e striping..."
+      echo >> $LOGFILE
+      echo "Continuring to use $n+$e striping with start $start..." >> $LOGFILE
+      echo
+   fi
+
+#   tmp=$RANDOM
+#   let "tmp %= 1024 * tmp"
+#   offset=$RANDOM
+#   offset=$(( offset * tmp ))
+#   let "offset %= 20470000"
+#   tmp=$RANDOM
+#   let "tmp %= 1024 * tmp"
+#   len=$RANDOM
+#   len=$(( len * tmp ))
+#   tmp=$(( 20480000 - offset ))
+#   let "len %= $tmp"
+
+   nerr=$RANDOM
+   let "nerr %= $(( e + 1 ))"
+#   nerr=$(( nerr + 1 ))
+   npat=""
+   maxpos=$(( n + e - nerr ))
+   oldpos=0
+   errcnt=0
+   errpos=-1
+
+   echo "$nerr error(s) are to be inserted..."
+   echo "Inserting $nerr error(s)..." >> $LOGFILE
+   
+   {
+
+      while [[ $errcnt -lt $nerr ]]; do
+         while [[ $errpos -lt $oldpos ]]; do
+            errpos=$RANDOM
+            let "errpos %= maxpos"
+         done
+
+         echo "   placing error at $errpos""..."
+         echo "   placing error at $errpos""..." >> $LOGFILE
+
+         efile="testout.$errpos.$$"
+
+         echo "   corrupting file $efile"
+         echo "   corrupting file $efile" >> $LOGFILE
+         dd if=/dev/urandom of=$efile bs=1 count=1
+
+         while [[ $oldpos -lt $errpos ]]; do
+            if [[ $npat == "" ]]; then
+               npat="0"
+            else
+               npat="$npat"".0"
+            fi
+            oldpos=$(( oldpos + 1 ))
+         done
+
+         if [[ $npat == "" ]]; then
+            npat="1"
+         else
+            npat="$npat"".1"
+         fi #here
+         echo "   error insertion successful"
+         echo "   error insertion successful" >> $LOGFILE
+         oldpos=$(( oldpos + 1 ))
+         
+         errcnt=$(( errcnt + 1 ))
+         maxpos=$(( maxpos + 1 ))
+      done
+
+      while [[ $oldpos -lt $maxpos ]]; do
+         if [[ $npat == "" ]]; then
+            npat="0"
+         else
+            npat="$npat"".0"
+         fi
+         oldpos=$(( oldpos + 1 ))
+      done
+
+      echo "...errors inserted."
+      echo "Errors inserted, pattern is  $npat" >> $LOGFILE
+      echo
+
+      echo "Performing a read of $len from data/erasure files with offset = $offset with error pattern $npat..."
+      echo "Performing read of $len""..." >> $LOGFILE
+      ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 #> /dev/null 2>&1
+      echo "...done.  Output file is \"outfile.$$\""
+      echo "...done.  Output file is \"outfile.$$\"" >> $LOGFILE
+      echo
+
+      #sleep 1
+      
+      echo "Performing comparison..."
+      echo "Performing comparison..." >> $LOGFILE
+      #sleep 1
+      cmp testfile.$$ outfile.$$
+
+      if [[ ! $? -eq 0 ]]; then
+         echo -e "\033[0;31mFAIL - output does not match expected data\033[0m"
+         echo "   FAILURE: output of ne_read does not match the expected data" >> $LOGFILE
+         echo "CMD = cmp testfile.$$ outfile.$$"
+         exit -1
+      fi
+      echo "Comparison passed"
+      echo "Comparison passed" >> $LOGFILE
+   
+      echo "Cleaining up outputs..."
+      echo "Cleaining up outputs..." >> $LOGFILE
+      rm outfile.$$ cmpout.$$
+      echo
+
+#      echo "Attempting error recovery..."
+#      echo "Attempting error recovery..." >> $LOGFILE
+#      if [[ $npat == *"1"* ]]; then
+#         echo "   errors exist within N, using \"rebuildne\"..."
+#         echo "   errors exist within N, using \"rebuildne\"..." >> $LOGFILE
+#         ./lanl_rebuildne testout.$$ $npat $epat > /dev/null 2>&1
+#         ret=$?
+#         if [[ $ret -ne 0 ]]; then
+#            echo -e "\033[0;31mFAIL - rebuild (rebuildne) has failed\033[0m"
+#            echo "CMD = ./lanl_rebuildne testout.$$ $npat $epat"
+#            echo "   FAILURE: an error occured within rebuildne" >> $LOGFILE
+#            echo "CMD = ./lanl_rebuildne testout.$$ $npat $epat" >> $LOGFILE
+#            ./lanl_rebuildne testout.$$ $npat $epat
+#            exit $ret
+#         fi
+#      else
+#         echo "   no errors exist within N, using \"ntofe\"..."
+#         echo "   no errors exist within N, using \"ntofe\"..." >> $LOGFILE
+#         ./lanl_ntofe testout.$$ cmpfile.$$ $epat > /dev/null 2>&1
+#         ret=$?
+#         if [[ $ret -ne 0 ]]; then
+#            echo -e "\033[0;31mFAIL - rebuild (ntofe) has failed\033[0m"
+#            echo "CMD = ./lanl_ntofe testout.$$ cmpfile.$$ $epat"
+#            echo "   FAILURE: an error occured within ntofe" >> $LOGFILE
+#            echo "CMD = ./lanl_ntofe testout.$$ cmpfile.$$ $epat" >> $LOGFILE
+#            exit $ret
+#         fi
+#         cmp testfile.$$ cmpfile.$$
+#         ret=$?
+#         if [[ $ret -ne 0 ]]; then
+#            echo -e "\033[0;31mFAIL - output file of \"ntofe\" does not match original file\033[0m"
+#            echo "   FAILURE: ouput file of ntofe does not match input" >> $LOGFILE
+#            exit $ret
+#         fi
+#         echo "   outfile matches orignal input"
+#         echo "   outfile matches orignal input" >> $LOGFILE
+#         echo "   deleting outfile"
+#         echo "   deleting outfile" >> $LOGFILE
+#         rm cmpfile.$$
+#      fi
+#         
+#      echo "...done"
+#      echo "...done" >> $LOGFILE
+#      
+#      ./lanl_health testout.$$ $n $bsz 209715200 $e > /dev/null 2>&1
+#      ret=$?
+#      if [[ $ret -ne 0 ]]; then
+#         echo -e "\033[0;31mFAIL - health check failed after rebuild\033[0m"
+#         echo "   FAILURE: health check failed after rebuild" >> $LOGFILE
+#         echo "CMD = ./lanl_health testout.$$ $n $bsz 209715200 $e"
+#         echo "CMD = ./lanl_health testout.$$ $n $bsz 209715200 $e" >> $LOGFILE
+#         exit $ret
+#      fi
+#      echo "Health check confirms corruption absent"
+#      echo "Health check confirms corruption absent" >> $LOGFILE
+#      echo
+
+      #All tests passed for this iteration
+      echo -e "\033[0;32mPASS - $n+$e with bsize $bsz""K"
+      echo -e "     read of $len at $offset"
+      echo -e "     and error pattern   N( $npat )  E( $epat )\033[0m"
+
+      echo "PASS - $n+$e with start file $start" >> $LOGFILE 
+      echo "     and error pattern   $npat" >> $LOGFILE
+   }
+
+   sleep $POSTSLEEP
+
+   incnt=$(( incnt + 1 ))
+   done
+
+   echo "Cleaining up file array..."
+   rm testout.*.$$
+
+   cnt=$(( cnt + 1 ))
+done
+
+echo "...done"
+echo
+
+
+
+
+echo "Cleaning up remaining files..."
+rm testfile.$$
+make clean
+echo "Removing log file..."
+rm $LOGFILE
+echo "...done"
+
