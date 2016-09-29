@@ -167,15 +167,17 @@ int main( int argc, const char* argv[] )
       }
       
       toread = (rand() % totbytes) + 1;
+      if ( toread > totbytes ) { exit(1000); }
       nread = 0;
 
       while ( totbytes > 0 ) {
          fprintf( stdout, "libTest: preparing to read %llu from erasure files with offset %llu\n", toread, nread );
+         if ( toread > totbytes ) { exit(1000); }
 
          unsigned long long tmp = ne_read( handle, buff, toread, nread );
 
          if( toread != tmp ) {
-            fprintf( stderr, "libTest: unexpected # of bytes read by ne_read\nlibTest:  got %llu but expected %llu", tmp, toread );
+            fprintf( stderr, "libTest: unexpected # of bytes read by ne_read\nlibTest:  got %llu but expected %llu\n", tmp, toread );
             return -1;
          }
 

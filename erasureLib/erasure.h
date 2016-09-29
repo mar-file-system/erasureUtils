@@ -126,6 +126,7 @@ typedef struct handle {
    unsigned char *decode_matrix;
    unsigned char *invert_matrix;
    unsigned char *g_tbls;
+   unsigned char *recov[ MAXPARTS ];
 } *ne_handle;
 
 /* Erasure Utility Functions */

@@ -233,7 +233,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    unsigned long ret_in;
    int tmp;
    unsigned int decode_index[ MAXPARTS ];
-   unsigned char* recov[ MAXPARTS ];
+   //unsigned char* recov[ MAXPARTS ];
    u32 llcounter;
    u32 readsize;
    u32 startoffset;
@@ -255,6 +255,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 
 
    for ( counter = 0; counter < mtot; counter++ ) {
+      posix_memalign((void **)&(temp_buffs[counter]),64,bsz*1024);       
       if ( handle->src_in_err[counter] ) {
          nerr++;
          if ( counter < N ) { 
@@ -302,6 +303,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
       counter++;
    }
    llcounter = 0;
+   tmpoffset = 0;
    char firstpart = 1;
    
    /* Read in nbytes so long as no errors have been encountered */
@@ -310,22 +312,28 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
       counter = 0;
       while ( counter < N ) {
          readsize = bsz*1024;
-         if (firstpart) {
-            if ( counter < startpart ) {
-               datasz[counter] = 0;
+         if (firstpart ) {
+            if( counter == startpart) {
+               /*if ( counter < startpart ) {
+                 datasz[counter] = 0;
+                 counter++;
+                 continue;
+                 }*/
+               firstpart = 0;
+               readsize = bsz*1024-startoffset;
+            }
+            else {
                counter++;
                continue;
             }
-            firstpart = 0;
-            readsize = bsz*1024-startoffset;
          } 
-         if ((nbytes-llcounter) < readsize) readsize = nbytes-llcounter;
+         if ((nbytes-tmpoffset) < readsize) readsize = nbytes-tmpoffset;
          fprintf(stderr,"ne_read: preparing to read %lu from datafile %d\n",(unsigned long)readsize,counter);
 
          /**** read ****/
          tmp = read( handle->FDArray[counter], handle->buffs[counter], readsize );
          datasz[counter] = tmp;
-         if ( tmp < 0 ) {
+         if ( tmp != 0  &&  tmp != readsize ) {
             fprintf(stderr, "ne_read: encoutered error while reading from file %d without rebuild\n", counter);
             if ( counter > maxNerr )  maxNerr = counter;
             if ( counter < minNerr )  minNerr = counter;
@@ -337,7 +345,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
             break;
          }
          ret_in += tmp;
-         llcounter += tmp;
+         tmpoffset += tmp;
          if ( tmp == 0 ) {
             fprintf(stderr, "ne_read: Input exhausted\n");
             break;
@@ -348,7 +356,8 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
          break;
       }
 
-      //llcounter = llcounter + ret_in;
+      llcounter = tmpoffset;
+      printf("llcounter = %lu\n", (unsigned long)llcounter);
 
       /**** copy to buffer ****/
       counter = 0;
@@ -373,11 +382,11 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 
    /******** Rebuild While Reading ********/
    if (nsrcerr != 0) { 
-      fprintf(stderr,"honor read request with rebuild\n");
-      startstripe = offset+llcounter / (bsz*1024*N);
-      startpart = (offset+llcounter - (startstripe*bsz*1024*N))/(bsz*1024);
+      fprintf(stderr,"ne_read: honor read request with rebuild\n");
+      startstripe = (offset+llcounter) / (bsz*1024*N);
+      startpart = (offset + llcounter - (startstripe*bsz*1024*N))/(bsz*1024);
       startoffset = offset+llcounter - (startstripe*bsz*1024*N) - (startpart*bsz*1024);
-      fprintf(stderr,"read with rebuild from startstripe %d startpart %d and startoffset %d for nbytes %d\n",startstripe,startpart,startoffset,nbytes);
+      fprintf(stderr,"ne_read: read with rebuild from startstripe %d startpart %d and startoffset %d for nbytes %d\n",startstripe,startpart,startoffset,nbytes);
 
 
       counter = 0;
@@ -390,7 +399,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 
       /**** set seek positions for initial reading ****/
       if (startpart > maxNerr  ||  endchunk < minNerr ) {  //if not reading from corrupted chunks, we can just set these normally
-         fprintf(stderr,"startpart = %d, endchunk = %d\n   This stipe does not contain any corrupted blocks...\n", startpart, endchunk);
+         fprintf(stderr,"ne_read: startpart = %d, endchunk = %d\nne_read:   this stipe does not contain any corrupted blocks...\n", startpart, endchunk);
          for ( counter = 0; counter <= endchunk; counter++ ) {
             if (counter < startpart) {
                seekamt = (startstripe*bsz*1024) + (bsz*1024); 
@@ -403,11 +412,11 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
             }
             if( handle->src_in_err[counter] == 0 ) {
                if ( counter < N ) {
-                  fprintf(stderr,"seek input file %d to %zd, as there is no error in this stripe\n",counter, seekamt);
+                  fprintf(stderr,"seeking input file %d to %zd, as there is no error in this stripe\n",counter, seekamt);
                }
                else {
                   seekamt += (bsz*1024);
-                  fprintf(stderr,"seek erasure file e%d to %zd, as we will be reading from the next stripe\n",counter-N, seekamt);
+                  fprintf(stderr,"seeking erasure file e%d to %zd, as we will be reading from the next stripe\n",counter-N, seekamt);
                }
                lseek(handle->FDArray[counter],seekamt,SEEK_SET);
             }
@@ -434,6 +443,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
          tmpchunk = 0;
          tmpoffset = 0;
          error_in_stripe = 1;
+         //handle->e_ready = 0; //test
       }
 
       firstchunk = 1;
@@ -446,14 +456,14 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
          endchunk = ((long)(offset+nbytes+1) - (long)((long)(startstripe*N*bsz*1024) + llcounter) ) / (bsz*1024);
          skipped_err = 0;
          
-         fprintf( stderr, "\nEndchunk unadjusted - %d\n", endchunk );
+         fprintf( stderr, "ne_read: endchunk unadjusted - %d\n", endchunk );
          if ( endchunk >= N ) {
             endchunk = N - 1;
          }
          
-         printf("Endchunk adjusted - %d\n\n", endchunk);
+         printf("ne_read: endchunk adjusted - %d\n", endchunk);
          if ( endchunk < minNerr ) {
-            printf("There is no error in this stripe\n");
+            printf("ne_read: there is no error in this stripe\n");
             error_in_stripe = 0;
          }
 
@@ -462,24 +472,25 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
             readsize = bsz*1024-tmpoffset;
 
             if ( llcounter == nbytes  &&  !error_in_stripe ) {
-               fprintf(stderr, "Data reads complete\n");
+               fprintf(stderr, "ne_read: data reads complete\n");
                break;
             }
 
-            if ( handle->src_in_err[counter] ) {  //this data chunk is invalid
-               fprintf(stderr,"zeroing data for faulty chunk %d\n",counter);
+            if ( handle->src_in_err[counter] == 1 ) {  //this data chunk is invalid
+               fprintf(stderr,"ne_read: zeroing data for faulty chunk %d\n",counter);
                bzero(handle->buffs[counter],bsz*1024);
+               fprintf(stderr,"ne_read: zeroing tmp_data for faulty chunk %d\n",counter);
                bzero(temp_buffs[counter],bsz*1024);
 
                error_in_stripe = 1;
 
-               if ( firstchunk  &&  counter == startpart ) {
+               if ( firstchunk == 1  &&  counter == startpart ) {
                   fprintf(stderr,"ne_read: first desired chunk : invalid\n");
                   llcounter = (readsize - (startoffset-tmpoffset) < nbytes ) ? readsize-(startoffset-tmpoffset) : nbytes;
                   datasz[counter] = llcounter;
                   firstchunk = 0;
                }
-               else if ( !firstchunk ) {
+               else if ( firstchunk == 0 ) {
 
                   llcounter += readsize;
 
@@ -523,7 +534,8 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 
             }
 
-            fprintf(stderr, "ne_read: nbytes = %d, llcounter = %lu, ret_in = %lu, read_size = %d\n", nbytes, (unsigned long)llcounter, ret_in, readsize);
+            //fprintf(stderr, "ne_read: nbytes = %d, llcounter = %lu, ret_in = %lu, read_size = %d\n", nbytes, (unsigned long)llcounter, ret_in, readsize);
+            fprintf(stderr, "ne_read: nbytes = rem, llcounter = rem, ret_in = rem, read_size = %d\n", readsize);
             tmpoffset = 0;
 
          } //completion of read from stripe
@@ -534,15 +546,28 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
             readsize = bsz*1024; //may want to limit later
 
             if( handle->src_in_err[counter] ) {
+               fprintf(stderr,"ne_read: zeroing data for faulty erasure %d\n",counter);
                bzero(handle->buffs[counter],bsz*1024);
+               fprintf(stderr,"ne_read: zeroing temp_data for faulty erasure %d\n",counter);
                bzero(temp_buffs[counter],bsz*1024);
             }
             else {
-               fprintf(stderr,"read %d from erasure %d\n",readsize,counter-N);
+               fprintf(stderr,"read %d from erasure %d\n",readsize,counter);
                ret_in = read( handle->FDArray[counter], handle->buffs[counter], readsize );
                if ( ret_in < readsize ) {
-                  fprintf(stderr, "Failed to read erasure!\n");
-                  break;
+                  fprintf(stderr, "ne_read: failed to read erasure data in file %d\n", counter);
+                  fprintf(stderr,"ne_read: zeroing data for faulty erasure %d\n",counter);
+                  bzero(handle->buffs[counter],bsz*1024);
+                  fprintf(stderr,"ne_read: zeroing temp_data for faulty erasure %d\n",counter);
+                  bzero(temp_buffs[counter],bsz*1024);
+                  fprintf(stderr,"ne_read: done zeroing %d\n",counter);
+                  if ( counter > maxNerr )  maxNerr = counter;
+                  if ( counter < minNerr )  minNerr = counter;
+                  handle->src_in_err[counter] = 1;
+                  handle->src_err_list[handle->nerr] = counter;
+                  handle->nerr++;
+                  handle->e_ready = 0; //indicate that erasure structs require re-initialization
+                  error_in_stripe = 1;
                }
             }
             counter++;
@@ -550,13 +575,14 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 
 
          /**** regenerate from erasure ****/
-         if ( error_in_stripe ) {
+         if ( error_in_stripe == 1 ) {
 
             /* If necessary, initialize the erasure structures */
             if ( nsrcerr > 0  &&  handle->e_ready == 0 ) {
                // Generate encode matrix encode_matrix
                // The matrix generated by gf_gen_rs_matrix
                // is not always invertable.
+               fprintf(stdout,"ne_read: initializing erasure structs...\n");
                gf_gen_rs_matrix(handle->encode_matrix, mtot, N);
 
                // Generate g_tbls from encode matrix encode_matrix
@@ -571,16 +597,17 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
                   return -1;
                }
 
+               for (tmp = 0; tmp < N; tmp++) {
+                  handle->recov[tmp] = handle->buffs[decode_index[tmp]];
+               }
+
                handle->e_ready = 1; //indicate that rebuild structures are initialized
             }
 
-            for (tmp = 0; tmp < N; tmp++) {
-               recov[tmp] = handle->buffs[decode_index[tmp]];
-            }
-
-            fprintf( stderr, "ne_read: performing regeneration from erasure...\n" );
+            fprintf( stderr, "ne_read: init erasure tables nsrcerr = %d e_ready = %d...\n", nsrcerr, handle->e_ready );
             ec_init_tables(N, handle->nerr, handle->decode_matrix, handle->g_tbls);
-            ec_encode_data(bsz*1024, N, handle->nerr, handle->g_tbls, recov, &temp_buffs[N]);
+            fprintf( stderr, "ne_read: performing regeneration from erasure...\n" );
+            ec_encode_data(bsz*1024, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
          }
 
          fprintf( stderr, "llcounter = %lu\n", (unsigned long)llcounter );
@@ -646,6 +673,10 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
       } //end of generating loop for each stripe
 
    } //end of "Read with rebuild" case
+
+   for( counter = 0; counter < N+E; counter++ ) {
+      free(temp_buffs[counter]);
+   }
 
    return llcounter; 
 }

@@ -56,8 +56,8 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-ITER=2 # Number of N+E file arrays to generate
-INITER=1 # Number of error patterns to test for each file array
+ITER=3 # Number of N+E file arrays to generate
+INITER=3 # Number of error patterns to test for each file array
 POSTSLEEP=2 # Number of seconds the program should sleep after a test
 LOGFILE=log_errTests.$$ # Name of the test logfile
 
@@ -158,7 +158,8 @@ while [[ $cnt -lt $ITER ]]; do
 
          echo "   corrupting file $efile"
          echo "   corrupting file $efile" >> $LOGFILE
-         dd if=/dev/urandom of=$efile bs=1 count=1
+        # dd if=/dev/urandom of=$efile bs=1 count=1
+         rm $efile
 
          while [[ $oldpos -lt $errpos ]]; do
             if [[ $npat == "" ]]; then
