@@ -88,7 +88,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define TEST_SEED 57
 
 #define XATTRKEY "user.n.e.bsz.nsz.ncompsz.ncrcsum.totsz"
-#define MAXPARTS MAXN + MAXE
+#define MAXPARTS (MAXN + MAXE)
 #define NO_INVERT_MATRIX -2
 
 typedef uint32_t u32;

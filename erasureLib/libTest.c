@@ -145,6 +145,8 @@ int main( int argc, const char* argv[] )
          toread = rand() % ( N * 64 * 1024 );
       }
 
+      free(buff);
+
    }
    else if ( wr == 0 ) { //read
       fprintf( stdout, "libTest: reading %llu bytes from erasure striping (N=%d,E=%d,offset=%d) to file %s\n", totbytes, N, E, start, argv[2] );
