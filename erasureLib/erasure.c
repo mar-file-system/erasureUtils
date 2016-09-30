@@ -423,6 +423,8 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    }
 
    /******** Rebuild While Reading ********/
+rebuild:
+
    if (nsrcerr != 0) { 
 #ifdef DEBUG
       fprintf(stdout,"ne_read: honor read request with rebuild\n");
@@ -466,7 +468,20 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
                   fprintf(stdout,"seeking erasure file e%d to %zd, as we will be reading from the next stripe\n",counter-N, seekamt);
 #endif
                }
-               lseek(handle->FDArray[counter],seekamt,SEEK_SET);
+               tmp = lseek(handle->FDArray[counter],seekamt,SEEK_SET);
+
+               //if we hit an error here, seek positions are wrong and we must restart
+               if ( tmp < 0 ) {
+                  if ( counter > maxNerr )  maxNerr = counter;
+                  if ( counter < minNerr )  minNerr = counter;
+                  handle->src_in_err[counter] = 1;
+                  handle->src_err_list[handle->nerr] = counter;
+                  handle->nerr++;
+                  nsrcerr++;
+                  handle->e_ready = 0; //indicate that erasure structs require re-initialization
+                  goto rebuild; //if another error is encountered, start over
+               }
+
             }
          }
          tmpchunk = startpart;
@@ -479,8 +494,20 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 #endif
          while (counter < mtot) {
             if( handle->src_in_err[counter] == 0 ) {
-               lseek(handle->FDArray[counter],(startstripe*bsz*1024),SEEK_SET);
+               tmp = lseek(handle->FDArray[counter],(startstripe*bsz*1024),SEEK_SET);
 #ifdef DEBUG
+               //note any errors, no need to restart though
+               if ( tmp < 0 ) {
+                  if ( counter > maxNerr )  maxNerr = counter;
+                  if ( counter < minNerr )  minNerr = counter;
+                  handle->src_in_err[counter] = 1;
+                  handle->src_err_list[handle->nerr] = counter;
+                  handle->nerr++;
+                  nsrcerr++;
+                  handle->e_ready = 0; //indicate that erasure structs require re-initialization
+                  counter++;
+                  continue;
+               }
                fprintf(stdout,"seek input file %d to %lu, to read entire stripe\n",counter, (unsigned long)(startstripe*bsz*1024));
 #endif
             }
@@ -574,6 +601,23 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
                fprintf(stdout,"read %d from datafile %d\n",readsize,counter);
 #endif
                ret_in = read( handle->FDArray[counter], handle->buffs[counter], readsize );
+               //check for a read error
+               if ( ret_in < 0 ) {
+                  if ( counter > maxNerr )  maxNerr = counter;
+                  if ( counter < minNerr )  minNerr = counter;
+                  handle->src_in_err[counter] = 1;
+                  handle->src_err_list[handle->nerr] = counter;
+                  handle->nerr++;
+                  nsrcerr++;
+                  handle->e_ready = 0; //indicate that erasure structs require re-initialization
+                  //if we have skipped some of the stripe, we must start over
+                  if ( error_in_stripe == 0 && tmpoffset != 0 ) {
+                     for( tmp = counter -1; tmp >=0; tmp-- ) {
+                        llcounter -= datasz[counter];
+                     }
+                     goto rebuild;
+                  }
+               }
 
                if ( firstchunk  &&  counter == startpart ) {
                   llcounter = (ret_in - (startoffset-tmpoffset) < nbytes ) ? ret_in-(startoffset-tmpoffset) : nbytes;
