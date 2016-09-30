@@ -138,7 +138,7 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
-      toread = rand() % ( N * 64 * 1024 );
+      toread = (rand() % ( N * 64 * 1024 )) + 1;
 
       while ( (nread = read( filefd, buff, toread )) != 0 ) {
          fprintf( stdout, "libTest: preparing to write %llu to erasure files...\n", nread );
@@ -150,7 +150,7 @@ int main( int argc, const char* argv[] )
 
          totdone += nread;
 
-         toread = rand() % ( N * 64 * 1024 );
+         toread = (rand() % ( N * 64 * 1024 )) + 1;
       }
 
       free(buff);
