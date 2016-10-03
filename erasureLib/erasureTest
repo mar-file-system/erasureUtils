@@ -95,12 +95,12 @@ while [[ $cnt -lt $ITER ]]; do
    echo >> $LIBTLOG
    echo "Generating $n+$e striping starting at file $start""..." >> $LOGFILE
    #sleep 1
-   ./libTest write testfile.$$ testout.%d.$$ $n $e $start >> $LIBTLOG 2>&1
+   ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200 >> $LIBTLOG 2>&1
    if [[ ! $? -eq 0 ]]; then
       echo -e "\033[0;31mFAIL - write operation returned a non-zero status"
-      echo -e "CMD = ./libTest write testfile.$$ testout.%d.$$ $n $e $start\033[0m"
+      echo -e "CMD = ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
       echo "   FAILURE: wite operation returned a non-sero status" >> $LOGFILE
-      echo "CMD = ./libTest write testfile.$$ testout.%d.$$ $n $e $start" >> $LOGFILE
+      echo "CMD = ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
       exit -1
    fi
    echo "...done"
@@ -294,10 +294,12 @@ while [[ $cnt -lt $ITER ]]; do
 
       #All tests passed for this iteration
       echo -e "\033[0;32mPASS - $n+$e with start position $start"
-      echo -e "     and error pattern   $npat\033[0m"
+      echo -e "       and error pattern   $npat"
+      echo -e "       ( Test $(( (cnt + 1) * (incnt + 1) )) )\033[0m"
 
       echo "PASS - $n+$e with start position $start" >> $LOGFILE 
-      echo "     and error pattern   $npat" >> $LOGFILE
+      echo "       and error pattern   $npat" >> $LOGFILE
+      echo "       ( Test $(( (cnt + 1) * (incnt + 1) )) )" >> $LOGFILE
    }
 
    sleep $POSTSLEEP

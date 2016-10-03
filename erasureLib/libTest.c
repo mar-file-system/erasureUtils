@@ -88,7 +88,7 @@ int main( int argc, const char* argv[] )
 
    if ( strncmp( argv[1], "write", strlen(argv[1]) ) == 0 ) {
       if ( argc < 7 ) { 
-         fprintf(stderr,"libTest: insufficient arguments for a write\nlibTest:   expected \'%s %s input_file output_path N E start_file\'\n", argv[0], argv[1] ); 
+         fprintf(stderr,"libTest: insufficient arguments for a write\nlibTest:   expected \'%s %s input_file output_path N E start_file [input_size]\'\n", argv[0], argv[1] ); 
          return -1;
       }
       wr = 1;
@@ -99,7 +99,6 @@ int main( int argc, const char* argv[] )
          return -1;
       }
       wr = 0;
-      totbytes = strtoll(argv[7],NULL,10); 
    }
    else if ( strncmp( argv[1], "rebuild", strlen(argv[1]) ) == 0 ) {
       if ( argc < 7 ) { 
@@ -116,13 +115,19 @@ int main( int argc, const char* argv[] )
    N = atoi(argv[4]);
    E = atoi(argv[5]);
    start = atoi(argv[6]);
-   
+   if ( argc == 8 ) {
+      totbytes = strtoll(argv[7],NULL,10); 
+   }
+   else {
+      totbytes = N * 64 * 1024;
+   }
+ 
    srand(time(NULL));
    ne_handle handle;
 
    if ( wr == 1 ) { //write
 
-      buff = malloc( sizeof(char) * N * 64 * 1024 );
+      buff = malloc( sizeof(char) * totbytes );
 
       fprintf( stdout, "libTest: writing content of file %s to erasure striping (N=%d,E=%d,offset=%d)\n", argv[2], N, E, start );
 
@@ -138,9 +143,10 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
-      toread = rand() % ( (N * 64 * 1024) + 1 );
+      toread = rand() % (totbytes+1);
 
-      while ( (nread = read( filefd, buff, toread )) != 0  &&  toread != 0 ) {
+      while ( totbytes != 0 ) {
+         nread = read( filefd, buff, toread );
          fprintf( stdout, "libTest: preparing to write %llu to erasure files...\n", nread );
          if ( nread != ne_write( handle, buff, nread ) ) {
             fprintf( stderr, "libTest: unexpected # of bytes written by ne_write\n" );
@@ -148,9 +154,15 @@ int main( int argc, const char* argv[] )
          }
          fprintf( stdout, "libTest: write successful\n" );
 
+         if ( argc == 8 ) {
+            totbytes -= nread;
+         }
+         else if (toread != 0  &&  nread == 0) {
+            totbytes = 0;
+         }
          totdone += nread;
 
-         toread = rand() % ( (N * 64 * 1024) + 1 );
+         toread = rand() % (totbytes+1);
       }
 
       free(buff);
