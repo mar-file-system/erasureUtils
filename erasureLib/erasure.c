@@ -1099,11 +1099,22 @@ int error_check( ne_handle handle, char *path )
    char file[MAXNAME];       /* array name of files */
    int counter;
    int ret;
+   size_t ret_in;
    char xattrval[strlen(XATTRKEY)+50];
+   char xattrchunks[20];       /* char array to get n parts from xattr */
+   char xattrchunksizek[20];   /* char array to get chunksize from xattr */
+   char xattrnsize[20];        /* char array to get total size from xattr */
+   char xattrerasure[20];      /* char array to get erasure from xattr */
+   char xattrncompsize[20];    /* general char for xattr manipulation */
+   char xattrnsum[50];         /* char array to get xattr sum from xattr */
+   char xattrtotsize[160];
    int N = handle->N;
    int E = handle->E;
    int bsz = handle->bsz;
-   int goodfile = N+E;
+   unsigned long nsz;
+   unsigned long ncompsz;
+   //u32 crc;
+   char goodfile = 0;
    u64 totsz;
    struct stat* partstat = malloc (sizeof(struct stat));
 
@@ -1122,59 +1133,102 @@ int error_check( ne_handle handle, char *path )
          handle->src_err_list[handle->nerr] = counter;
          handle->nerr++;
       }
-      else {
-         goodfile = counter;
+      else if ( handle->mode == NE_REBUILD  ||  goodfile == 0 ) {
+         bzero(xattrval,sizeof(xattrval));
+         ret_in = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
+#ifdef DEBUG
+         fprintf(stderr,"error_check: file %s xattr returned %zd\n",file,ret_in);
+#endif
+         if (ret_in < 0) {
+#ifdef DEBUG
+            fprintf(stderr, "file %s: failure of xattr retrieval\n", file);
+#endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+            continue;
+         }
+
+         sscanf(xattrval,"%s %s %s %s %s %s %s",xattrchunks,xattrerasure,xattrchunksizek,xattrnsize,xattrncompsize,xattrnsum,xattrtotsize);
+         N = atoi(xattrchunks);
+         E = atoi(xattrerasure);
+         bsz = atoi(xattrchunksizek);
+         nsz = strtol(xattrnsize,NULL,0);
+         ncompsz = strtol(xattrncompsize,NULL,0);
+         //crc = strtol(xattrnsum,NULL,0);
+         totsz = strtoll(xattrtotsize,NULL,0);
+
+         /* verify xattr */
+#ifdef DEBUG
+         fprintf(stdout,"error_check: total file size is %llu numparts %d erasure %d blocksize %d\n",(unsigned long long)totsz,N,E,bsz);
+#endif
+         if ( N != handle->N ) {
+#ifdef DEBUG
+            fprintf (stderr, "error_check: filexattr N = %d did not match handle value  %d \n", N, handle->N); 
+#endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+         }
+         else if ( E != handle->E ) {
+#ifdef DEBUG
+            fprintf (stderr, "error_check: filexattr E = %d did not match handle value  %d \n", E, handle->E); 
+#endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+         }
+         else if ( bsz != handle->bsz ) {
+#ifdef DEBUG
+            fprintf (stderr, "error_check: filexattr bsz = %d did not match handle value  %d \n", bsz, handle->bsz); 
+#endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+         }
+         else if ( nsz != partstat->st_size ) {
+#ifdef DEBUG
+            fprintf (stderr, "error_check: filexattr nsize = %lu did not match stat value %zu \n", nsz, partstat->st_size); 
+#endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+         }
+         else if ( (nsz % bsz) != 0 ) {
+#ifdef DEBUG
+            fprintf (stderr, "error_check: filexattr nsize = %lu is inconsistent with block size %d \n", nsz, bsz); 
+#endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+         }
+         else if ( ncompsz != partstat->st_size ) {
+#ifdef DEBUG
+            fprintf (stderr, "error_check: filexattr ncompsize = %lu did not match stat value %zu \n", ncompsz, partstat->st_size); 
+#endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+         }
+         else {
+            handle->totsz = totsz;
+            goodfile = 1;
+         }
       }
+   }
+
+   if ( goodfile == 0 ) {
+      errno = EUCLEAN;
+      return -1;
    }
 
    free(partstat);
 
    /* If no usable file was located or the number of errors is too great, notify of failure */
-   if ( goodfile == N+E  ||  handle->nerr > E ) {
+   if ( handle->nerr > E ) {
       errno = ENODATA;
       return -1;
    }
-
-   // TODO should this check be done for every file, or none?  It may be too performance heavy to bother with for every file.
-
-   bzero(file,sizeof(file));
-   sprintf(file,path,(goodfile+handle->erasure_offset)%(N+E));
-
-   /* go to the a good file depending on missing (there can only be one missing) and get the xattr to tell us how big the file is, num parts, chunk size, etc. */
-   bzero( xattrval, sizeof(xattrval) );
-   getxattr( file, XATTRKEY, &xattrval[0], sizeof(xattrval) );
-#ifdef DEBUG
-   fprintf(stdout,"error_check: got xattr %s for %s\n",xattrval,file);
-#endif
-   sscanf(xattrval,"%d %d %d %*u %*u %*u %llu",&N,&E,&bsz,(unsigned long long *)&totsz);
-
-   /* verify xattr */
-#ifdef DEBUG
-   fprintf(stdout,"total file size is %llu numparts %d erasure %d blocksize %d\n",(unsigned long long)totsz,N,E,bsz);
-#endif
-   if ( N != handle->N ) {
-#ifdef DEBUG
-      fprintf (stderr, "ne_read: filexattr N = %d did not match handle value  %d \n", N, handle->N); 
-#endif
-      errno = EUCLEAN;
-      return -1;
-   }
-   if ( E != handle->E ) {
-#ifdef DEBUG
-      fprintf (stderr, "ne_read: filexattr E = %d did not match handle value  %d \n", E, handle->E); 
-#endif
-      errno = EUCLEAN;
-      return -1;
-   }
-   if ( bsz != handle->bsz ) {
-#ifdef DEBUG
-      fprintf (stderr, "ne_read: filexattr bsz = %d did not match handle value  %d \n", bsz, handle->bsz); 
-#endif
-      errno = EUCLEAN;
-      return -1;
-   }
-
-   handle->totsz = totsz;
 
    return 0;
 }
