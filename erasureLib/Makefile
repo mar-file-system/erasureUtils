@@ -15,6 +15,5 @@ cleanLib :
 cleanTest :
 	rm libTest
 
-clean :
-	rm erasure.o libTest
+clean : cleanLib cleanTest
 

@@ -138,9 +138,9 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
-      toread = (rand() % ( N * 64 * 1024 )) + 1;
+      toread = rand() % ( (N * 64 * 1024) + 1 );
 
-      while ( (nread = read( filefd, buff, toread )) != 0 ) {
+      while ( (nread = read( filefd, buff, toread )) != 0  &&  toread != 0 ) {
          fprintf( stdout, "libTest: preparing to write %llu to erasure files...\n", nread );
          if ( nread != ne_write( handle, buff, nread ) ) {
             fprintf( stderr, "libTest: unexpected # of bytes written by ne_write\n" );
@@ -150,7 +150,7 @@ int main( int argc, const char* argv[] )
 
          totdone += nread;
 
-         toread = (rand() % ( N * 64 * 1024 )) + 1;
+         toread = rand() % ( (N * 64 * 1024) + 1 );
       }
 
       free(buff);

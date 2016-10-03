@@ -292,7 +292,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 #ifdef DEBUG
       fprintf( stderr, "ne_read: iconsistent internal state : handle->nerr and handle->src_in_err\n" );
 #endif
-      errno = EBADFD;
+      errno = ENOTRECOVERABLE;
       return -1;
    }
 
@@ -413,7 +413,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 #ifdef DEBUG
          fprintf( stderr, "ne_read: mismatch between bytes read and output of %lu\n", ret_in );
 #endif
-         errno=EBADFD;
+         errno=ENOTRECOVERABLE;
          return -1;
       }
 
@@ -717,6 +717,7 @@ rebuild:
 #ifdef DEBUG
                   fprintf(stderr,"ne_read: failure to generate decode matrix\n");
 #endif
+                  errno=ENODATA;
                   return -1;
                }
 
@@ -799,6 +800,7 @@ rebuild:
 #ifdef DEBUG
             fprintf( stderr, "ne_read: internal mismatch : llcounter (%lu) and out_off (%zd)\n", (unsigned long)llcounter, out_off );
 #endif
+            errno = ENOTRECOVERABLE;
             return -1;
          }
 
@@ -1129,6 +1131,7 @@ int error_check( ne_handle handle, char *path )
 
    /* If no usable file was located or the number of errors is too great, notify of failure */
    if ( goodfile == N+E  ||  handle->nerr > E ) {
+      errno = ENODATA;
       return -1;
    }
 
@@ -1153,21 +1156,21 @@ int error_check( ne_handle handle, char *path )
 #ifdef DEBUG
       fprintf (stderr, "ne_read: filexattr N = %d did not match handle value  %d \n", N, handle->N); 
 #endif
-      errno = EBADFD;
+      errno = EUCLEAN;
       return -1;
    }
    if ( E != handle->E ) {
 #ifdef DEBUG
       fprintf (stderr, "ne_read: filexattr E = %d did not match handle value  %d \n", E, handle->E); 
 #endif
-      errno = EBADFD;
+      errno = EUCLEAN;
       return -1;
    }
    if ( bsz != handle->bsz ) {
 #ifdef DEBUG
       fprintf (stderr, "ne_read: filexattr bsz = %d did not match handle value  %d \n", bsz, handle->bsz); 
 #endif
-      errno = EBADFD;
+      errno = EUCLEAN;
       return -1;
    }
 
@@ -1224,6 +1227,7 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 #endif
 		free(b);
 		free(backup);
+      errno = ENOMEM;
 		return -1;
 	}
 	// Construct matrix b by removing error rows
