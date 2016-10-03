@@ -1098,7 +1098,9 @@ int error_check( ne_handle handle, char *path )
 {
    char file[MAXNAME];       /* array name of files */
    int counter;
+   int bcounter;
    int ret;
+   int filefd;
    size_t ret_in;
    char xattrval[strlen(XATTRKEY)+50];
    char xattrchunks[20];       /* char array to get n parts from xattr */
@@ -1113,10 +1115,11 @@ int error_check( ne_handle handle, char *path )
    int bsz = handle->bsz;
    unsigned long nsz;
    unsigned long ncompsz;
-   //u32 crc;
+   u32 crc;
    char goodfile = 0;
    u64 totsz;
    struct stat* partstat = malloc (sizeof(struct stat));
+   void *buf;
 
    for ( counter = 0; counter < N+E; counter++ ) {
       bzero(file,sizeof(file));
@@ -1155,7 +1158,7 @@ int error_check( ne_handle handle, char *path )
          bsz = atoi(xattrchunksizek);
          nsz = strtol(xattrnsize,NULL,0);
          ncompsz = strtol(xattrncompsize,NULL,0);
-         //crc = strtol(xattrnsum,NULL,0);
+         crc = strtol(xattrnsum,NULL,0);
          totsz = strtoll(xattrtotsize,NULL,0);
 
          /* verify xattr */
@@ -1214,6 +1217,53 @@ int error_check( ne_handle handle, char *path )
             handle->totsz = totsz;
             goodfile = 1;
          }
+
+         if ( handle->mode == NE_REBUILD ) {
+            filefd = open( file, O_RDONLY );
+            if ( filefd == -1 ) {
+#ifdef DEBUG
+               fprintf( stderr, "error_check: failed to open file %s for read\n", file );
+#endif
+               handle->src_in_err[counter] = 1;
+               handle->src_err_list[handle->nerr] = counter;
+               handle->nerr++;
+               continue;
+            }
+
+            ret_in = ncompsz / (bsz*1024);
+            bcounter=0;
+            posix_memalign(&buf,32,bsz*1024);
+
+            while ( bcounter < ret_in ) {
+
+               ret = read(filefd,buf,bsz*1024);
+
+               if ( ret != bsz*1024 ) {
+#ifdef DEBUG
+                  fprintf( stderr, "error_check: failure to read full amt for file %s block %d\n", file, bcounter );
+#endif
+                  handle->src_in_err[counter] = 1;
+                  handle->src_err_list[handle->nerr] = counter;
+                  handle->nerr++;
+                  break;
+               }
+               if ( crc != crc32_ieee( TEST_SEED, buf, bsz*1024 ) ) {
+#ifdef DEBUG
+                  fprintf( stderr, "error_check: crc mismatch for file %s\n", file );
+#endif
+                  handle->src_in_err[counter] = 1;
+                  handle->src_err_list[handle->nerr] = counter;
+                  handle->nerr++;
+                  break;
+               }
+
+               bcounter++;
+            }
+
+            free(buf);
+
+         } 
+
       }
    }
 
