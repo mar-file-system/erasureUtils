@@ -88,21 +88,21 @@ int main( int argc, const char* argv[] )
 
    if ( strncmp( argv[1], "write", strlen(argv[1]) ) == 0 ) {
       if ( argc < 7 ) { 
-         fprintf(stderr,"libTest: insufficient arguments for a write\nlibTest:   expected \'%s %s input_file output_path N E start_file [input_size]\'\n", argv[0], argv[1] ); 
+         fprintf(stderr,"libTest: insufficient arguments for a write operation\nlibTest:   expected \'%s %s input_file output_path N E start_file [input_size]\'\n", argv[0], argv[1] ); 
          return -1;
       }
       wr = 1;
    }
    else if ( strncmp( argv[1], "read", strlen(argv[1]) ) == 0 ) {
       if ( argc < 8 ) { 
-         fprintf(stderr,"libTest: insufficient arguments for a read\nlibTest:   expected \'%s %s output_file erasure_path N E start_file total_bytes\'\n", argv[0], argv[1] ); 
+         fprintf(stderr,"libTest: insufficient arguments for a read operation\nlibTest:   expected \'%s %s output_file erasure_path N E start_file total_bytes\'\n", argv[0], argv[1] ); 
          return -1;
       }
       wr = 0;
    }
    else if ( strncmp( argv[1], "rebuild", strlen(argv[1]) ) == 0 ) {
-      if ( argc < 7 ) { 
-         fprintf(stderr,"libTest: insufficient arguments for a rebuild\nlibTest:   expected \'%s %s output_file erasure_path N E start_file\'\n", argv[0], argv[1] ); 
+      if ( argc < 6  ||  argc > 6 ) { 
+         fprintf(stderr,"libTest: inappropriate arguments for a rebuild operation\nlibTest:   expected \'%s %s erasure_path N E start_file\'\n", argv[0], argv[1] ); 
          return -1;
       }
       wr = 2;
@@ -112,9 +112,18 @@ int main( int argc, const char* argv[] )
       return -1;
    }
    
-   N = atoi(argv[4]);
-   E = atoi(argv[5]);
-   start = atoi(argv[6]);
+
+   if ( wr != 2 ) {
+      N = atoi(argv[4]);
+      E = atoi(argv[5]);
+      start = atoi(argv[6]);
+   }
+   else {
+      N = atoi(argv[3]);
+      E = atoi(argv[4]);
+      start = atoi(argv[5]);
+   }
+
    if ( argc == 8 ) {
       totbytes = strtoll(argv[7],NULL,10); 
    }
@@ -166,6 +175,7 @@ int main( int argc, const char* argv[] )
       }
 
       free(buff);
+      close(filefd);
       fprintf( stdout, "libTest: all writes completed\nlibTest: total written = %llu\n", totdone );
 
    }
@@ -213,14 +223,13 @@ int main( int argc, const char* argv[] )
       }
 
       free(buff); 
+      close(filefd);
       fprintf( stdout, "libTest: all reads completed\nlibTest: total read = %llu\n", totdone );
    }
    else if ( wr == 2 ) { //rebuild
-      ;
+      handle = ne_open( (char *)argv[2], NE_REBUILD, start, N, E );
    }
 
-   close(filefd);
-   ne_close( handle );
+   return ne_close( handle );
 
-   return 0;
 }

@@ -203,10 +203,16 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Performing a read of all data from striping..."
       echo "Performing read of all data from striping..." >> $LOGFILE
       ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 >> $LIBTLOG 2>&1
-      if [[ ! $? -eq 0 ]]; then
+      if [[ (! $? -eq 0)  &&  ($nerr -eq 0) ]]; then
          echo -e "\033[0;31mFAIL - read operation returned a non-zero status"
          echo -e "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
-         echo "   FAILURE: read operation returned a non-sero status" >> $LOGFILE
+         echo "   FAILURE: read operation returned a non-zero status" >> $LOGFILE
+         echo "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
+         exit -1
+      elif [[ $? -eq 0 ]]; then
+         echo -e "\033[0;31mFAIL - read operation returned a zero status"
+         echo -e "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
+         echo "   FAILURE: read operation returned a zero status" >> $LOGFILE
          echo "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
          exit -1
       fi

@@ -1100,8 +1100,8 @@ int error_check( ne_handle handle, char *path )
    int counter;
    int bcounter;
    int ret;
+   int ret_in;
    int filefd;
-   size_t ret_in;
    char xattrval[strlen(XATTRKEY)+50];
    char xattrchunks[20];       /* char array to get n parts from xattr */
    char xattrchunksizek[20];   /* char array to get chunksize from xattr */
@@ -1115,7 +1115,7 @@ int error_check( ne_handle handle, char *path )
    int bsz = handle->bsz;
    unsigned long nsz;
    unsigned long ncompsz;
-   u32 crc;
+   u64 scrc;
    char goodfile = 0;
    u64 totsz;
    struct stat* partstat = malloc (sizeof(struct stat));
@@ -1138,13 +1138,13 @@ int error_check( ne_handle handle, char *path )
       }
       else if ( handle->mode == NE_REBUILD  ||  goodfile == 0 ) {
          bzero(xattrval,sizeof(xattrval));
-         ret_in = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
+         ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
 #ifdef DEBUG
-         fprintf(stderr,"error_check: file %s xattr returned %zd\n",file,ret_in);
+         fprintf(stderr,"error_check: file %s xattr returned %d\n",file,ret);
 #endif
-         if (ret_in < 0) {
+         if (ret < 0) {
 #ifdef DEBUG
-            fprintf(stderr, "file %s: failure of xattr retrieval\n", file);
+            fprintf(stderr, "error_check: failure of xattr retrieval for file %s\n", file);
 #endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
@@ -1158,7 +1158,6 @@ int error_check( ne_handle handle, char *path )
          bsz = atoi(xattrchunksizek);
          nsz = strtol(xattrnsize,NULL,0);
          ncompsz = strtol(xattrncompsize,NULL,0);
-         crc = strtol(xattrnsum,NULL,0);
          totsz = strtoll(xattrtotsize,NULL,0);
 
          /* verify xattr */
@@ -1233,6 +1232,7 @@ int error_check( ne_handle handle, char *path )
             ret_in = ncompsz / (bsz*1024);
             bcounter=0;
             posix_memalign(&buf,32,bsz*1024);
+            scrc = 0;
 
             while ( bcounter < ret_in ) {
 
@@ -1247,17 +1247,18 @@ int error_check( ne_handle handle, char *path )
                   handle->nerr++;
                   break;
                }
-               if ( crc != crc32_ieee( TEST_SEED, buf, bsz*1024 ) ) {
-#ifdef DEBUG
-                  fprintf( stderr, "error_check: crc mismatch for file %s\n", file );
-#endif
-                  handle->src_in_err[counter] = 1;
-                  handle->src_err_list[handle->nerr] = counter;
-                  handle->nerr++;
-                  break;
-               }
+               scrc += crc32_ieee( TEST_SEED, buf, bsz*1024 );
 
                bcounter++;
+            }
+
+            if ( scrc != strtoll(xattrnsum,NULL,0) ) {
+#ifdef DEBUG
+               fprintf( stderr, "error_check: crc mismatch for file %s\n", file );
+#endif
+               handle->src_in_err[counter] = 1;
+               handle->src_err_list[handle->nerr] = counter;
+               handle->nerr++;
             }
 
             free(buf);
