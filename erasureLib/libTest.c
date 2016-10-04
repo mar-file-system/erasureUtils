@@ -76,6 +76,7 @@ int main( int argc, const char* argv[] )
    int filefd;
    int N;
    int E;
+   int tmp;
    unsigned long long totbytes;
 
    fprintf(stdout, "libTest: Running.  Preparing to parse args...\n");
@@ -106,6 +107,13 @@ int main( int argc, const char* argv[] )
          return -1;
       }
       wr = 2;
+   }
+   else if ( strncmp( argv[1], "status", strlen(argv[1]) ) == 0 ) {
+      if ( argc < 6  ||  argc > 6 ) { 
+         fprintf(stderr,"libTest: inappropriate arguments for a status operation\nlibTest:   expected \'%s %s erasure_path N E start_file\'\n", argv[0], argv[1] ); 
+         return -1;
+      }
+      wr = 3;
    }
    else {
       fprintf( stderr, "libTest: argument 1 not recognized, expecting \"read\" or \"write\"\n" );
@@ -205,10 +213,10 @@ int main( int argc, const char* argv[] )
          fprintf( stdout, "libTest: preparing to read %llu from erasure files with offset %llu\n", toread, nread );
          if ( toread > totbytes ) { exit(1000); }
 
-         unsigned long long tmp = ne_read( handle, buff, toread, nread );
+         tmp = ne_read( handle, buff, toread, nread );
 
          if( toread != tmp ) {
-            fprintf( stderr, "libTest: unexpected # of bytes read by ne_read\nlibTest:  got %llu but expected %llu\n", tmp, toread );
+            fprintf( stderr, "libTest: unexpected # of bytes read by ne_read\nlibTest:  got %d but expected %llu\n", tmp, toread );
             return -1;
          }
 
@@ -227,9 +235,23 @@ int main( int argc, const char* argv[] )
       fprintf( stdout, "libTest: all reads completed\nlibTest: total read = %llu\n", totdone );
    }
    else if ( wr == 2 ) { //rebuild
+      fprintf( stdout, "libTest: rebuilding erasure striping (N=%d,E=%d,offset=%d)\n", N, E, start );
+      handle = ne_open( (char *)argv[2], NE_REBUILD, start, N, E );
+      tmp = ne_rebuild( handle );
+      if ( tmp != 0 ) {
+         fprintf( stderr, "libTest: rebuild failed!\n" );
+         return -1;
+      }
+      fprintf( stdout, "libTest: rebuild complete\n" );
+   }
+   else if ( wr == 3 ) { //status
+      fprintf( stdout, "libTest: retrieving status of erasure striping (N=%d,E=%d,offset=%d)\n", N, E, start );
       handle = ne_open( (char *)argv[2], NE_REBUILD, start, N, E );
    }
 
-   return ne_close( handle );
+   tmp = ne_close( handle );
+   printf("%d",tmp);
+
+   return tmp;
 
 }

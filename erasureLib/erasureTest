@@ -56,8 +56,8 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-ITER=30 # Number of N+E file arrays to generate
-INITER=1 # (Must be 1 until regeneration is added to lib!!!)Number of error patterns to test for each file array
+ITER=5 # Number of N+E file arrays to generate
+INITER=5 # (Must be 1 until regeneration is added to lib!!!)Number of error patterns to test for each file array
 POSTSLEEP=0 # Number of seconds the program should sleep after a test
 LOGFILE=log_errTests.$$ # Name of the test logfile
 LIBTLOG=log_libTests.$$
@@ -147,6 +147,8 @@ while [[ $cnt -lt $ITER ]]; do
    
    {
 
+      stat=0
+
       while [[ $errcnt -lt $nerr ]]; do
          while [[ $errpos -lt $oldpos ]]; do
             errpos=$RANDOM
@@ -155,6 +157,7 @@ while [[ $cnt -lt $ITER ]]; do
 
          echo "   placing error at $errpos""..."
          echo "   placing error at $errpos""..." >> $LOGFILE
+         stat=$(( stat + 2**errpos ))
 
          efile="testout.$errpos.$$"
 
@@ -202,17 +205,11 @@ while [[ $cnt -lt $ITER ]]; do
       echo >> $LIBTLOG
       echo "Performing a read of all data from striping..."
       echo "Performing read of all data from striping..." >> $LOGFILE
-      ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 >> $LIBTLOG 2>&1
-      if [[ (! $? -eq 0)  &&  ($nerr -eq 0) ]]; then
-         echo -e "\033[0;31mFAIL - read operation returned a non-zero status"
+      ret=$( ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 )
+      if [[ $ret -ne $stat ]]; then
+         echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $stat but recieved $ret"
          echo -e "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
-         echo "   FAILURE: read operation returned a non-zero status" >> $LOGFILE
-         echo "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
-         exit -1
-      elif [[ $? -eq 0 ]]; then
-         echo -e "\033[0;31mFAIL - read operation returned a zero status"
-         echo -e "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
-         echo "   FAILURE: read operation returned a zero status" >> $LOGFILE
+         echo "   FAILURE: read operation returned an inappropriate status, expected $stat but recieved $ret" >> $LOGFILE
          echo "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
          exit -1
       fi
@@ -227,7 +224,7 @@ while [[ $cnt -lt $ITER ]]; do
       #sleep 1
       cmp testfile.$$ outfile.$$
 
-      if [[ ! $? -eq 0 ]]; then
+      if [[ $? -ne 0 ]]; then
          echo -e "\033[0;31mFAIL - output does not match expected data\033[0m"
          echo "   FAILURE: output of ne_read does not match the expected data" >> $LOGFILE
          echo "CMD = cmp testfile.$$ outfile.$$"
@@ -241,67 +238,39 @@ while [[ $cnt -lt $ITER ]]; do
       rm outfile.$$
       echo
 
-#      echo "Attempting error recovery..."
-#      echo "Attempting error recovery..." >> $LOGFILE
-#      if [[ $npat == *"1"* ]]; then
-#         echo "   errors exist within N, using \"rebuildne\"..."
-#         echo "   errors exist within N, using \"rebuildne\"..." >> $LOGFILE
-#         ./lanl_rebuildne testout.$$ $npat $epat > /dev/null 2>&1
-#         ret=$?
-#         if [[ $ret -ne 0 ]]; then
-#            echo -e "\033[0;31mFAIL - rebuild (rebuildne) has failed\033[0m"
-#            echo "CMD = ./lanl_rebuildne testout.$$ $npat $epat"
-#            echo "   FAILURE: an error occured within rebuildne" >> $LOGFILE
-#            echo "CMD = ./lanl_rebuildne testout.$$ $npat $epat" >> $LOGFILE
-#            ./lanl_rebuildne testout.$$ $npat $epat
-#            exit $ret
-#         fi
-#      else
-#         echo "   no errors exist within N, using \"ntofe\"..."
-#         echo "   no errors exist within N, using \"ntofe\"..." >> $LOGFILE
-#         ./lanl_ntofe testout.$$ cmpfile.$$ $epat > /dev/null 2>&1
-#         ret=$?
-#         if [[ $ret -ne 0 ]]; then
-#            echo -e "\033[0;31mFAIL - rebuild (ntofe) has failed\033[0m"
-#            echo "CMD = ./lanl_ntofe testout.$$ cmpfile.$$ $epat"
-#            echo "   FAILURE: an error occured within ntofe" >> $LOGFILE
-#            echo "CMD = ./lanl_ntofe testout.$$ cmpfile.$$ $epat" >> $LOGFILE
-#            exit $ret
-#         fi
-#         cmp testfile.$$ cmpfile.$$
-#         ret=$?
-#         if [[ $ret -ne 0 ]]; then
-#            echo -e "\033[0;31mFAIL - output file of \"ntofe\" does not match original file\033[0m"
-#            echo "   FAILURE: ouput file of ntofe does not match input" >> $LOGFILE
-#            exit $ret
-#         fi
-#         echo "   outfile matches orignal input"
-#         echo "   outfile matches orignal input" >> $LOGFILE
-#         echo "   deleting outfile"
-#         echo "   deleting outfile" >> $LOGFILE
-#         rm cmpfile.$$
-#      fi
-#         
-#      echo "...done"
-#      echo "...done" >> $LOGFILE
-#      
-#      ./lanl_health testout.$$ $n $bsz 209715200 $e > /dev/null 2>&1
-#      ret=$?
-#      if [[ $ret -ne 0 ]]; then
-#         echo -e "\033[0;31mFAIL - health check failed after rebuild\033[0m"
-#         echo "   FAILURE: health check failed after rebuild" >> $LOGFILE
-#         echo "CMD = ./lanl_health testout.$$ $n $bsz 209715200 $e"
-#         echo "CMD = ./lanl_health testout.$$ $n $bsz 209715200 $e" >> $LOGFILE
-#         exit $ret
-#      fi
-#      echo "Health check confirms corruption absent"
-#      echo "Health check confirms corruption absent" >> $LOGFILE
-#      echo
+      if [[ $npat == *"1"* ]]; then
+         echo "Attempting error recovery..."
+         echo "Attempting error recovery..." >> $LOGFILE
+         ret=$( ./libTest rebuild testout.%d.$$ $n $e $start 2>&1 | tail -n 1 )
+         if [[ $ret -ne $stat ]]; then
+            echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of $stat but recieved $ret"
+            echo -e "CMD = ./libTest rebuild testout.%d.$$ $n $e $start\033[0m"
+            echo "   FAILURE: an error occured within ne_rebuild, expected return of $stat but recieved $ret" >> $LOGFILE
+            echo "CMD = "./libTest rebuild testout.%d.$$ $n $e $start >> $LOGFILE
+            exit $ret
+         fi
+         echo "...recovery complete."
+         echo "...recovery complete." >> $LOGFILE
+      fi
+
+      echo "Checking the striping for corruption..."
+      echo "Checking the striping for corruption..." >> $LOGFILE
+      ret=$( ./libTest status testout.%d.$$ $n $e $start 2>&1 | tail -n 1 )
+      if [[ $ret -ne 0 ]]; then
+         echo -e "\033[0;31mFAIL - status check indicates corruption present in erasure striping"
+         echo -e "CMD = ./libTest status testout.%d.$$ $n $e $start\033[0m"
+         echo "FAIL - status check indicates corruption present in erasure striping" >> $LOGFILE
+         echo "CMD = ./libTest status testout.%d.$$ $n $e $start" >> $LOGFILE
+         exit $ret
+      fi
+      echo "...no corruption found."
+      echo "...no corruption found." >> $LOGFILE
+      echo
 
       #All tests passed for this iteration
       echo -e "\033[0;32mPASS - $n+$e with start position $start"
       echo -e "       and error pattern   $npat"
-      echo -e "       ( Test $(( (cnt + 1) * (incnt + 1) )) )\033[0m"
+      echo -e "       ( Test $(( (cnt*INITER) + incnt + 1 )) )\033[0m"
 
       echo "PASS - $n+$e with start position $start" >> $LOGFILE 
       echo "       and error pattern   $npat" >> $LOGFILE
