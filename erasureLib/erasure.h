@@ -134,6 +134,7 @@ ne_handle ne_open( char *path, ne_mode mode, int start_position, int N, int E );
 int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset );
 int ne_write( ne_handle handle, void *buffer, int nbytes );
 int ne_close( ne_handle handle );
+int ne_rebuild( ne_handle handle );
 
 extern void pq_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p and q */
 extern void xor_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p */
