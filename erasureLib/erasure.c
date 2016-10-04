@@ -275,6 +275,19 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
       return -1;
    }
 
+   if ( offset >= handle->totsz ) {
+#ifdef DEBUG
+      fprintf( stderr, "ne_read: offset is beyond filesize\n" );
+#endif
+      return 0;
+   }
+
+   if ( (offset + nbytes) > handle->totsz ) {
+#ifdef DEBUG
+      fprintf(stdout,"ne_read: read would extend beyond EOF, resizing read request...\n");
+#endif
+      nbytes = handle->totsz - offset;
+   }
 
    for ( counter = 0; counter < mtot; counter++ ) {
       posix_memalign((void **)&(temp_buffs[counter]),64,bsz*1024);       
@@ -366,8 +379,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 
          /**** read ****/
          tmp = read( handle->FDArray[counter], handle->buffs[counter], readsize );
-         datasz[counter] = tmp;
-         if ( tmp != 0  &&  tmp != readsize ) {
+         if ( tmp < 0 ) {
 #ifdef DEBUG
             fprintf(stderr, "ne_read: encoutered error while reading from file %d without rebuild\n", counter);
 #endif
@@ -380,11 +392,13 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
             handle->e_ready = 0; //indicate that erasure structs require re-initialization
             break;
          }
+         datasz[counter] = tmp;
          ret_in += tmp;
          tmpoffset += tmp;
-         if ( tmp == 0 ) {
+         if ( tmp < readsize ) {
+            nbytes = llcounter + tmpoffset;
 #ifdef DEBUG
-            fprintf(stdout, "ne_read: Input exhausted\n");
+            fprintf(stdout, "ne_read: Input exhausted, limiting read size to %d\n", nbytes);
 #endif
             break;
          }
@@ -602,21 +616,45 @@ rebuild:
 #endif
                ret_in = read( handle->FDArray[counter], handle->buffs[counter], readsize );
                //check for a read error
-               if ( ret_in < 0 ) {
-                  if ( counter > maxNerr )  maxNerr = counter;
-                  if ( counter < minNerr )  minNerr = counter;
-                  handle->src_in_err[counter] = 1;
-                  handle->src_err_list[handle->nerr] = counter;
-                  handle->nerr++;
-                  nsrcerr++;
-                  handle->e_ready = 0; //indicate that erasure structs require re-initialization
-                  //if we have skipped some of the stripe, we must start over
-                  if ( error_in_stripe == 0 && tmpoffset != 0 ) {
-                     for( tmp = counter -1; tmp >=0; tmp-- ) {
-                        llcounter -= datasz[counter];
+               if ( ret_in < readsize ) {
+                  if ( ret_in < 0 ) {
+#ifdef DEBUG
+                     fprintf(stderr, "ne_read: error encountered while reading data file %d\n", counter);
+#endif
+                     if ( counter > maxNerr )  maxNerr = counter;
+                     if ( counter < minNerr )  minNerr = counter;
+                     handle->src_in_err[counter] = 1;
+                     handle->src_err_list[handle->nerr] = counter;
+                     handle->nerr++;
+                     nsrcerr++;
+                     handle->e_ready = 0; //indicate that erasure structs require re-initialization
+                     ret_in = 0;
+                     //if we have skipped some of the stripe, we must start over
+                     if ( error_in_stripe == 0 && tmpoffset != 0 ) {
+                        for( tmp = counter -1; tmp >=0; tmp-- ) {
+                           llcounter -= datasz[counter];
+                        }
+                        goto rebuild;
                      }
-                     goto rebuild;
                   }
+                  else {
+                     nbytes = llcounter + ret_in;
+#ifdef DEBUG
+                     fprintf(stderr, "ne_read: inputs exhausted, limiting read to %d bytes\n",nbytes);
+#endif
+                  }
+
+#ifdef DEBUG
+                  fprintf(stderr, "ne_read: failed to read all requested data from file %d\n", counter);
+                  fprintf(stdout,"ne_read: zeroing missing data for %d from %lu to %d\n",counter,ret_in,bsz*1024);
+#endif
+                  bzero(handle->buffs[counter]+ret_in,bsz*1024-ret_in);
+#ifdef DEBUG
+                  fprintf(stdout,"ne_read: zeroing temp_data for data block %d\n",counter);
+#endif
+                  bzero(temp_buffs[counter],bsz*1024);
+                  
+
                }
 
                if ( firstchunk  &&  counter == startpart ) {
@@ -665,14 +703,27 @@ rebuild:
 #endif
                ret_in = read( handle->FDArray[counter], handle->buffs[counter], readsize );
                if ( ret_in < readsize ) {
-
+                  if ( ret_in < 0 ) {
+                     ret_in = 0;
+                     if ( counter > maxNerr )  maxNerr = counter;
+                     if ( counter < minNerr )  minNerr = counter;
+                     handle->src_in_err[counter] = 1;
+                     handle->src_err_list[handle->nerr] = counter;
+                     handle->nerr++;
+                     handle->e_ready = 0; //indicate that erasure structs require re-initialization
+                     error_in_stripe = 1;
+                  }
+                  else if ( ret_in > readsize ) { //this likely will never happen.  Included for completeness though.
 #ifdef DEBUG
-                  printf("got %lu from erasure but readsize was %d, seek = %zd\n", ret_in, readsize, lseek(handle->FDArray[counter], 0, SEEK_CUR));
-
-                  fprintf(stderr, "ne_read: failed to read erasure data in file %d\n", counter);
-                  fprintf(stdout,"ne_read: zeroing data for faulty erasure %d\n",counter);
+                     fprintf( stderr, "ne_read: value read from erasure file %d was larger than expected\n", counter );
 #endif
-                  bzero(handle->buffs[counter],bsz*1024);
+                     ret_in = readsize;
+                  }
+#ifdef DEBUG
+                  fprintf(stderr, "ne_read: failed to read erasure data in file %d\n", counter);
+                  fprintf(stdout,"ne_read: zeroing data for faulty erasure %d from %lu to %d\n",counter,ret_in,bsz*1024);
+#endif
+                  bzero(handle->buffs[counter]+ret_in,bsz*1024-ret_in);
 #ifdef DEBUG
                   fprintf(stdout,"ne_read: zeroing temp_data for faulty erasure %d\n",counter);
 #endif
@@ -680,18 +731,19 @@ rebuild:
 #ifdef DEBUG
                   fprintf(stdout,"ne_read: done zeroing %d\n",counter);
 #endif
-                  if ( counter > maxNerr )  maxNerr = counter;
-                  if ( counter < minNerr )  minNerr = counter;
-                  handle->src_in_err[counter] = 1;
-                  handle->src_err_list[handle->nerr] = counter;
-                  handle->nerr++;
-                  handle->e_ready = 0; //indicate that erasure structs require re-initialization
-                  error_in_stripe = 1;
                }
             }
             counter++;
          }
 
+
+         if ( handle->nerr > handle->E ) {
+#ifdef DEBUG
+            fprintf( stderr, "ne_read: encoutered errors exceed erasure limits\n" );
+#endif
+            errno = ENODATA;
+            break;
+         }
 
          /**** regenerate from erasure ****/
          if ( error_in_stripe == 1 ) {
@@ -1042,7 +1094,6 @@ int ne_close( ne_handle handle )
 #endif
          ret = -1;
       }
-      handle->totsz -= tmp; //decrement totsize to ignore zero fill
 
    }
 
@@ -1207,6 +1258,14 @@ int error_check( ne_handle handle, char *path )
          else if ( ncompsz != partstat->st_size ) {
 #ifdef DEBUG
             fprintf (stderr, "error_check: filexattr ncompsize = %lu did not match stat value %zu \n", ncompsz, partstat->st_size); 
+#endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+         }
+         else if ( ((ncompsz * N) - totsz) >= bsz*1024*N ) {
+#ifdef DEBUG
+            fprintf (stderr, "error_check: filexattr total_size = %llu is inconsistent with ncompsz %lu\n", (unsigned long long)totsz, ncompsz); 
 #endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
