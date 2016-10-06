@@ -1039,12 +1039,11 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
    int bsz;                     /* chunksize in k */ 
    int counter;                 /* general counter */
    int ecounter;                /* general counter */
-   int buflen;                   /* general int */
    ssize_t ret_out;     /* Number of bytes returned by read() and write() */
    unsigned long long totsize;            /* used to sum total size of the input file/stream */
    int mtot;                   /* N + numerasure stripes */
-   int loops;                    /* general counter for loops */
    u32 readsize;
+   u32 writesize;
    u32 crc;                      /* crc 32 */
 
    if ( handle-> mode != NE_WRONLY  &&  handle->mode != NE_REBUILD ) {
@@ -1064,80 +1063,57 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 
    /* loop until the file input or stream input ends */
    totsize = 0;
-   loops = 0;
    while (1) { 
-#ifdef DEBUG
-      fprintf(stdout, "ne_write: iteration %d for write of size %d\n", loops, nbytes);
-#endif
-      
-      /* check for any data remaining within the handle buffer */
-      if ( handle->rem_buff != 0 ) {
-         readsize = N*bsz*1024 - handle->rem_buff;
+
+      counter = handle->rem_buff / (bsz*1024);
+      /* loop over the parts and write the parts, sum and count bytes per part etc. */
+      while (counter < N) {
+
+         writesize = ( handle->rem_buff % (bsz*1024) );
+         readsize = bsz*1024 - writesize;
+
+         //avoid reading beyond end of buffer
          if ( totsize + readsize > nbytes ) { readsize = nbytes-totsize; }
-         if ( readsize > 0 ) {
-#ifdef DEBUG
-            fprintf( stdout, "ne_write: reading input for %lu bytes with offset of %llu\n          and writing to offset of %lu in handle buffer\n", (unsigned long)readsize, totsize, handle->rem_buff );
-#endif
-            memcpy ( handle->buffer + handle->rem_buff, buffer+totsize, readsize);
-#ifdef DEBUG
-            fprintf(stdout, "ne_write:   ...copy complete.\n");
-#endif
-            totsize += readsize;
-         }
-         else if ( handle->rem_buff < N*bsz*1024 ) {
-#ifdef DEBUG
-            fprintf(stdout,"ne_write: reading of input is now complete\n");
-#endif
-            break;
-         }
-         readsize += handle->rem_buff;
-         handle->rem_buff = 0;
-      }
-      else { //if none there, read all input from the buffer argument
-         readsize = N*bsz*1024;
-         if ( totsize + readsize > nbytes ) { readsize = nbytes-totsize; }
+
          if ( readsize < 1 ) {
 #ifdef DEBUG
             fprintf(stdout,"ne_write: reading of input is now complete\n");
 #endif
             break;
          }
-#ifdef DEBUG
-         fprintf( stdout, "ne_write: reading input for %lu bytes with offset of %llu\n", (unsigned long)readsize, totsize );
-#endif
-         memcpy ( handle->buffer, buffer+totsize, readsize);
-#ifdef DEBUG
-         fprintf(stdout, "ne_write:   ...copy compete.\n");
-#endif
-         totsize+=readsize;
-      }
-      if ( readsize < N*bsz*1024 ) {  //if there is not enough data to write a full stripe, stash it in the handle buffer
-#ifdef DEBUG
-         fprintf(stdout,"ne_write: reading of input is complete, stashing %lu bytes in handle buffer\n", readsize-handle->rem_buff);
-#endif
-         handle->rem_buff = readsize;
-         break;
-      }
 
+#ifdef DEBUG
+         fprintf( stdout, "ne_write: reading input for %lu bytes with offset of %llu\n          and writing to offset of %lu in handle buffer\n", (unsigned long)readsize, totsize, handle->rem_buff );
+#endif
+         memcpy ( handle->buffer + handle->rem_buff, buffer+totsize, readsize);
+#ifdef DEBUG
+         fprintf(stdout, "ne_write:   ...copy complete.\n");
+#endif
+         totsize += readsize;
+         writesize = readsize + ( handle->rem_buff % (bsz*1024) );
+         handle->rem_buff += readsize;
 
-      counter = 0;
-      /* loop over the parts and write the parts, sum and count bytes per part etc. */
-      while (counter < N) {
+         if ( writesize < bsz*1024 ) {  //if there is not enough data to write a full block, stash it in the handle buffer
+#ifdef DEBUG
+            fprintf(stdout,"ne_write: reading of input is complete, stashed %lu bytes in handle buffer\n", (unsigned long)readsize);
+#endif
+            break;
+         }
+
 
          if ( handle->src_in_err[counter] == 0 ) {
             /* this is the crcsum for each part */
             crc = crc32_ieee(TEST_SEED, handle->buffs[counter], bsz*1024);
             // TODO write out per-block-crc
             /* if we were compressing we would compress here */
-            buflen = 1024*bsz;
 #ifdef DEBUG
-            fprintf(stdout,"ne_write: wr %d to file %d\n",buflen,counter);
+            fprintf(stdout,"ne_write: wr %d to file %d\n",writesize,counter);
 #endif
-            ret_out = write(handle->FDArray[counter],handle->buffs[counter],buflen); 
-            
-            if ( ret_out != buflen ) {
+            ret_out = write(handle->FDArray[counter],handle->buffs[counter],writesize); 
+
+            if ( ret_out != writesize ) {
 #ifdef DEBUG
-               fprintf( stderr, "ne_write: write to file %d returned %zd instead of expected %d\n" , counter, ret_out, buflen );
+               fprintf( stderr, "ne_write: write to file %d returned %zd instead of expected %lu\n" , counter, ret_out, (unsigned long)writesize );
 #endif
                handle->src_in_err[counter] = 1;
                handle->src_err_list[handle->nerr] = counter;
@@ -1145,11 +1121,18 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
             }
 
             handle->csum[counter] += crc; 
-            handle->nsz[counter] += bsz*1024;
-            handle->ncompsz[counter] += buflen;
+            handle->nsz[counter] += writesize;
+            handle->ncompsz[counter] += writesize;
          }
+
          counter++;
       }
+
+      //if we haven't read a whole stripe, terminate
+      if ( counter != N ) {
+         break;
+      }
+
 
       /* calculate and write erasure */
       if ( handle->e_ready == 0 ) {
@@ -1194,13 +1177,10 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
          }
 
          ecounter++;
-      } 
-      counter++;
-      loops++;
+      }
 
-#ifdef DEBUG
-      fprintf( stdout, "ne_write: completed iteration for stripe %d\n", loops );
-#endif
+      //now that we have written out all data, reset buffer
+      handle->rem_buff = 0; 
    }
    handle->totsz += totsize; //as it is impossible to write at an offset, the sum of writes will be the total size
  
@@ -1225,15 +1205,16 @@ int ne_close( ne_handle handle )
    int bsz = handle->bsz;
    int ret = 0;
    int tmp;
+   unsigned char *zero_buff;
 
    /* flush the handle buffer if necessary */
-   if ( handle->mode == NE_WRONLY  &&  handle->rem_buff ) {
+   if ( handle->mode == NE_WRONLY  &&  handle->rem_buff != 0 ) {
       //zero the buffer to the end of the stripe
       tmp = (N*bsz*1024) - handle->rem_buff;
-      bzero(handle->buffer+handle->rem_buff, tmp );
-      handle->rem_buff += tmp;
+      zero_buff = malloc(sizeof(char) * tmp);
+      bzero(zero_buff, tmp );
 
-      if ( 0 != ne_write( handle, NULL, 0 ) ) { //make ne_write do all the work
+      if ( tmp != ne_write( handle, zero_buff, tmp ) ) { //make ne_write do all the work
 #ifdef DEBUG
          fprintf( stderr, "ne_close: failed to flush handle buffer\n" );
 #endif
