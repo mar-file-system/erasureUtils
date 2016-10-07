@@ -1136,9 +1136,9 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
          }
 
          counter++;
-      }
+      } //end of writes for N
 
-      //if we haven't read a whole stripe, terminate
+      //if we haven't written a whole stripe, terminate
       if ( counter != N ) {
          break;
       }
@@ -1173,7 +1173,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
          writesize = bsz*1024;
 #ifdef INTCRC
             // write out per-block-crc
-            memcpy( handle->buffs[counter]+writesize, &crc, sizeof(crc) );
+            memcpy( handle->buffs[counter+ecounter]+writesize, &crc, sizeof(crc) );
             writesize += sizeof(crc);
 #endif
 
@@ -1420,7 +1420,7 @@ int error_check( ne_handle handle, char *path )
          }
          else if ( (nsz % bsz) != 0 ) {
 #ifdef DEBUG
-            fprintf (stderr, "error_check: filexattr nsize = %lu is inconsistent with block size %d \n", ( nsz + (blocks*sizeof(crc)) ), bsz); 
+            fprintf (stderr, "error_check: filexattr nsize = %lu is inconsistent with block size %d \n", nsz, bsz); 
 #endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
@@ -1470,9 +1470,15 @@ int error_check( ne_handle handle, char *path )
 
             while ( bcounter < ret_in ) {
 
+#ifdef INTCRC
+               ret = read(filefd,buf,(bsz*1024)+sizeof(crc));
+
+               if ( ret != (bsz*1024)+sizeof(crc) ) {
+#else
                ret = read(filefd,buf,bsz*1024);
 
                if ( ret != bsz*1024 ) {
+#endif
 #ifdef DEBUG
                   fprintf( stderr, "error_check: failure to read full amt for file %s block %d\n", file, bcounter );
 #endif
@@ -1482,8 +1488,8 @@ int error_check( ne_handle handle, char *path )
                   break;
                }
 
-               //TODO store and verify intermediate crc
 #ifdef INTCRC
+               //store and verify intermediate crc
                crc = crc32_ieee( TEST_SEED, buf, bsz*1024 );
 
                if ( memcmp( &crc, buf+(bsz*1024), sizeof(crc) ) != 0 ) {
