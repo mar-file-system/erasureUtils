@@ -242,7 +242,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset ) 
 {
    int mtot = (handle->N)+(handle->E);
-   int minNerr = handle->N+1;  // greater than N+E
+   int minNerr = handle->N+1;  // greater than N
    int maxNerr = -1;   // less than N
    int nsrcerr = 0;
    int counter;
@@ -270,8 +270,6 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 #ifdef INTCRC
    u32 crc;
 #endif
-   //u64 csum;
-   //u64 totsz;
    ssize_t out_off;
    off_t seekamt;
 
@@ -327,9 +325,6 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 
    llcounter = 0;
    tmpoffset = 0;
-#ifdef INTCRC
-   char firstwrite = 1;
-#endif
 
    /******** Rebuild While Reading ********/
 rebuild:
@@ -539,7 +534,10 @@ rebuild:
 #endif
 
 #ifdef INTCRC
-            ret_in = read( handle->FDArray[counter], handle->buffs[counter], readsize+tmpoffset+sizeof(u32) );
+            ret_in = read( handle->FDArray[counter], handle->buffs[counter], (bsz*1024)+sizeof(crc) );
+
+            printf("     read %lu from file %d\n", (bsz*1024)+sizeof(crc), counter);
+
             ret_in -= (sizeof(u32)+tmpoffset);
 #else
             ret_in = read( handle->FDArray[counter], handle->buffs[counter], readsize );
@@ -567,6 +565,7 @@ rebuild:
                      }
                      goto rebuild;
                   }
+                  continue;
                }
                else {
                   nbytes = llcounter + ret_in;
@@ -611,6 +610,7 @@ rebuild:
                      }
                      goto rebuild;
                   }
+                  continue;
                }
             }
 #endif
