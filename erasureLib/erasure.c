@@ -242,9 +242,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset ) 
 {
    int mtot = (handle->N)+(handle->E);
-   //char file[MAXNAME];
-   //char rebuild = 0;
-   int minNerr = handle->N+1;  // greater than N
+   int minNerr = handle->N+1;  // greater than N+E
    int maxNerr = -1;   // less than N
    int nsrcerr = 0;
    int counter;
@@ -252,7 +250,6 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    char firststripe;
    char firstchunk;
    char error_in_stripe;
-   //char xattrval[strlen(XATTRKEY)+50];
    unsigned char *temp_buffs[ MAXPARTS ];
    int N = handle->N;
    int E = handle->E;
@@ -262,7 +259,6 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    unsigned long ret_in;
    int tmp;
    unsigned int decode_index[ MAXPARTS ];
-   //unsigned char* recov[ MAXPARTS ];
    u32 llcounter;
    u32 readsize;
    u32 startoffset;
@@ -329,276 +325,232 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    fprintf(stdout,"ne_read: read from startstripe %d startpart %d and startoffset %d for nbytes %d\n",startstripe,startpart,startoffset,nbytes);
 #endif
 
-   /******** Read Without Rebuild ********/  
-   counter = 0;
-#ifdef DEBUG
-   fprintf(stdout,"ne_read: honor read request with len = %d\n",nbytes);
-#endif
-
-   /* Set seek positions within each file */
-   while ( counter < N  &&  nsrcerr == 0 ) {
-#ifdef INTCRC
-      if (counter < startpart) seekamt = ((startstripe+1)*( (bsz*1024)+sizeof(u32) ));
-      if (counter >= startpart) seekamt = (startstripe*( (bsz*1024)+sizeof(u32) )); 
-#else
-      if (counter < startpart) seekamt = ((startstripe+1)*bsz*1024);
-      if (counter == startpart) seekamt = (startstripe*bsz*1024) + startoffset; 
-      if (counter > startpart) seekamt = (startstripe*bsz*1024); 
-#endif
-      tmp = lseek(handle->FDArray[counter],seekamt,SEEK_SET);
-      if ( tmp < 0 ) {
-#ifdef DEBUG
-         fprintf( stderr, "ne_read: encountered error seeking file %d\n", counter );
-#endif
-         if ( counter > maxNerr )  maxNerr = counter;
-         if ( counter < minNerr )  minNerr = counter;
-         handle->src_in_err[counter] = 1;
-         handle->src_err_list[handle->nerr] = counter;
-         handle->nerr++;
-         nsrcerr++;
-         handle->e_ready = 0; //indicate that erasure structs require re-initialization
-         break;
-      }
-#ifdef DEBUG
-      fprintf(stdout,"ne_read: seek input file %d %zd\n",counter, seekamt);
-#endif
-      counter++;
-   }
    llcounter = 0;
    tmpoffset = 0;
-   char firstpart = 1;
 #ifdef INTCRC
    char firstwrite = 1;
 #endif
 
-   /* Read in nbytes so long as no errors have been encountered */
-   while ( llcounter < nbytes  &&  nsrcerr == 0 ) {
-      ret_in = 0;
-      counter = 0;
-      while ( counter < N ) {
-
-#ifdef INTCRC
-         readsize = (bsz*1024) + sizeof(u32);
-#else
-         readsize = bsz*1024;
-         if (firstpart ) {
-            if( counter == startpart) {
-               firstpart = 0;
-               readsize = bsz*1024-startoffset;
-            }
-            else {
-               counter++;
-               continue;
-            }
-         }
-#endif
-
-         if ((nbytes-tmpoffset) < readsize) readsize = nbytes-tmpoffset;
-#ifdef DEBUG
-         fprintf(stdout,"ne_read: preparing to read %lu from datafile %d\n",(unsigned long)readsize,counter);
-#endif
-
-         /**** read ****/
-         tmp = read( handle->FDArray[counter], handle->buffs[counter], readsize );
-
-#ifdef INTCRC
-         //calculate and verify crc
-         crc += crc32_ieee( TEST_SEED, handle->buffs[counter], bsz*1024 );
-         if ( memcmp( handle->buffs[counter]+(bsz*1024), &crc, sizeof(u32) ) != 0 ){
-#ifdef DEBUG
-            fprintf(stderr, "ne_read: mismatch of int-crc for file %d while reading without rebuild\n", counter);
-#endif
-            if ( counter > maxNerr )  maxNerr = counter;
-            if ( counter < minNerr )  minNerr = counter;
-            handle->src_in_err[counter] = 1;
-            handle->src_err_list[handle->nerr] = counter;
-            handle->nerr++;
-            nsrcerr++;
-            handle->e_ready = 0; //indicate that erasure structs require re-initialization
-            break;
-         }
-#endif
-
-         if ( tmp < 0 ) {
-#ifdef DEBUG
-            fprintf(stderr, "ne_read: encoutered error while reading from file %d without rebuild\n", counter);
-#endif
-            if ( counter > maxNerr )  maxNerr = counter;
-            if ( counter < minNerr )  minNerr = counter;
-            handle->src_in_err[counter] = 1;
-            handle->src_err_list[handle->nerr] = counter;
-            handle->nerr++;
-            nsrcerr++;
-            handle->e_ready = 0; //indicate that erasure structs require re-initialization
-            break;
-         }
-
-#ifdef INTCRC
-         if ( firstpart == 1 ) {
-            datasz[counter] = tmp-( startoffset + sizeof(u32) );
-            ret_in += tmp-( startoffset + sizeof(u32) );
-            tmpoffset += tmp-( startoffset + sizeof(u32) );
-            firstpart = 0;
-         }
-         else {
-            datasz[counter] = tmp-sizeof(u32);
-            ret_in += tmp-sizeof(u32);
-            tmpoffset += tmp-sizeof(u32);
-         }
-#else
-         datasz[counter] = tmp;
-         ret_in += tmp;
-         tmpoffset += tmp;
-#endif
-
-         if ( tmp < readsize ) {
-            nbytes = llcounter + tmpoffset;
-#ifdef DEBUG
-            fprintf(stdout, "ne_read: Input exhausted, limiting read size to %d\n", nbytes);
-#endif
-            break;
-         }
-         counter++;
-      }
-      if ( nsrcerr != 0 ) {
-         break;
-      }
-
-      llcounter = tmpoffset;
-
-      /**** copy to buffer ****/
-      counter = 0;
-      while ( counter < N ) {
-#ifdef DEBUG
-         fprintf(stdout,"ne_read: writing %lu to buffer at offset %lu\n",datasz[counter],(llcounter-ret_in));
-#endif
-
-#ifdef INTCRC
-         if ( firstwrite == 1 ) {
-            firstwrite = 0;
-            memcpy( buffer+(llcounter-ret_in), handle->buffs[counter]+startoffset, datasz[counter] );
-         }
-         else {
-            memcpy( buffer+(llcounter-ret_in), handle->buffs[counter], datasz[counter] );
-         }
-#else
-         memcpy( buffer+(llcounter-ret_in), handle->buffs[counter], datasz[counter] );
-#endif
-         ret_in -= datasz[counter];
-         datasz[counter] = 0;
-         counter++;
-      }
-
-      if ( ret_in != 0 ) {
-#ifdef DEBUG
-         fprintf( stderr, "ne_read: mismatch between bytes read and output of %lu\n", ret_in );
-#endif
-         errno=ENOTRECOVERABLE;
-         return -1;
-      }
-
-#ifdef DEBUG
-      fprintf( stdout, "ne_read: total output = %lu\n", (unsigned long)llcounter );
-#endif
-   }
-
    /******** Rebuild While Reading ********/
 rebuild:
 
-   if (nsrcerr != 0) { 
 #ifdef DEBUG
-      fprintf(stdout,"ne_read: honor read request with rebuild\n");
+   fprintf(stdout,"ne_read: honor read request with rebuild\n");
 #endif
 
-      startstripe = (offset+llcounter) / (bsz*1024*N);
-      startpart = (offset + llcounter - (startstripe*bsz*1024*N))/(bsz*1024);
-      startoffset = offset+llcounter - (startstripe*bsz*1024*N) - (startpart*bsz*1024);
+   startstripe = (offset+llcounter) / (bsz*1024*N);
+   startpart = (offset + llcounter - (startstripe*bsz*1024*N))/(bsz*1024);
+   startoffset = offset+llcounter - (startstripe*bsz*1024*N) - (startpart*bsz*1024);
 
 #ifdef DEBUG
-      fprintf(stdout,"ne_read: read with rebuild from startstripe %d startpart %d and startoffset %d for nbytes %d\n",startstripe,startpart,startoffset,nbytes);
+   fprintf(stdout,"ne_read: read with rebuild from startstripe %d startpart %d and startoffset %d for nbytes %d\n",startstripe,startpart,startoffset,nbytes);
 #endif
 
-      counter = 0;
+   counter = 0;
 
-      endchunk = ((offset+nbytes) - (startstripe*N*bsz*1024) ) / (bsz*1024);
+   endchunk = ((offset+nbytes) - (startstripe*N*bsz*1024) ) / (bsz*1024);
+   int stop = endchunk;
 
-      if ( endchunk >= N ) {
-         endchunk = mtot - 1;
-      }     
+   if ( endchunk > N ) {
+      endchunk = N;
+      stop = mtot - 1;
+   }     
 
-      /**** set seek positions for initial reading ****/
-      if (startpart > maxNerr  ||  endchunk < minNerr ) {  //if not reading from corrupted chunks, we can just set these normally
-         for ( counter = 0; counter <= endchunk; counter++ ) {
+   /**** set seek positions for initial reading ****/
+   if (startpart > maxNerr  ||  endchunk < minNerr ) {  //if not reading from corrupted chunks, we can just set these normally
+      for ( counter = 0; counter <= stop; counter++ ) {
 #ifdef INTCRC
-            if (counter < startpart) {
-               seekamt = (startstripe+1) * ( (bsz*1024)+sizeof(u32) ); 
-            }
-            else if (counter >= startpart) {
-               seekamt = (startstripe*( (bsz*1024)+sizeof(u32) )); 
-            }
-#else
-            if (counter < startpart) {
-               seekamt = (startstripe*bsz*1024) + (bsz*1024); 
-            }
-            else if (counter == startpart) {
-               seekamt = (startstripe*bsz*1024) + startoffset; 
-            }
-            else { 
-               seekamt = (startstripe*bsz*1024); 
-            }
-#endif
-            if( handle->src_in_err[counter] == 0 ) {
-               if ( counter < N ) {
-#ifdef DEBUG
-                  fprintf(stdout,"seeking input file %d to %zd, as there is no error in this stripe\n",counter, seekamt);
-#endif
-               }
-               else {
-#ifdef INTCRC
-                  seekamt += ( (bsz*1024)+sizeof(u32) );
-#else
-                  seekamt += (bsz*1024);
-#endif
-
-#ifdef DEBUG
-                  fprintf(stdout,"seeking erasure file e%d to %zd, as we will be reading from the next stripe\n",counter-N, seekamt);
-#endif
-               }
-               tmp = lseek(handle->FDArray[counter],seekamt,SEEK_SET);
-
-               //if we hit an error here, seek positions are wrong and we must restart
-               if ( tmp < 0 ) {
-                  if ( counter > maxNerr )  maxNerr = counter;
-                  if ( counter < minNerr )  minNerr = counter;
-                  handle->src_in_err[counter] = 1;
-                  handle->src_err_list[handle->nerr] = counter;
-                  handle->nerr++;
-                  nsrcerr++;
-                  handle->e_ready = 0; //indicate that erasure structs require re-initialization
-                  goto rebuild; //if another error is encountered, start over
-               }
-
-            }
+         if (counter < startpart) {
+            seekamt = (startstripe+1) * ( (bsz*1024)+sizeof(u32) ); 
          }
-         tmpchunk = startpart;
-         tmpoffset = startoffset;
+         else if (counter >= startpart) {
+            seekamt = (startstripe*( (bsz*1024)+sizeof(u32) )); 
+         }
+#else
+         if (counter < startpart) {
+            seekamt = (startstripe*bsz*1024) + (bsz*1024); 
+         }
+         else if (counter == startpart) {
+            seekamt = (startstripe*bsz*1024) + startoffset; 
+         }
+         else { 
+            seekamt = (startstripe*bsz*1024); 
+         }
+#endif
+         if( handle->src_in_err[counter] == 0 ) {
+            if ( counter < N ) {
+#ifdef DEBUG
+               fprintf(stdout,"seeking input file %d to %zd, as there is no error in this stripe\n",counter, seekamt);
+#endif
+            }
+            else {
+#ifdef INTCRC
+               seekamt += ( (bsz*1024)+sizeof(u32) );
+#else
+               seekamt += (bsz*1024);
+#endif
+
+#ifdef DEBUG
+               fprintf(stdout,"seeking erasure file e%d to %zd, as we will be reading from the next stripe\n",counter-N, seekamt);
+#endif
+            }
+            tmp = lseek(handle->FDArray[counter],seekamt,SEEK_SET);
+
+            //if we hit an error here, seek positions are wrong and we must restart
+            if ( tmp < 0 ) {
+               if ( counter > maxNerr )  maxNerr = counter;
+               if ( counter < minNerr )  minNerr = counter;
+               handle->src_in_err[counter] = 1;
+               handle->src_err_list[handle->nerr] = counter;
+               handle->nerr++;
+               nsrcerr++;
+               handle->e_ready = 0; //indicate that erasure structs require re-initialization
+               goto rebuild; //if another error is encountered, start over
+            }
+
+         }
+      }
+      tmpchunk = startpart;
+      tmpoffset = startoffset;
+      error_in_stripe = 0;
+   }
+   else {  //if not, we will require the entire stripe for rebuild
+#ifdef DEBUG
+      fprintf(stdout,"startpart = %d, endchunk = %d\n   This stipe contains corrupted blocks...\n", startpart, endchunk);
+#endif
+      while (counter < mtot) {
+         if( handle->src_in_err[counter] == 0 ) {
+
+#ifdef INTCRC
+            tmp = lseek(handle->FDArray[counter],(startstripe*( (bsz*1024)+sizeof(u32) )),SEEK_SET);
+#else
+            tmp = lseek(handle->FDArray[counter],(startstripe*bsz*1024),SEEK_SET);
+#endif
+
+            //note any errors, no need to restart though
+            if ( tmp < 0 ) {
+               if ( counter > maxNerr )  maxNerr = counter;
+               if ( counter < minNerr )  minNerr = counter;
+               handle->src_in_err[counter] = 1;
+               handle->src_err_list[handle->nerr] = counter;
+               handle->nerr++;
+               nsrcerr++;
+               handle->e_ready = 0; //indicate that erasure structs require re-initialization
+               counter++;
+               continue;
+            }
+#ifdef DEBUG
+#ifdef INTCRC
+            fprintf(stdout,"seek input file %d to %lu, to read entire stripe\n",counter, (unsigned long)(startstripe*( (bsz*1024)+sizeof(u32) )));
+#else
+            fprintf(stdout,"seek input file %d to %lu, to read entire stripe\n",counter, (unsigned long)(startstripe*bsz*1024));
+#endif
+#endif
+         }
+         counter++;
+      }
+
+      tmpchunk = 0;
+      tmpoffset = 0;
+      error_in_stripe = 1;
+      //handle->e_ready = 0; //test
+   }
+
+   firstchunk = 1;
+   firststripe = 1;
+   out_off = llcounter;
+
+   /**** output each data stipe, regenerating as necessary ****/
+   while ( llcounter < nbytes ) {
+
+      endchunk = ((long)(offset+nbytes+1) - (long)((long)(startstripe*N*bsz*1024) + llcounter) ) / (bsz*1024);
+      skipped_err = 0;
+
+#ifdef DEBUG
+      fprintf( stdout, "ne_read: endchunk unadjusted - %d\n", endchunk );
+#endif
+      if ( endchunk >= N ) {
+         endchunk = N - 1;
+      }
+
+#ifdef DEBUG
+      fprintf(stdout,"ne_read: endchunk adjusted - %d\n", endchunk);
+#endif
+      if ( endchunk < minNerr ) {
+#ifdef DEBUG
+         printf("ne_read: there is no error in this stripe\n");
+#endif
          error_in_stripe = 0;
       }
-      else {  //if not, we will require the entire stripe for rebuild
+
+      /**** read data into buffers ****/
+      for( counter=tmpchunk; counter < N; counter++ ) {
+         readsize = bsz*1024-tmpoffset;
+
+         if ( llcounter == nbytes  &&  !error_in_stripe ) {
 #ifdef DEBUG
-         fprintf(stdout,"startpart = %d, endchunk = %d\n   This stipe contains corrupted blocks...\n", startpart, endchunk);
+            fprintf(stdout, "ne_read: data reads complete\n");
 #endif
-         while (counter < mtot) {
-            if( handle->src_in_err[counter] == 0 ) {
+            break;
+         }
+
+
+         if ( handle->src_in_err[counter] == 1 ) {  //this data chunk is invalid
+#ifdef DEBUG
+            fprintf(stdout,"ne_read: zeroing data for faulty chunk %d\n",counter);
+#endif
+            bzero(handle->buffs[counter],bsz*1024);
+#ifdef DEBUG
+            fprintf(stdout,"ne_read: zeroing tmp_data for faulty chunk %d\n",counter);
+#endif
+            bzero(temp_buffs[counter],bsz*1024);
+
+            error_in_stripe = 1;
+
+            if ( firstchunk == 1  &&  counter == startpart ) {
+               llcounter = (readsize - (startoffset-tmpoffset) < nbytes ) ? readsize-(startoffset-tmpoffset) : nbytes;
+               datasz[counter] = llcounter;
+               firstchunk = 0;
+            }
+            else if ( firstchunk == 0 ) {
+
+               llcounter += readsize;
+
+               if ( llcounter < nbytes ) {
+                  datasz[counter] = readsize;
+               }
+               else {
+                  datasz[counter] = nbytes - (llcounter - readsize);
+                  llcounter=nbytes;
+               }
+            }
+            else {
+               skipped_err++;
+            }
+
+         }
+         else {    //this data chunk is valid, store it
+            if ( (nbytes-llcounter) < readsize  &&  error_in_stripe == 0 ) {
+               readsize = nbytes-llcounter;
+            }
+
+#ifdef DEBUG
+            fprintf(stdout,"ne_read: read %d from datafile %d\n",readsize,counter);
+#endif
 
 #ifdef INTCRC
-               tmp = lseek(handle->FDArray[counter],(startstripe*( (bsz*1024)+sizeof(u32) )),SEEK_SET);
+            ret_in = read( handle->FDArray[counter], handle->buffs[counter], readsize+tmpoffset+sizeof(u32) );
+            ret_in -= (sizeof(u32)+tmpoffset);
 #else
-               tmp = lseek(handle->FDArray[counter],(startstripe*bsz*1024),SEEK_SET);
+            ret_in = read( handle->FDArray[counter], handle->buffs[counter], readsize );
 #endif
 
-               //note any errors, no need to restart though
-               if ( tmp < 0 ) {
+            //check for a read error
+            if ( ret_in < readsize ) {
+               if ( ret_in < 0 ) {
+#ifdef DEBUG
+                  fprintf(stderr, "ne_read: error encountered while reading data file %d\n", counter);
+#endif
                   if ( counter > maxNerr )  maxNerr = counter;
                   if ( counter < minNerr )  minNerr = counter;
                   handle->src_in_err[counter] = 1;
@@ -606,351 +558,229 @@ rebuild:
                   handle->nerr++;
                   nsrcerr++;
                   handle->e_ready = 0; //indicate that erasure structs require re-initialization
-                  counter++;
-                  continue;
+                  ret_in = 0;
+                  counter--;
+                  //if we have skipped some of the stripe, we must start over
+                  if ( error_in_stripe == 0 && tmpoffset != 0 ) {
+                     for( tmp = counter -1; tmp >=0; tmp-- ) {
+                        llcounter -= datasz[counter];
+                     }
+                     goto rebuild;
+                  }
                }
+               else {
+                  nbytes = llcounter + ret_in;
 #ifdef DEBUG
-#ifdef INTCRC
-               fprintf(stdout,"seek input file %d to %lu, to read entire stripe\n",counter, (unsigned long)(startstripe*( (bsz*1024)+sizeof(u32) )));
-#else
-               fprintf(stdout,"seek input file %d to %lu, to read entire stripe\n",counter, (unsigned long)(startstripe*bsz*1024));
+                  fprintf(stderr, "ne_read: inputs exhausted, limiting read to %d bytes\n",nbytes);
 #endif
-#endif
-            }
-            counter++;
-         }
+               }
 
-         tmpchunk = 0;
-         tmpoffset = 0;
-         error_in_stripe = 1;
-         //handle->e_ready = 0; //test
-      }
-
-      firstchunk = 1;
-      firststripe = 1;
-      out_off = llcounter;
-
-      /**** output each data stipe, regenerating as necessary ****/
-      while ( llcounter < nbytes ) {
-
-         endchunk = ((long)(offset+nbytes+1) - (long)((long)(startstripe*N*bsz*1024) + llcounter) ) / (bsz*1024);
-         skipped_err = 0;
-         
 #ifdef DEBUG
-         fprintf( stdout, "ne_read: endchunk unadjusted - %d\n", endchunk );
+               fprintf(stderr, "ne_read: failed to read all requested data from file %d\n", counter);
+               fprintf(stdout,"ne_read: zeroing missing data for %d from %lu to %d\n",counter,ret_in,bsz*1024);
 #endif
-         if ( endchunk >= N ) {
-            endchunk = N - 1;
-         }
-         
+               bzero(handle->buffs[counter]+ret_in,bsz*1024-ret_in);
 #ifdef DEBUG
-         fprintf(stdout,"ne_read: endchunk adjusted - %d\n", endchunk);
-#endif
-         if ( endchunk < minNerr ) {
-#ifdef DEBUG
-            printf("ne_read: there is no error in this stripe\n");
-#endif
-            error_in_stripe = 0;
-         }
-
-         /**** read data into buffers ****/
-         for( counter=tmpchunk; counter < N; counter++ ) {
-            readsize = bsz*1024-tmpoffset;
-
-            if ( llcounter == nbytes  &&  !error_in_stripe ) {
-#ifdef DEBUG
-               fprintf(stdout, "ne_read: data reads complete\n");
-#endif
-               break;
-            }
-
-
-            if ( handle->src_in_err[counter] == 1 ) {  //this data chunk is invalid
-#ifdef DEBUG
-               fprintf(stdout,"ne_read: zeroing data for faulty chunk %d\n",counter);
-#endif
-               bzero(handle->buffs[counter],bsz*1024);
-#ifdef DEBUG
-               fprintf(stdout,"ne_read: zeroing tmp_data for faulty chunk %d\n",counter);
+               fprintf(stdout,"ne_read: zeroing temp_data for data block %d\n",counter);
 #endif
                bzero(temp_buffs[counter],bsz*1024);
 
-               error_in_stripe = 1;
-
-               if ( firstchunk == 1  &&  counter == startpart ) {
-                  llcounter = (readsize - (startoffset-tmpoffset) < nbytes ) ? readsize-(startoffset-tmpoffset) : nbytes;
-                  datasz[counter] = llcounter;
-                  firstchunk = 0;
-               }
-               else if ( firstchunk == 0 ) {
-
-                  llcounter += readsize;
-
-                  if ( llcounter < nbytes ) {
-                     datasz[counter] = readsize;
-                  }
-                  else {
-                     datasz[counter] = nbytes - (llcounter - readsize);
-                     llcounter=nbytes;
-                  }
-               }
-               else {
-                  skipped_err++;
-               }
 
             }
-            else {    //this data chunk is valid, store it
-               if ( (nbytes-llcounter) < readsize  &&  error_in_stripe == 0 ) {
-                  readsize = nbytes-llcounter;
-               }
-
-#ifdef DEBUG
-               fprintf(stdout,"ne_read: read %d from datafile %d\n",readsize,counter);
-#endif
-
 #ifdef INTCRC
-               ret_in = read( handle->FDArray[counter], handle->buffs[counter], readsize+tmpoffset+sizeof(u32) );
-               ret_in -= (sizeof(u32)+tmpoffset);
-#else
-               ret_in = read( handle->FDArray[counter], handle->buffs[counter], readsize );
-#endif
-
-               //check for a read error
-               if ( ret_in < readsize ) {
-                  if ( ret_in < 0 ) {
+            else {
+               //calculate and verify crc
+               crc += crc32_ieee( TEST_SEED, handle->buffs[counter], bsz*1024 );
+               if ( memcmp( handle->buffs[counter]+(bsz*1024), &crc, sizeof(u32) ) != 0 ){
 #ifdef DEBUG
-                     fprintf(stderr, "ne_read: error encountered while reading data file %d\n", counter);
+                  fprintf(stderr, "ne_read: mismatch of int-crc for file %d while reading with rebuild\n", counter);
 #endif
-                     if ( counter > maxNerr )  maxNerr = counter;
-                     if ( counter < minNerr )  minNerr = counter;
-                     handle->src_in_err[counter] = 1;
-                     handle->src_err_list[handle->nerr] = counter;
-                     handle->nerr++;
-                     nsrcerr++;
-                     handle->e_ready = 0; //indicate that erasure structs require re-initialization
-                     ret_in = 0;
-                     counter--;
-                     //if we have skipped some of the stripe, we must start over
-                     if ( error_in_stripe == 0 && tmpoffset != 0 ) {
-                        for( tmp = counter -1; tmp >=0; tmp-- ) {
-                           llcounter -= datasz[counter];
-                        }
-                        goto rebuild;
+                  if ( counter > maxNerr )  maxNerr = counter;
+                  if ( counter < minNerr )  minNerr = counter;
+                  handle->src_in_err[counter] = 1;
+                  handle->src_err_list[handle->nerr] = counter;
+                  handle->nerr++;
+                  nsrcerr++;
+                  handle->e_ready = 0; //indicate that erasure structs require re-initialization
+                  counter--;
+                  ret_in = 0;
+                  //if we have skipped some of the stripe, we must start over
+                  if ( error_in_stripe == 0 && tmpoffset != 0 ) {
+                     for( tmp = counter -1; tmp >=0; tmp-- ) {
+                        llcounter -= datasz[counter];
                      }
+                     goto rebuild;
                   }
-                  else {
-                     nbytes = llcounter + ret_in;
-#ifdef DEBUG
-                     fprintf(stderr, "ne_read: inputs exhausted, limiting read to %d bytes\n",nbytes);
-#endif
-                  }
-
-#ifdef DEBUG
-                  fprintf(stderr, "ne_read: failed to read all requested data from file %d\n", counter);
-                  fprintf(stdout,"ne_read: zeroing missing data for %d from %lu to %d\n",counter,ret_in,bsz*1024);
-#endif
-                  bzero(handle->buffs[counter]+ret_in,bsz*1024-ret_in);
-#ifdef DEBUG
-                  fprintf(stdout,"ne_read: zeroing temp_data for data block %d\n",counter);
-#endif
-                  bzero(temp_buffs[counter],bsz*1024);
-                  
-
                }
-#ifdef INTCRC
+            }
+#endif
+
+
+            if ( firstchunk  &&  counter == startpart ) {
+               llcounter = (ret_in - (startoffset-tmpoffset) < nbytes ) ? ret_in-(startoffset-tmpoffset) : nbytes;
+               datasz[counter] = llcounter;
+               firstchunk = 0;
+            }
+            else if ( !firstchunk ) {
+               llcounter += ret_in;
+               if ( llcounter < nbytes ) {
+                  datasz[counter] = ret_in;
+               }
                else {
-                  //calculate and verify crc
-                  crc += crc32_ieee( TEST_SEED, handle->buffs[counter], bsz*1024 );
-                  if ( memcmp( handle->buffs[counter]+(bsz*1024), &crc, sizeof(u32) ) != 0 ){
-#ifdef DEBUG
-                     fprintf(stderr, "ne_read: mismatch of int-crc for file %d while reading with rebuild\n", counter);
-#endif
-                     if ( counter > maxNerr )  maxNerr = counter;
-                     if ( counter < minNerr )  minNerr = counter;
-                     handle->src_in_err[counter] = 1;
-                     handle->src_err_list[handle->nerr] = counter;
-                     handle->nerr++;
-                     nsrcerr++;
-                     handle->e_ready = 0; //indicate that erasure structs require re-initialization
-                     counter--;
-                     ret_in = 0;
-                     //if we have skipped some of the stripe, we must start over
-                     if ( error_in_stripe == 0 && tmpoffset != 0 ) {
-                        for( tmp = counter -1; tmp >=0; tmp-- ) {
-                           llcounter -= datasz[counter];
-                        }
-                        goto rebuild;
-                     }
-                  }
+                  datasz[counter] = nbytes - (llcounter - ret_in);
+                  llcounter = nbytes;
                }
-#endif
-
-
-               if ( firstchunk  &&  counter == startpart ) {
-                  llcounter = (ret_in - (startoffset-tmpoffset) < nbytes ) ? ret_in-(startoffset-tmpoffset) : nbytes;
-                  datasz[counter] = llcounter;
-                  firstchunk = 0;
-               }
-               else if ( !firstchunk ) {
-                  llcounter += ret_in;
-                  if ( llcounter < nbytes ) {
-                     datasz[counter] = ret_in;
-                  }
-                  else {
-                     datasz[counter] = nbytes - (llcounter - ret_in);
-                     llcounter = nbytes;
-                  }
-               }
-
             }
 
+         }
+
 #ifdef DEBUG
-            fprintf(stderr, "ne_read: nbytes = %d, llcounter = %lu, read_size = %d\n", nbytes, (unsigned long)llcounter, readsize);
+         fprintf(stderr, "ne_read: nbytes = %d, llcounter = %lu, read_size = %d\n", nbytes, (unsigned long)llcounter, readsize);
 #endif
-            tmpoffset = 0;
+         tmpoffset = 0;
 
-         } //completion of read from stripe
+      } //completion of read from stripe
 
-         //notice, we only need the erasure stripes if we hit an error
-         while ( counter < mtot  &&  error_in_stripe == 1 ) {
+      //notice, we only need the erasure stripes if we hit an error
+      while ( counter < mtot  &&  error_in_stripe == 1 ) {
 
 #ifdef INTCRC
-            readsize = (bsz*1024)+sizeof(u32);
+         readsize = (bsz*1024)+sizeof(u32);
 #else
-            readsize = bsz*1024; //may want to limit later
+         readsize = bsz*1024; //may want to limit later
 #endif
 
-            if( handle->src_in_err[counter] ) {
+         if( handle->src_in_err[counter] ) {
 #ifdef DEBUG
-               fprintf(stdout,"ne_read: zeroing data for faulty erasure %d\n",counter);
+            fprintf(stdout,"ne_read: zeroing data for faulty erasure %d\n",counter);
 #endif
-               bzero(handle->buffs[counter],bsz*1024);
+            bzero(handle->buffs[counter],bsz*1024);
+#ifdef DEBUG
+            fprintf(stdout,"ne_read: zeroing temp_data for faulty erasure %d\n",counter);
+#endif
+            bzero(temp_buffs[counter],bsz*1024);
+         }
+         else {
+#ifdef DEBUG
+            fprintf(stdout,"ne_read: reading %d from erasure %d\n",readsize,counter);
+#endif
+            ret_in = read( handle->FDArray[counter], handle->buffs[counter], readsize );
+            if ( ret_in < readsize ) {
+               if ( ret_in < 0 ) {
+                  ret_in = 0;
+                  if ( counter > maxNerr )  maxNerr = counter;
+                  if ( counter < minNerr )  minNerr = counter;
+                  handle->src_in_err[counter] = 1;
+                  handle->src_err_list[handle->nerr] = counter;
+                  handle->nerr++;
+                  handle->e_ready = 0; //indicate that erasure structs require re-initialization
+                  error_in_stripe = 1;
+               }
+#ifdef DEBUG
+               fprintf(stderr, "ne_read: failed to read erasure data in file %d\n", counter);
+               fprintf(stdout,"ne_read: zeroing data for faulty erasure %d from %lu to %d\n",counter,ret_in,bsz*1024);
+#endif
+               bzero(handle->buffs[counter]+ret_in,bsz*1024-ret_in);
 #ifdef DEBUG
                fprintf(stdout,"ne_read: zeroing temp_data for faulty erasure %d\n",counter);
 #endif
                bzero(temp_buffs[counter],bsz*1024);
+#ifdef DEBUG
+               fprintf(stdout,"ne_read: done zeroing %d\n",counter);
+#endif
             }
+#ifdef INTCRC
             else {
+               //calculate and verify crc
+               crc += crc32_ieee( TEST_SEED, handle->buffs[counter], bsz*1024 );
+               if ( memcmp( handle->buffs[counter]+(bsz*1024), &crc, sizeof(u32) ) != 0 ){
 #ifdef DEBUG
-               fprintf(stdout,"ne_read: reading %d from erasure %d\n",readsize,counter);
+                  fprintf(stderr, "ne_read: mismatch of int-crc for file %d (erasure)\n", counter);
 #endif
-               ret_in = read( handle->FDArray[counter], handle->buffs[counter], readsize );
-               if ( ret_in < readsize ) {
-                  if ( ret_in < 0 ) {
-                     ret_in = 0;
-                     if ( counter > maxNerr )  maxNerr = counter;
-                     if ( counter < minNerr )  minNerr = counter;
-                     handle->src_in_err[counter] = 1;
-                     handle->src_err_list[handle->nerr] = counter;
-                     handle->nerr++;
-                     handle->e_ready = 0; //indicate that erasure structs require re-initialization
-                     error_in_stripe = 1;
-                  }
-#ifdef DEBUG
-                  fprintf(stderr, "ne_read: failed to read erasure data in file %d\n", counter);
-                  fprintf(stdout,"ne_read: zeroing data for faulty erasure %d from %lu to %d\n",counter,ret_in,bsz*1024);
-#endif
-                  bzero(handle->buffs[counter]+ret_in,bsz*1024-ret_in);
-#ifdef DEBUG
-                  fprintf(stdout,"ne_read: zeroing temp_data for faulty erasure %d\n",counter);
-#endif
-                  bzero(temp_buffs[counter],bsz*1024);
-#ifdef DEBUG
-                  fprintf(stdout,"ne_read: done zeroing %d\n",counter);
-#endif
+                  if ( counter > maxNerr )  maxNerr = counter;
+                  if ( counter < minNerr )  minNerr = counter;
+                  handle->src_in_err[counter] = 1;
+                  handle->src_err_list[handle->nerr] = counter;
+                  handle->nerr++;
+                  nsrcerr++;
+                  handle->e_ready = 0; //indicate that erasure structs require re-initialization
+                  error_in_stripe = 1;
                }
-#ifdef INTCRC
-               else {
-                  //calculate and verify crc
-                  crc += crc32_ieee( TEST_SEED, handle->buffs[counter], bsz*1024 );
-                  if ( memcmp( handle->buffs[counter]+(bsz*1024), &crc, sizeof(u32) ) != 0 ){
-#ifdef DEBUG
-                     fprintf(stderr, "ne_read: mismatch of int-crc for file %d (erasure)\n", counter);
-#endif
-                     if ( counter > maxNerr )  maxNerr = counter;
-                     if ( counter < minNerr )  minNerr = counter;
-                     handle->src_in_err[counter] = 1;
-                     handle->src_err_list[handle->nerr] = counter;
-                     handle->nerr++;
-                     nsrcerr++;
-                     handle->e_ready = 0; //indicate that erasure structs require re-initialization
-                     error_in_stripe = 1;
-                  }
-               }
-#endif
             }
-            counter++;
+#endif
          }
+         counter++;
+      }
 
 
-         if ( handle->nerr > handle->E ) {
+      if ( handle->nerr > handle->E ) {
 #ifdef DEBUG
-            fprintf( stderr, "ne_read: encoutered errors exceed erasure limits\n" );
+         fprintf( stderr, "ne_read: encoutered errors exceed erasure limits\n" );
 #endif
-            errno = ENODATA;
-            break;
-         }
+         errno = ENODATA;
+         break;
+      }
 
-         /**** regenerate from erasure ****/
-         if ( error_in_stripe == 1 ) {
+      /**** regenerate from erasure ****/
+      if ( error_in_stripe == 1 ) {
 
-            /* If necessary, initialize the erasure structures */
-            if ( handle->e_ready == 0 ) {
-               // Generate encode matrix encode_matrix
-               // The matrix generated by gf_gen_rs_matrix
-               // is not always invertable.
+         /* If necessary, initialize the erasure structures */
+         if ( handle->e_ready == 0 ) {
+            // Generate encode matrix encode_matrix
+            // The matrix generated by gf_gen_rs_matrix
+            // is not always invertable.
 #ifdef DEBUG
-               fprintf(stdout,"ne_read: initializing erasure structs...\n");
+            fprintf(stdout,"ne_read: initializing erasure structs...\n");
 #endif
-               gf_gen_rs_matrix(handle->encode_matrix, mtot, N);
+            gf_gen_rs_matrix(handle->encode_matrix, mtot, N);
 
-               // Generate g_tbls from encode matrix encode_matrix
-               ec_init_tables(N, E, &(handle->encode_matrix[N * N]), handle->g_tbls);
+            // Generate g_tbls from encode matrix encode_matrix
+            ec_init_tables(N, E, &(handle->encode_matrix[N * N]), handle->g_tbls);
 
-               ret_in = gf_gen_decode_matrix( handle->encode_matrix, handle->decode_matrix,
-                     handle->invert_matrix, decode_index, handle->src_err_list, handle->src_in_err,
-                     handle->nerr, nsrcerr, N, mtot);
+            ret_in = gf_gen_decode_matrix( handle->encode_matrix, handle->decode_matrix,
+                  handle->invert_matrix, decode_index, handle->src_err_list, handle->src_in_err,
+                  handle->nerr, nsrcerr, N, mtot);
 
-               if (ret_in != 0) {
+            if (ret_in != 0) {
 #ifdef DEBUG
-                  fprintf(stderr,"ne_read: failure to generate decode matrix\n");
+               fprintf(stderr,"ne_read: failure to generate decode matrix\n");
 #endif
-                  errno=ENODATA;
-                  return -1;
-               }
-
-               for (tmp = 0; tmp < N; tmp++) {
-                  handle->recov[tmp] = handle->buffs[decode_index[tmp]];
-               }
-
-#ifdef DEBUG
-               fprintf( stdout, "ne_read: init erasure tables nsrcerr = %d e_ready = %d...\n", nsrcerr, handle->e_ready );
-#endif
-               ec_init_tables(N, handle->nerr, handle->decode_matrix, handle->g_tbls);
-
-               handle->e_ready = 1; //indicate that rebuild structures are initialized
+               errno=ENODATA;
+               return -1;
             }
+
+            for (tmp = 0; tmp < N; tmp++) {
+               handle->recov[tmp] = handle->buffs[decode_index[tmp]];
+            }
+
 #ifdef DEBUG
-            fprintf( stdout, "ne_read: performing regeneration from erasure...\n" );
+            fprintf( stdout, "ne_read: init erasure tables nsrcerr = %d e_ready = %d...\n", nsrcerr, handle->e_ready );
 #endif
-            ec_encode_data(bsz*1024, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
+            ec_init_tables(N, handle->nerr, handle->decode_matrix, handle->g_tbls);
+
+            handle->e_ready = 1; //indicate that rebuild structures are initialized
          }
+#ifdef DEBUG
+         fprintf( stdout, "ne_read: performing regeneration from erasure...\n" );
+#endif
+         ec_encode_data(bsz*1024, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
+      }
 
-         /**** write appropriate data out ****/
-         for( counter=startpart, tmp=0; counter <= endchunk; counter++ ) {
-            readsize = datasz[counter];
+      /**** write appropriate data out ****/
+      for( counter=startpart, tmp=0; counter <= endchunk; counter++ ) {
+         readsize = datasz[counter];
 
 #ifdef DEBUG
-            if ( readsize > llcounter ) { fprintf(stderr,"ne_read: GROSS ERROR!!!\n"); }
+         if ( readsize > llcounter ) { fprintf(stderr,"ne_read: GROSS ERROR!!!\n"); }
 #endif
 
-            if ( handle->src_in_err[counter] == 0 ) {
+         if ( handle->src_in_err[counter] == 0 ) {
 #ifdef DEBUG
-               fprintf( stdout, "ne_read: performing write of %d from chunk %d data\n", readsize, counter );
+            fprintf( stdout, "ne_read: performing write of %d from chunk %d data\n", readsize, counter );
 #endif
 
 #ifdef INTCRC
-               if ( firststripe  &&  counter == startpart ) {
+            if ( firststripe  &&  counter == startpart ) {
 #else
                if ( firststripe  &&  counter == startpart  &&  error_in_stripe ) {
 #endif
@@ -1014,7 +844,6 @@ rebuild:
 
       } //end of generating loop for each stripe
 
-   } //end of "Read with rebuild" case
 
    for( counter = 0; counter < N+E; counter++ ) {
       free(temp_buffs[counter]);
