@@ -1104,7 +1104,13 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
          if ( handle->src_in_err[counter] == 0 ) {
             /* this is the crcsum for each part */
             crc = crc32_ieee(TEST_SEED, handle->buffs[counter], bsz*1024);
-            // TODO write out per-block-crc
+
+#ifdef INTCRC
+            // write out per-block-crc
+            memcpy( handle->buffs[counter]+writesize, &crc, sizeof(crc) );
+            writesize += sizeof(crc);
+#endif
+
             /* if we were compressing we would compress here */
 #ifdef DEBUG
             fprintf(stdout,"ne_write: wr %d to file %d\n",writesize,counter);
@@ -1119,6 +1125,10 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
                handle->src_err_list[handle->nerr] = counter;
                handle->nerr++;
             }
+
+#ifdef INTCRC
+            writesize -= sizeof(crc);
+#endif
 
             handle->csum[counter] += crc; 
             handle->nsz[counter] += writesize;
@@ -1159,17 +1169,25 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
       ecounter = 0;
       while (ecounter < E) {
          crc = crc32_ieee(TEST_SEED, handle->buffs[counter+ecounter], bsz*1024); 
+
+         writesize = bsz*1024;
+#ifdef INTCRC
+            // write out per-block-crc
+            memcpy( handle->buffs[counter]+writesize, &crc, sizeof(crc) );
+            writesize += sizeof(crc);
+#endif
+
          handle->csum[counter+ecounter] += crc; 
          handle->nsz[counter+ecounter] += bsz*1024;
          handle->ncompsz[counter+ecounter] += bsz*1024;
 #ifdef DEBUG
          fprintf( stdout, "ne_write: writing out erasure stripe %d\n", ecounter );
 #endif
-         ret_out = write(handle->FDArray[counter+ecounter],handle->buffs[counter+ecounter],bsz*1024); 
+         ret_out = write(handle->FDArray[counter+ecounter],handle->buffs[counter+ecounter],writesize); 
          
-         if ( ret_out != bsz*1024 ) {
+         if ( ret_out != writesize ) {
 #ifdef DEBUG
-            fprintf( stderr, "ne_write: write to erasure file %d, returned %zd instead of expected %d\n" , ecounter, ret_out, bsz*1024 );
+            fprintf( stderr, "ne_write: write to erasure file %d, returned %zd instead of expected %d\n" , ecounter, ret_out, writesize );
 #endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
