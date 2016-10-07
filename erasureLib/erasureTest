@@ -62,6 +62,8 @@ POSTSLEEP=0 # Number of seconds the program should sleep after a test
 LOGFILE=log_errTests.$$ # Name of the test logfile
 LIBTLOG=log_libTests.$$
 
+re='^[0-9]+$'
+
 echo
 echo "Tests erasure library functions..."
 echo
@@ -95,9 +97,10 @@ while [[ $cnt -lt $ITER ]]; do
    echo >> $LIBTLOG
    echo "Generating $n+$e striping starting at file $start""..." >> $LOGFILE
    #sleep 1
-   ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200 >> $LIBTLOG 2>&1
-   if [[ ! $? -eq 0 ]]; then
-      echo -e "\033[0;31mFAIL - write operation returned a non-zero status"
+   ret=$( ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 )
+
+   if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
+      echo -e "\033[0;31mFAIL - write operation returned an unexpected status"
       echo -e "CMD = ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
       echo "   FAILURE: wite operation returned a non-sero status" >> $LOGFILE
       echo "CMD = ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
@@ -206,7 +209,7 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Performing a read of all data from striping..."
       echo "Performing read of all data from striping..." >> $LOGFILE
       ret=$( ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 )
-      if [[ $ret -ne $stat ]]; then
+      if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
          echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $stat but recieved $ret"
          echo -e "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
          echo "   FAILURE: read operation returned an inappropriate status, expected $stat but recieved $ret" >> $LOGFILE
@@ -239,10 +242,11 @@ while [[ $cnt -lt $ITER ]]; do
       echo
 
       if [[ $npat == *"1"* ]]; then
+         echo >> $LIBTLOG
          echo "Attempting error recovery..."
          echo "Attempting error recovery..." >> $LOGFILE
-         ret=$( ./libTest rebuild testout.%d.$$ $n $e $start 2>&1 | tail -n 1 )
-         if [[ $ret -ne $stat ]]; then
+         ret=$( ./libTest rebuild testout.%d.$$ $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 )
+         if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
             echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of $stat but recieved $ret"
             echo -e "CMD = ./libTest rebuild testout.%d.$$ $n $e $start\033[0m"
             echo "   FAILURE: an error occured within ne_rebuild, expected return of $stat but recieved $ret" >> $LOGFILE
@@ -256,7 +260,7 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Checking the striping for corruption..."
       echo "Checking the striping for corruption..." >> $LOGFILE
       ret=$( ./libTest status testout.%d.$$ $n $e $start 2>&1 | tail -n 1 )
-      if [[ $ret -ne 0 ]]; then
+      if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
          echo -e "\033[0;31mFAIL - status check indicates corruption present in erasure striping"
          echo -e "CMD = ./libTest status testout.%d.$$ $n $e $start\033[0m"
          echo "FAIL - status check indicates corruption present in erasure striping" >> $LOGFILE
