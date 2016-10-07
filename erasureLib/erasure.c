@@ -1216,6 +1216,15 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
  */
 int ne_close( ne_handle handle ) 
 {
+
+   if ( handle == NULL ) {
+#ifdef DEBUG
+      fprintf( stderr, "ne_close: received a NULL handle\n" );
+#endif
+      errno = EINVAL;
+      return -1;
+   }
+
    int counter;
    char xattrval[strlen(XATTRKEY)+50];
    int N = handle->N;
@@ -1310,13 +1319,21 @@ int error_check( ne_handle handle, char *path )
    int bsz = handle->bsz;
    unsigned long nsz;
    unsigned long ncompsz;
+#ifdef INTCRC
+   unsigned int blocks;
+   u32 crc;
+#endif
    u64 scrc;
    char goodfile = 0;
    u64 totsz;
    struct stat* partstat = malloc (sizeof(struct stat));
    void *buf;
 
+#ifdef INTCRC
+   posix_memalign(&buf,32,(bsz*1024)+sizeof(crc));
+#else
    posix_memalign(&buf,32,bsz*1024);
+#endif
 
    for ( counter = 0; counter < N+E; counter++ ) {
       bzero(file,sizeof(file));
@@ -1357,6 +1374,10 @@ int error_check( ne_handle handle, char *path )
          ncompsz = strtol(xattrncompsize,NULL,0);
          totsz = strtoll(xattrtotsize,NULL,0);
 
+#ifdef INTCRC
+         blocks = nsz / (bsz*1024);
+#endif
+
          /* verify xattr */
 #ifdef DEBUG
          fprintf(stdout,"error_check: total file size is %llu numparts %d erasure %d blocksize %d\n",(unsigned long long)totsz,N,E,bsz);
@@ -1385,7 +1406,11 @@ int error_check( ne_handle handle, char *path )
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
          }
+#ifdef INTCRC
+         else if ( ( nsz + (blocks*sizeof(crc)) ) != partstat->st_size ) {
+#else
          else if ( nsz != partstat->st_size ) {
+#endif
 #ifdef DEBUG
             fprintf (stderr, "error_check: filexattr nsize = %lu did not match stat value %zu \n", nsz, partstat->st_size); 
 #endif
@@ -1395,13 +1420,18 @@ int error_check( ne_handle handle, char *path )
          }
          else if ( (nsz % bsz) != 0 ) {
 #ifdef DEBUG
-            fprintf (stderr, "error_check: filexattr nsize = %lu is inconsistent with block size %d \n", nsz, bsz); 
+            fprintf (stderr, "error_check: filexattr nsize = %lu is inconsistent with block size %d \n", ( nsz + (blocks*sizeof(crc)) ), bsz); 
 #endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
          }
+
+#ifdef INTCRC
+         else if ( ( ncompsz + (blocks*sizeof(crc)) ) != partstat->st_size ) {
+#else
          else if ( ncompsz != partstat->st_size ) {
+#endif
 #ifdef DEBUG
             fprintf (stderr, "error_check: filexattr ncompsize = %lu did not match stat value %zu \n", ncompsz, partstat->st_size); 
 #endif
@@ -1451,8 +1481,24 @@ int error_check( ne_handle handle, char *path )
                   handle->nerr++;
                   break;
                }
-               scrc += crc32_ieee( TEST_SEED, buf, bsz*1024 );
 
+               //TODO store and verify intermediate crc
+#ifdef INTCRC
+               crc = crc32_ieee( TEST_SEED, buf, bsz*1024 );
+
+               if ( memcmp( &crc, buf+(bsz*1024), sizeof(crc) ) != 0 ) {
+#ifdef DEBUG
+                  fprintf( stderr, "error_check: int-crc mismatch for file %s\n", file );
+#endif
+                  handle->src_in_err[counter] = 1;
+                  handle->src_err_list[handle->nerr] = counter;
+                  handle->nerr++;
+
+               }
+               scrc += crc;
+#else
+               scrc += crc32_ieee( TEST_SEED, buf, bsz*1024 );
+#endif
                bcounter++;
             }
 
