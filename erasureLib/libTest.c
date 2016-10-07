@@ -121,7 +121,7 @@ int main( int argc, const char* argv[] )
    }
    
 
-   if ( wr != 2 ) {
+   if ( wr < 2 ) {
       N = atoi(argv[4]);
       E = atoi(argv[5]);
       start = atoi(argv[6]);
@@ -250,7 +250,7 @@ int main( int argc, const char* argv[] )
    }
 
    tmp = ne_close( handle );
-   printf("%d",tmp);
+   printf("%d\n",tmp);
 
    return tmp;
 
