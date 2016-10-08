@@ -589,7 +589,7 @@ rebuild:
 #ifdef INTCRC
             else {
                //calculate and verify crc
-               crc += crc32_ieee( TEST_SEED, handle->buffs[counter], bsz*1024 );
+               crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz*1024 );
                if ( memcmp( handle->buffs[counter]+(bsz*1024), &crc, sizeof(u32) ) != 0 ){
 #ifdef DEBUG
                   fprintf(stderr, "ne_read: mismatch of int-crc for file %d while reading with rebuild\n", counter);
@@ -692,7 +692,7 @@ rebuild:
 #ifdef INTCRC
             else {
                //calculate and verify crc
-               crc += crc32_ieee( TEST_SEED, handle->buffs[counter], bsz*1024 );
+               crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz*1024 );
                if ( memcmp( handle->buffs[counter]+(bsz*1024), &crc, sizeof(u32) ) != 0 ){
 #ifdef DEBUG
                   fprintf(stderr, "ne_read: mismatch of int-crc for file %d (erasure)\n", counter);
@@ -1386,6 +1386,14 @@ int ne_rebuild( ne_handle handle ) {
    u32 crc;
    u64 totsizetest;
 
+   if ( handle == NULL ) {
+#ifdef DEBUG
+      fprintf( stderr, "ne_rebuild: received NULL handle\n" );
+#endif
+      errno = EINVAL;
+      return -1;
+   }
+
    if ( handle->mode != NE_REBUILD ){
 #ifdef DEBUG
       fprintf( stderr, "ne_rebuild: handle is in improper mode for rebuild operation!" );
@@ -1396,6 +1404,7 @@ int ne_rebuild( ne_handle handle ) {
 
    init = 1;
    totsizetest = 0;
+   /* Perform rebuild over all data */
    while (totsizetest < handle->totsz) {  
       ret_in = 0;
       counter = 0;
@@ -1409,8 +1418,13 @@ int ne_rebuild( ne_handle handle ) {
             bzero(handle->buffs[counter], handle->bsz*1024); 
             bzero(temp_buffs[counter], handle->bsz*1024); 
          } else {
+#ifdef INTCRC
+            ret_in = read(handle->FDArray[counter],handle->buffs[counter],(handle->bsz*1024)+sizeof(crc)); 
+            if ( ret_in < (handle->bsz*1024)+sizeof(crc) ) {
+#else
             ret_in = read(handle->FDArray[counter],handle->buffs[counter],handle->bsz*1024); 
             if ( ret_in < (handle->bsz*1024) ) {
+#endif
 #ifdef DEBUG
                fprintf( stderr, "ne_rebuild: encountered error while reading file %d\n", counter );
 #endif
