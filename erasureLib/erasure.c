@@ -110,6 +110,9 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
    int counter;
    int bsz = BLKSZ;
    int ret;
+#ifdef INTCRC
+   int crccount;
+#endif
 
    ne_handle handle = malloc( sizeof( struct handle ) );
 
@@ -174,9 +177,12 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 
    /* allocate a big buffer for all the N chunks plus a bit extra for reading in crcs */
 #ifdef INTCRC
-   posix_memalign( &(handle->buffer), 64, (N+E)*((bsz*1024)) +sizeof(u32)); //add space for intermediate checksum
+   crccount = 1;
+   if ( E > 0 ) { crccount = E; }
+
+   posix_memalign( &(handle->buffer), 64, ((N+E)*(bsz*1024)) + (sizeof(u32)*crccount) ); //add space for intermediate checksum
 #else
-   posix_memalign( &(handle->buffer), 64, (N+E)*((bsz*1024)) );
+   posix_memalign( &(handle->buffer), 64, ((N+E)*(bsz*1024)) );
 #endif
 
 #ifdef DEBUG
@@ -201,8 +207,15 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
       handle->ncompsz[counter] = 0;
       bzero( file, MAXNAME );
       sprintf( file, path, (counter+erasure_offset)%(N+E) );
+
 #ifdef INTCRC
-      handle->buffs[counter] = handle->buffer + ( counter*bsz*1024 ); //make space for block TODO and its associated crc
+      if ( counter > N ) {
+         crccount = counter - N;
+         handle->buffs[counter] = handle->buffer + ( counter*bsz*1024 ) + ( crccount * sizeof(u32) ); //make space for block and erasure crc
+      }
+      else {
+         handle->buffs[counter] = handle->buffer + ( counter*bsz*1024 ); //make space for block
+      }
 #else
       handle->buffs[counter] = handle->buffer + ( counter*bsz*1024 ); //make space for block
 #endif
@@ -604,10 +617,12 @@ rebuild:
                   counter--;
                   ret_in = 0;
                   //if we have skipped some of the stripe, we must start over
-                  if ( error_in_stripe == 0 && tmpoffset != 0 ) {
-                     for( tmp = counter -1; tmp >=0; tmp-- ) {
+                  if ( error_in_stripe == 0 && firststripe == 1  &&  ( startoffset != 0 || startpart != 0 ) ) {
+                     printf("              Jumping back!\n");
+                     for( tmp = counter; tmp >=0; tmp-- ) {
                         llcounter -= datasz[counter];
                      }
+                     printf("              llcounter = %lu\n", (unsigned long)llcounter);
                      goto rebuild;
                   }
                   continue;
@@ -1001,9 +1016,9 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 
          writesize = bsz*1024;
 #ifdef INTCRC
-            // write out per-block-crc
-            memcpy( handle->buffs[counter+ecounter]+writesize, &crc, sizeof(crc) );
-            writesize += sizeof(crc);
+         // write out per-block-crc
+         memcpy( handle->buffs[counter+ecounter]+writesize, &crc, sizeof(crc) );
+         writesize += sizeof(crc);
 #endif
 
          handle->csum[counter+ecounter] += crc; 
@@ -1013,7 +1028,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
          fprintf( stdout, "ne_write: writing out erasure stripe %d\n", ecounter );
 #endif
          ret_out = write(handle->FDArray[counter+ecounter],handle->buffs[counter+ecounter],writesize); 
-         
+
          if ( ret_out != writesize ) {
 #ifdef DEBUG
             fprintf( stderr, "ne_write: write to erasure file %d, returned %zd instead of expected %d\n" , ecounter, ret_out, writesize );
