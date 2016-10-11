@@ -164,6 +164,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 #ifdef DEBUG
          fprintf( stderr, "ne_open: error_check has failed\n" );
 #endif
+         free( handle );
          return NULL;
       }
    }
@@ -616,20 +617,20 @@ rebuild:
                   handle->e_ready = 0; //indicate that erasure structs require re-initialization
                   counter--;
                   ret_in = 0;
-                  //if we have skipped some of the stripe, we must start over
-                  if ( error_in_stripe == 0 && firststripe == 1  &&  ( startoffset != 0 || startpart != 0 ) ) {
-                     printf("              Jumping back!\n");
+                  //if this is the first encountered error for the stripe, we must start over
+                  if ( error_in_stripe == 0 ) {
                      for( tmp = counter; tmp >=0; tmp-- ) {
                         llcounter -= datasz[counter];
                      }
-                     printf("              llcounter = %lu\n", (unsigned long)llcounter);
+#ifdef DEBUG
+                     fprintf( stdout, "ne_read: restarting stripe read, reset total read to %lu\n", (unsigned long)llcounter);
+#endif
                      goto rebuild;
                   }
                   continue;
                }
             }
 #endif
-
 
             if ( firstchunk  &&  counter == startpart ) {
                llcounter = (ret_in - (startoffset-tmpoffset) < nbytes ) ? ret_in-(startoffset-tmpoffset) : nbytes;
@@ -1061,6 +1062,16 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 int ne_close( ne_handle handle ) 
 {
 
+   int counter;
+   char xattrval[strlen(XATTRKEY)+50];
+   int N;
+   int E;
+   int bsz;
+   int ret = 0;
+   int tmp;
+   unsigned char *zero_buff;
+
+
    if ( handle == NULL ) {
 #ifdef DEBUG
       fprintf( stderr, "ne_close: received a NULL handle\n" );
@@ -1069,14 +1080,10 @@ int ne_close( ne_handle handle )
       return -1;
    }
 
-   int counter;
-   char xattrval[strlen(XATTRKEY)+50];
-   int N = handle->N;
-   int E = handle->E;
-   int bsz = handle->bsz;
-   int ret = 0;
-   int tmp;
-   unsigned char *zero_buff;
+   N = handle->N;
+   E = handle->E;
+   bsz = handle->bsz;
+
 
    /* flush the handle buffer if necessary */
    if ( handle->mode == NE_WRONLY  &&  handle->rem_buff != 0 ) {
@@ -1319,7 +1326,7 @@ int error_check( ne_handle handle, char *path )
 
                if ( ret != (bsz*1024)+sizeof(crc) ) {
 #else
-               ret = read(filefd,buf,bsz*1024);
+                  ret = read(filefd,buf,bsz*1024);
 
                if ( ret != bsz*1024 ) {
 #endif
@@ -1333,7 +1340,7 @@ int error_check( ne_handle handle, char *path )
                }
 
 #ifdef INTCRC
-               //store and verify intermediate crc
+                  //store and verify intermediate crc
                crc = crc32_ieee( TEST_SEED, buf, bsz*1024 );
 
                if ( memcmp( &crc, buf+(bsz*1024), sizeof(crc) ) != 0 ) {
@@ -1343,14 +1350,15 @@ int error_check( ne_handle handle, char *path )
                   handle->src_in_err[counter] = 1;
                   handle->src_err_list[handle->nerr] = counter;
                   handle->nerr++;
-
+                  break;
                }
+
                scrc += crc;
 #else
                scrc += crc32_ieee( TEST_SEED, buf, bsz*1024 );
 #endif
                bcounter++;
-            }
+            } //end of while loop
 
             if ( scrc != strtoll(xattrnsum,NULL,0) ) {
 #ifdef DEBUG
@@ -1362,17 +1370,19 @@ int error_check( ne_handle handle, char *path )
             }
 
             close(filefd);
-         } 
 
-      }
-   }
+         } //end of if-rebuild
+
+      } //end of if-goodfile/rebuild
+   } //end of loop over files
+
+   free(partstat);
+   free(buf);
 
    if ( goodfile == 0 ) {
       errno = EUCLEAN;
       return -1;
    }
-
-   free(partstat);
 
    /* If no usable file was located or the number of errors is too great, notify of failure */
    if ( handle->nerr > E ) {
@@ -1380,7 +1390,6 @@ int error_check( ne_handle handle, char *path )
       return -1;
    }
 
-   free(buf);
    return 0;
 }
 
