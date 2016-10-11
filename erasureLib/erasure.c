@@ -1230,9 +1230,6 @@ int error_check( ne_handle handle, char *path )
 #endif
 
          /* verify xattr */
-#ifdef DEBUG
-         fprintf(stdout,"error_check: total file size is %llu numparts %d erasure %d blocksize %d\n",(unsigned long long)totsz,N,E,bsz);
-#endif
          if ( N != handle->N ) {
 #ifdef DEBUG
             fprintf (stderr, "error_check: filexattr N = %d did not match handle value  %d \n", N, handle->N); 
@@ -1240,6 +1237,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
+            break;
          }
          else if ( E != handle->E ) {
 #ifdef DEBUG
@@ -1248,6 +1246,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
+            break;
          }
          else if ( bsz != handle->bsz ) {
 #ifdef DEBUG
@@ -1256,6 +1255,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
+            break;
          }
 #ifdef INTCRC
          else if ( ( nsz + (blocks*sizeof(crc)) ) != partstat->st_size ) {
@@ -1268,6 +1268,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
+            break;
          }
          else if ( (nsz % bsz) != 0 ) {
 #ifdef DEBUG
@@ -1276,6 +1277,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
+            break;
          }
 
 #ifdef INTCRC
@@ -1289,6 +1291,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
+            break;
          }
          else if ( ((ncompsz * N) - totsz) >= bsz*1024*N ) {
 #ifdef DEBUG
@@ -1297,6 +1300,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
+            break;
          }
          else {
             handle->totsz = totsz;
@@ -1360,7 +1364,7 @@ int error_check( ne_handle handle, char *path )
                bcounter++;
             } //end of while loop
 
-            if ( scrc != strtoll(xattrnsum,NULL,0) ) {
+            if ( scrc != strtoll(xattrnsum,NULL,0)  &&  handle->src_in_err[counter] == 0 ) {
 #ifdef DEBUG
                fprintf( stderr, "error_check: crc mismatch for file %s\n", file );
 #endif
@@ -1420,7 +1424,7 @@ int ne_rebuild( ne_handle handle ) {
 
    if ( handle->mode != NE_REBUILD ){
 #ifdef DEBUG
-      fprintf( stderr, "ne_rebuild: handle is in improper mode for rebuild operation!" );
+      fprintf( stderr, "ne_rebuild: handle is in improper mode for rebuild operation" );
 #endif
       errno = EPERM;
       return -1;
@@ -1433,15 +1437,20 @@ int ne_rebuild( ne_handle handle ) {
       ret_in = 0;
       counter = 0;
       while (counter < (handle->N + handle->E)) {
+#ifdef INTCRC
+         if ( init == 1 ) { posix_memalign((void **)&(temp_buffs[counter]),64,(handle->bsz*1024)+sizeof(crc)); }
+#else
          if ( init == 1 ) { posix_memalign((void **)&(temp_buffs[counter]),64,handle->bsz*1024); }
+#endif
          if (handle->src_in_err[counter] == 1) {
 #ifdef DEBUG
-               fprintf( stdout, "ne_rebuild: zeroing data for faulty file %d\n", counter );
+            if ( init == 1 ) { fprintf( stdout, "ne_rebuild: zeroing data for faulty file %d\n", counter ); }
 #endif
             if ( counter < handle->N  &&  init == 1 ) { nsrcerr++; }
             bzero(handle->buffs[counter], handle->bsz*1024); 
             bzero(temp_buffs[counter], handle->bsz*1024); 
          } else {
+
 #ifdef INTCRC
             ret_in = read(handle->FDArray[counter],handle->buffs[counter],(handle->bsz*1024)+sizeof(crc)); 
             if ( ret_in < (handle->bsz*1024)+sizeof(crc) ) {
@@ -1455,10 +1464,27 @@ int ne_rebuild( ne_handle handle ) {
                handle->src_err_list[handle->nerr] = counter;
                handle->src_in_err[counter] = 1;
                handle->nerr++;
-               handle->e_ready = 0;
+               handle->e_ready = 0; //indicate that erasure structs require re-initialization
                if ( counter < handle->N ) { nsrcerr++; }
                continue;
             }
+
+#ifdef INTCRC
+            //calculate and verify crc
+            crc = crc32_ieee( TEST_SEED, handle->buffs[counter], handle->bsz*1024 );
+            if ( memcmp( handle->buffs[counter]+(handle->bsz*1024), &crc, sizeof(u32) ) != 0 ){
+#ifdef DEBUG
+               fprintf(stderr, "ne_rebuild: mismatch of int-crc for file %d (erasure)\n", counter);
+#endif
+               handle->src_in_err[counter] = 1;
+               handle->src_err_list[handle->nerr] = counter;
+               handle->nerr++;
+               handle->e_ready = 0; //indicate that erasure structs require re-initialization
+               if ( counter < handle->N ) { nsrcerr++; }
+               continue;
+            }
+#endif
+
          }
          counter++;
       }
@@ -1494,7 +1520,7 @@ int ne_rebuild( ne_handle handle ) {
 #ifdef DEBUG
             fprintf(stderr,"ne_rebuild: failure to generate decode matrix\n");
 #endif
-            errno=ENODATA;
+            errno = ENODATA;
             return -1;
          }
 
@@ -1503,27 +1529,36 @@ int ne_rebuild( ne_handle handle ) {
          }
 
 #ifdef DEBUG
-         fprintf( stdout, "ne_rebuild: init erasure tables nsrcerr = %d e_ready = %d...\n", nsrcerr, handle->e_ready );
+         fprintf( stdout, "ne_rebuild: init erasure tables nsrcerr = %d...\n", nsrcerr );
 #endif
          ec_init_tables(handle->N, handle->nerr, handle->decode_matrix, handle->g_tbls);
 
          handle->e_ready = 1; //indicate that rebuild structures are initialized
       }
 #ifdef DEBUG
-      fprintf( stdout, "ne_rebuild: performing regeneration from erasure...\n" );
+      if ( init == 1 ) { fprintf( stdout, "ne_rebuild: performing regeneration from erasure...\n" ); }
 #endif
       ec_encode_data(handle->bsz*1024, handle->N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[handle->N]);
 
 
       for (i = 0; i < handle->nerr; i++) {
-         write(handle->FDArray[handle->src_err_list[i]],temp_buffs[handle->N+i],handle->bsz*1024);
          crc = crc32_ieee(TEST_SEED, temp_buffs[handle->N+i], handle->bsz*1024);
+#ifdef INTCRC
+         memcpy ( temp_buffs[handle->N+i]+(handle->bsz*1024), &crc, sizeof(crc) );
+         write(handle->FDArray[handle->src_err_list[i]],temp_buffs[handle->N+i],(handle->bsz*1024)+sizeof(crc));
+#else
+         write(handle->FDArray[handle->src_err_list[i]],temp_buffs[handle->N+i],handle->bsz*1024);
+#endif
          handle->csum[handle->src_err_list[i]] += crc;
          handle->nsz[handle->src_err_list[i]] += handle->bsz*1024;
          handle->ncompsz[handle->src_err_list[i]] += handle->bsz*1024;
       }
       totsizetest += handle->N*handle->bsz*1024;  
       init = 0;
+   }
+
+   for ( counter = 0; counter < (handle->N + handle->E); counter++ ) {
+      free( temp_buffs[counter] );
    }
 
    return 0;

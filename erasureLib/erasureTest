@@ -248,15 +248,15 @@ while [[ $cnt -lt $ITER ]]; do
          echo >> $LIBTLOG
          echo "Attempting error recovery..."
          echo "Attempting error recovery..." >> $LOGFILE
-         #ret=$( ./libTest rebuild testout.%d.$$ $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 )
-         #if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
-         #   echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of $stat but recieved $ret"
-         #   echo -e "CMD = ./libTest rebuild testout.%d.$$ $n $e $start\033[0m"
-         #   echo "   FAILURE: an error occured within ne_rebuild, expected return of $stat but recieved $ret" >> $LOGFILE
-         #   echo "CMD = "./libTest rebuild testout.%d.$$ $n $e $start >> $LOGFILE
-         #   exit $ret
-         #fi
-         ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200 > /dev/null 2>&1
+         ret=$( ./libTest rebuild testout.%d.$$ $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 )
+         if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
+            echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of $stat but recieved $ret"
+            echo -e "CMD = ./libTest rebuild testout.%d.$$ $n $e $start\033[0m"
+            echo "   FAILURE: an error occured within ne_rebuild, expected return of $stat but recieved $ret" >> $LOGFILE
+            echo "CMD = "./libTest rebuild testout.%d.$$ $n $e $start >> $LOGFILE
+            exit $ret
+         fi
+#         ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200 > /dev/null 2>&1
          echo "...recovery complete."
          echo "...recovery complete." >> $LOGFILE
       fi
