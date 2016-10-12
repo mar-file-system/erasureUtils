@@ -244,6 +244,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
          if ( handle->nerr > E ) { //if errors are unrecoverable, terminate
             return NULL;
          }
+         continue;
       }
 
       counter++;
@@ -559,7 +560,8 @@ rebuild:
 
             //check for a read error
             if ( ret_in < readsize ) {
-               if ( ret_in < 0 ) {
+
+               if ( ret_in < 0  ||  handle->nerr < handle->E ) {
 #ifdef DEBUG
                   fprintf(stderr, "ne_read: error encountered while reading data file %d\n", counter);
 #endif
@@ -572,11 +574,14 @@ rebuild:
                   handle->e_ready = 0; //indicate that erasure structs require re-initialization
                   ret_in = 0;
                   counter--;
-                  //if we have skipped some of the stripe, we must start over
-                  if ( error_in_stripe == 0 && tmpoffset != 0 ) {
-                     for( tmp = counter -1; tmp >=0; tmp-- ) {
+                  //if this is the first encountered error for the stripe, we must start over
+                  if ( error_in_stripe == 0 ) {
+                     for( tmp = counter; tmp >=0; tmp-- ) {
                         llcounter -= datasz[counter];
                      }
+#ifdef DEBUG
+                     fprintf( stdout, "ne_read: restarting stripe read, reset total read to %lu\n", (unsigned long)llcounter);
+#endif
                      goto rebuild;
                   }
                   continue;
@@ -684,16 +689,17 @@ rebuild:
             if ( ret_in < readsize ) {
                if ( ret_in < 0 ) {
                   ret_in = 0;
-                  if ( counter > maxNerr )  maxNerr = counter;
-                  if ( counter < minNerr )  minNerr = counter;
-                  handle->src_in_err[counter] = 1;
-                  handle->src_err_list[handle->nerr] = counter;
-                  handle->nerr++;
-                  handle->e_ready = 0; //indicate that erasure structs require re-initialization
-                  error_in_stripe = 1;
                }
+
+               //if ( counter > maxNerr )  maxNerr = counter;
+               //if ( counter < minNerr )  minNerr = counter;
+               handle->src_in_err[counter] = 1;
+               handle->src_err_list[handle->nerr] = counter;
+               handle->nerr++;
+               handle->e_ready = 0; //indicate that erasure structs require re-initialization
+               error_in_stripe = 1;
 #ifdef DEBUG
-               fprintf(stderr, "ne_read: failed to read erasure data in file %d\n", counter);
+               fprintf(stderr, "ne_read: failed to read all erasure data in file %d\n", counter);
                fprintf(stdout,"ne_read: zeroing data for faulty erasure %d from %lu to %d\n",counter,ret_in,bsz*1024);
 #endif
                bzero(handle->buffs[counter]+ret_in,bsz*1024-ret_in);
@@ -810,6 +816,16 @@ rebuild:
                }
             }
             else {
+
+               for ( tmp = 0; counter != handle->src_err_list[tmp]; tmp++ ) {
+                  if ( tmp == handle->nerr ) {
+#ifdef DEBUG 
+                     fprintf( stderr, "ne_read: improperly definded erasure structs, failed to locate %d in src_err_list\n", tmp );
+#endif
+                     break;
+                  }
+               }
+
 #ifdef DEBUG
                fprintf( stdout, "ne_read: performing write of %d from regenerated chunk %d data, src_err = %d\n", readsize, counter, handle->src_err_list[tmp] );
 #endif
@@ -819,13 +835,15 @@ rebuild:
                      fprintf( stdout, "   with offset of %d\n", startoffset );
                      fprintf( stdout, "   Accounting for a skip of %d blocks\n", skipped_err );
 #endif
-                     memcpy( buffer+out_off, (temp_buffs[N+tmp+skipped_err])+startoffset, readsize );
+                     //memcpy( buffer+out_off, (temp_buffs[N+tmp+skipped_err])+startoffset, readsize );
+                     memcpy( buffer+out_off, (temp_buffs[N+tmp])+startoffset, readsize );
                   }
                   else {
 #ifdef DEBUG
                      fprintf( stdout, "   Accounting for a skip of %d blocks\n", skipped_err );
 #endif
-                     memcpy( buffer+out_off, temp_buffs[N+tmp+skipped_err], readsize );
+                     //memcpy( buffer+out_off, temp_buffs[N+tmp+skipped_err], readsize );
+                     memcpy( buffer+out_off, temp_buffs[N+tmp], readsize );
                   }
                }
                else {
@@ -834,8 +852,6 @@ rebuild:
 #endif
                   memcpy( buffer+out_off, temp_buffs[N+tmp], readsize );
                }
-
-               tmp++;
 
             } //end of src_in_err = true block
 
@@ -1237,7 +1253,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
-            break;
+            continue;
          }
          else if ( E != handle->E ) {
 #ifdef DEBUG
@@ -1246,7 +1262,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
-            break;
+            continue;
          }
          else if ( bsz != handle->bsz ) {
 #ifdef DEBUG
@@ -1255,7 +1271,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
-            break;
+            continue;
          }
 #ifdef INTCRC
          else if ( ( nsz + (blocks*sizeof(crc)) ) != partstat->st_size ) {
@@ -1268,7 +1284,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
-            break;
+            continue;
          }
          else if ( (nsz % bsz) != 0 ) {
 #ifdef DEBUG
@@ -1277,7 +1293,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
-            break;
+            continue;
          }
 
 #ifdef INTCRC
@@ -1291,7 +1307,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
-            break;
+            continue;
          }
          else if ( ((ncompsz * N) - totsz) >= bsz*1024*N ) {
 #ifdef DEBUG
@@ -1300,7 +1316,7 @@ int error_check( ne_handle handle, char *path )
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
-            break;
+            continue;
          }
          else {
             handle->totsz = totsz;

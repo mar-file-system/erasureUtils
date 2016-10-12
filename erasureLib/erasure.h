@@ -64,7 +64,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #endif
 
-#define DEBUG
+//#define DEBUG
 #define INTCRC
 
 #include <sys/stat.h>
