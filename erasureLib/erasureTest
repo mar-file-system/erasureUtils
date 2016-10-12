@@ -56,11 +56,12 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-ITER=5 # Number of N+E file arrays to generate
+ITER=10 # Number of N+E file arrays to generate
 INITER=5 # (Must be 1 until regeneration is added to lib!!!)Number of error patterns to test for each file array
 POSTSLEEP=0 # Number of seconds the program should sleep after a test
 LOGFILE=log_errTests.$$ # Name of the test logfile
 LIBTLOG=log_libTests.$$
+NEHEADER="erasure.h"
 
 re='^[0-9]+$'
 
@@ -70,6 +71,18 @@ echo
 echo "Compiling..."
 make all
 echo "done"
+
+def=$( cat "$NEHEADER" | sed 's/\/\/.*//' | grep "#define INTCRC" )
+ICRC=$?
+if [[ $ICRC -eq 0 ]]; then
+   echo "Located line : \"$def\""
+   echo "INTERMEDIATE CRCS - ACTIVE"
+else
+   ICRC=1
+   echo 'Failed to locate line : "#define INTCRC" in file "'$NEHEADER'"'
+   echo "INTERMEDIATE CRCS - INACTIVE"
+fi
+
 echo "Generating input file 'testfile.$$' (this will take some time)..."
 dd if=/dev/urandom of=testfile.$$ bs=10M count=20
 echo "done"
@@ -140,10 +153,12 @@ while [[ $cnt -lt $ITER ]]; do
    let "nerr %= $(( e + 1 ))"
 #   nerr=$(( nerr + 1 ))
    npat=""
-   maxpos=$(( n + e - nerr ))
+   maxpos=$(( n + e - nerr + 1 ))
    oldpos=0
    errcnt=0
    errpos=-1
+   readerr=0
+   silent_count=0
 
    echo "$nerr error(s) are to be inserted..."
    echo "Inserting $nerr error(s)..." >> $LOGFILE
@@ -163,11 +178,52 @@ while [[ $cnt -lt $ITER ]]; do
          stat=$(( stat + 2**errpos ))
 
          efile="testout.$errpos.$$"
+         truepos=$(( errpos - start ))
+         if [[ $truepos -lt 0 ]]; then
+            truepos=$(( truepos + n + e ))
+         fi
+            
+         if [[ $truepos -lt $n ]]; then
+            readerr=1
+         fi
 
-         echo "   corrupting file $efile"
-         echo "   corrupting file $efile" >> $LOGFILE
-        # dd if=/dev/urandom of=$efile bs=1 count=1
-         rm $efile
+         ctype=$(( RANDOM % (3-ICRC) ))
+         if [[ $ctype -eq 0 ]]; then
+            echo "   corrupting file $efile ( corruption-type : removal )"
+            echo "   corrupting file $efile ( corruption-type : removal )" >> $LOGFILE
+            rm $efile
+         elif [[ $ctype -eq 1 ]]; then
+            err_list[$silent_count]=$errpos
+            silent_count=$(( silent_count + 1 ))
+            echo "   corrupting file $efile ( corruption-type : truncate )"
+            echo "   corrupting file $efile ( corruption-type : truncate )" >> $LOGFILE
+            fsize=$( stat -c%s $efile )
+            corr=$(( RANDOM % fsize ))
+            echo "      truncating from $fsize to $corr bytes"
+            truncate -s $corr $efile
+         else
+            err_list[$silent_count]=$errpos
+            silent_count=$(( silent_count + 1 ))
+            echo "   corrupting file $efile ( corruption-type : silent )"
+            echo "   corrupting file $efile ( corruption-type : silent )" >> $LOGFILE
+            fsize=$( stat -c%s $efile )
+            corr=$(( RANDOM % fsize ))
+            offset=$(( RANDOM % ( fsize - corr ) ))
+            echo "      inserting $corr random bytes at offset $offset"
+            echo "      inserting $corr random bytes at offset $offset" >> $LOGFILE
+
+            cp $efile $efile".tmp"
+            diff=0
+            while [[ $diff -eq 0 ]]; do
+               dd if=/dev/urandom of=$efile bs=1 count=$corr seek=$offset conv=notrunc > /dev/null 2>&1
+               diff $efile $efile".tmp" > /dev/null 2>&1
+               diff=$?
+               if [[ $diff -eq 0 ]]; then
+                  echo "      corrption insertion did not alter file, retrying..."
+               fi
+            done
+            rm $efile".tmp"
+         fi
 
          while [[ $oldpos -lt $errpos ]]; do
             if [[ $npat == "" ]]; then
@@ -183,8 +239,8 @@ while [[ $cnt -lt $ITER ]]; do
          else
             npat="$npat"".1"
          fi #here
-         echo "   error insertion successful"
-         echo "   error insertion successful" >> $LOGFILE
+         echo "   error creation successful"
+         echo "   error creation successful" >> $LOGFILE
          oldpos=$(( oldpos + 1 ))
          
          errcnt=$(( errcnt + 1 ))
@@ -201,18 +257,34 @@ while [[ $cnt -lt $ITER ]]; do
       done
 
       echo "...errors inserted."
-      echo "Errors pattern is  $npat"
+      echo "Error pattern is  $npat"
       echo "Errors inserted, pattern is  $npat" >> $LOGFILE
       echo
 
+      tstat=$stat
+      tmp=0
+      while [[ $readerr -eq 0  &&  $tmp -lt $silent_count ]]; do
+         errpos=${err_list[$tmp]}
+         truepos=$(( errpos - start ))
+         if [[ $truepos -lt 0 ]]; then
+            truepos=$(( truepos + n + e ))
+         fi
+
+         if [[ ! $truepos -lt $n ]]; then
+            tstat=$(( tstat - (2**errpos) ))
+         fi
+
+         tmp=$(( tmp + 1 ))
+      done
+
       echo >> $LIBTLOG
-      echo "Performing a read of all data from striping..."
-      echo "Performing read of all data from striping..." >> $LOGFILE
+      echo "Performing a read of all data from striping (expected return value = $tstat)..."
+      echo "Performing read of all data from striping (expected return value = $tstat)..." >> $LOGFILE
       ret=$( ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 )
-      if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
-         echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $stat but recieved $ret"
+      if [[ ! $ret =~ $re  ||  $ret -ne $tstat ]]; then
+         echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but recieved $ret"
          echo -e "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
-         echo "   FAILURE: read operation returned an inappropriate status, expected $stat but recieved $ret" >> $LOGFILE
+         echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but recieved $ret" >> $LOGFILE
          echo "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
          exit -1
       fi
