@@ -156,7 +156,9 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
    handle->erasure_offset = erasure_offset;
    handle->mode = mode;
    handle->e_ready = 0;
-   handle->rem_buff = 0;
+   handle->buff_rem = 0;
+   handle->buff_offset = 0;
+   handle->buff_stripe = -1;
 
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
       ret = error_check(handle,path); //idenfity a preliminary error pattern
@@ -311,7 +313,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    }
 
    for ( counter = 0; counter < mtot; counter++ ) {
-      posix_memalign((void **)&(temp_buffs[counter]),64,bsz*1024);       
+      posix_memalign((void **)&(temp_buffs[counter]),64,bsz*1024);
       if ( handle->src_in_err[counter] ) {
          nerr++;
          if ( counter < N ) { 
@@ -337,6 +339,9 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 #ifdef DEBUG
    fprintf(stdout,"ne_read: read from startstripe %d startpart %d and startoffset %d for nbytes %d\n",startstripe,startpart,startoffset,nbytes);
 #endif
+
+   //check stripe cache
+   //if ( startstripe == handle->buff_stripe  &&  startoffset
 
    llcounter = 0;
    tmpoffset = 0;
@@ -472,6 +477,14 @@ rebuild:
 
    /**** output each data stipe, regenerating as necessary ****/
    while ( llcounter < nbytes ) {
+
+      handle->buff_offset = tmpoffset;
+      handle->buff_rem = 0;
+      handle->buff_stripe = ( offset + llcounter ) / (bsz*N*1024);
+
+      for ( counter = 0; counter < N; counter++ ) {
+         datasz[counter] = 0;
+      }
 
       endchunk = ((long)(offset+nbytes+1) - (long)((long)(startstripe*N*bsz*1024) + llcounter) ) / (bsz*1024);
       skipped_err = 0;
@@ -637,7 +650,7 @@ rebuild:
             }
 #endif
 
-            if ( firstchunk  &&  counter == startpart ) {
+            if ( firstchunk == 1  &&  counter == startpart ) {
                llcounter = (ret_in - (startoffset-tmpoffset) < nbytes ) ? ret_in-(startoffset-tmpoffset) : nbytes;
                datasz[counter] = llcounter;
                firstchunk = 0;
@@ -804,82 +817,85 @@ rebuild:
 #ifdef INTCRC
             if ( firststripe  &&  counter == startpart ) {
 #else
-               if ( firststripe  &&  counter == startpart  &&  error_in_stripe ) {
+            if ( firststripe  &&  counter == startpart  &&  error_in_stripe ) {
 #endif
 #ifdef DEBUG
-                  fprintf( stdout, "ne_read:   with offset of %d\n", startoffset );
+               fprintf( stdout, "ne_read:   with offset of %d\n", startoffset );
 #endif
-                  memcpy( buffer+out_off, (handle->buffs[counter])+startoffset, readsize );
+               memcpy( buffer+out_off, (handle->buffs[counter])+startoffset, readsize );
+            }
+            else {
+               memcpy( buffer+out_off, handle->buffs[counter], readsize );
+            }
+         }
+         else {
+
+            for ( tmp = 0; counter != handle->src_err_list[tmp]; tmp++ ) {
+               if ( tmp == handle->nerr ) {
+#ifdef DEBUG 
+                  fprintf( stderr, "ne_read: improperly definded erasure structs, failed to locate %d in src_err_list\n", tmp );
+#endif
+                  break;
+               }
+            }
+
+#ifdef DEBUG
+            fprintf( stdout, "ne_read: performing write of %d from regenerated chunk %d data, src_err = %d\n", readsize, counter, handle->src_err_list[tmp] );
+#endif
+            if ( firststripe ) {
+               if ( counter == startpart ) {
+#ifdef DEBUG
+                  fprintf( stdout, "   with offset of %d\n", startoffset );
+#endif
+                  memcpy( buffer+out_off, (temp_buffs[N+tmp])+startoffset, readsize );
                }
                else {
-                  memcpy( buffer+out_off, handle->buffs[counter], readsize );
+                  memcpy( buffer+out_off, temp_buffs[N+tmp], readsize );
                }
             }
             else {
-
-               for ( tmp = 0; counter != handle->src_err_list[tmp]; tmp++ ) {
-                  if ( tmp == handle->nerr ) {
-#ifdef DEBUG 
-                     fprintf( stderr, "ne_read: improperly definded erasure structs, failed to locate %d in src_err_list\n", tmp );
-#endif
-                     break;
-                  }
-               }
-
 #ifdef DEBUG
-               fprintf( stdout, "ne_read: performing write of %d from regenerated chunk %d data, src_err = %d\n", readsize, counter, handle->src_err_list[tmp] );
+               fprintf( stdout, "   no errors skipped\n" );
 #endif
-               if ( firststripe ) {
-                  if ( counter == startpart ) {
-#ifdef DEBUG
-                     fprintf( stdout, "   with offset of %d\n", startoffset );
-                     fprintf( stdout, "   Accounting for a skip of %d blocks\n", skipped_err );
-#endif
-                     //memcpy( buffer+out_off, (temp_buffs[N+tmp+skipped_err])+startoffset, readsize );
-                     memcpy( buffer+out_off, (temp_buffs[N+tmp])+startoffset, readsize );
-                  }
-                  else {
-#ifdef DEBUG
-                     fprintf( stdout, "   Accounting for a skip of %d blocks\n", skipped_err );
-#endif
-                     //memcpy( buffer+out_off, temp_buffs[N+tmp+skipped_err], readsize );
-                     memcpy( buffer+out_off, temp_buffs[N+tmp], readsize );
-                  }
-               }
-               else {
-#ifdef DEBUG
-                  fprintf( stdout, "   no errors skipped\n" );
-#endif
-                  memcpy( buffer+out_off, temp_buffs[N+tmp], readsize );
-               }
+               memcpy( buffer+out_off, temp_buffs[N+tmp], readsize );
+            }
 
-            } //end of src_in_err = true block
+         } //end of src_in_err = true block
 
-            out_off += readsize;
+         out_off += readsize;
 
-         } //end of output loop for stipe data
+      } //end of output loop for stipe data
 
-         if ( out_off != llcounter ) {
+      if ( out_off != llcounter ) {
 #ifdef DEBUG
-            fprintf( stderr, "ne_read: internal mismatch : llcounter (%lu) and out_off (%zd)\n", (unsigned long)llcounter, out_off );
+         fprintf( stderr, "ne_read: internal mismatch : llcounter (%lu) and out_off (%zd)\n", (unsigned long)llcounter, out_off );
 #endif
-            errno = ENOTRECOVERABLE;
-            return -1;
+         errno = ENOTRECOVERABLE;
+         return -1;
+      }
+
+      firststripe=0;
+      out_off = llcounter;
+      tmpoffset = 0; tmpchunk = 0; startpart=0;
+
+   } //end of generating loop for each stripe
+
+   for ( counter = 0; counter < mtot; counter++ ) {
+      if ( handle->src_in_err[counter] == 1  &&  counter <= endchunk ) {
+         for ( tmp = 0; counter != handle->src_err_list[tmp]; tmp++ ) {
+            if ( tmp == handle->nerr ) {
+               break;
+            }
          }
-
-         firststripe=0;
-         out_off = llcounter;
-         for ( counter = 0; counter < N; counter++ ) {
-            datasz[counter] = 0;
-         }
-         counter = 0; tmpoffset = 0; tmpchunk = 0; startpart=0;
-
-      } //end of generating loop for each stripe
-
-
-   for( counter = 0; counter < N+E; counter++ ) {
+         memcpy( handle->buffs[counter], temp_buffs[N+tmp], datasz[counter] );
+         handle->buff_rem += datasz[counter];
+      }
       free(temp_buffs[counter]);
    }
+
+#ifdef INTCRC
+   fprintf( stderr, "ne_read: cached stripe from %lu to %lu", handle->buff_offset, handle->buff_rem );
+#endif
 
    return llcounter; 
 }
@@ -900,12 +916,12 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
    int bsz;                     /* chunksize in k */ 
    int counter;                 /* general counter */
    int ecounter;                /* general counter */
-   ssize_t ret_out;     /* Number of bytes returned by read() and write() */
-   unsigned long long totsize;            /* used to sum total size of the input file/stream */
-   int mtot;                   /* N + numerasure stripes */
+   ssize_t ret_out;             /* Number of bytes returned by read() and write() */
+   unsigned long long totsize;  /* used to sum total size of the input file/stream */
+   int mtot;                    /* N + numerasure stripes */
    u32 readsize;
    u32 writesize;
-   u32 crc;                      /* crc 32 */
+   u32 crc;                     /* crc 32 */
 
    if ( handle-> mode != NE_WRONLY  &&  handle->mode != NE_REBUILD ) {
 #ifdef DEBUG
@@ -926,11 +942,11 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
    totsize = 0;
    while (1) { 
 
-      counter = handle->rem_buff / (bsz*1024);
+      counter = handle->buff_rem / (bsz*1024);
       /* loop over the parts and write the parts, sum and count bytes per part etc. */
       while (counter < N) {
 
-         writesize = ( handle->rem_buff % (bsz*1024) );
+         writesize = ( handle->buff_rem % (bsz*1024) );
          readsize = bsz*1024 - writesize;
 
          //avoid reading beyond end of buffer
@@ -944,15 +960,15 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
          }
 
 #ifdef DEBUG
-         fprintf( stdout, "ne_write: reading input for %lu bytes with offset of %llu\n          and writing to offset of %lu in handle buffer\n", (unsigned long)readsize, totsize, handle->rem_buff );
+         fprintf( stdout, "ne_write: reading input for %lu bytes with offset of %llu\n          and writing to offset of %lu in handle buffer\n", (unsigned long)readsize, totsize, handle->buff_rem );
 #endif
-         memcpy ( handle->buffer + handle->rem_buff, buffer+totsize, readsize);
+         memcpy ( handle->buffer + handle->buff_rem, buffer+totsize, readsize);
 #ifdef DEBUG
          fprintf(stdout, "ne_write:   ...copy complete.\n");
 #endif
          totsize += readsize;
-         writesize = readsize + ( handle->rem_buff % (bsz*1024) );
-         handle->rem_buff += readsize;
+         writesize = readsize + ( handle->buff_rem % (bsz*1024) );
+         handle->buff_rem += readsize;
 
          if ( writesize < bsz*1024 ) {  //if there is not enough data to write a full block, stash it in the handle buffer
 #ifdef DEBUG
@@ -1059,7 +1075,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
       }
 
       //now that we have written out all data, reset buffer
-      handle->rem_buff = 0; 
+      handle->buff_rem = 0; 
    }
    handle->totsz += totsize; //as it is impossible to write at an offset, the sum of writes will be the total size
  
@@ -1102,9 +1118,9 @@ int ne_close( ne_handle handle )
 
 
    /* flush the handle buffer if necessary */
-   if ( handle->mode == NE_WRONLY  &&  handle->rem_buff != 0 ) {
+   if ( handle->mode == NE_WRONLY  &&  handle->buff_rem != 0 ) {
       //zero the buffer to the end of the stripe
-      tmp = (N*bsz*1024) - handle->rem_buff;
+      tmp = (N*bsz*1024) - handle->buff_rem;
       zero_buff = malloc(sizeof(char) * tmp);
       bzero(zero_buff, tmp );
 

@@ -64,8 +64,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #endif
 
-//#define DEBUG
-#define INTCRC
+#define DEBUG
+//#define INTCRC
 
 #include <sys/stat.h>
 #include <stdint.h>
@@ -107,7 +107,9 @@ typedef struct handle {
    u64 totsz;
    void *buffer;
    unsigned char *buffs[ MAXN + MAXE ];
-   unsigned long rem_buff;
+   unsigned long buff_rem;
+   unsigned long buff_offset;
+   unsigned int buff_stripe;
    int FDArray[ MAXN + MAXE ];
 
    /* Per-part Info */
