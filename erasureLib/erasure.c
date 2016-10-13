@@ -156,9 +156,8 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
    handle->erasure_offset = erasure_offset;
    handle->mode = mode;
    handle->e_ready = 0;
-   handle->buff_rem = 0;
    handle->buff_offset = 0;
-   handle->buff_stripe = -1;
+   handle->buff_rem = 0;
 
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
       ret = error_check(handle,path); //idenfity a preliminary error pattern
@@ -312,6 +311,32 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
       nbytes = handle->totsz - offset;
    }
 
+   startstripe = offset / (bsz*1024*N);
+   startpart = (offset - (startstripe*bsz*1024*N))/(bsz*1024);
+   startoffset = offset - (startstripe*bsz*1024*N) - (startpart*bsz*1024);
+#ifdef DEBUG
+   fprintf(stdout,"ne_read: read from startstripe %d startpart %d and startoffset %d for nbytes %d\n",startstripe,startpart,startoffset,nbytes);
+#endif
+
+   llcounter = 0;
+   tmpoffset = 0;
+
+   //check stripe cache
+   if ( offset >= handle->buff_offset  &&  offset < (handle->buff_offset + handle->buff_rem) ) {
+      seekamt = offset - handle->buff_offset;
+      readsize = ( nbytes >= (handle->buff_rem - seekamt) ) ? (handle->buff_rem - seekamt) : nbytes;
+#ifdef DEBUG
+      fprintf( stdout, "ne_read: filling request for first %lu bytes from cache with offset %zd in buffer...\n", (unsigned long) readsize, seekamt );
+#endif
+      memcpy( buffer, handle->buffer + seekamt, readsize );
+      llcounter += readsize;
+   }
+
+   //if entire request was cached, skip seeks
+   if ( llcounter == nbytes ) { return llcounter; }
+
+
+   //determine min/max errors and allocate temporary buffers
    for ( counter = 0; counter < mtot; counter++ ) {
       posix_memalign((void **)&(temp_buffs[counter]),64,bsz*1024);
       if ( handle->src_in_err[counter] ) {
@@ -333,25 +358,8 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    }
 
 
-   startstripe = offset / (bsz*1024*N);
-   startpart = (offset - (startstripe*bsz*1024*N))/(bsz*1024);
-   startoffset = offset - (startstripe*bsz*1024*N) - (startpart*bsz*1024);
-#ifdef DEBUG
-   fprintf(stdout,"ne_read: read from startstripe %d startpart %d and startoffset %d for nbytes %d\n",startstripe,startpart,startoffset,nbytes);
-#endif
-
-   //check stripe cache
-   //if ( startstripe == handle->buff_stripe  &&  startoffset
-
-   llcounter = 0;
-   tmpoffset = 0;
-
    /******** Rebuild While Reading ********/
 rebuild:
-
-#ifdef DEBUG
-   fprintf(stdout,"ne_read: honor read request with rebuild\n");
-#endif
 
    startstripe = (offset+llcounter) / (bsz*1024*N);
    startpart = (offset + llcounter - (startstripe*bsz*1024*N))/(bsz*1024);
@@ -478,15 +486,16 @@ rebuild:
    /**** output each data stipe, regenerating as necessary ****/
    while ( llcounter < nbytes ) {
 
-      handle->buff_offset = tmpoffset;
+      //handle->buff_offset = (offset+llcounter) - ( (offset+llcounter) % (N*bsz*1024) );
+      handle->buff_offset = (offset+llcounter);
       handle->buff_rem = 0;
-      handle->buff_stripe = ( offset + llcounter ) / (bsz*N*1024);
 
       for ( counter = 0; counter < N; counter++ ) {
          datasz[counter] = 0;
       }
 
-      endchunk = ((long)(offset+nbytes+1) - (long)((long)(startstripe*N*bsz*1024) + llcounter) ) / (bsz*1024);
+      //endchunk = ((long)(offset+nbytes+1) - (long)((long)(startstripe*N*bsz*1024) + llcounter) ) / (bsz*1024);
+      endchunk = ((long)(offset+nbytes) - (long)( (offset + llcounter) - ((offset+llcounter)%(N*bsz*1024)) ) ) / (bsz*1024);
       skipped_err = 0;
 
 #ifdef DEBUG
@@ -531,8 +540,8 @@ rebuild:
             error_in_stripe = 1;
 
             if ( firstchunk == 1  &&  counter == startpart ) {
-               llcounter = (readsize - (startoffset-tmpoffset) < nbytes ) ? readsize-(startoffset-tmpoffset) : nbytes;
-               datasz[counter] = llcounter;
+               llcounter += (readsize - (startoffset-tmpoffset) < (nbytes-llcounter) ) ? readsize-(startoffset-tmpoffset) : (nbytes-llcounter);
+               datasz[counter] = llcounter - out_off;
                firstchunk = 0;
             }
             else if ( firstchunk == 0 ) {
@@ -651,8 +660,8 @@ rebuild:
 #endif
 
             if ( firstchunk == 1  &&  counter == startpart ) {
-               llcounter = (ret_in - (startoffset-tmpoffset) < nbytes ) ? ret_in-(startoffset-tmpoffset) : nbytes;
-               datasz[counter] = llcounter;
+               llcounter += (ret_in - (startoffset-tmpoffset) < (nbytes-llcounter) ) ? ret_in-(startoffset-tmpoffset) : (nbytes-llcounter);
+               datasz[counter] = llcounter - out_off;
                firstchunk = 0;
             }
             else if ( !firstchunk ) {
@@ -806,7 +815,7 @@ rebuild:
          readsize = datasz[counter];
 
 #ifdef DEBUG
-         if ( readsize > llcounter ) { fprintf(stderr,"ne_read: GROSS ERROR!!!\n"); }
+         if ( readsize+out_off > llcounter ) { fprintf(stderr,"ne_read: out_off + readsize(%lu) > llcounter at counter = %d!!!\n",(unsigned long)readsize,counter); return -1; }
 #endif
 
          if ( handle->src_in_err[counter] == 0 ) {
@@ -875,26 +884,42 @@ rebuild:
       }
 
       firststripe=0;
-      out_off = llcounter;
       tmpoffset = 0; tmpchunk = 0; startpart=0;
 
    } //end of generating loop for each stripe
 
+   if ( error_in_stripe == 1 ) {
+      handle->buff_offset -= ( handle->buff_offset % (N*bsz*1024) );
+   }
+
+   //copy regenerated blocks and note length of cached stripe
    for ( counter = 0; counter < mtot; counter++ ) {
-      if ( handle->src_in_err[counter] == 1  &&  counter <= endchunk ) {
-         for ( tmp = 0; counter != handle->src_err_list[tmp]; tmp++ ) {
-            if ( tmp == handle->nerr ) {
-               break;
+      if ( error_in_stripe == 1  &&  counter < N ) {
+         if ( handle->src_in_err[counter] == 1 ) {
+            for ( tmp = 0; counter != handle->src_err_list[tmp]; tmp++ ) {
+               if ( tmp == handle->nerr ) {
+#ifdef DEBUG 
+                  fprintf( stderr, "ne_read: improperly definded erasure structs, failed to locate %d in src_err_list while caching\n", tmp );
+#endif
+                  mtot=0;
+                  tmp=0;
+                  handle->buff_rem -= (bsz*1024); //just to offset the later addition
+                  break;
+               }
             }
+#ifdef DEBUG
+            fprintf( stdout, "ne_read: caching %d from regenerated chunk %d data, src_err = %d\n", (bsz*1024), counter, handle->src_err_list[tmp] );
+#endif
+            memcpy( handle->buffs[counter], temp_buffs[N+tmp], (bsz*1024) );
          }
-         memcpy( handle->buffs[counter], temp_buffs[N+tmp], datasz[counter] );
-         handle->buff_rem += datasz[counter];
+         handle->buff_rem += (bsz*1024);
       }
+      else if ( counter < N ) { handle->buff_rem += datasz[counter]; }
       free(temp_buffs[counter]);
    }
 
 #ifdef INTCRC
-   fprintf( stderr, "ne_read: cached stripe from %lu to %lu", handle->buff_offset, handle->buff_rem );
+   fprintf( stderr, "ne_read: cached %lu bytes from stripe at offset %lu\n", handle->buff_rem, handle->buff_offset );
 #endif
 
    return llcounter; 
