@@ -62,8 +62,12 @@ POSTSLEEP=0 # Number of seconds the program should sleep after a test
 LOGFILE=log_errTests.$$ # Name of the test logfile
 LIBTLOG=log_libTests.$$
 NEHEADER="erasure.h"
+TLOGPREF="time_log."
 
 re='^[0-9]+$'
+
+command -v bc >/dev/null 2>&1
+BC=$?
 
 echo
 echo "Tests erasure library functions..."
@@ -83,6 +87,10 @@ else
    echo "INTERMEDIATE CRCS - INACTIVE"
 fi
 
+if [[ $BC -ne 0 ]]; then
+   echo "Note: command 'bc' could not be found.  Times will be displayed as ranges and averages will be skipped!"
+fi
+
 echo "Generating input file 'testfile.$$' (this will take some time)..."
 dd if=/dev/urandom of=testfile.$$ bs=10M count=20
 echo "done"
@@ -99,18 +107,22 @@ while [[ $cnt -lt $ITER ]]; do
    e=$RANDOM
    let "e %= 3"
    e=$(( e + 1 ))
-#   bsz=$RANDOM
-#   let "bsz %= 90"
-#   bsz=$(( bsz + 10 ))
    start=$RANDOM
    let "start %= $(( n + e ))"
+
    echo
    echo "Generating $n+$e striping starting at file $start..."
    echo >> $LOGFILE
    echo >> $LIBTLOG
    echo "Generating $n+$e striping starting at file $start""..." >> $LOGFILE
-   #sleep 1
+   tcnt=$( date +%s%N )
+
    ret=$( ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 )
+
+   tcnt="`date +%s%N` - $tcnt"
+   if [[ $BC -eq 0 ]]; then
+      tcnt=$( echo "$tcnt" | bc )
+   fi
 
    if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
       echo -e "\033[0;31mFAIL - write operation returned an unexpected status"
@@ -119,13 +131,12 @@ while [[ $cnt -lt $ITER ]]; do
       echo "CMD = ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
       exit -1
    fi
-   echo "...done"
+   echo "...done.  Elapsed time = $tcnt""."
    echo "   stripe generation complete" >> $LOGFILE
-   #sleep 1
+   echo "$tcnt" >> $TLOGPREF$$.write
    echo
    ls testout.*.$$
    echo
-   #sleep 1
 
    incnt=0
    while [[ $incnt -lt $INITER ]]; do
@@ -282,7 +293,15 @@ while [[ $cnt -lt $ITER ]]; do
       echo >> $LIBTLOG
       echo "Performing a read of all data from striping (expected return value = $tstat)..."
       echo "Performing read of all data from striping (expected return value = $tstat)..." >> $LOGFILE
+      tcnt=$( date +%s%N )
+      
       ret=$( ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 )
+      
+      tcnt="`date +%s%N` - $tcnt"
+      if [[ $BC -eq 0 ]]; then
+         tcnt=$( echo "$tcnt" | bc )
+      fi
+
       if [[ ! $ret =~ $re  ||  $ret -ne $tstat ]]; then
          echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but recieved $ret"
          echo -e "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
@@ -290,8 +309,9 @@ while [[ $cnt -lt $ITER ]]; do
          echo "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
          exit -1
       fi
-      echo "...done.  Output file is \"outfile.$$\""
-      echo "...done.  Output file is \"outfile.$$\"" >> $LOGFILE
+      echo "...done.  Elapsed time = $tcnt"". Output file is \"outfile.$$\""
+      echo "...done.  Elapsed time = $tcnt"". Output file is \"outfile.$$\"" >> $LOGFILE
+      echo "$tcnt" >> $TLOGPREF$$.read
       echo
 
       #sleep 1
@@ -322,7 +342,15 @@ while [[ $cnt -lt $ITER ]]; do
          echo >> $LIBTLOG
          echo "Attempting error recovery..."
          echo "Attempting error recovery..." >> $LOGFILE
+         tcnt=$( date +%s%N )
+         
          ret=$( ./libTest rebuild testout.%d.$$ $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 )
+
+         tcnt="`date +%s%N` - $tcnt"
+         if [[ $BC -eq 0 ]]; then
+            tcnt=$( echo "$tcnt" | bc )
+         fi
+
          if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
             echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of $stat but recieved $ret"
             echo -e "CMD = ./libTest rebuild testout.%d.$$ $n $e $start\033[0m"
@@ -331,13 +359,22 @@ while [[ $cnt -lt $ITER ]]; do
             exit $ret
          fi
 #         ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200 > /dev/null 2>&1
-         echo "...recovery complete."
-         echo "...recovery complete." >> $LOGFILE
+         echo "...recovery complete.  Elapsed time = $tcnt""."
+         echo "...recovery complete.  Elapsed time = $tcnt""." >> $LOGFILE
+         echo "$tcnt" >> $TLOGPREF$$.recovery
       fi
 
       echo "Checking the striping for corruption..."
       echo "Checking the striping for corruption..." >> $LOGFILE
+      tcnt=$( date +%s%N )
+
       ret=$( ./libTest status testout.%d.$$ $n $e $start 2>&1 | tail -n 1 )
+
+      tcnt="`date +%s%N` - $tcnt"
+      if [[ $BC -eq 0 ]]; then
+         tcnt=$( echo "$tcnt" | bc )
+      fi
+
       if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
          echo -e "\033[0;31mFAIL - status check indicates corruption present in erasure striping"
          echo -e "CMD = ./libTest status testout.%d.$$ $n $e $start\033[0m"
@@ -345,8 +382,9 @@ while [[ $cnt -lt $ITER ]]; do
          echo "CMD = ./libTest status testout.%d.$$ $n $e $start" >> $LOGFILE
          exit $ret
       fi
-      echo "...no corruption found."
-      echo "...no corruption found." >> $LOGFILE
+      echo "...no corruption found.  Elapsed time = $tcnt""."
+      echo "...no corruption found.  Elapsed time = $tcnt""." >> $LOGFILE
+      echo "$tcnt" >> $TLOGPREF$$.status
       echo
 
       #All tests passed for this iteration
@@ -376,13 +414,60 @@ done
 echo "...done"
 echo
 
+if [[ $BC -eq 0 ]]; then
+   output=""
+   echo "Generating average times..."
+   tcnt="( 0.0"
+   count=0
 
+   while read -r line; do
+      tcnt="$tcnt + $line"
+      count=$(( count + 1 ));
+   done < "$TLOGPREF$$.write"
+   tcnt=$( echo "$tcnt ) / $count" | bc )
+   
+   output="$output\nWrites:,Performed = $count,AvgTime = $tcnt Nanoseconds"
+   tcnt="( 0.0"
+   count=0
 
+   while read -r line; do
+      tcnt="$tcnt + $line"
+      count=$(( count + 1 ));
+   done < "$TLOGPREF$$.read"
+   tcnt=$( echo "$tcnt ) / $count" | bc )
+   
+   output="$output\nReads:,Performed = $count,AvgTime = $tcnt Nanoseconds"
+   tcnt="( 0.0"
+   count=0
+
+   while read -r line; do
+      tcnt="$tcnt + $line"
+      count=$(( count + 1 ));
+   done < "$TLOGPREF$$.recovery"
+   tcnt=$( echo "$tcnt ) / $count" | bc )
+   
+   output="$output\nRecoveries:,Performed = $count,AvgTime = $tcnt Nanoseconds"
+   tcnt="( 0.0"
+   count=0
+
+   while read -r line; do
+      tcnt="$tcnt + $line"
+      count=$(( count + 1 ));
+   done < "$TLOGPREF$$.status"
+   tcnt=$( echo "$tcnt ) / $count" | bc )
+   
+   output="$output\nStatus:,Performed = $count,AvgTime = $tcnt Nanoseconds"
+
+   printf "$output\n" | column -s "," -o "   " -t
+   echo
+fi
 
 echo "Cleaning up remaining files..."
 rm testfile.$$
 make clean
 echo "Removing log files..."
 rm $LOGFILE
+rm $TLOGPREF$$.*
 echo "...done"
+
 
