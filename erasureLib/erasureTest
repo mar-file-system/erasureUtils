@@ -62,7 +62,7 @@ POSTSLEEP=0 # Number of seconds the program should sleep after a test
 LOGFILE=log_errTests.$$ # Name of the test logfile
 LIBTLOG=log_libTests.$$
 NEHEADER="erasure.h"
-TLOGPREF="time_log."
+TLOGPREF="log_time."
 
 re='^[0-9]+$'
 
