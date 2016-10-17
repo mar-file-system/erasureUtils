@@ -59,10 +59,11 @@
 ITER=5 # Number of N+E file arrays to generate
 INITER=3 # (Must be 1 until regeneration is added to lib!!!)Number of error patterns to test for each file array
 POSTSLEEP=0 # Number of seconds the program should sleep after a test
+NEHEADER="erasure.h"    # Header file to be scanned for compilation configuration
+TLOGPREF="log_time."    # Prefix for execution time logfiles
 LOGFILE=log_errTests.$$ # Name of the test logfile
-LIBTLOG=log_libTests.$$
-NEHEADER="erasure.h"
-TLOGPREF="log_time."
+LIBTLOG=log_libTests.$$ # Name of the libTest output logfile
+INTCRC="#define INT_CRC"
 
 re='^[0-9]+$'
 
@@ -76,14 +77,14 @@ echo "Compiling..."
 make all
 echo "done"
 
-def=$( cat "$NEHEADER" | sed 's/\/\/.*//' | grep "#define INTCRC" )
+def=$( cat "$NEHEADER" | sed 's/\/\/.*//' | grep "$INTCRC" )
 ICRC=$?
 if [[ $ICRC -eq 0 ]]; then
-   echo "Located line : \"$def\""
+   echo "Located line : \"$def\" in file \"$NEHEADER\""
    echo "INTERMEDIATE CRCS - ACTIVE"
 else
    ICRC=1
-   echo 'Failed to locate line : "#define INTCRC" in file "'$NEHEADER'"'
+   echo 'Failed to locate line : "'$INTCRC'" in file "'$NEHEADER'"'
    echo "INTERMEDIATE CRCS - INACTIVE"
 fi
 
@@ -109,6 +110,8 @@ while [[ $cnt -lt $ITER ]]; do
    e=$(( e + 1 ))
    start=$RANDOM
    let "start %= $(( n + e ))"
+
+   err_free=0
 
    echo
    echo "Generating $n+$e striping starting at file $start..."
@@ -148,21 +151,16 @@ while [[ $cnt -lt $ITER ]]; do
       echo
    fi
 
-#   tmp=$RANDOM
-#   let "tmp %= 1024 * tmp"
-#   offset=$RANDOM
-#   offset=$(( offset * tmp ))
-#   let "offset %= 20470000"
-#   tmp=$RANDOM
-#   let "tmp %= 1024 * tmp"
-#   len=$RANDOM
-#   len=$(( len * tmp ))
-#   tmp=$(( 20480000 - offset ))
-#   let "len %= $tmp"
-
    nerr=$RANDOM
    let "nerr %= $(( e + 1 ))"
-#   nerr=$(( nerr + 1 ))
+
+   if [[ $nerr -eq 0 ]]; then
+      if [[ $err_free -eq 1 ]]; then
+         nerr=$e
+      fi
+      err_free=1
+   fi
+
    npat=""
    maxpos=$(( n + e - nerr + 1 ))
    oldpos=0

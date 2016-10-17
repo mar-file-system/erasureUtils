@@ -65,7 +65,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #endif
 
 #define DEBUG
-#define INTCRC
+#define INT_CRC
+//#define XATTR_CRC
 
 #include <sys/stat.h>
 #include <stdint.h>
@@ -85,10 +86,13 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define MAXNAME 1024 
 #define MAXBUF 4096 
 #define MAXBLKSZ 256
-#define BLKSZ 64
+#define BLKSZ 65536
 #define TEST_SEED 57
 
 #define XATTRKEY "user.n.e.bsz.nsz.ncompsz.ncrcsum.totsz"
+#ifdef XATTR_CRC
+#define XCRCKEY "crc_list"
+#endif
 #define MAXPARTS (MAXN + MAXE)
 #define NO_INVERT_MATRIX -2
 
@@ -96,11 +100,17 @@ typedef uint32_t u32;
 typedef uint64_t u64;
 typedef enum {NE_RDONLY,NE_WRONLY,NE_REBUILD} ne_mode;
 
+typedef struct node {
+   struct node *next;
+   struct node *prev;
+   u32 crc;
+} *crc_node;
+
 typedef struct handle {
    /* Erasure Info */
    int N;
    int E;
-   int bsz;
+   unsigned int bsz;
 
    /* Read/Write Info and Structures */
    ne_mode mode;
@@ -110,6 +120,9 @@ typedef struct handle {
    unsigned long buff_rem;
    off_t buff_offset;
    int FDArray[ MAXN + MAXE ];
+#ifdef XATTR_CRC
+   crc_node crc_list[ MAXPARTS ];
+#endif
 
    /* Per-part Info */
    u64 csum[ MAXN + MAXE ];
