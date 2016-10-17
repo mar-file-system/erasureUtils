@@ -100,11 +100,19 @@ typedef uint32_t u32;
 typedef uint64_t u64;
 typedef enum {NE_RDONLY,NE_WRONLY,NE_REBUILD} ne_mode;
 
+#ifdef XATTR_CRC
 typedef struct node {
    struct node *next;
    struct node *prev;
    u32 crc;
 } *crc_node;
+
+typedef struct node_list {
+   crc_node head;
+   crc_node tail;
+   unsigned int length;
+} *crc_list;
+#endif
 
 typedef struct handle {
    /* Erasure Info */
@@ -121,7 +129,7 @@ typedef struct handle {
    off_t buff_offset;
    int FDArray[ MAXN + MAXE ];
 #ifdef XATTR_CRC
-   crc_node crc_list[ MAXPARTS ];
+   crc_list crc_list[ MAXPARTS ];
 #endif
 
    /* Per-part Info */

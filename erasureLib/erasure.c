@@ -149,6 +149,12 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
    for ( counter=0; counter < N+E; counter++ ) {
       handle->src_in_err[counter] = 0;
       handle->src_err_list[counter] = 0;
+#ifdef XATTR_CRC
+      handle->crc_list[counter] = malloc( sizeof(struct node_list) );
+      handle->crc_list[counter]->length = 0;
+      handle->crc_list[counter]->head = NULL;
+      handle->crc_list[counter]->tail = NULL;
+#endif
    }
    handle->nerr = 0;
    handle->totsz = 0;
@@ -955,6 +961,22 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
             /* this is the crcsum for each part */
             crc = crc32_ieee(TEST_SEED, handle->buffs[counter], bsz);
 
+#ifdef XATTR_CRC
+            //attatch this crc to the list for the given file
+            crc_node node = malloc(sizeof(struct node));
+            node->crc = crc;
+            node->prev = handle->crc_list[counter]->tail;
+            node->next = NULL;
+            if ( handle->crc_list[counter]->length == 0 ) {
+               handle->crc_list[counter]->head = node;
+            }
+            else {
+               handle->crc_list[counter]->tail->next = node;
+            }
+            handle->crc_list[counter]->tail = node;
+            handle->crc_list[counter]->length++;
+#endif
+
 #ifdef INT_CRC
             // write out per-block-crc
             memcpy( handle->buffs[counter]+writesize, &crc, sizeof(crc) );
@@ -1019,6 +1041,22 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
       ecounter = 0;
       while (ecounter < E) {
          crc = crc32_ieee(TEST_SEED, handle->buffs[counter+ecounter], bsz); 
+
+#ifdef XATTR_CRC
+         //attatch this crc to the list for the given file
+         crc_node node = malloc(sizeof(struct node));
+         node->crc = crc;
+         node->prev = handle->crc_list[counter+ecounter]->tail;
+         node->next = NULL;
+         if ( handle->crc_list[counter+ecounter]->length == 0 ) {
+            handle->crc_list[counter+ecounter]->head = node;
+         }
+         else {
+            handle->crc_list[counter+ecounter]->tail->next = node;
+         }
+         handle->crc_list[counter+ecounter]->tail = node;
+         handle->crc_list[counter+ecounter]->length++;
+#endif
 
          writesize = bsz;
 #ifdef INT_CRC
@@ -1129,6 +1167,19 @@ int ne_close( ne_handle handle )
             ret = -1;
          }
 
+#ifdef XATTR_CRC
+//TODO set crc xattr
+
+         crc_node node = handle->crc_list[counter]->head;
+         crc_node tmp_node = NULL;
+         for( tmp = 0; tmp < handle->crc_list[counter]->length; tmp++ ) {
+            tmp_node = node;
+            node = node->next;
+            free(tmp_node);
+         }
+         free( handle->crc_list[counter] );
+#endif
+
       }
       if ( handle->FDArray[counter] != -1 ) { close(handle->FDArray[counter]); }
       counter++;
@@ -1192,6 +1243,7 @@ int error_check( ne_handle handle, char *path )
    u64 totsz;
    struct stat* partstat = malloc (sizeof(struct stat));
    void *buf;
+   
 
 #ifdef INT_CRC
    posix_memalign(&buf,32,bsz+sizeof(crc));
@@ -1213,8 +1265,10 @@ int error_check( ne_handle handle, char *path )
          handle->src_in_err[counter] = 1;
          handle->src_err_list[handle->nerr] = counter;
          handle->nerr++;
+         continue;
       }
-      else if ( handle->mode == NE_REBUILD  ||  goodfile == 0 ) {
+
+      if ( handle->mode == NE_REBUILD  ||  goodfile == 0 ) {
          bzero(xattrval,sizeof(xattrval));
          ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
 #ifdef DEBUG
@@ -1320,77 +1374,83 @@ int error_check( ne_handle handle, char *path )
             goodfile = 1;
          }
 
-         if ( handle->mode == NE_REBUILD ) {
-            filefd = open( file, O_RDONLY );
-            if ( filefd == -1 ) {
-#ifdef DEBUG
-               fprintf( stderr, "error_check: failed to open file %s for read\n", file );
-#endif
-               handle->src_in_err[counter] = 1;
-               handle->src_err_list[handle->nerr] = counter;
-               handle->nerr++;
-               continue;
-            }
-
-            ret_in = ncompsz / bsz;
-            bcounter=0;
-            scrc = 0;
-
-            while ( bcounter < ret_in ) {
-
-#ifdef INT_CRC
-               ret = read(filefd,buf,bsz+sizeof(crc));
-
-               if ( ret != bsz+sizeof(crc) ) {
-#else
-                  ret = read(filefd,buf,bsz);
-
-               if ( ret != bsz ) {
-#endif
-#ifdef DEBUG
-                  fprintf( stderr, "error_check: failure to read full amt for file %s block %d\n", file, bcounter );
-#endif
-                  handle->src_in_err[counter] = 1;
-                  handle->src_err_list[handle->nerr] = counter;
-                  handle->nerr++;
-                  break;
-               }
-
-#ifdef INT_CRC
-                  //store and verify intermediate crc
-               crc = crc32_ieee( TEST_SEED, buf, bsz );
-
-               if ( memcmp( &crc, buf+bsz, sizeof(crc) ) != 0 ) {
-#ifdef DEBUG
-                  fprintf( stderr, "error_check: int-crc mismatch for file %s\n", file );
-#endif
-                  handle->src_in_err[counter] = 1;
-                  handle->src_err_list[handle->nerr] = counter;
-                  handle->nerr++;
-                  break;
-               }
-
-               scrc += crc;
-#else
-               scrc += crc32_ieee( TEST_SEED, buf, bsz );
-#endif
-               bcounter++;
-            } //end of while loop
-
-            if ( scrc != strtoll(xattrnsum,NULL,0)  &&  handle->src_in_err[counter] == 0 ) {
-#ifdef DEBUG
-               fprintf( stderr, "error_check: crc mismatch for file %s\n", file );
-#endif
-               handle->src_in_err[counter] = 1;
-               handle->src_err_list[handle->nerr] = counter;
-               handle->nerr++;
-            }
-
-            close(filefd);
-
-         } //end of if-rebuild
-
       } //end of if-goodfile/rebuild
+
+#ifdef XATTR_CRC
+//TODO
+#endif
+
+      if ( handle->mode == NE_REBUILD ) {
+         filefd = open( file, O_RDONLY );
+         if ( filefd == -1 ) {
+#ifdef DEBUG
+            fprintf( stderr, "error_check: failed to open file %s for read\n", file );
+#endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+            continue;
+         }
+
+         ret_in = ncompsz / bsz;
+         bcounter=0;
+         scrc = 0;
+
+         while ( bcounter < ret_in ) {
+
+#ifdef INT_CRC
+            ret = read(filefd,buf,bsz+sizeof(crc));
+
+            if ( ret != bsz+sizeof(crc) ) {
+#else
+               ret = read(filefd,buf,bsz);
+
+            if ( ret != bsz ) {
+#endif
+#ifdef DEBUG
+               fprintf( stderr, "error_check: failure to read full amt for file %s block %d\n", file, bcounter );
+#endif
+               handle->src_in_err[counter] = 1;
+               handle->src_err_list[handle->nerr] = counter;
+               handle->nerr++;
+               break;
+            }
+
+#ifdef INT_CRC
+               //store and verify intermediate crc
+            crc = crc32_ieee( TEST_SEED, buf, bsz );
+
+            if ( memcmp( &crc, buf+bsz, sizeof(crc) ) != 0 ) {
+#ifdef DEBUG
+               fprintf( stderr, "error_check: int-crc mismatch for file %s\n", file );
+#endif
+               handle->src_in_err[counter] = 1;
+               handle->src_err_list[handle->nerr] = counter;
+               handle->nerr++;
+               break;
+            }
+
+            scrc += crc;
+#else
+            scrc += crc32_ieee( TEST_SEED, buf, bsz );
+#endif
+            bcounter++;
+         } //end of while loop
+
+         if ( scrc != strtoll(xattrnsum,NULL,0)  &&  handle->src_in_err[counter] == 0 ) {
+#ifdef DEBUG
+            fprintf( stderr, "error_check: crc mismatch for file %s\n", file );
+#endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+         }
+
+         close(filefd);
+
+      } //end of if-rebuild
+
+
    } //end of loop over files
 
    free(partstat);
