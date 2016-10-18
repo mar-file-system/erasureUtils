@@ -79,7 +79,11 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/types.h>
 #include <unistd.h>
 #include <sys/uio.h>
+#if __APPLE__
 #include <sys/xattr.h>
+#elif __linux__
+#include <attr/xattr.h>
+#endif
 
 #define MAXN 15
 #define MAXE 5

@@ -1,19 +1,21 @@
 CC = gcc
-CFLAGS = -g -Wall -I. -l isal
+CFLAGS = -g -Wall
 
-lib : erasure.c erasure.h
-	$(CC) $(CFLAGS) -c erasure.c
+# add this, even if cflags was overridden
+CFLAGS += -I. -lisal
 
-all : lib test
+libne.a : erasure.o
+	ar rcs $@ $^
 
-test : libTest.c
+test : libTest.c erasure.o
 	$(CC) $(CFLAGS) libTest.c erasure.o -o libTest
 
 cleanLib : 
-	rm erasure.o 
+	rm -f erasure.o
+	rm -f libne.a
 
 cleanTest :
-	rm libTest
+	rm -f libTest
 
 clean : cleanLib cleanTest
 
