@@ -73,8 +73,6 @@ BC=$?
 echo
 echo "Tests erasure library functions..."
 echo
-echo "Compiling..."
-make all
 echo "done"
 
 def=$( cat "$NEHEADER" | sed 's/\/\/.*//' | grep "$INTCRC" )
@@ -462,7 +460,6 @@ fi
 
 echo "Cleaning up remaining files..."
 rm testfile.$$
-make clean
 echo "Removing log files..."
 rm $LOGFILE
 rm $TLOGPREF$$.*
