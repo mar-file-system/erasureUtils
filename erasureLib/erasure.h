@@ -79,9 +79,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/types.h>
 #include <unistd.h>
 #include <sys/uio.h>
-#if __APPLE__
+#if (AXATTR_RES == 1)
 #include <sys/xattr.h>
-#elif __linux__
+#elif (AXATTR_RES == 2)
 #include <attr/xattr.h>
 #endif
 
