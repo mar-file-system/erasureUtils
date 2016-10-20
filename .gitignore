@@ -1,0 +1,13 @@
+configure
+aclocal.m4
+autom4te.cache*
+*.in
+install-sh
+missing
+depcomp
+config.*
+Makefile
+erasureLib/Makefile
+erasureLib/.*
+stamp-*
+
