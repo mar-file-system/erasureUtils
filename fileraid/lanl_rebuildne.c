@@ -226,7 +226,11 @@ int main(int argc, char* argv[]) {
 
     /* go to the a good file depending on missing (there can only be one missing) and get the xattr to tell us how big the file is, num parts, chunk size, etc. */
     bzero(xattrval,sizeof(xattrval));
+#if (AXATTR_GET_FUNC == 4)
     getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval));
+#else
+    getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+#endif
     fprintf(stderr,"got xattr %s for %s\n",xattrval,infile);
     bzero(xattrchunks,sizeof(xattrchunks));
     bzero(xattrchunksizek,sizeof(xattrchunksizek));
@@ -393,7 +397,11 @@ int main(int argc, char* argv[]) {
        if (src_in_err[counter] == 1) {
           bzero(xattrval,sizeof(xattrval));
           sprintf(xattrval,"%d %d %d %d %d %lu %lld",numchunks,erasure,chunksize,nsz[counter],ncompsz[counter],sum[counter],totsize);
+#if (AXATTR_SET_FUNC == 5)
           fsetxattr(input_fd[counter],XATTRKEY, xattrval,strlen(xattrval),0);
+#else
+          fsetxattr(input_fd[counter],XATTRKEY, xattrval,strlen(xattrval),0,0);
+#endif
           printf("wrote and set xattr for %d\n",counter);
        }
        close(input_fd[counter]);

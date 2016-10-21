@@ -273,7 +273,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    unsigned int bsz = handle->bsz;
    int nerr = 0;
    unsigned long datasz[ MAXPARTS ] = {0};
-   unsigned long ret_in;
+   long ret_in;
    int tmp;
    unsigned int decode_index[ MAXPARTS ];
    u32 llcounter;
@@ -1116,12 +1116,16 @@ int ne_close( ne_handle handle )
    while (counter < N+E) {
       if ( handle->mode == NE_WRONLY  ||  (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1) ) { 
          bzero(xattrval,sizeof(xattrval));
-         sprintf(xattrval,"%d %d %d %lu %lu %zu %zu",N,E,bsz,handle->nsz[counter],handle->ncompsz[counter],handle->csum[counter],handle->totsz);
+         sprintf(xattrval,"%d %d %d %lu %lu %llu %llu",N,E,bsz,handle->nsz[counter],handle->ncompsz[counter],(unsigned long long)handle->csum[counter],(unsigned long long)handle->totsz);
 #ifdef DEBUG
          fprintf( stdout, "ne_close: setting file %d xattr = \"%s\"\n", counter, xattrval );
 #endif
+#if (AXATTR_SET_FUNC == 5)
          tmp = fsetxattr(handle->FDArray[counter],XATTRKEY, xattrval,strlen(xattrval),0); 
-         
+#else
+         tmp = fsetxattr(handle->FDArray[counter],XATTRKEY, xattrval,strlen(xattrval),0,0); 
+#endif
+
          if ( tmp != 0 ) {
 #ifdef DEBUG
             fprintf( stderr, "ne_close: failed to set xattr for file %d\n", counter );
@@ -1216,10 +1220,10 @@ int error_check( ne_handle handle, char *path )
       }
       else if ( handle->mode == NE_REBUILD  ||  goodfile == 0 ) {
          bzero(xattrval,sizeof(xattrval));
-#if (XATTR_GET_FUNC == 4)
+#if (AXATTR_GET_FUNC == 4)
          ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
 #else
-         ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval),0);
+         ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
 #endif
 #ifdef DEBUG
          fprintf(stderr,"error_check: file %s xattr returned %d\n",file,ret);

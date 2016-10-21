@@ -195,7 +195,11 @@ int main(int argc, char* argv[]) {
 
    sprintf(infile,"%s.0",argv[1]);
    bzero(xattrval,sizeof(xattrval));
+#if (AXATTR_GET_FUNC == 4)
    ret_in = getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval));
+#else
+   ret_in = getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+#endif
    if ( ret_in < 0 ) {
       perror("Could not access the xattr input chunk 0");
       exit(-1);
@@ -336,7 +340,11 @@ int main(int argc, char* argv[]) {
       else if (counter < numchunks){  //verify crc and then close input files
          sprintf(infile,"%s.%d",argv[1],counter);
          bzero(xattrval,sizeof(xattrval));
+#if (AXATTR_GET_FUNC == 4)
          ret_in = getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval));
+#else
+         ret_in = getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+#endif
          if ( ret_in < 0 ) {
             perror("lanl_ntofe: could not access the xattr of an input chunk");
          }

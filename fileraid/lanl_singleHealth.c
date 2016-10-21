@@ -169,7 +169,11 @@ int main(int argc, char* argv[]) {
 
    /* Verify xattr */
    bzero(xattrval,sizeof(xattrval));
+#if (AXATTR_GET_FUNC == 4)
    ret_in = getxattr(argv[1],XATTRKEY,&xattrval[0],sizeof(xattrval));
+#else
+   ret_in = getxattr(argv[1],XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+#endif
    fprintf(stderr,"file %s xattr returned %zd\n",argv[1],ret_in);
    if (ret_in < 0) {
      fprintf(stderr, "file %s: failure of xattr retrieval\n", argv[1]);

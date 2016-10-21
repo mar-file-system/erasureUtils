@@ -248,7 +248,11 @@ int main(int argc, char* argv[]) {
     }
 
     /* go to the a good file depending on missing (there can only be one missing) and get the xattr to tell us how big the file is, num parts, chunk size, etc. */
+#if (AXATTR_GET_FUNC == 4)
     getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval));
+#else
+    getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+#endif
     fprintf(stderr,"got xattr %s for %s\n",xattrval,infile);
     bzero(xattrchunks,sizeof(xattrchunks));
     bzero(xattrchunksizek,sizeof(xattrchunksizek));

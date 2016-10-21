@@ -338,7 +338,11 @@ int main(int argc, char* argv[]) {
     while (counter < numchunks+erasure) {
        bzero(xattrval,sizeof(xattrval));
        sprintf(xattrval,"%d %d %d %d %d %lu %lld",numchunks,erasure,chunksize,nsz[counter],ncompsz[counter],sum[counter],totsize);
+#if (AXATTR_SET_FUNC == 5)
        fsetxattr(output_fd[counter],XATTRKEY, xattrval,strlen(xattrval),0);
+#else
+       fsetxattr(output_fd[counter],XATTRKEY, xattrval,strlen(xattrval),0,0);
+#endif
        close(output_fd[counter]);
        counter++;
     }

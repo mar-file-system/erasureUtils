@@ -69,7 +69,8 @@ AC_PROG_RANLIB
 AC_PROG_CC
 
 # Checks for libraries.
-AC_CHECK_LIB([isal], [ec_init_tables])
+AC_CHECK_LIB([isal], [ec_init_tables], [], 
+         [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!"])])
 
 # Checks for header files.
 AC_CHECK_HEADERS([fcntl.h stdint.h stdlib.h string.h unistd.h])

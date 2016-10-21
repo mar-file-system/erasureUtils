@@ -56,8 +56,8 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-ITER=5 # Number of N+E file arrays to generate
-INITER=3 # (Must be 1 until regeneration is added to lib!!!)Number of error patterns to test for each file array
+ITER=2 # Number of N+E file arrays to generate
+INITER=2 # (Must be 1 until regeneration is added to lib!!!)Number of error patterns to test for each file array
 POSTSLEEP=0 # Number of seconds the program should sleep after a test
 TLOGPREF="log_time."    # Prefix for execution time logfiles
 LOGFILE=log_errTests.$$ # Name of the test logfile
