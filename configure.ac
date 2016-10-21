@@ -61,7 +61,7 @@ AC_PREREQ([2.69])
 AC_INIT([erasureUtils], [1.0], [gransom@lanl.gov])
 AC_CONFIG_SRCDIR([COPYRIGHT.h])
 AC_CONFIG_HEADERS([config.h])
-AC_CONFIG_MACRO_DIRS([m4])
+AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
 AC_PROG_RANLIB
 
@@ -86,6 +86,8 @@ AC_TYPE_UINT8_T
 # Checks for library functions.
 AC_FUNC_MALLOC
 AC_CHECK_FUNCS([bzero ftruncate memset strerror strtol strtoul])
+
+AXATTR_GET_FUNC_CHECK
 
 AC_CONFIG_FILES([Makefile
                  fileraid/Makefile

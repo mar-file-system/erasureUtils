@@ -115,6 +115,9 @@ int main( int argc, const char* argv[] )
       }
       wr = 3;
    }
+   else if ( strncmp( argv[1], "crc-status", strlen(argv[1]) ) == 0 ) {
+      return crc_status();
+   }
    else {
       fprintf( stderr, "libTest: argument 1 not recognized, expecting \"read\" or \"write\"\n" );
       return -1;
@@ -255,3 +258,14 @@ int main( int argc, const char* argv[] )
    return tmp;
 
 }
+
+
+int crc_status() {
+   #ifdef INT_CRC
+      return 0;
+   #else
+      return 1;
+   #endif
+}
+
+

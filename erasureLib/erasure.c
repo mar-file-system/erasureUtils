@@ -1216,7 +1216,11 @@ int error_check( ne_handle handle, char *path )
       }
       else if ( handle->mode == NE_REBUILD  ||  goodfile == 0 ) {
          bzero(xattrval,sizeof(xattrval));
+#if (XATTR_GET_FUNC == 4)
          ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
+#else
+         ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval),0);
+#endif
 #ifdef DEBUG
          fprintf(stderr,"error_check: file %s xattr returned %d\n",file,ret);
 #endif

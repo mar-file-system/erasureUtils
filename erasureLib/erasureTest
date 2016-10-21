@@ -59,32 +59,31 @@
 ITER=5 # Number of N+E file arrays to generate
 INITER=3 # (Must be 1 until regeneration is added to lib!!!)Number of error patterns to test for each file array
 POSTSLEEP=0 # Number of seconds the program should sleep after a test
-NEHEADER="erasure.h"    # Header file to be scanned for compilation configuration
 TLOGPREF="log_time."    # Prefix for execution time logfiles
 LOGFILE=log_errTests.$$ # Name of the test logfile
 LIBTLOG=log_libTests.$$ # Name of the libTest output logfile
-INTCRC="#define INT_CRC"
 
 re='^[0-9]+$'
-
-command -v bc >/dev/null 2>&1
-BC=$?
 
 echo
 echo "Tests erasure library functions..."
 echo
-echo "done"
 
-def=$( cat "$NEHEADER" | sed 's/\/\/.*//' | grep "$INTCRC" )
+if [[ ! -e libTest ]]; then
+   echo "erasureTest: error: could not locate executable \"libTest\", please run this script from within the \"erasureLib\" directory!"
+   exit 1
+fi
+
+./libTest crc-status
 ICRC=$?
 if [[ $ICRC -eq 0 ]]; then
-   echo "Located line : \"$def\" in file \"$NEHEADER\""
    echo "INTERMEDIATE CRCS - ACTIVE"
 else
-   ICRC=1
-   echo 'Failed to locate line : "'$INTCRC'" in file "'$NEHEADER'"'
    echo "INTERMEDIATE CRCS - INACTIVE"
 fi
+
+command -v bc >/dev/null 2>&1
+BC=$?
 
 if [[ $BC -ne 0 ]]; then
    echo "Note: command 'bc' could not be found.  Times will be displayed as ranges and averages will be skipped!"
