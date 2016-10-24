@@ -601,7 +601,11 @@ rebuild:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
+#ifdef AISAL
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
+#else
+               crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], bsz );
+#endif
                if ( memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) ) != 0 ){
 #ifdef DEBUG
                   fprintf(stderr, "ne_read: mismatch of int-crc for file %d while reading with rebuild\n", counter);
@@ -695,7 +699,11 @@ rebuild:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
+#ifdef AISAL
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
+#else
+               crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], bsz );
+#endif
                if ( memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) ) != 0 ){
 #ifdef DEBUG
                   fprintf(stderr, "ne_read: mismatch of int-crc for file %d (erasure)\n", counter);
@@ -762,7 +770,12 @@ rebuild:
 #ifdef DEBUG
          fprintf( stdout, "ne_read: performing regeneration from erasure...\n" );
 #endif
+
+#ifdef AISAL
          ec_encode_data(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
+#else
+         ec_encode_data_base(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
+#endif
       }
 
       /**** write appropriate data out ****/
@@ -867,7 +880,7 @@ rebuild:
    }
 
 #ifdef INT_CRC
-   fprintf( stderr, "ne_read: cached %lu bytes from stripe at offset %lu\n", handle->buff_rem, handle->buff_offset );
+   fprintf( stderr, "ne_read: cached %lu bytes from stripe at offset %zd\n", handle->buff_rem, handle->buff_offset );
 #endif
 
    return llcounter; 
@@ -953,7 +966,11 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 
          if ( handle->src_in_err[counter] == 0 ) {
             /* this is the crcsum for each part */
+#ifdef AISAL
             crc = crc32_ieee(TEST_SEED, handle->buffs[counter], bsz);
+#else
+            crc = crc32_ieee_base(TEST_SEED, handle->buffs[counter], bsz);
+#endif
 
 #ifdef INT_CRC
             // write out per-block-crc
@@ -1014,11 +1031,19 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 #endif
       // Perform matrix dot_prod for EC encoding
       // using g_tbls from encode matrix encode_matrix
+#ifdef AISAL
       ec_encode_data( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
+#else
+      ec_encode_data_base( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
+#endif
 
       ecounter = 0;
       while (ecounter < E) {
+#ifdef AISAL
          crc = crc32_ieee(TEST_SEED, handle->buffs[counter+ecounter], bsz); 
+#else
+         crc = crc32_ieee_base(TEST_SEED, handle->buffs[counter+ecounter], bsz); 
+#endif
 
          writesize = bsz;
 #ifdef INT_CRC
@@ -1284,7 +1309,7 @@ int error_check( ne_handle handle, char *path )
          else if ( nsz != partstat->st_size ) {
 #endif
 #ifdef DEBUG
-            fprintf (stderr, "error_check: filexattr nsize = %lu did not match stat value %zu \n", nsz, partstat->st_size); 
+            fprintf (stderr, "error_check: filexattr nsize = %lu did not match stat value %zd\n", nsz, partstat->st_size); 
 #endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
@@ -1307,7 +1332,7 @@ int error_check( ne_handle handle, char *path )
          else if ( ncompsz != partstat->st_size ) {
 #endif
 #ifdef DEBUG
-            fprintf (stderr, "error_check: filexattr ncompsize = %lu did not match stat value %zu \n", ncompsz, partstat->st_size); 
+            fprintf (stderr, "error_check: filexattr ncompsize = %lu did not match stat value %zd\n", ncompsz, partstat->st_size); 
 #endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
@@ -1366,7 +1391,11 @@ int error_check( ne_handle handle, char *path )
 
 #ifdef INT_CRC
                   //store and verify intermediate crc
+#ifdef AISAL
                crc = crc32_ieee( TEST_SEED, buf, bsz );
+#else
+               crc = crc32_ieee_base( TEST_SEED, buf, bsz );
+#endif
 
                if ( memcmp( &crc, buf+bsz, sizeof(crc) ) != 0 ) {
 #ifdef DEBUG
@@ -1380,7 +1409,11 @@ int error_check( ne_handle handle, char *path )
 
                scrc += crc;
 #else
+#ifdef AISAL
                scrc += crc32_ieee( TEST_SEED, buf, bsz );
+#else
+               scrc += crc32_ieee_base( TEST_SEED, buf, bsz );
+#endif
 #endif
                bcounter++;
             } //end of while loop
@@ -1405,7 +1438,7 @@ int error_check( ne_handle handle, char *path )
    free(buf);
 
    if ( goodfile == 0 ) {
-      errno = EUCLEAN;
+      errno = EBADF;
       return -1;
    }
 
@@ -1492,7 +1525,11 @@ int ne_rebuild( ne_handle handle ) {
 
 #ifdef INT_CRC
             //calculate and verify crc
+#ifdef AISAL
             crc = crc32_ieee( TEST_SEED, handle->buffs[counter], handle->bsz );
+#else
+            crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], handle->bsz );
+#endif
             if ( memcmp( handle->buffs[counter]+(handle->bsz), &crc, sizeof(u32) ) != 0 ){
 #ifdef DEBUG
                fprintf(stderr, "ne_rebuild: mismatch of int-crc for file %d (erasure)\n", counter);
@@ -1559,11 +1596,19 @@ int ne_rebuild( ne_handle handle ) {
 #ifdef DEBUG
       if ( init == 1 ) { fprintf( stdout, "ne_rebuild: performing regeneration from erasure...\n" ); }
 #endif
-      ec_encode_data(handle->bsz, handle->N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[handle->N]);
 
+#ifdef AISAL
+      ec_encode_data(handle->bsz, handle->N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[handle->N]);
+#else
+      ec_encode_data_base(handle->bsz, handle->N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[handle->N]);
+#endif
 
       for (i = 0; i < handle->nerr; i++) {
+#ifdef AISAL
          crc = crc32_ieee(TEST_SEED, temp_buffs[handle->N+i], handle->bsz);
+#else
+         crc = crc32_ieee_base(TEST_SEED, temp_buffs[handle->N+i], handle->bsz);
+#endif
 #ifdef INT_CRC
          memcpy ( temp_buffs[handle->N+i]+(handle->bsz), &crc, sizeof(crc) );
          write(handle->FDArray[handle->src_err_list[i]],temp_buffs[handle->N+i],(handle->bsz)+sizeof(crc));

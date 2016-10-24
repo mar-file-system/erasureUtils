@@ -75,10 +75,10 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/types.h>
 #include <unistd.h>
 #include <sys/uio.h>
-#if (AXATTR_RES == 1)
-#include <sys/xattr.h>
-#elif (AXATTR_RES == 2)
+#if (AXATTR_RES == 2)
 #include <attr/xattr.h>
+#else
+#include <sys/xattr.h>
 #endif
 
 #define MAXPARTS 20

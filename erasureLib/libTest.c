@@ -65,6 +65,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #include <time.h>
 
+int crc_status();
+
 int main( int argc, const char* argv[] ) 
 {
    unsigned long long nread;

@@ -11,22 +11,22 @@ AC_DEFUN([AXATTR_GET_FUNC_CHECK],
    [AC_LANG([C])
    AC_COMPILE_IFELSE([dnl Performs compilation tests with various xattr function formats
       AC_LANG_PROGRAM([[
-      #if (AXATTR_RES == 1)
-      #   include <sys/xattr.h>
-      #else
+      #if (AXATTR_RES == 2)
       #   include <attr/xattr.h>
+      #else
+      #   include <sys/xattr.h>
       #endif
       char xattrval[20];
       ]], [[
       getxattr("test","user.test",&xattrval[0],sizeof(xattrval));
       ]])], 
       [AC_DEFINE([AXATTR_GET_FUNC], [4], [Arg cnt for getxattr()])], 
-      [AC_COMPILE_IFELSE([dnl Performs compilation tests with various xattr function formats
+      [AC_COMPILE_IFELSE([
          AC_LANG_PROGRAM([[
-         #if (AXATTR_RES == 1)
-         #   include <sys/xattr.h>
-         #else
+         #if (AXATTR_RES == 2)
          #   include <attr/xattr.h>
+         #else
+         #   include <sys/xattr.h>
          #endif
          char xattrval[20];
          ]], [[
@@ -39,22 +39,22 @@ AC_DEFUN([AXATTR_SET_FUNC_CHECK],
    [AC_LANG([C])
    AC_COMPILE_IFELSE([dnl Performs compilation tests with various xattr function formats
       AC_LANG_PROGRAM([[
-      #if (AXATTR_RES == 1)
-      #   include <sys/xattr.h>
-      #else
+      #if (AXATTR_RES == 2)
       #   include <attr/xattr.h>
+      #else
+      #   include <sys/xattr.h>
       #endif
       char xattrval[20];
       ]], [[
       fsetxattr(12,"user.test", xattrval,strlen(xattrval),0);
       ]])], 
       [AC_DEFINE([AXATTR_SET_FUNC], [5], [Arg cnt for getxattr()])], 
-      [AC_COMPILE_IFELSE([dnl Performs compilation tests with various xattr function formats
+      [AC_COMPILE_IFELSE([
          AC_LANG_PROGRAM([[
-         #if (AXATTR_RES == 1)
-         #   include <sys/xattr.h>
-         #else
+         #if (AXATTR_RES == 2)
          #   include <attr/xattr.h>
+         #else
+         #   include <sys/xattr.h>
          #endif
          char xattrval[20];
          ]], [[

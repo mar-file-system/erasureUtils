@@ -69,8 +69,14 @@ AC_PROG_RANLIB
 AC_PROG_CC
 
 # Checks for libraries.
-AC_CHECK_LIB([isal], [ec_init_tables], [], 
-         [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!"])])
+AC_CHECK_LIB([isal], [ec_encode_data], 
+   [AC_DEFINE([AISAL],[1],[Indicates presence of isa-l library])],
+   [AC_CHECK_LIB([isal], [ec_encode_data_base],
+      [echo
+       echo "WARNING:  Could not properly link 'ec_encode_data' from isa-l, defaulting to '_base' implementation"
+       echo "          PERFORMANCE MAY BE VERY POOR"
+       echo], 
+         [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!"])])])
 
 # Checks for header files.
 AC_CHECK_HEADERS([fcntl.h stdint.h stdlib.h string.h unistd.h])
