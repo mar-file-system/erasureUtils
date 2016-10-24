@@ -240,11 +240,15 @@ int main(int argc, char* argv[]) {
       /* read, calc sum and tot */
       ret_in = read(input_fd,buf,chunksize*1024); 
       if (ret_in != chunksize*1024) {
-        fprintf(stderr,"unexpectedly small size for file %s, expected %lu but only got %lu\n",argv[1],chunksize*1024,ret_in); 
+        fprintf(stderr,"unexpectedly small size for file %s, expected %d but only got %lu\n",argv[1],chunksize*1024,ret_in); 
         exit(-1);
       }
       //fprintf(stderr,"reading %zd from %s\n",ret_in,argv[1]);
+#ifdef AISAL
       crc = crc32_ieee(TEST_SEED, buf, chunksize*1024);
+#else
+      crc = crc32_ieee_base(TEST_SEED, buf, chunksize*1024);
+#endif
       sum = sum + crc; 
       nsz = nsz + chunksize*1024;
       ncompsz = ncompsz + chunksize*1024;

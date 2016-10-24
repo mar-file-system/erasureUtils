@@ -281,7 +281,11 @@ int main(int argc, char* argv[]) {
          ret_in = ret_in + tret_in;
 
          /* this is the crcsum for each part */
+#ifdef AISAL
          crc = crc32_ieee(TEST_SEED, tbuff, chunksize*1024);
+#else
+         crc = crc32_ieee_base(TEST_SEED, tbuff, chunksize*1024);
+#endif
          sum[counter] = sum[counter] + crc;
 
          tret_in = write(output_fd[0],tbuff,tret_in);
@@ -303,12 +307,20 @@ int main(int argc, char* argv[]) {
       printf("erasure_code_test: calculating %d recovery stripes from %d data stripes, and writing %d erasure stripes out\n",numtot-numchunks,numchunks,nerr);
       // Perform matrix dot_prod for EC encoding
       // using g_tbls from encode matrix encode_matrix
+#ifdef AISAL
       ec_encode_data(chunksize*1024, numchunks, numtot - numchunks, g_tbls, buffs, &buffs[numchunks]);
+#else
+      ec_encode_data_base(chunksize*1024, numchunks, numtot - numchunks, g_tbls, buffs, &buffs[numchunks]);
+#endif
 
       ecounter = 0;
       printf("counter = %d, ret_in = %zd, numchunks = %d, loops = %d\n",counter,ret_in,numchunks,loops);
       while (ecounter < etot) {
+#ifdef AISAL
          crc = crc32_ieee(TEST_SEED, buffs[counter+ecounter], chunksize*1024); 
+#else
+         crc = crc32_ieee_base(TEST_SEED, buffs[counter+ecounter], chunksize*1024); 
+#endif
          sum[counter+ecounter] = sum[counter+ecounter] + crc; 
          nsz[counter+ecounter]=nsz[counter+ecounter]+chunksize*1024;
          ncompsz[counter+ecounter]=ncompsz[counter+ecounter]+chunksize*1024;
@@ -316,8 +328,12 @@ int main(int argc, char* argv[]) {
             fprintf(stderr, "Outputting to file %s.e%d...", argv[1], ecounter);
             write(output_fd[1+ecounter],buffs[counter+ecounter],chunksize*1024); 
          }
-         
+        
+#ifdef AISAL 
          int ret = xor_check(counter+1,chunksize*1024,buffs);
+#else
+         int ret = xor_check_base(counter+1,chunksize*1024,buffs);
+#endif
          if (ret != 0) {
             fprintf(stderr, "P does not match xor for iteration %d\n",loops);
          }
@@ -334,7 +350,11 @@ int main(int argc, char* argv[]) {
       if ( counter >= numchunks  &&  src_in_err[counter-numchunks] == 1 ) { //set xattrs for erasure files
          bzero(xattrval,sizeof(xattrval));
          sprintf(xattrval,"%d %d %d %d %d %lu %lld",numchunks,etot,chunksize,nsz[counter],ncompsz[counter],sum[counter],totsize);
+#if (AXATTR_SET_FUNC == 5 )
          fsetxattr(output_fd[1+counter-numchunks],XATTRKEY, xattrval,strlen(xattrval),0);
+#else
+         fsetxattr(output_fd[1+counter-numchunks],XATTRKEY, xattrval,strlen(xattrval),0,0);
+#endif
          close(output_fd[1+counter-numchunks]);
       }
       else if (counter < numchunks){  //verify crc and then close input files

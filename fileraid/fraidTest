@@ -65,7 +65,7 @@ echo
 echo "Tests of generalized erasure code"
 echo
 echo "Generating input file 'testfile.$$' (this will take some time)..."
-dd if=/dev/urandom of=testfile.$$ bs=10M count=20
+dd if=/dev/urandom of=testfile.$$ bs=10485760 count=20
 echo "done"
 echo
 

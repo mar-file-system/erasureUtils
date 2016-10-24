@@ -261,11 +261,19 @@ int main(int argc, char* argv[]) {
          counter++;
       }
       /* calc e0 which is really the missing stripe sum, total, and write missing files */
-      xor_gen_sse(numchunks+1,chunksize*1024,buffs);
+#ifdef AISAL
+      xor_gen(numchunks+1,chunksize*1024,buffs);
+#else
+      xor_gen_base(numchunks+1,chunksize*1024,buffs);
+#endif
       fprintf(stderr,"writing xor %zd to missing file at fd %d \n",chunksize*1024,counter);
       write(input_fd[counter],buffs[counter],chunksize*1024);
       crc = 0;
+#ifdef AISAL
       crc = crc32_ieee(TEST_SEED, buffs[counter], chunksize*1024);
+#else
+      crc = crc32_ieee_base(TEST_SEED, buffs[counter], chunksize*1024);
+#endif
       sum[counter] = sum[counter] + crc;
       nsz[counter] = nsz[counter] + chunksize*1024;
       ncompsz[counter] = ncompsz[counter] + chunksize*1024;

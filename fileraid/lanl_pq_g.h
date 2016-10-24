@@ -88,13 +88,20 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define XATTRKEY "user.n.e.chunksize.nsz.ncompsz.ncrcsum.totsz"
 #define TEST_SEED 57
 
-extern void pq_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p and q */
-extern void xor_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern int pq_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern int xor_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern uint32_t crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
-extern void gf_gen_rs_matrix(unsigned char *a, int m, int k);
+#ifdef AISAL
 extern void ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
+extern uint32_t crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
+extern int xor_check(int, int, void*);  /* assembler routine to use sse to calc p */
+extern void xor_gen(int, int, void*);  /* assembler routine to use sse to calc p */
+#else
+extern void ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
+extern uint32_t crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len);
+extern int xor_check_base(int, int, void*);  /* assembler routine to use sse to calc p */
+extern void xor_gen_base(int, int, void*);  /* assembler routine to use sse to calc p */
+#endif
+extern void pq_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p and q */
+extern int pq_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
+extern void gf_gen_rs_matrix(unsigned char *a, int m, int k);
 extern void gf_vect_mul_init(unsigned char c, unsigned char *tbl);
 extern unsigned char gf_mul(unsigned char a, unsigned char b);
 extern int gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);

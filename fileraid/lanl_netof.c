@@ -645,7 +645,11 @@ int main(int argc, char* argv[]) {
              }
              printf("\nPerforming regeneration from erasure...\n\n");
              ec_init_tables(ntot, nerr, decode_matrix, g_tbls);
+#ifdef AISAL
              ec_encode_data(chunksize*1024, ntot, nerr, g_tbls, recov, &temp_buffs[ntot]);
+#else
+             ec_encode_data_base(chunksize*1024, ntot, nerr, g_tbls, recov, &temp_buffs[ntot]);
+#endif
           }
 
           ret_out = llcounter;
