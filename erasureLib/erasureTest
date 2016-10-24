@@ -66,16 +66,16 @@ LIBTLOG=log_libTests.$$ # Name of the libTest output logfile
 re='^[0-9]+$'
 
 echo
-echo "Tests erasure library functions..."
+echo "Testing erasure library functions..."
 echo
 
 stfmt="-c%s"
 
-{ stat $stfmt 2>&1; } > /dev/null
+{ stat $stfmt /dev/null 2>&1; } > /dev/null
 ret=$?
 if [[ $ret -ne 0 ]]; then
    stfmt="-f %z"
-   { stat $stfmt 2>&1; } > /dev/null
+   { stat $stfmt /dev/null 2>&1; } > /dev/null
    ret=$?
    if [[ $ret -ne 0 ]]; then
       echo "Failed to identify proper 'stat' argument format!"
@@ -130,7 +130,7 @@ while [[ $cnt -lt $ITER ]]; do
    echo >> $LIBTLOG
    echo "Generating $n+$e striping starting at file $start""..." >> $LOGFILE
 #   tcnt=$( date +%s%N )
-   { ret=$( time -p ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2> $TLOGPREF$$.write
+   { ret=$( time -p ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.write
 
 #   tcnt="`date +%s%N` - $tcnt"
 #   if [[ $BC -eq 0 ]]; then
@@ -305,7 +305,7 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Performing read of all data from striping (expected return value = $tstat)..." >> $LOGFILE
 #      tcnt=$( date +%s%N )
       
-      { ret=$( time -p ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2> $TLOGPREF$$.read
+      { ret=$( time -p ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.read
       
 #      tcnt="`date +%s%N` - $tcnt"
 #      if [[ $BC -eq 0 ]]; then
@@ -351,7 +351,7 @@ while [[ $cnt -lt $ITER ]]; do
          echo "Attempting error recovery..." >> $LOGFILE
 #         tcnt=$( date +%s%N )
          
-         { ret=$( time -p ./libTest rebuild testout.%d.$$ $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>$TLOGPREF$$.recovery
+         { ret=$( time -p ./libTest rebuild testout.%d.$$ $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>>$TLOGPREF$$.recovery
 
 #         tcnt="`date +%s%N` - $tcnt"
 #         if [[ $BC -eq 0 ]]; then
@@ -375,7 +375,7 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Checking the striping for corruption..." >> $LOGFILE
 #      tcnt=$( date +%s%N )
 
-      { ret=$( time -p ./libTest status testout.%d.$$ $n $e $start 2>&1 | tail -n 1 ); } 2>$TLOGPREF$$.status
+      { ret=$( time -p ./libTest status testout.%d.$$ $n $e $start 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
 
 #      tcnt="`date +%s%N` - $tcnt"
 #      if [[ $BC -eq 0 ]]; then
@@ -432,9 +432,10 @@ if [[ $BC -eq 0 ]]; then
       tcnt="$tcnt + $line"
       count=$(( count + 1 ));
    done < "$TLOGPREF$$.write"
+   count=$(( count / 3 ));
 
    if [[ $count -ne 0 ]]; then
-      tcnt=$( echo "$tcnt ) / $count" | bc )
+      tcnt=$( echo "$tcnt ) / $count" | bc -l )
       output="$output\nWrites:,Performed = $count,AvgTime = $tcnt Seconds"
    fi
 
@@ -446,9 +447,10 @@ if [[ $BC -eq 0 ]]; then
       tcnt="$tcnt + $line"
       count=$(( count + 1 ));
    done < "$TLOGPREF$$.read"
+   count=$(( count / 3 ));
 
    if [[ $count -ne 0 ]]; then
-      tcnt=$( echo "$tcnt ) / $count" | bc )
+      tcnt=$( echo "$tcnt ) / $count" | bc -l )
       output="$output\nReads:,Performed = $count,AvgTime = $tcnt Seconds"
    fi
 
@@ -460,9 +462,10 @@ if [[ $BC -eq 0 ]]; then
       tcnt="$tcnt + $line"
       count=$(( count + 1 ));
    done < "$TLOGPREF$$.recovery"
+   count=$(( count / 3 ));
 
    if [[ $count -ne 0 ]]; then
-      tcnt=$( echo "$tcnt ) / $count" | bc )
+      tcnt=$( echo "$tcnt ) / $count" | bc -l )
       output="$output\nRecoveries:,Performed = $count,AvgTime = $tcnt Seconds"
    fi
 
@@ -474,9 +477,10 @@ if [[ $BC -eq 0 ]]; then
       tcnt="$tcnt + $line"
       count=$(( count + 1 ));
    done < "$TLOGPREF$$.status"
+   count=$(( count / 3 ));
 
    if [[ $count -ne 0 ]]; then
-      tcnt=$( echo "$tcnt ) / $count" | bc )
+      tcnt=$( echo "$tcnt ) / $count" | bc -l )
       output="$output\nStatus:,Performed = $count,AvgTime = $tcnt Seconds"
    fi
 
