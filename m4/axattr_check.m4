@@ -20,8 +20,10 @@ AC_DEFUN([AXATTR_GET_FUNC_CHECK],
       ]], [[
       getxattr("test","user.test",&xattrval[0],sizeof(xattrval));
       ]])], 
-      [AC_DEFINE([AXATTR_GET_FUNC], [4], [Arg cnt for getxattr()])], 
-      [AC_COMPILE_IFELSE([
+      [echo "verified format of getxattr() with 4 args..."
+      AC_DEFINE([AXATTR_GET_FUNC], [4], [Arg cnt for getxattr()])], 
+      [echo "checking for alternate format getxattr()..."
+      AC_COMPILE_IFELSE([
          AC_LANG_PROGRAM([[
          #if (AXATTR_RES == 2)
          #   include <attr/xattr.h>
@@ -32,7 +34,8 @@ AC_DEFUN([AXATTR_GET_FUNC_CHECK],
          ]], [[
          getxattr("test","user.test",&xattrval[0],sizeof(xattrval),0,0);
          ]])], 
-         [AC_DEFINE([AXATTR_GET_FUNC], [5], [Arg cnt for getxattr()])], 
+         [echo "verified format of getxattr() with 6 args..."
+         AC_DEFINE([AXATTR_GET_FUNC], [6], [Arg cnt for getxattr()])], 
          [AC_MSG_ERROR([Could not identify a getxattr() function on this system])])])])
 
 AC_DEFUN([AXATTR_SET_FUNC_CHECK],
@@ -48,8 +51,10 @@ AC_DEFUN([AXATTR_SET_FUNC_CHECK],
       ]], [[
       fsetxattr(12,"user.test", xattrval,strlen(xattrval),0);
       ]])], 
-      [AC_DEFINE([AXATTR_SET_FUNC], [5], [Arg cnt for getxattr()])], 
-      [AC_COMPILE_IFELSE([
+      [echo "verified format of fsetxattr() with 5 args..."
+      AC_DEFINE([AXATTR_SET_FUNC], [5], [Arg cnt for getxattr()])], 
+      [echo "checking for alternate format fsetxattr()..."
+      AC_COMPILE_IFELSE([
          AC_LANG_PROGRAM([[
          #if (AXATTR_RES == 2)
          #   include <attr/xattr.h>
@@ -60,6 +65,7 @@ AC_DEFUN([AXATTR_SET_FUNC_CHECK],
          ]], [[
          fsetxattr(12,"user.test", xattrval,strlen(xattrval),0,0);
          ]])], 
-         [AC_DEFINE([AXATTR_GET_FUNC], [6], [Arg cnt for getxattr()])], 
+         [echo "verified format of fsetxattr() with 6 args..."
+         AC_DEFINE([AXATTR_GET_FUNC], [6], [Arg cnt for getxattr()])], 
          [AC_MSG_ERROR([Could not identify a getxattr() function on this system])])])])
 

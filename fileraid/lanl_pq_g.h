@@ -64,6 +64,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #endif
 
+#include "config.h"
 
 #include <sys/stat.h>
 #include <stdint.h>

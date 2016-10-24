@@ -68,6 +68,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define INT_CRC
 //#define XATTR_CRC
 
+#include "config.h"
+
 #include <sys/stat.h>
 #include <stdint.h>
 #include <stdio.h>

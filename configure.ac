@@ -95,6 +95,7 @@ AC_FUNC_MALLOC
 AC_CHECK_FUNCS([bzero ftruncate memset strerror strtol strtoul])
 
 AXATTR_GET_FUNC_CHECK
+AXATTR_SET_FUNC_CHECK
 
 AC_CONFIG_FILES([Makefile
                  fileraid/Makefile
