@@ -56,7 +56,7 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-ITER=3 # Number of N+E file arrays to generate
+ITER=1 # Number of N+E file arrays to generate
 INITER=2 # Number of error patterns to test for each file array
 POSTSLEEP=0 # Number of seconds the program should sleep after a test
 LOGFILE=log_errTests.$$ # Name of the test logfile
@@ -227,8 +227,7 @@ while [[ $cnt -lt $ITER ]]; do
       oldpos=$(( n * 2 ))
 
       epat=${npat:$oldpos}
-      oldpos=$(( e * 2 ))
-      npat=${npat::-$oldpos}
+      npat=${npat:0:$(( oldpos - 1 ))}
 
       echo "...errors inserted."
       echo "Errors inserted, pattern is  $npat   $epat" >> $LOGFILE
