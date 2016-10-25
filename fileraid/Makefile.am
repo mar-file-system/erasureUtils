@@ -1,5 +1,5 @@
 AM_CFLAGS = -I.
-#AM_LDFLAGS = -lisal
+AM_LDFLAGS = -lisal
 
 noinst_PROGRAMS = lanl_netof lanl_ntofe lanl_rebuildne lanl_ftone lanl_rebuild1n_from_e0 lanl_health lanl_singleHealth
 lanl_netof_SOURCES = lanl_netof.c

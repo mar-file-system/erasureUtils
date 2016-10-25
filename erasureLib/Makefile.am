@@ -60,5 +60,5 @@ libne_a_SOURCES = erasure.c erasure.h
 bin_PROGRAMS = libTest
 libTest_SOURCES = libTest.c
 libTest_LDADD = libne.a
-#libTest_LDFLAGS = -lisal
+libTest_LDFLAGS = -lisal
 

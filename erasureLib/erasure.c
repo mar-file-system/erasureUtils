@@ -64,9 +64,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #endif
 
 #if (AXATTR_RES == 2)
-#include <sys/xattr.h>
-#else
 #include <attr/xattr.h>
+#else
+#include <sys/xattr.h>
 #endif
  
 /********************************************************/
