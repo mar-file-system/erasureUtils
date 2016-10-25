@@ -56,19 +56,16 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-ITER=5 # Number of N+E file arrays to generate
-INITER=5 # Number of error patterns to test for each file array
+ITER=1 # Number of N+E file arrays to generate
+INITER=2 # Number of error patterns to test for each file array
 POSTSLEEP=0 # Number of seconds the program should sleep after a test
 LOGFILE=log_errTests.$$ # Name of the test logfile
 
 echo
 echo "Tests of generalized erasure code"
 echo
-echo "Compiling..."
-./makefne
-echo "done"
 echo "Generating input file 'testfile.$$' (this will take some time)..."
-dd if=/dev/urandom of=testfile.$$ bs=10M count=20
+dd if=/dev/urandom of=testfile.$$ bs=10485760 count=20
 echo "done"
 echo
 
@@ -230,8 +227,7 @@ while [[ $cnt -lt $ITER ]]; do
       oldpos=$(( n * 2 ))
 
       epat=${npat:$oldpos}
-      oldpos=$(( e * 2 ))
-      npat=${npat::-$oldpos}
+      npat=${npat:0:$(( oldpos - 1 ))}
 
       echo "...errors inserted."
       echo "Errors inserted, pattern is  $npat   $epat" >> $LOGFILE
@@ -357,7 +353,7 @@ echo
 
 
 echo "Cleaning up remaining files..."
-rm testfile.$$ lanl_netof lanl_ftone lanl_rebuildne lanl_health lanl_singleHealth lanl_ntofe
+rm testfile.$$
 echo "Removing log file..."
 rm $LOGFILE
 echo "...done"

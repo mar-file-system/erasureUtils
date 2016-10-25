@@ -1,5 +1,3 @@
-#!/bin/sh
-
 #Copyright (c) 2015, Los Alamos National Security, LLC
 #All rights reserved.
 #
@@ -55,14 +53,50 @@
 #LANL contributions is found at https://github.com/jti-lanl/aws4c.
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
+#
+#                                               -*- Autoconf -*-
+# Process this file with autoconf to produce a configure script.
 
-#cc lanl_ftonpq.c -I. pq_gen_sse.o xor_gen_sse.o -o lanl_ftonpq
-cc lanl_ftone.c -I. -l isal -L ../usr/lib  -o lanl_ftone
-#cc lanl_ntofpq.c -I. pq_gen_sse.o xor_gen_sse.o -o lanl_ntofpq
-cc lanl_ntofe.c -I. -l isal -L ../usr/lib -o lanl_ntofe
-#cc lanl_rebuild1n_from_p.c -I. pq_gen_sse.o xor_gen_sse.o -o lanl_rebuild1n_from_p
-#cc lanl_rebuild1n_from_e0.c -I. -l isal -L ../usr/lib -o lanl_rebuild1n_from_e0
-cc lanl_rebuildne.c -I. -l isal -L ../usr/lib -o lanl_rebuildne
-cc lanl_netof.c -I. -l isal -L ../usr/lib -o lanl_netof
-cc lanl_health.c -I. -l isal -L /usr/lib -o lanl_health
-cc lanl_singleHealth.c -I. -l isal -L /usr/lib -o lanl_singleHealth
+AC_PREREQ([2.69])
+AC_INIT([erasureUtils], [1.0], [gransom@lanl.gov])
+AC_CONFIG_SRCDIR([COPYRIGHT.h])
+AC_CONFIG_HEADERS([config.h])
+AC_CONFIG_MACRO_DIR([m4])
+AM_INIT_AUTOMAKE
+AC_PROG_RANLIB
+
+# Checks for programs.
+AC_PROG_CC
+
+# Checks for libraries.
+AC_CHECK_LIB([isal], [crc32_ieee], [],
+   [AC_CHECK_LIB([isal], [crc32_ieee_base],
+      [echo
+       echo "WARNING:  Could not properly link 'crc32_ieee' from isa-l, defaulting to '_base' implementation"
+       echo "          IN THIS STATE, THESE UTILITES MAY NOT FUNCTION AND WILL ALMOST CERTAINLY HAVE VERY POOR PERFORMANCE"
+       echo], 
+         [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!  Please verify that the proper version of the library (v2.16.0 or higher) is installed."])])])
+
+# Checks for header files.
+AC_CHECK_HEADERS([fcntl.h stdint.h stdlib.h string.h unistd.h])
+AXATTR_CHECK
+
+# Checks for typedefs, structures, and compiler characteristics.
+AC_TYPE_OFF_T
+AC_TYPE_SSIZE_T
+AC_CHECK_HEADER_STDBOOL
+AC_TYPE_UINT32_T
+AC_TYPE_UINT64_T
+AC_TYPE_UINT8_T
+
+# Checks for library functions.
+AC_FUNC_MALLOC
+AC_CHECK_FUNCS([bzero ftruncate memset strerror strtol strtoul])
+
+AXATTR_GET_FUNC_CHECK
+AXATTR_SET_FUNC_CHECK
+
+AC_CONFIG_FILES([Makefile
+                 fileraid/Makefile
+                 erasureLib/Makefile])
+AC_OUTPUT

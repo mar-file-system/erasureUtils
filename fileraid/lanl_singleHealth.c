@@ -169,7 +169,11 @@ int main(int argc, char* argv[]) {
 
    /* Verify xattr */
    bzero(xattrval,sizeof(xattrval));
+#if (AXATTR_GET_FUNC == 4)
    ret_in = getxattr(argv[1],XATTRKEY,&xattrval[0],sizeof(xattrval));
+#else
+   ret_in = getxattr(argv[1],XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+#endif
    fprintf(stderr,"file %s xattr returned %zd\n",argv[1],ret_in);
    if (ret_in < 0) {
      fprintf(stderr, "file %s: failure of xattr retrieval\n", argv[1]);
@@ -236,11 +240,15 @@ int main(int argc, char* argv[]) {
       /* read, calc sum and tot */
       ret_in = read(input_fd,buf,chunksize*1024); 
       if (ret_in != chunksize*1024) {
-        fprintf(stderr,"unexpectedly small size for file %s, expected %lu but only got %lu\n",argv[1],chunksize*1024,ret_in); 
+        fprintf(stderr,"unexpectedly small size for file %s, expected %d but only got %lu\n",argv[1],chunksize*1024,ret_in); 
         exit(-1);
       }
       //fprintf(stderr,"reading %zd from %s\n",ret_in,argv[1]);
+#ifdef HAVE_LIBISAL
       crc = crc32_ieee(TEST_SEED, buf, chunksize*1024);
+#else
+      crc = crc32_ieee_base(TEST_SEED, buf, chunksize*1024);
+#endif
       sum = sum + crc; 
       nsz = nsz + chunksize*1024;
       ncompsz = ncompsz + chunksize*1024;

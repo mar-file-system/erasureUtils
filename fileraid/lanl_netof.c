@@ -248,7 +248,11 @@ int main(int argc, char* argv[]) {
     }
 
     /* go to the a good file depending on missing (there can only be one missing) and get the xattr to tell us how big the file is, num parts, chunk size, etc. */
+#if (AXATTR_GET_FUNC == 4)
     getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval));
+#else
+    getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+#endif
     fprintf(stderr,"got xattr %s for %s\n",xattrval,infile);
     bzero(xattrchunks,sizeof(xattrchunks));
     bzero(xattrchunksizek,sizeof(xattrchunksizek));
@@ -497,10 +501,10 @@ int main(int argc, char* argv[]) {
              if( src_in_err[counter] == 0 ) {
                 lseek(input_fd[counter],(startstripe*chunksize*1024),SEEK_SET);
                 if (counter < ntot) {
-                   fprintf(stderr,"seek input file %d to %lld, to read entire stripe\n",counter, (startstripe*chunksize*1024));
+                   fprintf(stderr,"seek input file %d to %d, to read entire stripe\n",counter, (startstripe*chunksize*1024));
                 }
                 else {
-                   fprintf(stderr,"seek erasure file e%d to %lld, to read entire stripe\n",counter-ntot, (startstripe*chunksize*1024));
+                   fprintf(stderr,"seek erasure file e%d to %d, to read entire stripe\n",counter-ntot, (startstripe*chunksize*1024));
                 }
              }
              counter++;
@@ -611,7 +615,7 @@ int main(int argc, char* argv[]) {
 
                 //tmpoffset = 0;
              }
-             printf("length = %lu, llcounter = %lu, ret_in = %d, read_size = %d\n", length, llcounter, ret_in, writesize);
+             printf("length = %lld, llcounter = %d, ret_in = %zd, read_size = %d\n", length, llcounter, ret_in, writesize);
              tmpoffset = 0;
           }
           //notice, we only need the erasure stripes if we hit an error
@@ -641,14 +645,18 @@ int main(int argc, char* argv[]) {
              }
              printf("\nPerforming regeneration from erasure...\n\n");
              ec_init_tables(ntot, nerr, decode_matrix, g_tbls);
+#ifdef HAVE_LIBISAL
              ec_encode_data(chunksize*1024, ntot, nerr, g_tbls, recov, &temp_buffs[ntot]);
+#else
+             ec_encode_data_base(chunksize*1024, ntot, nerr, g_tbls, recov, &temp_buffs[ntot]);
+#endif
           }
 
           ret_out = llcounter;
 
           //firstchunk = 1;
-          fprintf( stderr, "llcounter = %lu\n", llcounter );
-          fprintf(stderr,"%d %d %d %d %d %d %d %d %d %d %d\n",counter, tmpoffset, tmpchunk, error_in_stripe,startchunk, startoffset, firststripe, ntot, mtot, etot, ret_out);
+          fprintf( stderr, "llcounter = %d\n", llcounter );
+          fprintf(stderr,"%d %d %d %d %d %d %d %d %d %d %zd\n",counter, tmpoffset, tmpchunk, error_in_stripe,startchunk, startoffset, firststripe, ntot, mtot, etot, ret_out);
 
           /**** write appropriate data out ****/
           for( counter=startchunk, i=0; counter <= endchunk; counter++ ) {
@@ -696,7 +704,7 @@ int main(int argc, char* argv[]) {
                    }
                 }
                 else {
-                   fprintf( stderr, "   stupid simple\n", startoffset );
+                   fprintf( stderr, "   stupid simple\n" );
                    writesize -= write( output_fd, temp_buffs[numchunks+i], writesize );
                 }
 
@@ -705,7 +713,7 @@ int main(int argc, char* argv[]) {
              } //end of src_in_err = true block
 
              if( writesize != 0 ) {
-                fprintf( stderr, "lanl_netof: Error: write failed of chunk %d to %s, failed to store %lu\n", counter, outfile, writesize );
+                fprintf( stderr, "lanl_netof: Error: write failed of chunk %d to %s, failed to store %d\n", counter, outfile, writesize );
              }
 
           } //end of output loop for stipe data

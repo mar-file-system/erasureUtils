@@ -226,7 +226,11 @@ int main(int argc, char* argv[]) {
 
     /* go to the a good file depending on missing (there can only be one missing) and get the xattr to tell us how big the file is, num parts, chunk size, etc. */
     bzero(xattrval,sizeof(xattrval));
+#if (AXATTR_GET_FUNC == 4)
     getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval));
+#else
+    getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+#endif
     fprintf(stderr,"got xattr %s for %s\n",xattrval,infile);
     bzero(xattrchunks,sizeof(xattrchunks));
     bzero(xattrchunksizek,sizeof(xattrchunksizek));
@@ -374,12 +378,20 @@ int main(int argc, char* argv[]) {
             recov[i] = buffs[decode_index[i]];
       }
       ec_init_tables(ntot, nerr, decode_matrix, g_tbls);
+#ifdef HAVE_LIBISAL
       ec_encode_data(chunksize*1024, ntot, nerr, g_tbls, recov, &temp_buffs[ntot]);
+#else
+      ec_encode_data_base(chunksize*1024, ntot, nerr, g_tbls, recov, &temp_buffs[ntot]);
+#endif
 
       for (i = 0; i < nerr; i++) {
          write(input_fd[src_err_list[i]],temp_buffs[ntot+i],chunksize*1024);
          crc = 0;
+#ifdef HAVE_LIBISAL
          crc = crc32_ieee(TEST_SEED, temp_buffs[ntot+i], chunksize*1024);
+#else
+         crc = crc32_ieee_base(TEST_SEED, temp_buffs[ntot+i], chunksize*1024);
+#endif
          sum[src_err_list[i]] = sum[src_err_list[i]] + crc;
          nsz[src_err_list[i]] = nsz[src_err_list[i]] + chunksize*1024;
          ncompsz[src_err_list[i]] = ncompsz[src_err_list[i]] + chunksize*1024;
@@ -393,7 +405,11 @@ int main(int argc, char* argv[]) {
        if (src_in_err[counter] == 1) {
           bzero(xattrval,sizeof(xattrval));
           sprintf(xattrval,"%d %d %d %d %d %lu %lld",numchunks,erasure,chunksize,nsz[counter],ncompsz[counter],sum[counter],totsize);
+#if (AXATTR_SET_FUNC == 5)
           fsetxattr(input_fd[counter],XATTRKEY, xattrval,strlen(xattrval),0);
+#else
+          fsetxattr(input_fd[counter],XATTRKEY, xattrval,strlen(xattrval),0,0);
+#endif
           printf("wrote and set xattr for %d\n",counter);
        }
        close(input_fd[counter]);

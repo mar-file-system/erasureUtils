@@ -62,6 +62,12 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
 #endif
+
+#if (AXATTR_RES == 2)
+#include <attr/xattr.h>
+#else
+#include <sys/xattr.h>
+#endif
  
 /********************************************************/
 /*
@@ -279,7 +285,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
    unsigned int bsz = handle->bsz;
    int nerr = 0;
    unsigned long datasz[ MAXPARTS ] = {0};
-   unsigned long ret_in;
+   long ret_in;
    int tmp;
    unsigned int decode_index[ MAXPARTS ];
    u32 llcounter;
@@ -607,7 +613,11 @@ rebuild:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
+#ifdef HAVE_LIBISAL
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
+#else
+               crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], bsz );
+#endif
                if ( memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) ) != 0 ){
 #ifdef DEBUG
                   fprintf(stderr, "ne_read: mismatch of int-crc for file %d while reading with rebuild\n", counter);
@@ -701,7 +711,11 @@ rebuild:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
+#ifdef HAVE_LIBISAL
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
+#else
+               crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], bsz );
+#endif
                if ( memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) ) != 0 ){
 #ifdef DEBUG
                   fprintf(stderr, "ne_read: mismatch of int-crc for file %d (erasure)\n", counter);
@@ -768,7 +782,12 @@ rebuild:
 #ifdef DEBUG
          fprintf( stdout, "ne_read: performing regeneration from erasure...\n" );
 #endif
+
+#ifdef HAVE_LIBISAL
          ec_encode_data(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
+#else
+         ec_encode_data_base(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
+#endif
       }
 
       /**** write appropriate data out ****/
@@ -873,7 +892,7 @@ rebuild:
    }
 
 #ifdef INT_CRC
-   fprintf( stderr, "ne_read: cached %lu bytes from stripe at offset %lu\n", handle->buff_rem, handle->buff_offset );
+   fprintf( stderr, "ne_read: cached %lu bytes from stripe at offset %zd\n", handle->buff_rem, handle->buff_offset );
 #endif
 
    return llcounter; 
@@ -959,7 +978,11 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 
          if ( handle->src_in_err[counter] == 0 ) {
             /* this is the crcsum for each part */
+#ifdef HAVE_LIBISAL
             crc = crc32_ieee(TEST_SEED, handle->buffs[counter], bsz);
+#else
+            crc = crc32_ieee_base(TEST_SEED, handle->buffs[counter], bsz);
+#endif
 
 #ifdef XATTR_CRC
             //attatch this crc to the list for the given file
@@ -1036,11 +1059,19 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 #endif
       // Perform matrix dot_prod for EC encoding
       // using g_tbls from encode matrix encode_matrix
+#ifdef HAVE_LIBISAL
       ec_encode_data( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
+#else
+      ec_encode_data_base( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
+#endif
 
       ecounter = 0;
       while (ecounter < E) {
+#ifdef HAVE_LIBISAL
          crc = crc32_ieee(TEST_SEED, handle->buffs[counter+ecounter], bsz); 
+#else
+         crc = crc32_ieee_base(TEST_SEED, handle->buffs[counter+ecounter], bsz); 
+#endif
 
 #ifdef XATTR_CRC
          //attatch this crc to the list for the given file
@@ -1154,12 +1185,16 @@ int ne_close( ne_handle handle )
    while (counter < N+E) {
       if ( handle->mode == NE_WRONLY  ||  (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1) ) { 
          bzero(xattrval,sizeof(xattrval));
-         sprintf(xattrval,"%d %d %d %lu %lu %zu %zu",N,E,bsz,handle->nsz[counter],handle->ncompsz[counter],handle->csum[counter],handle->totsz);
+         sprintf(xattrval,"%d %d %d %lu %lu %llu %llu",N,E,bsz,handle->nsz[counter],handle->ncompsz[counter],(unsigned long long)handle->csum[counter],(unsigned long long)handle->totsz);
 #ifdef DEBUG
          fprintf( stdout, "ne_close: setting file %d xattr = \"%s\"\n", counter, xattrval );
 #endif
+#if (AXATTR_SET_FUNC == 5)
          tmp = fsetxattr(handle->FDArray[counter],XATTRKEY, xattrval,strlen(xattrval),0); 
-         
+#else
+         tmp = fsetxattr(handle->FDArray[counter],XATTRKEY, xattrval,strlen(xattrval),0,0); 
+#endif
+
          if ( tmp != 0 ) {
 #ifdef DEBUG
             fprintf( stderr, "ne_close: failed to set xattr for file %d\n", counter );
@@ -1270,7 +1305,11 @@ int error_check( ne_handle handle, char *path )
 
       if ( handle->mode == NE_REBUILD  ||  goodfile == 0 ) {
          bzero(xattrval,sizeof(xattrval));
+#if (AXATTR_GET_FUNC == 4)
          ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
+#else
+         ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+#endif
 #ifdef DEBUG
          fprintf(stderr,"error_check: file %s xattr returned %d\n",file,ret);
 #endif
@@ -1330,7 +1369,7 @@ int error_check( ne_handle handle, char *path )
          else if ( nsz != partstat->st_size ) {
 #endif
 #ifdef DEBUG
-            fprintf (stderr, "error_check: filexattr nsize = %lu did not match stat value %zu \n", nsz, partstat->st_size); 
+            fprintf (stderr, "error_check: filexattr nsize = %lu did not match stat value %zd\n", nsz, partstat->st_size); 
 #endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
@@ -1353,7 +1392,7 @@ int error_check( ne_handle handle, char *path )
          else if ( ncompsz != partstat->st_size ) {
 #endif
 #ifdef DEBUG
-            fprintf (stderr, "error_check: filexattr ncompsize = %lu did not match stat value %zu \n", ncompsz, partstat->st_size); 
+            fprintf (stderr, "error_check: filexattr ncompsize = %lu did not match stat value %zd\n", ncompsz, partstat->st_size); 
 #endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
@@ -1417,8 +1456,12 @@ int error_check( ne_handle handle, char *path )
             }
 
 #ifdef INT_CRC
-               //store and verify intermediate crc
+            //store and verify intermediate crc
+#ifdef HAVE_LIBISAL
             crc = crc32_ieee( TEST_SEED, buf, bsz );
+#else
+            crc = crc32_ieee_base( TEST_SEED, buf, bsz );
+#endif
 
             if ( memcmp( &crc, buf+bsz, sizeof(crc) ) != 0 ) {
 #ifdef DEBUG
@@ -1432,7 +1475,11 @@ int error_check( ne_handle handle, char *path )
 
             scrc += crc;
 #else
+#ifdef HAVE_LIBISAL
             scrc += crc32_ieee( TEST_SEED, buf, bsz );
+#else
+            scrc += crc32_ieee_base( TEST_SEED, buf, bsz );
+#endif
 #endif
             bcounter++;
          } //end of while loop
@@ -1457,7 +1504,7 @@ int error_check( ne_handle handle, char *path )
    free(buf);
 
    if ( goodfile == 0 ) {
-      errno = EUCLEAN;
+      errno = EBADF;
       return -1;
    }
 
@@ -1544,7 +1591,11 @@ int ne_rebuild( ne_handle handle ) {
 
 #ifdef INT_CRC
             //calculate and verify crc
+#ifdef HAVE_LIBISAL
             crc = crc32_ieee( TEST_SEED, handle->buffs[counter], handle->bsz );
+#else
+            crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], handle->bsz );
+#endif
             if ( memcmp( handle->buffs[counter]+(handle->bsz), &crc, sizeof(u32) ) != 0 ){
 #ifdef DEBUG
                fprintf(stderr, "ne_rebuild: mismatch of int-crc for file %d (erasure)\n", counter);
@@ -1611,11 +1662,19 @@ int ne_rebuild( ne_handle handle ) {
 #ifdef DEBUG
       if ( init == 1 ) { fprintf( stdout, "ne_rebuild: performing regeneration from erasure...\n" ); }
 #endif
-      ec_encode_data(handle->bsz, handle->N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[handle->N]);
 
+#ifdef HAVE_LIBISAL
+      ec_encode_data(handle->bsz, handle->N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[handle->N]);
+#else
+      ec_encode_data_base(handle->bsz, handle->N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[handle->N]);
+#endif
 
       for (i = 0; i < handle->nerr; i++) {
+#ifdef HAVE_LIBISAL
          crc = crc32_ieee(TEST_SEED, temp_buffs[handle->N+i], handle->bsz);
+#else
+         crc = crc32_ieee_base(TEST_SEED, temp_buffs[handle->N+i], handle->bsz);
+#endif
 #ifdef INT_CRC
          memcpy ( temp_buffs[handle->N+i]+(handle->bsz), &crc, sizeof(crc) );
          write(handle->FDArray[handle->src_err_list[i]],temp_buffs[handle->N+i],(handle->bsz)+sizeof(crc));

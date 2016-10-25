@@ -190,7 +190,11 @@ int main(int argc, char* argv[]) {
         exit(-1);
       }
       bzero(xattrval,sizeof(xattrval));
+#if (AXATTR_GET_FUNC == 4)
       ret_in = getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval));
+#else
+      ret_in = getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+#endif
       fprintf(stderr,"file %s xattr returned %zd\n",infile,ret_in);
       if (ret_in < 0) {
         fprintf(stderr, "file %s: failure of xattr retrieval\n", infile);
@@ -293,9 +297,17 @@ int main(int argc, char* argv[]) {
          ret_in = read(input_fd[counter],buf,chunksize*1024); 
          //fprintf(stderr,"reading %zd from infile %d\n",ret_in,counter);
          if ( counter == numchunks ) { //if we need them, generate the erasure blocks
+#ifdef HAVE_LIBISAL
             ec_encode_data(chunksize*1024, numchunks, numerasure, g_tbls, buffs, &buffs[numchunks]);
+#else
+            ec_encode_data_base(chunksize*1024, numchunks, numerasure, g_tbls, buffs, &buffs[numchunks]);
+#endif
          }
+#ifdef HAVE_LIBISAL
          crc = crc32_ieee(TEST_SEED, buffs[counter], chunksize*1024);
+#else
+         crc = crc32_ieee_base(TEST_SEED, buffs[counter], chunksize*1024);
+#endif
          sum[counter] = sum[counter] + crc; 
          nsz[counter] = nsz[counter] + chunksize*1024;
          ncompsz[counter] = ncompsz[counter] + chunksize*1024;

@@ -1,5 +1,3 @@
-#!/bin/sh
-
 #Copyright (c) 2015, Los Alamos National Security, LLC
 #All rights reserved.
 #
@@ -55,13 +53,8 @@
 #LANL contributions is found at https://github.com/jti-lanl/aws4c.
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
+#
 
-#cc lanl_ftonpq.c -I. pq_gen_sse.o xor_gen_sse.o -o lanl_ftonpq
-cc lanl_ftone.c -I. -l isal -L ../usr/lib  -o lanl_ftone
-#cc lanl_ntofpq.c -I. pq_gen_sse.o xor_gen_sse.o -o lanl_ntofpq
-cc lanl_ntofe.c -I. -l isal -L ../usr/lib -o lanl_ntofe
-#cc lanl_rebuild1n_from_p.c -I. pq_gen_sse.o xor_gen_sse.o -o lanl_rebuild1n_from_p
-cc lanl_rebuild1n_from_e0.c -I. -l isal -L ../usr/lib -o lanl_rebuild1n_from_e0
-cc lanl_rebuildne.c -I. -l isal -L ../usr/lib -o lanl_rebuildne
-cc lanl_netof.c -I. -l isal -L ../usr/lib -o lanl_netof
-#cc lanl_npqhealth.c -I. pq_gen_sse.o xor_gen_sse.o pq_check_sse.o xor_check_sse.o -o lanl_npqhealth
+AUTOMAKE_OPTIONS = foreign
+SUBDIRS = erasureLib fileraid
+

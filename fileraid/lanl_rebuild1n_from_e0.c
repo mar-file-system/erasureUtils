@@ -142,7 +142,11 @@ int main(int argc, char* argv[]) {
     bzero(infile,sizeof(infile));
     if (missing > 0) sprintf(infile,"%s.0",argv[1]);
     if (missing == 0) sprintf(infile,"%s.1",argv[1]);
+#if (AXATTR_GET_FUNC == 4)
     getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval));
+#else
+    getxattr(infile,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+#endif
     fprintf(stderr,"got xattr %s\n",xattrval);
     bzero(xattrchunks,sizeof(xattrchunks));
     bzero(xattrchunksizek,sizeof(xattrchunksizek));
@@ -257,11 +261,19 @@ int main(int argc, char* argv[]) {
          counter++;
       }
       /* calc e0 which is really the missing stripe sum, total, and write missing files */
-      xor_gen_sse(numchunks+1,chunksize*1024,buffs);
+#ifdef HAVE_LIBISAL
+      xor_gen(numchunks+1,chunksize*1024,buffs);
+#else
+      xor_gen_base(numchunks+1,chunksize*1024,buffs);
+#endif
       fprintf(stderr,"writing xor %zd to missing file at fd %d \n",chunksize*1024,counter);
       write(input_fd[counter],buffs[counter],chunksize*1024);
       crc = 0;
+#ifdef HAVE_LIBISAL
       crc = crc32_ieee(TEST_SEED, buffs[counter], chunksize*1024);
+#else
+      crc = crc32_ieee_base(TEST_SEED, buffs[counter], chunksize*1024);
+#endif
       sum[counter] = sum[counter] + crc;
       nsz[counter] = nsz[counter] + chunksize*1024;
       ncompsz[counter] = ncompsz[counter] + chunksize*1024;
@@ -278,7 +290,11 @@ int main(int argc, char* argv[]) {
     free(buffs[counter]);
     bzero(xattrval,sizeof(xattrval));
     sprintf(xattrval,"%d %d %d %d %d %lu %lld",numchunks,erasure,chunksize,nsz[counter],ncompsz[counter],sum[counter],totsize);
+#if (AXATTR_SET_FUNC == 5)
     fsetxattr(input_fd[counter],XATTRKEY, xattrval,strlen(xattrval),0);
+#else
+    fsetxattr(input_fd[counter],XATTRKEY, xattrval,strlen(xattrval),0,0);
+#endif
     close(input_fd[counter]);
     return (EXIT_SUCCESS);
 }

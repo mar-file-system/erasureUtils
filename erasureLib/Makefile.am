@@ -1,5 +1,3 @@
-#!/bin/sh
-
 #Copyright (c) 2015, Los Alamos National Security, LLC
 #All rights reserved.
 #
@@ -56,8 +54,13 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-rm testfilepart
-./lanl_netof testout 0.0.0.0.0.0.0.0.0.0 1.1  477 1100033 testfilepart
-./lanl_netof testout 0.0.0.0.0.0.0.0.0.0 1.1  66477 1100033 testfilepart
-./lanl_netof testout 0.0.0.0.0.0.0.0.0.0 1.1  1066477 50033 testfilepart
-./lanl_netof testout 0.0.1.0.0.0.0.0.0.0 1.0  477 1000033 testfilepart
+lib_LIBRARIES = libne.a
+libne_a_SOURCES = erasure.c erasure.h
+
+bin_PROGRAMS = libneTest
+libneTest_SOURCES = libneTest.c
+libneTest_LDADD = libne.a
+libneTest_LDFLAGS = -lisal
+
+TESTS=erasureTest
+
