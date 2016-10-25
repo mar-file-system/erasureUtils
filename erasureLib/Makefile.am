@@ -62,3 +62,5 @@ libneTest_SOURCES = libneTest.c
 libneTest_LDADD = libne.a
 libneTest_LDFLAGS = -lisal
 
+TESTS=erasureTest
+
