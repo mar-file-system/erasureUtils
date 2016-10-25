@@ -70,12 +70,12 @@ AC_PROG_CC
 
 # Checks for libraries.
 AC_CHECK_LIB([isal], [crc32_ieee], [],
-   [AC_CHECK_LIB([isal], [ec_encode_data_base],
+   [AC_CHECK_LIB([isal], [crc32_ieee_base],
       [echo
-       echo "WARNING:  Could not properly link 'ec_encode_data' from isa-l, defaulting to '_base' implementation"
-       echo "          PERFORMANCE MAY BE VERY POOR"
+       echo "WARNING:  Could not properly link 'crc32_ieee' from isa-l, defaulting to '_base' implementation"
+       echo "          IN THIS STATE, THESE UTILITES MAY NOT FUNCTION AND WILL ALMOST CERTAINLY HAVE VERY POOR PERFORMANCE"
        echo], 
-         [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!"])])])
+         [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!  Please verify that the proper version of the library (v2.16.0 or higher) is installed."])])])
 
 # Checks for header files.
 AC_CHECK_HEADERS([fcntl.h stdint.h stdlib.h string.h unistd.h])

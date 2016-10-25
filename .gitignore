@@ -1,7 +1,6 @@
 *.o
 *.a
 compile
-configure
 aclocal.m4
 autom4te.cache*
 *.in
