@@ -69,8 +69,7 @@ AC_PROG_RANLIB
 AC_PROG_CC
 
 # Checks for libraries.
-AC_CHECK_LIB([isal], [ec_encode_data], 
-   [AC_DEFINE([AISAL],[1],[Indicates presence of isa-l library])],
+AC_CHECK_LIB([isal], [crc32_ieee], [],
    [AC_CHECK_LIB([isal], [ec_encode_data_base],
       [echo
        echo "WARNING:  Could not properly link 'ec_encode_data' from isa-l, defaulting to '_base' implementation"

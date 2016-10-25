@@ -81,11 +81,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/types.h>
 #include <unistd.h>
 #include <sys/uio.h>
-#if (AXATTR_RES == 2)
-#include <attr/xattr.h>
-#else
-#include <sys/xattr.h>
-#endif
 
 #define MAXN 15
 #define MAXE 5
@@ -157,7 +152,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes );
 int ne_close( ne_handle handle );
 int ne_rebuild( ne_handle handle );
 
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
 extern uint32_t crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
 extern void ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 #else

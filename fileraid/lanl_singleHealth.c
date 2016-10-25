@@ -244,7 +244,7 @@ int main(int argc, char* argv[]) {
         exit(-1);
       }
       //fprintf(stderr,"reading %zd from %s\n",ret_in,argv[1]);
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
       crc = crc32_ieee(TEST_SEED, buf, chunksize*1024);
 #else
       crc = crc32_ieee_base(TEST_SEED, buf, chunksize*1024);

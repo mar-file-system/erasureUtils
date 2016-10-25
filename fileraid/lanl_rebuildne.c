@@ -378,7 +378,7 @@ int main(int argc, char* argv[]) {
             recov[i] = buffs[decode_index[i]];
       }
       ec_init_tables(ntot, nerr, decode_matrix, g_tbls);
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
       ec_encode_data(chunksize*1024, ntot, nerr, g_tbls, recov, &temp_buffs[ntot]);
 #else
       ec_encode_data_base(chunksize*1024, ntot, nerr, g_tbls, recov, &temp_buffs[ntot]);
@@ -387,7 +387,7 @@ int main(int argc, char* argv[]) {
       for (i = 0; i < nerr; i++) {
          write(input_fd[src_err_list[i]],temp_buffs[ntot+i],chunksize*1024);
          crc = 0;
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
          crc = crc32_ieee(TEST_SEED, temp_buffs[ntot+i], chunksize*1024);
 #else
          crc = crc32_ieee_base(TEST_SEED, temp_buffs[ntot+i], chunksize*1024);

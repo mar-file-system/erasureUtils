@@ -62,6 +62,12 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
 #endif
+
+#if (AXATTR_RES == 2)
+#include <sys/xattr.h>
+#else
+#include <attr/xattr.h>
+#endif
  
 /********************************************************/
 /*
@@ -601,7 +607,7 @@ rebuild:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
 #else
                crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], bsz );
@@ -699,7 +705,7 @@ rebuild:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
 #else
                crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], bsz );
@@ -771,7 +777,7 @@ rebuild:
          fprintf( stdout, "ne_read: performing regeneration from erasure...\n" );
 #endif
 
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
          ec_encode_data(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
 #else
          ec_encode_data_base(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
@@ -966,7 +972,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 
          if ( handle->src_in_err[counter] == 0 ) {
             /* this is the crcsum for each part */
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
             crc = crc32_ieee(TEST_SEED, handle->buffs[counter], bsz);
 #else
             crc = crc32_ieee_base(TEST_SEED, handle->buffs[counter], bsz);
@@ -1031,7 +1037,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 #endif
       // Perform matrix dot_prod for EC encoding
       // using g_tbls from encode matrix encode_matrix
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
       ec_encode_data( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
 #else
       ec_encode_data_base( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
@@ -1039,7 +1045,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 
       ecounter = 0;
       while (ecounter < E) {
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
          crc = crc32_ieee(TEST_SEED, handle->buffs[counter+ecounter], bsz); 
 #else
          crc = crc32_ieee_base(TEST_SEED, handle->buffs[counter+ecounter], bsz); 
@@ -1391,7 +1397,7 @@ int error_check( ne_handle handle, char *path )
 
 #ifdef INT_CRC
                   //store and verify intermediate crc
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
                crc = crc32_ieee( TEST_SEED, buf, bsz );
 #else
                crc = crc32_ieee_base( TEST_SEED, buf, bsz );
@@ -1409,7 +1415,7 @@ int error_check( ne_handle handle, char *path )
 
                scrc += crc;
 #else
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
                scrc += crc32_ieee( TEST_SEED, buf, bsz );
 #else
                scrc += crc32_ieee_base( TEST_SEED, buf, bsz );
@@ -1525,7 +1531,7 @@ int ne_rebuild( ne_handle handle ) {
 
 #ifdef INT_CRC
             //calculate and verify crc
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
             crc = crc32_ieee( TEST_SEED, handle->buffs[counter], handle->bsz );
 #else
             crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], handle->bsz );
@@ -1597,14 +1603,14 @@ int ne_rebuild( ne_handle handle ) {
       if ( init == 1 ) { fprintf( stdout, "ne_rebuild: performing regeneration from erasure...\n" ); }
 #endif
 
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
       ec_encode_data(handle->bsz, handle->N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[handle->N]);
 #else
       ec_encode_data_base(handle->bsz, handle->N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[handle->N]);
 #endif
 
       for (i = 0; i < handle->nerr; i++) {
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
          crc = crc32_ieee(TEST_SEED, temp_buffs[handle->N+i], handle->bsz);
 #else
          crc = crc32_ieee_base(TEST_SEED, temp_buffs[handle->N+i], handle->bsz);

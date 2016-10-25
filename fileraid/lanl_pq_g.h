@@ -88,7 +88,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define XATTRKEY "user.n.e.chunksize.nsz.ncompsz.ncrcsum.totsz"
 #define TEST_SEED 57
 
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
 extern void ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 extern uint32_t crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
 extern int xor_check(int, int, void*);  /* assembler routine to use sse to calc p */

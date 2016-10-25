@@ -275,7 +275,7 @@ int main(int argc, char* argv[]) {
          }
          /* this is the crcsum for each part */
          crc = 0;
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
          crc = crc32_ieee(TEST_SEED, buffs[counter], chunksize*1024); 
 #else
          crc = crc32_ieee_base(TEST_SEED, buffs[counter], chunksize*1024); 
@@ -298,7 +298,7 @@ int main(int argc, char* argv[]) {
       printf("erasure_code_test: caculating %d recovery stripes from %d data stripes\n",numtot-numchunks,numchunks);
       // Perform matrix dot_prod for EC encoding
       // using g_tbls from encode matrix encode_matrix
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
       ec_encode_data(chunksize*1024, numchunks, numtot - numchunks, g_tbls, buffs, &buffs[numchunks]);
 #else
       ec_encode_data_base(chunksize*1024, numchunks, numtot - numchunks, g_tbls, buffs, &buffs[numchunks]);
@@ -326,7 +326,7 @@ int main(int argc, char* argv[]) {
       printf("counter = %d\n",counter);
       while (ecounter < erasure) {
          crc = 0;
-#ifdef AISAL
+#ifdef HAVE_LIBISAL
          crc = crc32_ieee(TEST_SEED, buffs[counter+ecounter], chunksize*1024); 
 #else
          crc = crc32_ieee_base(TEST_SEED, buffs[counter+ecounter], chunksize*1024); 
