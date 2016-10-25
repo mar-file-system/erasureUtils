@@ -61,7 +61,7 @@ INITER=2 # (Must be 1 until regeneration is added to lib!!!)Number of error patt
 POSTSLEEP=0 # Number of seconds the program should sleep after a test
 TLOGPREF="log_time."    # Prefix for execution time logfiles
 LOGFILE=log_errTests.$$ # Name of the test logfile
-LIBTLOG=log_libTests.$$ # Name of the libTest output logfile
+LIBTLOG=log_libneTests.$$ # Name of the libneTest output logfile
 
 re='^[0-9]+$'
 
@@ -83,12 +83,12 @@ if [[ $ret -ne 0 ]]; then
    fi
 fi
 
-if [[ ! -e libTest ]]; then
-   echo "erasureTest: error: could not locate executable \"libTest\", please run this script from within the \"erasureLib\" directory!"
+if [[ ! -e libneTest ]]; then
+   echo "erasureTest: error: could not locate executable \"libneTest\", please run this script from within the \"erasureLib\" directory!"
    exit 1
 fi
 
-./libTest crc-status > /dev/null
+./libneTest crc-status > /dev/null
 ICRC=$?
 if [[ $ICRC -eq 0 ]]; then
    echo "INTERMEDIATE CRCS - ACTIVE"
@@ -130,7 +130,7 @@ while [[ $cnt -lt $ITER ]]; do
    echo >> $LIBTLOG
    echo "Generating $n+$e striping starting at file $start""..." >> $LOGFILE
 #   tcnt=$( date +%s%N )
-   { ret=$( time -p ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.write
+   { ret=$( time -p ./libneTest write testfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.write
 
 #   tcnt="`date +%s%N` - $tcnt"
 #   if [[ $BC -eq 0 ]]; then
@@ -139,9 +139,9 @@ while [[ $cnt -lt $ITER ]]; do
 
    if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
       echo -e "\033[0;31mFAIL - write operation returned an unexpected status"
-      echo -e "CMD = ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
+      echo -e "CMD = ./libneTest write testfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
       echo "   FAILURE: wite operation returned a non-sero status" >> $LOGFILE
-      echo "CMD = ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
+      echo "CMD = ./libneTest write testfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
       exit -1
    fi
 #   echo "...done.  Elapsed time = $tcnt""."
@@ -305,7 +305,7 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Performing read of all data from striping (expected return value = $tstat)..." >> $LOGFILE
 #      tcnt=$( date +%s%N )
       
-      { ret=$( time -p ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.read
+      { ret=$( time -p ./libneTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.read
       
 #      tcnt="`date +%s%N` - $tcnt"
 #      if [[ $BC -eq 0 ]]; then
@@ -314,9 +314,9 @@ while [[ $cnt -lt $ITER ]]; do
 
       if [[ ! $ret =~ $re  ||  $ret -ne $tstat ]]; then
          echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but recieved $ret"
-         echo -e "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
+         echo -e "CMD = ./libneTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
          echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but recieved $ret" >> $LOGFILE
-         echo "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
+         echo "CMD = ./libneTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
          exit -1
       fi
 #      echo "...done.  Elapsed time = $tcnt"". Output file is \"outfile.$$\""
@@ -331,10 +331,10 @@ while [[ $cnt -lt $ITER ]]; do
       if [[ $? -ne 0 ]]; then
          echo -e "\033[0;31mFAIL - output does not match expected data"
          echo -e "        compared testfile.$$ and outfile.$$"
-         echo -e "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
+         echo -e "CMD = ./libneTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
          echo "   FAILURE: output of ne_read does not match the expected data" >> $LOGFILE
          echo "            compared testfile.$$ and outfile.$$" >> $LOGFILE
-         echo "CMD = ./libTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
+         echo "CMD = ./libneTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
          exit -1
       fi
       echo "Comparison passed"
@@ -351,7 +351,7 @@ while [[ $cnt -lt $ITER ]]; do
          echo "Attempting error recovery..." >> $LOGFILE
 #         tcnt=$( date +%s%N )
          
-         { ret=$( time -p ./libTest rebuild testout.%d.$$ $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>>$TLOGPREF$$.recovery
+         { ret=$( time -p ./libneTest rebuild testout.%d.$$ $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>>$TLOGPREF$$.recovery
 
 #         tcnt="`date +%s%N` - $tcnt"
 #         if [[ $BC -eq 0 ]]; then
@@ -360,12 +360,12 @@ while [[ $cnt -lt $ITER ]]; do
 
          if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
             echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of $stat but recieved $ret"
-            echo -e "CMD = ./libTest rebuild testout.%d.$$ $n $e $start\033[0m"
+            echo -e "CMD = ./libneTest rebuild testout.%d.$$ $n $e $start\033[0m"
             echo "   FAILURE: an error occured within ne_rebuild, expected return of $stat but recieved $ret" >> $LOGFILE
-            echo "CMD = "./libTest rebuild testout.%d.$$ $n $e $start >> $LOGFILE
+            echo "CMD = "./libneTest rebuild testout.%d.$$ $n $e $start >> $LOGFILE
             exit $ret
          fi
-#         ./libTest write testfile.$$ testout.%d.$$ $n $e $start 209715200 > /dev/null 2>&1
+#         ./libneTest write testfile.$$ testout.%d.$$ $n $e $start 209715200 > /dev/null 2>&1
 #         echo "...recovery complete.  Elapsed time = $tcnt""."
 #         echo "...recovery complete.  Elapsed time = $tcnt""." >> $LOGFILE
 #         echo "$tcnt" >> $TLOGPREF$$.recovery
@@ -375,7 +375,7 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Checking the striping for corruption..." >> $LOGFILE
 #      tcnt=$( date +%s%N )
 
-      { ret=$( time -p ./libTest status testout.%d.$$ $n $e $start 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
+      { ret=$( time -p ./libneTest status testout.%d.$$ $n $e $start 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
 
 #      tcnt="`date +%s%N` - $tcnt"
 #      if [[ $BC -eq 0 ]]; then
@@ -384,9 +384,9 @@ while [[ $cnt -lt $ITER ]]; do
 
       if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
          echo -e "\033[0;31mFAIL - status check indicates corruption present in erasure striping"
-         echo -e "CMD = ./libTest status testout.%d.$$ $n $e $start\033[0m"
+         echo -e "CMD = ./libneTest status testout.%d.$$ $n $e $start\033[0m"
          echo "FAIL - status check indicates corruption present in erasure striping" >> $LOGFILE
-         echo "CMD = ./libTest status testout.%d.$$ $n $e $start" >> $LOGFILE
+         echo "CMD = ./libneTest status testout.%d.$$ $n $e $start" >> $LOGFILE
          exit $ret
       fi
 #      echo "...no corruption found.  Elapsed time = $tcnt""."
@@ -406,7 +406,7 @@ while [[ $cnt -lt $ITER ]]; do
 
    sleep $POSTSLEEP
 
-   echo "Removing libTest log file..."
+   echo "Removing libneTest log file..."
    rm $LIBTLOG
 
    incnt=$(( incnt + 1 ))
