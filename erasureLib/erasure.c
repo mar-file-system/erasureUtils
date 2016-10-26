@@ -658,9 +658,6 @@ rebuild:
 
          }
 
-#ifdef DEBUG
-         fprintf(stderr, "ne_read: nbytes = %d, llcounter = %lu, read_size = %d\n", nbytes, (unsigned long)llcounter, readsize);
-#endif
          tmpoffset = 0;
 
       } //completion of read from stripe
@@ -886,7 +883,7 @@ rebuild:
    }
 
 #ifdef INT_CRC
-   fprintf( stderr, "ne_read: cached %lu bytes from stripe at offset %zd\n", handle->buff_rem, handle->buff_offset );
+   fprintf( stdout, "ne_read: cached %lu bytes from stripe at offset %zd\n", handle->buff_rem, handle->buff_offset );
 #endif
 
    return llcounter; 
@@ -1070,8 +1067,8 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 #ifdef DEBUG
             fprintf( stderr, "ne_write: write to erasure file %d, returned %zd instead of expected %d\n" , ecounter, ret_out, writesize );
 #endif
-            handle->src_in_err[counter] = 1;
-            handle->src_err_list[handle->nerr] = counter;
+            handle->src_in_err[counter + ecounter] = 1;
+            handle->src_err_list[handle->nerr] = counter + ecounter;
             handle->nerr++;
          }
 
@@ -1135,11 +1132,18 @@ int ne_close( ne_handle handle )
 #ifdef DEBUG
          fprintf( stderr, "ne_close: failed to flush handle buffer\n" );
 #endif
+         free( zero_buff );
+         free(handle->encode_matrix);
+         free(handle->decode_matrix);
+         free(handle->invert_matrix);
+         free(handle->g_tbls);
+         free(handle);
+         
          ret = -1;
       }
 
       handle->totsz -= tmp;
-
+      free( zero_buff );
    }
 
    /* Close file descriptors and free bufs and set xattrs for written files */
@@ -1257,7 +1261,7 @@ int error_check( ne_handle handle, char *path )
          ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
 #endif
 #ifdef DEBUG
-         fprintf(stderr,"error_check: file %s xattr returned %d\n",file,ret);
+         fprintf(stdout,"error_check: file %s xattr returned %d\n",file,ret);
 #endif
          if (ret < 0) {
 #ifdef DEBUG
