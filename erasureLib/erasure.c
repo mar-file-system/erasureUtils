@@ -4,6 +4,8 @@
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #if (AXATTR_RES == 2)
 #include <attr/xattr.h>
 #else

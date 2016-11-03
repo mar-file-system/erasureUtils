@@ -71,6 +71,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "config.h"
 #include <stdlib.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #define MAXN 15
 #define MAXE 5
