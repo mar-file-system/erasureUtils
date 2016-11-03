@@ -1,5 +1,10 @@
 #include <erasure.h>
 
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <errno.h>
+
 #ifndef __MARFS_COPYRIGHT_H__
 #define __MARFS_COPYRIGHT_H__
 
@@ -265,10 +270,11 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
       counter++;
    }
 
-   char *nfile = malloc( sizeof( file ) );
-
-   strncpy( nfile, path, strlen(path) + 1 );
-
+   char *nfile = NULL;
+   if ( mode == NE_REBUILD ) {
+      nfile = malloc( sizeof( file ) );
+      strncpy( nfile, path, strlen(path) + 1 );
+   }
    handle->path = nfile;
 
    return handle;
@@ -1204,11 +1210,14 @@ int ne_close( ne_handle handle )
       }
    }
 
+   if ( handle->path != NULL ) {
+      free(handle->path);
+   }
+
    free(handle->encode_matrix);
    free(handle->decode_matrix);
    free(handle->invert_matrix);
    free(handle->g_tbls);
-   free(handle->path);
    free(handle);
    
    return ret;

@@ -1,17 +1,11 @@
-*.o
-*.a
-compile
-configure
-aclocal.m4
-autom4te.cache*
-*.in
-install-sh
-missing
-depcomp
-config.*
-Makefile
-erasureLib/Makefile
-erasureLib/.*
-fileraid/.*
-stamp-*
+*
+!*/
+!*.c
+!*.h
+!*.txt
+!*.am
+!*.ac
+!test-driver
+!README*
+config.h
 

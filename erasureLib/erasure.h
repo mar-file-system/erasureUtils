@@ -69,18 +69,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 //#define XATTR_CRC
 
 #include "config.h"
-
-#include <sys/stat.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <string.h>
 #include <stdlib.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <sys/uio.h>
+#include <stdint.h>
 
 #define MAXN 15
 #define MAXE 5
