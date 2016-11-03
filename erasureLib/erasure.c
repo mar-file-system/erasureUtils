@@ -4,6 +4,11 @@
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
+#if (AXATTR_RES == 2)
+#include <attr/xattr.h>
+#else
+#include <sys/xattr.h>
+#endif
 
 #ifndef __MARFS_COPYRIGHT_H__
 #define __MARFS_COPYRIGHT_H__
@@ -66,12 +71,6 @@ LANL contributions is found at https://github.com/jti-lanl/aws4c.
 GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
-#endif
-
-#if (AXATTR_RES == 2)
-#include <attr/xattr.h>
-#else
-#include <sys/xattr.h>
 #endif
  
 /********************************************************/
@@ -1147,6 +1146,8 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
  *               but that errors were encountered in the stipe.  The Least-Significant Bit of the return code corresponds to the first of 
  *               the N data stripe files, while each subsequent bit corresponds to the next N files and then the E files.  A 1 in these 
  *               positions indicates that an error was encountered while acessing that specific file.
+ *               Note, this code does not account for the offset of the stripe.  The code will be relative to the file names only.
+ *               (i.e. an error in "<output_path>1<output_path>" would be encoded in the second bit of the output, a decimal value of 2)
  */
 int ne_close( ne_handle handle ) 
 {
@@ -1891,4 +1892,142 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 	free(backup);
 	return 0;
 }
+
+
+/**
+ * Checks the health and parameters for the erasure striping indicated by the provided path and offset
+ * @param char* path : Name structure for the files of the desired striping.  This should contain a single "%d" field.
+ * @param int erasure_offset : Offset of the erasure stripe, defining the name of the first N file
+ * @return int : Status code.  Success is indicated by 0 and failure by -1.  A positive value indicates that the operation was sucessful, 
+ *               but that errors were encountered in the stipe.  The Least-Significant Bit of the return code corresponds to the first of 
+ *               the N data stripe files, while each subsequent bit corresponds to the next N files and then the E files.  A 1 in these 
+ *               positions indicates that an error was encountered while acessing that specific file.
+ *               Note, this code does not account for the offset of the stripe.  The code will be relative to the file names only.
+ *               (i.e. an error in "<output_path>1<output_path>" would be encoded in the second bit of the output, a decimal value of 2)
+ */
+//int ne_stat( char *path, int erasure_offset )
+//{
+//
+//   char file[MAXNAME];       /* array name of files */
+//   int counter;
+//   int ret;
+//#ifdef INT_CRC
+//   int crccount;
+//   unsigned int bsz = BLKSZ - sizeof( u32 );
+//#else
+//   unsigned int bsz = BLKSZ;
+//#endif
+//
+//   ne_handle handle = malloc( sizeof( struct handle ) );
+//
+//   /* initialize stored info */
+//   for ( counter=0; counter < N+E; counter++ ) {
+//      handle->src_in_err[counter] = 0;
+//      handle->src_err_list[counter] = 0;
+//#ifdef XATTR_CRC
+//      handle->crc_list[counter] = malloc( sizeof(struct node_list) );
+//      handle->crc_list[counter]->length = 0;
+//      handle->crc_list[counter]->head = NULL;
+//      handle->crc_list[counter]->tail = NULL;
+//#endif
+//   }
+//
+//   handle->nerr = 0;
+//   handle->totsz = 0;
+//   handle->N = 0;
+//   handle->E = 0;
+//   handle->bsz = bsz;
+//   handle->erasure_offset = erasure_offset;
+//   handle->mode = NE_REBUILD;
+//   handle->e_ready = 0;
+//   handle->buff_offset = 0;
+//   handle->buff_rem = 0;
+//
+//   ret = error_check(handle,path); //idenfity a preliminary error pattern
+//   if ( ret != 0 ) {
+//#ifdef DEBUG
+//      fprintf( stderr, "ne_open: error_check has failed\n" );
+//#endif
+//      free( handle );
+//      return NULL;
+//   }
+//
+//   /* allocate a big buffer for all the N chunks plus a bit extra for reading in crcs */
+//#ifdef INT_CRC
+//   crccount = 1;
+//   if ( E > 0 ) { crccount = E; }
+//
+//   ret = posix_memalign( &(handle->buffer), 64, ((N+E)*bsz) + (sizeof(u32)*crccount) ); //add space for intermediate checksum
+//#else
+//   ret = posix_memalign( &(handle->buffer), 64, ((N+E)*bsz) );
+//#endif
+//
+//#ifdef DEBUG
+//   fprintf(stdout,"ne_open: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n", (N+E)*bsz, bsz, N, E);
+//#endif
+//
+//   /* allocate matrices */
+//   handle->encode_matrix = malloc(MAXPARTS * MAXPARTS);
+//   handle->decode_matrix = malloc(MAXPARTS * MAXPARTS);
+//   handle->invert_matrix = malloc(MAXPARTS * MAXPARTS);
+//   handle->g_tbls = malloc(MAXPARTS * MAXPARTS * 32);
+//
+//
+//   /* loop through and open up all the output files and initilize per part info and allocate buffers */
+//   counter = 0;
+//#ifdef DEBUG
+//   fprintf( stdout, "opening file descriptors...\n" );
+//#endif
+//   while ( counter < N+E ) {
+//      handle->csum[counter] = 0;
+//      handle->nsz[counter] = 0;
+//      handle->ncompsz[counter] = 0;
+//      bzero( file, MAXNAME );
+//      sprintf( file, path, (counter+erasure_offset)%(N+E) );
+//
+//#ifdef INT_CRC
+//      if ( counter > N ) {
+//         crccount = counter - N;
+//         handle->buffs[counter] = handle->buffer + ( counter*bsz ) + ( crccount * sizeof(u32) ); //make space for block and erasure crc
+//      }
+//      else {
+//         handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
+//      }
+//#else
+//      handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
+//#endif
+//
+//      if( mode == NE_WRONLY  ||  (mode == NE_REBUILD  &&  handle->src_in_err[counter] == 1) ) {
+//#ifdef DEBUG
+//         fprintf( stdout, "   opening %s for write\n", file );
+//#endif
+//         handle->FDArray[counter] = open( file, O_WRONLY | O_CREAT, 0666 );
+//      }
+//      else {
+//#ifdef DEBUG
+//         fprintf( stdout, "   opening %s for read\n", file );
+//#endif
+//         handle->FDArray[counter] = open( file, O_RDONLY );
+//      }
+//
+//      if ( handle->FDArray[counter] == -1  &&  handle->src_in_err[counter] == 0 ) {
+//#ifdef DEBUG
+//         fprintf( stderr, "   failed to open file %s!!!!\n", file );
+//#endif
+//         handle->src_err_list[handle->nerr] = counter;
+//         handle->nerr++;
+//         handle->src_in_err[counter] = 1;
+//         if ( handle->nerr > E ) { //if errors are unrecoverable, terminate
+//            return NULL;
+//         }
+//         continue;
+//      }
+//
+//      counter++;
+//   }
+//
+//   return handle;
+//
+//}
+//
 
