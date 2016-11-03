@@ -4,6 +4,8 @@
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #ifndef __MARFS_COPYRIGHT_H__
 #define __MARFS_COPYRIGHT_H__
