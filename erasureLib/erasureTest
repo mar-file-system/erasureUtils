@@ -65,8 +65,24 @@ LIBTLOG=log_libneTests.$$ # Name of the libneTest output logfile
 
 re='^[0-9]+$'
 
+if [[ $# -gt 0 ]]; then
+   if [[ $1 =~ $re ]]; then
+      ITER=$1
+   else
+      echo "erasureTest: warning: ignoring unrecognized arumgent \"$1\", expected an integer number of stripes to be tested"
+   fi
+fi
+if [[ $# -gt 1 ]]; then
+   if [[ $2 =~ $re ]]; then 
+      INITER=$2
+   else
+      echo "erasureTest: warning: ignoring unrecognized arumgent \"$2\", expected an integer number of error patterns per stripe to be tested"
+   fi
+fi
+
 echo
 echo "Testing erasure library functions..."
+echo "   Tests to perform:  $ITER stripings with $INITER error patterns apiece"
 echo
 
 stfmt="-c%s"

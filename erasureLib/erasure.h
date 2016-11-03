@@ -69,18 +69,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 //#define XATTR_CRC
 
 #include "config.h"
-
-#include <sys/stat.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <string.h>
 #include <stdlib.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <sys/uio.h>
+#include <stdint.h>
 
 #define MAXN 15
 #define MAXE 5
@@ -120,6 +110,7 @@ typedef struct handle {
    int N;
    int E;
    unsigned int bsz;
+   char *path;
 
    /* Read/Write Info and Structures */
    ne_mode mode;
@@ -159,6 +150,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset );
 int ne_write( ne_handle handle, void *buffer, int nbytes );
 int ne_close( ne_handle handle );
 int ne_rebuild( ne_handle handle );
+int ne_flush( ne_handle handle );
 
 #ifdef HAVE_LIBISAL
 extern uint32_t crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);

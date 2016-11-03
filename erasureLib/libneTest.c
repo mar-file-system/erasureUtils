@@ -1,4 +1,8 @@
 #include <erasure.h>
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #ifndef __MARFS_COPYRIGHT_H__
 #define __MARFS_COPYRIGHT_H__
@@ -185,6 +189,11 @@ int main( int argc, const char* argv[] )
          totdone += nread;
 
          toread = rand() % (totbytes+1);
+      }
+
+      if ( ne_flush( handle ) != 0 ) {
+         fprintf( stderr, "libneTest: flush failed!\n" );
+         return -1;
       }
 
       free(buff);

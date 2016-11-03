@@ -1,5 +1,10 @@
 #include <erasure.h>
 
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <errno.h>
+
 #ifndef __MARFS_COPYRIGHT_H__
 #define __MARFS_COPYRIGHT_H__
 
@@ -236,11 +241,17 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
       handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
 #endif
 
-      if( mode == NE_WRONLY  ||  (mode == NE_REBUILD  &&  handle->src_in_err[counter] == 1) ) {
+      if( mode == NE_WRONLY ) {
 #ifdef DEBUG
          fprintf( stdout, "   opening %s for write\n", file );
 #endif
          handle->FDArray[counter] = open( file, O_WRONLY | O_CREAT, 0666 );
+      }
+      else if ( mode == NE_REBUILD  &&  handle->src_in_err[counter] == 1 ) {
+#ifdef DEBUG
+         fprintf( stdout, "   opening %s for write\n", file );
+#endif
+         handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
       }
       else {
 #ifdef DEBUG
@@ -264,6 +275,13 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 
       counter++;
    }
+
+   char *nfile = NULL;
+   if ( mode == NE_REBUILD ) {
+      nfile = malloc( sizeof( file ) );
+      strncpy( nfile, path, strlen(path) + 1 );
+   }
+   handle->path = nfile;
 
    return handle;
 
@@ -664,9 +682,6 @@ rebuild:
 
          }
 
-#ifdef DEBUG
-         fprintf(stderr, "ne_read: nbytes = %d, llcounter = %lu, read_size = %d\n", nbytes, (unsigned long)llcounter, readsize);
-#endif
          tmpoffset = 0;
 
       } //completion of read from stripe
@@ -892,7 +907,7 @@ rebuild:
    }
 
 #ifdef INT_CRC
-   fprintf( stderr, "ne_read: cached %lu bytes from stripe at offset %zd\n", handle->buff_rem, handle->buff_offset );
+   fprintf( stdout, "ne_read: cached %lu bytes from stripe at offset %zd\n", handle->buff_rem, handle->buff_offset );
 #endif
 
    return llcounter; 
@@ -1108,8 +1123,8 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 #ifdef DEBUG
             fprintf( stderr, "ne_write: write to erasure file %d, returned %zd instead of expected %d\n" , ecounter, ret_out, writesize );
 #endif
-            handle->src_in_err[counter] = 1;
-            handle->src_err_list[handle->nerr] = counter;
+            handle->src_in_err[counter + ecounter] = 1;
+            handle->src_err_list[handle->nerr] = counter + ecounter;
             handle->nerr++;
          }
 
@@ -1138,6 +1153,8 @@ int ne_close( ne_handle handle )
 
    int counter;
    char xattrval[strlen(XATTRKEY)+50];
+   char file[MAXNAME];       /* array name of files */
+   char nfile[MAXNAME];       /* array name of files */
    int N;
    int E;
    unsigned int bsz;
@@ -1177,7 +1194,7 @@ int ne_close( ne_handle handle )
       }
 
       handle->totsz -= tmp;
-
+      free( zero_buff );
    }
 
    /* Close file descriptors and free bufs and set xattrs for written files */
@@ -1217,6 +1234,19 @@ int ne_close( ne_handle handle )
 
       }
       if ( handle->FDArray[counter] != -1 ) { close(handle->FDArray[counter]); }
+
+      if (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1 ) {
+         sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
+         strncpy( nfile, file, strlen(file) + 1);
+         strncat( file, ".rebuild", 9 );
+         if ( rename( file, nfile ) != 0 ) {
+#ifdef DEBUG
+            fprintf( stderr, "ne_close: failed to rename rebuilt file" );
+#endif
+            ret = -1;
+         }
+      }
+
       counter++;
    }
    free(handle->buffer);
@@ -1229,6 +1259,10 @@ int ne_close( ne_handle handle )
       for( counter = 0; counter < N+E; counter++ ) {
          if ( handle->src_in_err[counter] ) { ret += ( 1 << ((counter + handle->erasure_offset) % (N+E)) ); }
       }
+   }
+
+   if ( handle->path != NULL ) {
+      free(handle->path);
    }
 
    free(handle->encode_matrix);
@@ -1311,7 +1345,7 @@ int error_check( ne_handle handle, char *path )
          ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
 #endif
 #ifdef DEBUG
-         fprintf(stderr,"error_check: file %s xattr returned %d\n",file,ret);
+         fprintf(stdout,"error_check: file %s xattr returned %d\n",file,ret);
 #endif
          if (ret < 0) {
 #ifdef DEBUG
@@ -1694,6 +1728,54 @@ int ne_rebuild( ne_handle handle ) {
    }
 
    return 0;
+}
+
+
+/**
+ * Flushes the handle buffer of the given striping, zero filling the remainder of the stripe data
+ * @param ne_handle handle : Handle for the erasure striping to be flushed
+ * @return int : 0 on success and -1 on failure
+ */
+int ne_flush( ne_handle handle ) {
+   int N;
+   int E;
+   unsigned int bsz;
+   int ret = 0;
+   int tmp;
+   unsigned char *zero_buff;
+
+   if ( handle == NULL ) {
+#ifdef DEBUG
+      fprintf( stderr, "ne_flush: received a NULL handle\n" );
+#endif
+      errno = EINVAL;
+      return -1;
+   }
+
+   N = handle->N;
+   E = handle->E;
+   bsz = handle->bsz;
+
+
+#ifdef DEBUG
+   fprintf( stdout, "ne_flush: flusing handle buffer...\n" );
+#endif
+   //zero the buffer to the end of the stripe
+   tmp = (N*bsz) - handle->buff_rem;
+   zero_buff = malloc(sizeof(char) * tmp);
+   bzero(zero_buff, tmp );
+
+   if ( tmp != ne_write( handle, zero_buff, tmp ) ) { //make ne_write do all the work
+#ifdef DEBUG
+      fprintf( stderr, "ne_flush: failed to flush handle buffer\n" );
+#endif
+      ret = -1;
+   }
+
+   handle->totsz -= tmp;
+   free( zero_buff );
+
+   return ret;
 }
 
 
