@@ -218,6 +218,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 #ifdef DEBUG
    fprintf( stdout, "opening file descriptors...\n" );
 #endif
+   mode_t mask = umask(0000);
    while ( counter < N+E ) {
       handle->csum[counter] = 0;
       handle->nsz[counter] = 0;
@@ -271,6 +272,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 
       counter++;
    }
+   umask(mask);
 
    char *nfile = NULL;
    if ( mode == NE_REBUILD ) {
