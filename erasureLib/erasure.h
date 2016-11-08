@@ -135,6 +135,10 @@ typedef struct handle {
    unsigned char *invert_matrix;
    unsigned char *g_tbls;
    unsigned char *recov[ MAXPARTS ];
+
+  /* Used for rebuilds to restore the original ownership to the rebuilt file. */
+  uid_t owner;
+  gid_t group;
 } *ne_handle;
 
 /* Erasure Utility Functions */

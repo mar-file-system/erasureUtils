@@ -249,6 +249,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
          fprintf( stdout, "   opening %s for write\n", file );
 #endif
          handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
+
       }
       else {
 #ifdef DEBUG
@@ -1192,6 +1193,7 @@ int ne_close( ne_handle handle )
          sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
          strncpy( nfile, file, strlen(file) + 1);
          strncat( file, ".rebuild", 9 );
+         chown(file, handle->owner, handle->group);
          if ( rename( file, nfile ) != 0 ) {
 #ifdef DEBUG
             fprintf( stderr, "ne_close: failed to rename rebuilt file" );
@@ -1288,6 +1290,8 @@ int error_check( ne_handle handle, char *path )
          handle->nerr++;
       }
       else if ( handle->mode == NE_REBUILD  ||  goodfile == 0 ) {
+         handle->owner = partstat->st_uid;
+         handle->group = partstat->st_gid;
          bzero(xattrval,sizeof(xattrval));
 #if (AXATTR_GET_FUNC == 4)
          ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
