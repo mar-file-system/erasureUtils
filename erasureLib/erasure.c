@@ -92,11 +92,40 @@ To fill in the trailing zeros, this program uses truncate - punching a hole in t
 
 *********************************************************/
 
-
 /* The following are defined here, so as to hide them from users of the library */
+#ifdef HAVE_LIBISAL
+extern uint32_t crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
+extern void ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
+#else
+extern uint32_t crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len);
+extern void ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
+#endif
+extern void pq_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p and q */
+extern void xor_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p */
+extern int pq_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
+extern int xor_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
+extern void gf_gen_rs_matrix(unsigned char *a, int m, int k);
+extern void gf_vect_mul_init(unsigned char c, unsigned char *tbl);
+extern unsigned char gf_mul(unsigned char a, unsigned char b);
+extern int gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);
+
+#ifdef XATTR_CRC
+typedef struct node {
+   struct node *next;
+   struct node *prev;
+   u32 crc;
+} *crc_node;
+
+typedef struct node_list {
+   crc_node head;
+   crc_node tail;
+   unsigned int length;
+} *crc_list;
+#endif
+
 int error_check( ne_handle handle, char *path );
+int xattr_check( ne_handle handle, char *path );
 void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls);
-void dump(unsigned char *buf, int len);
 static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 				unsigned char *decode_matrix,
 				unsigned char *invert_matrix,
@@ -104,6 +133,7 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 				unsigned char *src_err_list,
 				unsigned char *src_in_err,
 				int nerrs, int nsrcerrs, int k, int m);
+//void dump(unsigned char *buf, int len);
 
 
 /**
@@ -1280,6 +1310,317 @@ int ne_close( ne_handle handle )
 
 
 /**
+ * Internal helper function intended to access xattrs for the purpose of validating/identifying handle information
+ * @param ne_handle handle : The handle for the current erasure striping
+ * @param char* path : Name structure for the files of the desired striping.  This should contain a single "%d" field.
+ * @return int : Status code, with 0 indicating success and -1 indicating failure
+ */
+int xattr_check( ne_handle handle, char *path ) 
+{
+   char file[MAXNAME];       /* array name of files */
+   int counter;
+   int bcounter;
+   int ret;
+   int ret_in;
+   int filefd;
+   char xattrval[strlen(XATTRKEY)+50];
+   char xattrchunks[20];       /* char array to get n parts from xattr */
+   char xattrchunksizek[20];   /* char array to get chunksize from xattr */
+   char xattrnsize[20];        /* char array to get total size from xattr */
+   char xattrerasure[20];      /* char array to get erasure from xattr */
+   char xattrncompsize[20];    /* general char for xattr manipulation */
+   char xattrnsum[50];         /* char array to get xattr sum from xattr */
+   char xattrtotsize[160];
+   int N = handle->N;
+   int E = handle->E;
+   unsigned int bsz = handle->bsz;
+   unsigned long nsz;
+   unsigned long ncompsz;
+   char goodfile = 0;
+   u64 totsz;
+#ifdef INT_CRC
+   unsigned int blocks;
+   u32 crc;
+#endif
+   int N_list[ MAXE ] = { 0 };
+   int E_list[ MAXE ] = { 0 };
+   int bsz_list[ MAXE ] = { 0 };
+   int totsz_list[ MAXE ] = { 0 };
+   int N_match[ MAXE ] = { 0 };
+   int E_match[ MAXE ] = { 0 };
+   int bsz_match[ MAXE ] = { 0 };
+   int totsz_match[ MAXE ] = { 0 };
+   struct stat* partstat = malloc (sizeof(struct stat));
+   
+   for ( counter = 0; counter < N+E; counter++ ) {
+      bzero(file,sizeof(file));
+      sprintf( file, path, (counter+handle->erasure_offset)%(N+E) );
+      ret = stat( file, partstat );
+#ifdef DEBUG
+      fprintf( stdout, "error_check: stat of file %s returns %d\n", file, ret );
+#endif
+      if ( ret != 0 ) {
+#ifdef DEBUG
+         fprintf( stderr, "error_check: file %s: failure of stat\n", file );
+#endif
+         handle->src_in_err[counter] = 1;
+         handle->src_err_list[handle->nerr] = counter;
+         handle->nerr++;
+         continue;
+      }
+
+      bzero(xattrval,sizeof(xattrval));
+#if (AXATTR_GET_FUNC == 4)
+      ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
+#else
+      ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+#endif
+#ifdef DEBUG
+      fprintf(stdout,"error_check: file %s xattr returned %d\n",file,ret);
+#endif
+      if (ret < 0) {
+#ifdef DEBUG
+         fprintf(stderr, "error_check: failure of xattr retrieval for file %s\n", file);
+#endif
+         handle->src_in_err[counter] = 1;
+         handle->src_err_list[handle->nerr] = counter;
+         handle->nerr++;
+         continue;
+      }
+
+      sscanf(xattrval,"%s %s %s %s %s %s %s",xattrchunks,xattrerasure,xattrchunksizek,xattrnsize,xattrncompsize,xattrnsum,xattrtotsize);
+      N = atoi(xattrchunks);
+      E = atoi(xattrerasure);
+      bsz = atoi(xattrchunksizek);
+      nsz = strtol(xattrnsize,NULL,0);
+      ncompsz = strtol(xattrncompsize,NULL,0);
+      totsz = strtoll(xattrtotsize,NULL,0);
+
+#ifdef INT_CRC
+      blocks = nsz / bsz;
+#endif
+
+      if ( handle->N != 0 ) { //branch skips checks involving uninitialized handle values (i.e. for stat)
+
+         /* verify xattr */
+         if ( N != handle->N ) {
+   #ifdef DEBUG
+            fprintf (stderr, "error_check: filexattr N = %d did not match handle value  %d \n", N, handle->N); 
+   #endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+            continue;
+         }
+         else if ( E != handle->E ) {
+   #ifdef DEBUG
+            fprintf (stderr, "error_check: filexattr E = %d did not match handle value  %d \n", E, handle->E); 
+   #endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+            continue;
+         }
+         else if ( bsz != handle->bsz ) {
+   #ifdef DEBUG
+            fprintf (stderr, "error_check: filexattr bsz = %d did not match handle value  %d \n", bsz, handle->bsz); 
+   #endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+            continue;
+         }
+
+      }
+
+#ifdef INT_CRC
+      if ( ( nsz + (blocks*sizeof(crc)) ) != partstat->st_size ) {
+#else
+      if ( nsz != partstat->st_size ) {
+#endif
+#ifdef DEBUG
+         fprintf (stderr, "error_check: filexattr nsize = %lu did not match stat value %zd\n", nsz, partstat->st_size); 
+#endif
+         handle->src_in_err[counter] = 1;
+         handle->src_err_list[handle->nerr] = counter;
+         handle->nerr++;
+         continue;
+      }
+      else if ( (nsz % bsz) != 0 ) {
+#ifdef DEBUG
+         fprintf (stderr, "error_check: filexattr nsize = %lu is inconsistent with block size %d \n", nsz, bsz); 
+#endif
+         handle->src_in_err[counter] = 1;
+         handle->src_err_list[handle->nerr] = counter;
+         handle->nerr++;
+         continue;
+      }
+
+#ifdef INT_CRC
+      else if ( ( ncompsz + (blocks*sizeof(crc)) ) != partstat->st_size ) {
+#else
+      else if ( ncompsz != partstat->st_size ) {
+#endif
+#ifdef DEBUG
+         fprintf (stderr, "error_check: filexattr ncompsize = %lu did not match stat value %zd\n", ncompsz, partstat->st_size); 
+#endif
+         handle->src_in_err[counter] = 1;
+         handle->src_err_list[handle->nerr] = counter;
+         handle->nerr++;
+         continue;
+      }
+      else if ( ((ncompsz * N) - totsz) >= bsz*N ) {
+#ifdef DEBUG
+         fprintf (stderr, "error_check: filexattr total_size = %llu is inconsistent with ncompsz %lu\n", (unsigned long long)totsz, ncompsz); 
+#endif
+         handle->src_in_err[counter] = 1;
+         handle->src_err_list[handle->nerr] = counter;
+         handle->nerr++;
+         continue;
+      }
+      else {
+         if ( handle->mode == NE_RDONLY ) {
+            handle->totsz = totsz;
+            break;
+         }
+
+         // This bundle of spaghetti acts to individually verify each "important" xattr value and count matches amongst all files
+         char nc = 1, ec = 1, bc = 1, tc = 1;
+         for ( bcounter = 0; ( nc || ec || bc || tc )  &&  bcounter < MAXE; bcounter++ ) {
+            if ( nc ) {
+               if ( N_list[bcounter] == N ) {
+                  N_match[bcounter]++;
+                  nc = 0;
+               }
+               else if ( N_list[bcounter] == 0 ) {
+                  nc = 0;
+               }
+            }
+
+            if ( ec ) {
+               if ( E_list[bcounter] == E ) {
+                  E_match[bcounter]++;
+                  ec = 0;
+               }
+               else if ( E_list[bcounter] == 0 ) {
+                  ec = 0;
+               }
+            }
+
+            if ( bc ) {
+               if ( bsz_list[bcounter] == bsz ) {
+                  bsz_match[bcounter]++;
+                  bc = 0;
+               }
+               else if ( bsz_list[bcounter] == 0 ) {
+                  bc = 0;
+               }
+            }
+
+            if ( tc ) {
+               if ( totsz_list[bcounter] == totsz ) {
+                  totsz_match[bcounter]++;
+                  tc = 0;
+               }
+               else if ( totsz_list[bcounter] == 0 ) {
+                  tc = 0;
+               }
+            }
+         } //end of value-check loop
+
+      } //end of else at end of xattr checks
+
+
+   } //end of loop over files
+
+   free(partstat);
+
+   if ( handle->N == 0 ) { //if the handle is uninitialized, store the necessary info
+      int maxmatch=0;
+      int match=-1;
+      //loop through the counts of matching xattr values and identify the most prevalent match
+      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
+         if ( N_match[bcounter] > maxmatch ) { maxmatch = N_match[bcounter]; match = bcounter; }
+      }
+
+      if ( match != -1 ) {
+         handle->N = N_list[match];
+      }
+      else {
+#ifdef DEBUG
+         fprintf( stderr, "xattr_check: number of mismatched N xattr vals exceeds erasure limits" );
+#endif
+         errno = ENODATA;
+         return -1;
+      }
+
+      maxmatch=0;
+      match=-1;
+      //loop through the counts of matching xattr values and identify the most prevalent match
+      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
+         if ( E_match[bcounter] > maxmatch ) { maxmatch = E_match[bcounter]; match = bcounter; }
+      }
+
+      if ( match != -1 ) {
+         handle->E = E_list[match];
+      }
+      else {
+#ifdef DEBUG
+         fprintf( stderr, "xattr_check: number of mismatched E xattr vals exceeds erasure limits" );
+#endif
+         errno = ENODATA;
+         return -1;
+      }
+
+      maxmatch=0;
+      match=-1;
+      //loop through the counts of matching xattr values and identify the most prevalent match
+      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
+         if ( bsz_match[bcounter] > maxmatch ) { maxmatch = bsz_match[bcounter]; match = bcounter; }
+      }
+
+      if ( match != -1 ) {
+         handle->bsz = bsz_list[match];
+      }
+      else {
+#ifdef DEBUG
+         fprintf( stderr, "xattr_check: number of mismatched bsz xattr vals exceeds erasure limits" );
+#endif
+         errno = ENODATA;
+         return -1;
+      }
+
+      maxmatch=0;
+      match=-1;
+      //loop through the counts of matching xattr values and identify the most prevalent match
+      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
+         if ( totsz_match[bcounter] > maxmatch ) { maxmatch = totsz_match[bcounter]; match = bcounter; }
+      }
+
+      if ( match != -1 ) {
+         handle->totsz = totsz_list[match];
+      }
+      else {
+#ifdef DEBUG
+         fprintf( stderr, "xattr_check: number of mismatched totsz xattr vals exceeds erasure limits" );
+#endif
+         errno = ENODATA;
+         return -1;
+      }
+
+   }
+
+   /* If no usable file was located or the number of errors is too great, notify of failure */
+   if ( handle->nerr > E ) {
+      errno = ENODATA;
+      return -1;
+   }
+
+   return 0;
+}
+
+
+/**
  * Internal helper function intended to identify file error pattern ahead of ne_read or ne_rebuild operations.
  * @param ne_handle handle : The handle for the current erasure striping
  * @param char* path : Name structure for the files of the desired striping.  This should contain a single "%d" field.
@@ -1794,16 +2135,16 @@ void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls)
         }
 }
 
-void dump(unsigned char *buf, int len)
-{
-        int i;
-        for (i = 0; i < len;) {
-                printf(" %2x", 0xff & buf[i++]);
-                if (i % 32 == 0)
-                        printf("\n");
-        }
-        printf("\n");
-}
+//void dump(unsigned char *buf, int len)
+//{
+//        int i;
+//        for (i = 0; i < len;) {
+//                printf(" %2x", 0xff & buf[i++]);
+//                if (i % 32 == 0)
+//                        printf("\n");
+//        }
+//        printf("\n");
+//}
 
 // Generate decode matrix from encode matrix
 static int gf_gen_decode_matrix(unsigned char *encode_matrix,
@@ -1897,42 +2238,50 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 
 
 /**
- * Checks the health and parameters for the erasure striping indicated by the provided path and offset
+ * Retrieves the health and parameters for the erasure striping indicated by the provided path and offset
  * @param char* path : Name structure for the files of the desired striping.  This should contain a single "%d" field.
  * @param int erasure_offset : Offset of the erasure stripe, defining the name of the first N file
- * @return int : Status code.  Success is indicated by 0 and failure by -1.  A positive value indicates that the operation was sucessful, 
- *               but that errors were encountered in the stipe.  The Least-Significant Bit of the return code corresponds to the first of 
- *               the N data stripe files, while each subsequent bit corresponds to the next N files and then the E files.  A 1 in these 
- *               positions indicates that an error was encountered while acessing that specific file.
- *               Note, this code does not account for the offset of the stripe.  The code will be relative to the file names only.
- *               (i.e. an error in "<output_path>1<output_path>" would be encoded in the second bit of the output, a decimal value of 2)
+ * @return nestat : Status structure containing the encoded error pattern of the stripe (as with ne_close) as well as 
+ *                  the number of data parts (N), number of erasure parts (E), and blocksize (bsz) for the stripe.
  */
-//int ne_stat( char *path, int erasure_offset )
+//nestat ne_stat( char *path, int erasure_offset )
 //{
 //
 //   char file[MAXNAME];       /* array name of files */
 //   int counter;
+//   int bcounter;
 //   int ret;
+//   int ret_in;
+//   int filefd;
+//   char xattrval[strlen(XATTRKEY)+50];
+//   char xattrchunks[20];       /* char array to get n parts from xattr */
+//   char xattrchunksizek[20];   /* char array to get chunksize from xattr */
+//   char xattrnsize[20];        /* char array to get total size from xattr */
+//   char xattrerasure[20];      /* char array to get erasure from xattr */
+//   char xattrncompsize[20];    /* general char for xattr manipulation */
+//   char xattrnsum[50];         /* char array to get xattr sum from xattr */
+//   char xattrtotsize[160];
+//   unsigned int bsz = handle->bsz;
+//   unsigned long nsz;
+//   unsigned long ncompsz;
 //#ifdef INT_CRC
 //   int crccount;
+//   unsigned int blocks;
+//   u32 crc;
+//#endif
+//   u64 scrc;
+//   char goodfile = 0;
+//   u64 totsz;
+//   struct stat* partstat = malloc (sizeof(struct stat));
+//   void *buf;
+//
+//#ifdef INT_CRC
 //   unsigned int bsz = BLKSZ - sizeof( u32 );
 //#else
 //   unsigned int bsz = BLKSZ;
 //#endif
 //
 //   ne_handle handle = malloc( sizeof( struct handle ) );
-//
-//   /* initialize stored info */
-//   for ( counter=0; counter < N+E; counter++ ) {
-//      handle->src_in_err[counter] = 0;
-//      handle->src_err_list[counter] = 0;
-//#ifdef XATTR_CRC
-//      handle->crc_list[counter] = malloc( sizeof(struct node_list) );
-//      handle->crc_list[counter]->length = 0;
-//      handle->crc_list[counter]->head = NULL;
-//      handle->crc_list[counter]->tail = NULL;
-//#endif
-//   }
 //
 //   handle->nerr = 0;
 //   handle->totsz = 0;
@@ -1945,14 +2294,191 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 //   handle->buff_offset = 0;
 //   handle->buff_rem = 0;
 //
-//   ret = error_check(handle,path); //idenfity a preliminary error pattern
-//   if ( ret != 0 ) {
-//#ifdef DEBUG
-//      fprintf( stderr, "ne_open: error_check has failed\n" );
+//
+//   /* initialize stored info */
+//   for ( counter=0; counter < N+E; counter++ ) {
+//   //INITIALIZE HANDLE
+//      handle->src_in_err[counter] = 0;
+//      handle->src_err_list[counter] = 0;
+//#ifdef XATTR_CRC
+//      handle->crc_list[counter] = malloc( sizeof(struct node_list) );
+//      handle->crc_list[counter]->length = 0;
+//      handle->crc_list[counter]->head = NULL;
+//      handle->crc_list[counter]->tail = NULL;
 //#endif
-//      free( handle );
-//      return NULL;
+//      handle->csum[counter] = 0;
+//      handle->nsz[counter] = 0;
+//      handle->ncompsz[counter] = 0;
+//      bzero( file, MAXNAME );
+//      sprintf( file, path, (counter+erasure_offset)%(N+E) );
+//
+//#ifdef INT_CRC
+//      if ( counter > N ) {
+//         crccount = counter - N;
+//         handle->buffs[counter] = handle->buffer + ( counter*bsz ) + ( crccount * sizeof(u32) ); //make space for block and erasure crc
+//      }
+//      else {
+//         handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
+//      }
+//#else
+//      handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
+//#endif
+//  //END INITIALIZE HANDLE
+//
+//  //XATTR CHECK
+//      ret = stat( file, partstat );
+//#ifdef DEBUG
+//      fprintf( stdout, "error_check: stat of file %s returns %d\n", file, ret );
+//#endif
+//      if ( ret != 0 ) {
+//#ifdef DEBUG
+//         fprintf( stderr, "error_check: file %s: failure of stat\n", file );
+//#endif
+//         handle->src_in_err[counter] = 1;
+//         handle->src_err_list[handle->nerr] = counter;
+//         handle->nerr++;
+//         continue;
+//      }
+//
+//      bzero(xattrval,sizeof(xattrval));
+//#if (AXATTR_GET_FUNC == 4)
+//      ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
+//#else
+//      ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+//#endif
+//#ifdef DEBUG
+//      fprintf(stdout,"error_check: file %s xattr returned %d\n",file,ret);
+//#endif
+//      if (ret < 0) {
+//#ifdef DEBUG
+//         fprintf(stderr, "error_check: failure of xattr retrieval for file %s\n", file);
+//#endif
+//         handle->src_in_err[counter] = 1;
+//         handle->src_err_list[handle->nerr] = counter;
+//         handle->nerr++;
+//         continue;
+//      }
+//
+//      sscanf(xattrval,"%s %s %s %s %s %s %s",xattrchunks,xattrerasure,xattrchunksizek,xattrnsize,xattrncompsize,xattrnsum,xattrtotsize);
+//      N = atoi(xattrchunks);
+//      E = atoi(xattrerasure);
+//      bsz = atoi(xattrchunksizek);
+//      nsz = strtol(xattrnsize,NULL,0);
+//      ncompsz = strtol(xattrncompsize,NULL,0);
+//      totsz = strtoll(xattrtotsize,NULL,0);
+//
+//#ifdef INT_CRC
+//      blocks = nsz / bsz;
+//#endif
+//
+//      /* verify xattr */
+//      if ( N != handle->N ) {
+//#ifdef DEBUG
+//         fprintf (stderr, "error_check: filexattr N = %d did not match handle value  %d \n", N, handle->N); 
+//#endif
+//         handle->src_in_err[counter] = 1;
+//         handle->src_err_list[handle->nerr] = counter;
+//         handle->nerr++;
+//         continue;
+//      }
+//      else if ( E != handle->E ) {
+//#ifdef DEBUG
+//         fprintf (stderr, "error_check: filexattr E = %d did not match handle value  %d \n", E, handle->E); 
+//#endif
+//         handle->src_in_err[counter] = 1;
+//         handle->src_err_list[handle->nerr] = counter;
+//         handle->nerr++;
+//         continue;
+//      }
+//      else if ( bsz != handle->bsz ) {
+//#ifdef DEBUG
+//         fprintf (stderr, "error_check: filexattr bsz = %d did not match handle value  %d \n", bsz, handle->bsz); 
+//#endif
+//         handle->src_in_err[counter] = 1;
+//         handle->src_err_list[handle->nerr] = counter;
+//         handle->nerr++;
+//         continue;
+//      }
+//#ifdef INT_CRC
+//      else if ( ( nsz + (blocks*sizeof(crc)) ) != partstat->st_size ) {
+//#else
+//      else if ( nsz != partstat->st_size ) {
+//#endif
+//#ifdef DEBUG
+//         fprintf (stderr, "error_check: filexattr nsize = %lu did not match stat value %zd\n", nsz, partstat->st_size); 
+//#endif
+//         handle->src_in_err[counter] = 1;
+//         handle->src_err_list[handle->nerr] = counter;
+//         handle->nerr++;
+//         continue;
+//      }
+//      else if ( (nsz % bsz) != 0 ) {
+//#ifdef DEBUG
+//         fprintf (stderr, "error_check: filexattr nsize = %lu is inconsistent with block size %d \n", nsz, bsz); 
+//#endif
+//         handle->src_in_err[counter] = 1;
+//         handle->src_err_list[handle->nerr] = counter;
+//         handle->nerr++;
+//         continue;
+//      }
+//
+//#ifdef INT_CRC
+//      else if ( ( ncompsz + (blocks*sizeof(crc)) ) != partstat->st_size ) {
+//#else
+//      else if ( ncompsz != partstat->st_size ) {
+//#endif
+//#ifdef DEBUG
+//         fprintf (stderr, "error_check: filexattr ncompsize = %lu did not match stat value %zd\n", ncompsz, partstat->st_size); 
+//#endif
+//         handle->src_in_err[counter] = 1;
+//         handle->src_err_list[handle->nerr] = counter;
+//         handle->nerr++;
+//         continue;
+//      }
+//      else if ( ((ncompsz * N) - totsz) >= bsz*N ) {
+//#ifdef DEBUG
+//         fprintf (stderr, "error_check: filexattr total_size = %llu is inconsistent with ncompsz %lu\n", (unsigned long long)totsz, ncompsz); 
+//#endif
+//         handle->src_in_err[counter] = 1;
+//         handle->src_err_list[handle->nerr] = counter;
+//         handle->nerr++;
+//         continue;
+//      }
+//      else { //TODO verify xattrs against one another
+//         handle->totsz = totsz;
+//         goodfile = 1;
+//      }
+//   //END XATTR CHECK
+//
+//   //OPEN FILES
+//#ifdef DEBUG
+//      fprintf( stdout, "            opening %s for read\n", file );
+//#endif
+//      handle->FDArray[counter] = open( file, O_RDONLY );
+//
+//      if ( handle->FDArray[counter] == -1  &&  handle->src_in_err[counter] == 0 ) {
+//#ifdef DEBUG
+//         fprintf( stderr, "            failed to open file %s!\n", file );
+//#endif
+//         handle->src_err_list[handle->nerr] = counter;
+//         handle->nerr++;
+//         handle->src_in_err[counter] = 1;
+//         if ( handle->nerr > E ) { //if errors are unrecoverable, terminate
+//            return NULL;
+//         }
+//         continue;
+//      }
+//   //END OPEN FILES
+//
 //   }
+////   ret = error_check(handle,path); //idenfity a preliminary error pattern
+////   if ( ret != 0 ) {
+////#ifdef DEBUG
+////      fprintf( stderr, "ne_open: error_check has failed\n" );
+////#endif
+////      free( handle );
+////      return NULL;
+////   }
 //
 //   /* allocate a big buffer for all the N chunks plus a bit extra for reading in crcs */
 //#ifdef INT_CRC
@@ -1974,62 +2500,91 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 //   handle->invert_matrix = malloc(MAXPARTS * MAXPARTS);
 //   handle->g_tbls = malloc(MAXPARTS * MAXPARTS * 32);
 //
+////  COPY PASE FROM ERROR_CHECK
 //
-//   /* loop through and open up all the output files and initilize per part info and allocate buffers */
-//   counter = 0;
-//#ifdef DEBUG
-//   fprintf( stdout, "opening file descriptors...\n" );
+//   //TODO loop over entire stripe content, checking erasure generation
+//
+//   for ( counter = 0; counter < N+E; counter++ ) {
+//#ifdef XATTR_CRC
+////TODO
 //#endif
-//   while ( counter < N+E ) {
-//      handle->csum[counter] = 0;
-//      handle->nsz[counter] = 0;
-//      handle->ncompsz[counter] = 0;
-//      bzero( file, MAXNAME );
-//      sprintf( file, path, (counter+erasure_offset)%(N+E) );
+//
+//      ret_in = ncompsz / bsz;
+//      bcounter=0;
+//      scrc = 0;
+//
+//      while ( bcounter < ret_in ) {
 //
 //#ifdef INT_CRC
-//      if ( counter > N ) {
-//         crccount = counter - N;
-//         handle->buffs[counter] = handle->buffer + ( counter*bsz ) + ( crccount * sizeof(u32) ); //make space for block and erasure crc
-//      }
-//      else {
-//         handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
-//      }
+//         ret = read(handle->FDArray[counter],buf,bsz+sizeof(crc));
+//
+//         if ( ret != bsz+sizeof(crc) ) {
 //#else
-//      handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
+//            ret = read(filefd,buf,bsz);
+//
+//         if ( ret != bsz ) {
+//#endif
+//#ifdef DEBUG
+//            fprintf( stderr, "error_check: failure to read full amt for file %s block %d\n", file, bcounter );
+//#endif
+//            handle->src_in_err[counter] = 1;
+//            handle->src_err_list[handle->nerr] = counter;
+//            handle->nerr++;
+//            break;
+//         }
+//
+//#ifdef INT_CRC
+//         //store and verify intermediate crc
+//#ifdef HAVE_LIBISAL
+//         crc = crc32_ieee( TEST_SEED, buf, bsz );
+//#else
+//         crc = crc32_ieee_base( TEST_SEED, buf, bsz );
 //#endif
 //
-//      if( mode == NE_WRONLY  ||  (mode == NE_REBUILD  &&  handle->src_in_err[counter] == 1) ) {
+//         if ( memcmp( &crc, buf+bsz, sizeof(crc) ) != 0 ) {
 //#ifdef DEBUG
-//         fprintf( stdout, "   opening %s for write\n", file );
+//            fprintf( stderr, "error_check: int-crc mismatch for file %s\n", file );
 //#endif
-//         handle->FDArray[counter] = open( file, O_WRONLY | O_CREAT, 0666 );
-//      }
-//      else {
-//#ifdef DEBUG
-//         fprintf( stdout, "   opening %s for read\n", file );
-//#endif
-//         handle->FDArray[counter] = open( file, O_RDONLY );
-//      }
+//            handle->src_in_err[counter] = 1;
+//            handle->src_err_list[handle->nerr] = counter;
+//            handle->nerr++;
+//            break;
+//         }
 //
-//      if ( handle->FDArray[counter] == -1  &&  handle->src_in_err[counter] == 0 ) {
-//#ifdef DEBUG
-//         fprintf( stderr, "   failed to open file %s!!!!\n", file );
+//         scrc += crc;
+//#else
+//#ifdef HAVE_LIBISAL
+//         scrc += crc32_ieee( TEST_SEED, buf, bsz );
+//#else
+//         scrc += crc32_ieee_base( TEST_SEED, buf, bsz );
 //#endif
+//#endif
+//         bcounter++;
+//      } //end of while loop
+//
+//      if ( scrc != strtoll(xattrnsum,NULL,0)  &&  handle->src_in_err[counter] == 0 ) {
+//#ifdef DEBUG
+//         fprintf( stderr, "error_check: crc mismatch for file %s\n", file );
+//#endif
+//         handle->src_in_err[counter] = 1;
 //         handle->src_err_list[handle->nerr] = counter;
 //         handle->nerr++;
-//         handle->src_in_err[counter] = 1;
-//         if ( handle->nerr > E ) { //if errors are unrecoverable, terminate
-//            return NULL;
-//         }
-//         continue;
 //      }
 //
-//      counter++;
+//      close(handle->FDArray[counter]);
+//
+//   } //end of loop over files
+//
+//   free(partstat);
+//   free(buf);
+//
+//   /* If the number of errors is too great, notify of failure */
+//   if ( handle->nerr > E ) {
+//      errno = ENODATA;
+//      return -1;
 //   }
 //
-//   return handle;
+//// END ERROR_CHECK COPY PASE
 //
 //}
 //
-
