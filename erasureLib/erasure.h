@@ -64,7 +64,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #endif
 
-//#define DEBUG
+#define DEBUG
 #define INT_CRC
 //#define XATTR_CRC
 
@@ -90,7 +90,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 typedef uint32_t u32;
 typedef uint64_t u64;
-typedef enum {NE_RDONLY,NE_WRONLY,NE_REBUILD} ne_mode;
+typedef enum {NE_RDONLY,NE_WRONLY,NE_REBUILD,NE_STAT} ne_mode;
 
 typedef struct ne_stat_struct {
    char xattr_status[ MAXPARTS ];
