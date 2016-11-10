@@ -260,6 +260,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 #ifdef DEBUG
    fprintf( stdout, "opening file descriptors...\n" );
 #endif
+   mode_t mask = umask(0000);
    while ( counter < N+E ) {
       handle->csum[counter] = 0;
       handle->nsz[counter] = 0;
@@ -290,6 +291,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
          fprintf( stdout, "   opening %s for write\n", file );
 #endif
          handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
+
       }
       else {
 #ifdef DEBUG
@@ -315,6 +317,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 
       counter++;
    }
+   umask(mask);
 
    char *nfile = NULL;
    if ( mode == NE_REBUILD ) {
@@ -1288,6 +1291,7 @@ int ne_close( ne_handle handle )
          sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
          strncpy( nfile, file, strlen(file) + 1);
          strncat( file, ".rebuild", 9 );
+         chown(file, handle->owner, handle->group);
          if ( rename( file, nfile ) != 0 ) {
 #ifdef DEBUG
             fprintf( stderr, "ne_close: failed to rename rebuilt file\n" );
@@ -1397,8 +1401,10 @@ int xattr_check( ne_handle handle, char *path )
          handle->nerr++;
          continue;
       }
-
+      handle->owner = partstat->st_uid;
+      handle->group = partstat->st_gid;
       bzero(xattrval,sizeof(xattrval));
+
 #if (AXATTR_GET_FUNC == 4)
       ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
 #else
@@ -2019,7 +2025,10 @@ rebuild:
 #ifdef DEBUG
                fprintf( stdout, "   opening %s for write\n", file );
 #endif
+
+               mode_t mask = umask(0000);
                handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
+               umask(mask);
                init = 1;
 
                //ensure that sources are listed in order
@@ -2073,7 +2082,9 @@ rebuild:
 #ifdef DEBUG
                   fprintf( stdout, "   opening %s.rebuild for write\n", file );
 #endif
+                  mode_t mask = umask(0000);
                   handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
+                  umask(mask);
                }
 
                //ensure that sources are listed in order
@@ -2118,7 +2129,9 @@ rebuild:
 #ifdef DEBUG
                   fprintf( stdout, "   opening %s.rebuild for write\n", file );
 #endif
+                  mode_t mask = umask(0000);
                   handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
+                  umask(mask);
                }
 
                //ensure that sources are listed in order
