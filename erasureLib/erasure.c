@@ -2013,23 +2013,34 @@ rebuild:
 #ifdef DEBUG
                fprintf( stderr, "ne_rebuild: encountered error while reading file %d\n", counter );
 #endif
-               handle->src_err_list[handle->nerr] = counter;
                handle->src_in_err[counter] = 1;
-               printf( "added error to index %d for src error %d\n", handle->nerr, counter); //REMOVE
-               handle->nerr++;
-               handle->e_ready = 0; //indicate that erasure structs require re-initialization
 
                bzero( file, MAXNAME );
                sprintf( file, handle->path, (counter+handle->erasure_offset)%(handle->N+handle->E) );
-
 #ifdef DEBUG
                fprintf( stdout, "   closing %s\n", file );
 #endif
                close( handle->FDArray[counter] );
 #ifdef DEBUG
-               fprintf( stdout, "   opening %s for write\n", file );
+               fprintf( stdout, "   opening %s.rebuild for write\n", file );
 #endif
                handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
+
+               //ensure that sources are listed in order
+               for ( i = 0; i < handle->nerr; i++ ) {
+                  if ( handle->src_err_list[i] > counter) { break; }
+               }
+               printf( "adding error to index %d for src error %d\n", i, counter); //REMOVE
+               while ( i < handle->nerr ) {
+                  tmp = handle->src_err_list[i];
+                  handle->src_err_list[i] = counter;
+                  counter = tmp;
+                  i++;
+               }
+
+               handle->src_err_list[handle->nerr] = counter;
+               handle->nerr++;
+               handle->e_ready = 0; //indicate that erasure structs require re-initialization
                init = 1;
                goto rebuild;
             }
@@ -2046,22 +2057,33 @@ rebuild:
                fprintf(stderr, "ne_rebuild: mismatch of int-crc for file %d\n", counter);
 #endif
                handle->src_in_err[counter] = 1;
-               handle->src_err_list[handle->nerr] = counter;
-               printf( "added error to index %d for src error %d\n", handle->nerr, counter); //REMOVE
-               handle->nerr++;
-               handle->e_ready = 0; //indicate that erasure structs require re-initialization
 
                bzero( file, MAXNAME );
                sprintf( file, handle->path, (counter+handle->erasure_offset)%(handle->N+handle->E) );
-
 #ifdef DEBUG
                fprintf( stdout, "   closing %s\n", file );
 #endif
                close( handle->FDArray[counter] );
 #ifdef DEBUG
-               fprintf( stdout, "   opening %s for write\n", file );
+               fprintf( stdout, "   opening %s.rebuild for write\n", file );
 #endif
                handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
+
+               //ensure that sources are listed in order
+               for ( i = 0; i < handle->nerr; i++ ) {
+                  if ( handle->src_err_list[i] > counter) { break; }
+               }
+               printf( "adding error to index %d for src error %d\n", i, counter); //REMOVE
+               while ( i < handle->nerr ) {
+                  tmp = handle->src_err_list[i];
+                  handle->src_err_list[i] = counter;
+                  counter = tmp;
+                  i++;
+               }
+
+               handle->src_err_list[i] = counter;
+               handle->nerr++;
+               handle->e_ready = 0; //indicate that erasure structs require re-initialization
                init = 1;
                goto rebuild;
             }
