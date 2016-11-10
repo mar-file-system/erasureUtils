@@ -261,7 +261,22 @@ int main( int argc, const char* argv[] )
    }
    else if ( wr == 3 ) { //status
       fprintf( stdout, "libneTest: retrieving status of erasure striping (N=%d,E=%d,offset=%d)\n", N, E, start );
-      handle = ne_open( (char *)argv[2], NE_REBUILD, start, N, E );
+      ne_stat stat = ne_status( (char *)argv[2], start );
+      if ( stat == NULL ) {
+         fprintf( stderr, "libneTest: ne_status failed!" );
+         return -1;
+      }
+      printf( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %d\nExtended Attribute Errors : ", stat->N, stat->E, stat->bsz, start, stat->totsz );
+      for( tmp = 0; tmp < ( N+E ); tmp++ ){
+         printf( "%d ", stat->xattr_status[tmp] );
+      }
+      printf( "\nData/Erasure Errors : " );
+      for( tmp = 0; tmp < ( N+E ); tmp++ ){
+         printf( "%d ", stat->data_status[tmp] );
+      }
+      printf( "\n" );
+      free(stat);
+      return 0;
    }
 
    tmp = ne_close( handle );

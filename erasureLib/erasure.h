@@ -64,7 +64,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #endif
 
-#define DEBUG
+//#define DEBUG
 #define INT_CRC
 //#define XATTR_CRC
 
@@ -146,6 +146,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset );
 int ne_write( ne_handle handle, void *buffer, int nbytes );
 int ne_close( ne_handle handle );
 int ne_rebuild( ne_handle handle );
+ne_stat ne_status( char *path, int start_position );
 int ne_flush( ne_handle handle );
 
 #endif
