@@ -1367,15 +1367,23 @@ int xattr_check( ne_handle handle, char *path )
    int bsz_match[ MAXE ] = { 0 };
    int totsz_match[ MAXE ] = { 0 };
    struct stat* partstat = malloc (sizeof(struct stat));
+   int lN;
+   int lE;
   
-   if ( handle->mode == NE_STAT ) {
+   if ( handle->mode == NE_STAT  &&  N == 0 ) {
       N = MAXN;
       E = MAXE;
    }
+
+   lN = N;
+   lE = E;
+
+   printf ( " Max = %d", lN+lE ); //REMOVE
  
-   for ( counter = 0; counter < N+E; counter++ ) {
+   for ( counter = 0; counter < lN+lE; counter++ ) {
+      printf( " counter = %d\n", counter ); //REMOVE
       bzero(file,sizeof(file));
-      sprintf( file, path, (counter+handle->erasure_offset)%(N+E) );
+      sprintf( file, path, (counter+handle->erasure_offset)%(lN+lE) );
       ret = stat( file, partstat );
 #ifdef DEBUG
       fprintf( stdout, "xattr_check: stat of file %s returns %d\n", file, ret );
@@ -1500,6 +1508,7 @@ int xattr_check( ne_handle handle, char *path )
          continue;
       }
       else {
+         printf( " valid xattr\n" ); //REMOVE
          if ( handle->mode == NE_RDONLY ) {
             handle->totsz = totsz;
             break;
@@ -1553,6 +1562,7 @@ int xattr_check( ne_handle handle, char *path )
             }
          } //end of value-check loop
 
+         printf("Max = %d, counter = %d\n", lN+lE, counter); //REMOVE
       } //end of else at end of xattr checks
 
 
@@ -1560,7 +1570,7 @@ int xattr_check( ne_handle handle, char *path )
 
    free(partstat);
 
-   if ( handle->mode != NE_WRONLY ) { //if the handle is uninitialized, store the necessary info
+   if ( handle->mode != NE_RDONLY ) { //if the handle is uninitialized, store the necessary info
       int maxmatch=0;
       int match=-1;
       //loop through the counts of matching xattr values and identify the most prevalent match
@@ -1636,7 +1646,7 @@ int xattr_check( ne_handle handle, char *path )
    }
 
    /* If no usable file was located or the number of errors is too great, notify of failure */
-   if ( handle->nerr > E ) {
+   if ( handle->nerr > handle->E ) {
       errno = ENODATA;
       return -1;
    }
@@ -2501,6 +2511,10 @@ ne_stat ne_status( char *path, int erasure_offset )
    handle->buff_rem = 0;
 
    ret = xattr_check(handle,path); //idenfity total data size of stripe
+   if ( handle->nerr != 0  ||  ret != 0 ) {
+      handle->nerr = 0;
+      ret = xattr_check(handle,path); //verify the stripe, now that values have been established
+   }
    if ( ret != 0 ) {
 #ifdef DEBUG
       fprintf( stderr, "ne_status: extended attribute check has failed\n" );
