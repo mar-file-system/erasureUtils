@@ -239,9 +239,12 @@ while [[ $cnt -lt $ITER ]]; do
             fsize=$( stat $stfmt $efile )
             corr=$(( RANDOM % fsize ))
             echo "      truncating from $fsize to $corr bytes"
+            echo "      truncating from $fsize to $corr bytes" >> $LOGFILE
             dd if=$efile of=$efile.tmp bs=1 count=$corr > /dev/null 2>&1
             rm $efile
             mv $efile.tmp $efile
+            echo "   creating backup of corrupted file..."
+            cp $efile "$efile".corrupted
          else
             err_list[$silent_count]=$errpos
             silent_count=$(( silent_count + 1 ))
@@ -264,6 +267,8 @@ while [[ $cnt -lt $ITER ]]; do
                fi
             done
             rm $efile".tmp"
+            echo "   creating backup of corrupted file..."
+            cp $efile "$efile".corrupted
          fi
 
          while [[ $oldpos -lt $errpos ]]; do
@@ -387,9 +392,9 @@ while [[ $cnt -lt $ITER ]]; do
                   echo "CMD = ./libneTest rebuild testout.%d.$$ $n $e $start" >> $LOGFILE
                   exit -1
                fi
-               echo "Comparison passed. Removing backup file."
-               echo "Comparison passed. Removing backup file." >> $LOGFILE
-               rm "$line".backup
+               echo "Comparison passed. Removing backup file(s)."
+               echo "Comparison passed. Removing backup file(s)." >> $LOGFILE
+               rm "$line".*
             fi
          done
 
