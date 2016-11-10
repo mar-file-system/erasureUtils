@@ -326,6 +326,21 @@ while [[ $cnt -lt $ITER ]]; do
       done
 
       echo >> $LIBTLOG
+
+      echo "Verifying corruption pattern (expecting pattern $stat)..."
+      echo "Verifying corruption pattern (expecting pattern $stat)..." >> $LOGFILE
+
+      { ret=$( time -p ./libneTest status testout.%d.$$ $n $e $start 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
+
+      if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
+         echo -e "\033[0;31mFAIL - status check returned an unexpected error pattern"
+         echo -e "CMD = ./libneTest status testout.%d.$$ $n $e $start\033[0m"
+         echo "FAIL - status check returned an unexpected error pattern" >> $LOGFILE
+         echo "CMD = ./libneTest status testout.%d.$$ $n $e $start" >> $LOGFILE
+         exit -1
+      fi
+      echo
+
       echo "Performing a read of all data from striping (expected return value = $tstat)..."
       echo "Performing read of all data from striping (expected return value = $tstat)..." >> $LOGFILE
       
@@ -419,7 +434,11 @@ while [[ $cnt -lt $ITER ]]; do
       echo
 
       #All tests passed for this iteration
-      echo -e "\033[0;32mPASS - $n+$e with start position $start"
+      if [[ $incnt -gt 0 ]]; then
+         echo -e "\033[0;32mPASS - $n+$e with start position $start (reused)"
+      else
+         echo -e "\033[0;32mPASS - $n+$e with start position $start"
+      fi
       echo -e "       and error pattern   $npat"
       echo -e "       ( Test $(( (cnt*INITER) + incnt + 1 )) )\033[0m"
 
