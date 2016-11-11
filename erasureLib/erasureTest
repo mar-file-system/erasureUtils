@@ -330,7 +330,7 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Verifying corruption pattern (expecting pattern $stat)..."
       echo "Verifying corruption pattern (expecting pattern $stat)..." >> $LOGFILE
 
-      { ret=$( time -p ./libneTest status testout.%d.$$ $n $e $start 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
+      { ret=$( time -p ./libneTest status testout.%d.$$ $start 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
 
       if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
          echo -e "\033[0;31mFAIL - status check returned an unexpected error pattern"
@@ -422,7 +422,7 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Checking the striping for corruption..."
       echo "Checking the striping for corruption..." >> $LOGFILE
 
-      { ret=$( time -p ./libneTest status testout.%d.$$ $n $e $start 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
+      { ret=$( time -p ./libneTest status testout.%d.$$ $start 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
 
       if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
          echo -e "\033[0;31mFAIL - status check indicates corruption present in erasure striping"
