@@ -116,8 +116,8 @@ int main( int argc, const char* argv[] )
       wr = 2;
    }
    else if ( strncmp( argv[1], "status", strlen(argv[1]) ) == 0 ) {
-      if ( argc != 4 ) { 
-         fprintf(stderr,"libneTest: inappropriate arguments for a status operation\nlibneTest:   expected \'%s %s erasure_path N E start_file\'\n", argv[0], argv[1] ); 
+      if ( argc != 3 ) { 
+         fprintf(stderr,"libneTest: inappropriate arguments for a status operation\nlibneTest:   expected \'%s %s erasure_path\'\n", argv[0], argv[1] ); 
          return -1;
       }
       wr = 3;
@@ -140,9 +140,6 @@ int main( int argc, const char* argv[] )
       N = atoi(argv[3]);
       E = atoi(argv[4]);
       start = atoi(argv[5]);
-   }
-   else {
-      start = atoi(argv[3]);
    }
 
    if ( argc == 8 ) {
@@ -263,18 +260,18 @@ int main( int argc, const char* argv[] )
       fprintf( stdout, "libneTest: rebuild complete\n" );
    }
    else if ( wr == 3 ) { //status
-      fprintf( stdout, "libneTest: retrieving status of erasure striping (N=%d,E=%d,offset=%d)\n", N, E, start );
+      fprintf( stdout, "libneTest: retrieving status of erasure striping with path \"%s\"\n", (char *)argv[2] );
       ne_stat stat = ne_status( (char *)argv[2] );
       if ( stat == NULL ) {
          fprintf( stderr, "libneTest: ne_status failed!\n" );
          return -1;
       }
-      printf( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %d\nExtended Attribute Errors : ", stat->N, stat->E, stat->bsz, start, stat->totsz );
-      for( tmp = 0; tmp < ( N+E ); tmp++ ){
+      printf( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %d\nExtended Attribute Errors : ", stat->N, stat->E, stat->bsz, stat->start, stat->totsz );
+      for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
          printf( "%d ", stat->xattr_status[tmp] );
       }
       printf( "\nData/Erasure Errors : " );
-      for( tmp = 0; tmp < ( N+E ); tmp++ ){
+      for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
          printf( "%d ", stat->data_status[tmp] );
       }
       printf( "\n" );
@@ -283,7 +280,7 @@ int main( int argc, const char* argv[] )
       tmp=0;
       /* Encode any file errors into the return status */
       for( filefd = 0; filefd < stat->N+stat->E; filefd++ ) {
-         if ( stat->data_status[filefd] || stat->xattr_status[filefd] ) { tmp += ( 1 << ((filefd + start) % (stat->N+stat->E)) ); }
+         if ( stat->data_status[filefd] || stat->xattr_status[filefd] ) { tmp += ( 1 << ((filefd + stat->start) % (stat->N+stat->E)) ); }
       }
 
       printf("%d\n",tmp);

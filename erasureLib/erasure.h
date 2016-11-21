@@ -97,6 +97,7 @@ typedef struct ne_stat_struct {
    char data_status[ MAXPARTS ];
    int N;
    int E;
+   int start;
    unsigned int bsz;
    u64 totsz;
 } *ne_stat;

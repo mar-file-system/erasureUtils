@@ -330,13 +330,13 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Verifying corruption pattern (expecting pattern $stat)..."
       echo "Verifying corruption pattern (expecting pattern $stat)..." >> $LOGFILE
 
-      { ret=$( time -p ./libneTest status testout.%d.$$ $start 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
+      { ret=$( time -p ./libneTest status testout.%d.$$ 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
 
       if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
          echo -e "\033[0;31mFAIL - status check returned an unexpected error pattern"
-         echo -e "CMD = ./libneTest status testout.%d.$$ $n $e $start\033[0m"
+         echo -e "CMD = ./libneTest status testout.%d.$$\033[0m"
          echo "FAIL - status check returned an unexpected error pattern" >> $LOGFILE
-         echo "CMD = ./libneTest status testout.%d.$$ $n $e $start" >> $LOGFILE
+         echo "CMD = ./libneTest status testout.%d.$$" >> $LOGFILE
          exit -1
       fi
       echo
@@ -422,13 +422,13 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Checking the striping for corruption..."
       echo "Checking the striping for corruption..." >> $LOGFILE
 
-      { ret=$( time -p ./libneTest status testout.%d.$$ $start 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
+      { ret=$( time -p ./libneTest status testout.%d.$$ 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
 
       if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
-         echo -e "\033[0;31mFAIL - status check indicates corruption present in erasure striping"
-         echo -e "CMD = ./libneTest status testout.%d.$$ $n $e $start\033[0m"
-         echo "FAIL - status check indicates corruption present in erasure striping" >> $LOGFILE
-         echo "CMD = ./libneTest status testout.%d.$$ $n $e $start" >> $LOGFILE
+         echo -e "\033[0;31mFAIL - status check indicates corruption present in erasure striping ( code : $ret )"
+         echo -e "CMD = ./libneTest status testout.%d.$$\033[0m"
+         echo "FAIL - status check indicates corruption present in erasure striping ( code : $ret )" >> $LOGFILE
+         echo "CMD = ./libneTest status testout.%d.$$" >> $LOGFILE
          exit $ret
       fi
       echo

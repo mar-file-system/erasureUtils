@@ -1213,7 +1213,7 @@ int ne_close( ne_handle handle )
 {
 
    int counter;
-   char xattrval[strlen(XATTRKEY)+50];
+   char xattrval[strlen(XATTRKEY)+80];
    char file[MAXNAME];       /* array name of files */
    char nfile[MAXNAME];       /* array name of files */
    int N;
@@ -1352,7 +1352,7 @@ int xattr_check( ne_handle handle, char *path )
    int ret;
    int ret_in;
    int filefd;
-   char xattrval[strlen(XATTRKEY)+50];
+   char xattrval[strlen(XATTRKEY)+80];
    char xattrchunks[20];       /* char array to get n parts from xattr */
    char xattrchunksizek[20];   /* char array to get chunksize from xattr */
    char xattrnsize[20];        /* char array to get total size from xattr */
@@ -2316,6 +2316,7 @@ ne_stat ne_status( char *path )
    stat->E = handle->E;
    stat->bsz = handle->bsz;
    stat->totsz = handle->totsz;
+   stat->start = handle->erasure_offset;
 
    // store xattr failures to stat struct and reset error data
    for ( counter = 0; counter < ( handle->N + handle->E ); counter++ ) {
