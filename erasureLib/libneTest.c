@@ -109,14 +109,14 @@ int main( int argc, const char* argv[] )
       wr = 0;
    }
    else if ( strncmp( argv[1], "rebuild", strlen(argv[1]) ) == 0 ) {
-      if ( argc < 6  ||  argc > 6 ) { 
+      if ( argc != 6 ) { 
          fprintf(stderr,"libneTest: inappropriate arguments for a rebuild operation\nlibneTest:   expected \'%s %s erasure_path N E start_file\'\n", argv[0], argv[1] ); 
          return -1;
       }
       wr = 2;
    }
    else if ( strncmp( argv[1], "status", strlen(argv[1]) ) == 0 ) {
-      if ( argc < 6  ||  argc > 6 ) { 
+      if ( argc != 4 ) { 
          fprintf(stderr,"libneTest: inappropriate arguments for a status operation\nlibneTest:   expected \'%s %s erasure_path N E start_file\'\n", argv[0], argv[1] ); 
          return -1;
       }
@@ -136,10 +136,13 @@ int main( int argc, const char* argv[] )
       E = atoi(argv[5]);
       start = atoi(argv[6]);
    }
-   else {
+   else if ( wr < 3 ) {
       N = atoi(argv[3]);
       E = atoi(argv[4]);
       start = atoi(argv[5]);
+   }
+   else {
+      start = atoi(argv[3]);
    }
 
    if ( argc == 8 ) {
