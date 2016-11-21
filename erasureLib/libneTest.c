@@ -261,7 +261,7 @@ int main( int argc, const char* argv[] )
    }
    else if ( wr == 3 ) { //status
       fprintf( stdout, "libneTest: retrieving status of erasure striping (N=%d,E=%d,offset=%d)\n", N, E, start );
-      ne_stat stat = ne_status( (char *)argv[2], start );
+      ne_stat stat = ne_status( (char *)argv[2] );
       if ( stat == NULL ) {
          fprintf( stderr, "libneTest: ne_status failed!\n" );
          return -1;
