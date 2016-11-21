@@ -81,7 +81,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define BLKSZ 65536
 #define TEST_SEED 57
 
-#define XATTRKEY "user.n.e.bsz.nsz.ncompsz.ncrcsum.totsz"
+#define XATTRKEY "user.n.e.offset.bsz.nsz.ncompsz.ncrcsum.totsz"
 #ifdef XATTR_CRC
 #define XCRCKEY "crc_list"
 #endif
@@ -150,7 +150,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset );
 int ne_write( ne_handle handle, void *buffer, int nbytes );
 int ne_close( ne_handle handle );
 int ne_rebuild( ne_handle handle );
-ne_stat ne_status( char *path, int start_position );
+ne_stat ne_status( char *path );
 int ne_flush( ne_handle handle );
 
 #endif

@@ -84,8 +84,8 @@ These include:   ne_read(), ne_write(), ne_health(), and ne_rebuild().
 
 Additionally, each output file gets an xattr added to it  (yes all 12 files in the case of a 10+2
 the xattr looks like this
-n.e.chunksize.nsz.ncompsz.ncrcsum.totsz: 10 2 64 196608 196608 3304199718723886772 1717171
-N is nparts, E is numerasure, chunksize is chunksize, nsz is the size of the part, ncompsz is the size of the part but might get used if we ever compress the parts, totsz is the total real data in the N part files.
+n.e.offset.blocksize.nsz.ncompsz.ncrcsum.totsz: 10 2 64 0 196608 196608 3304199718723886772 1717171
+N is nparts, E is numerasure, offset is the starting position of the stripe in terms of part number, chunksize is chunksize, nsz is the size of the part, ncompsz is the size of the part but might get used if we ever compress the parts, totsz is the total real data in the N part files.
 Since creating erasure requires full stripe writes, the last part of the file may all be zeros in the parts.  This totsz is the real size of the data, not counting the trailing zeros.
 All the parts and all the erasure stripes should be the same size.
 To fill in the trailing zeros, this program uses truncate - punching a hole in the N part files for the zeros.
@@ -211,12 +211,22 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
 
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
       ret = xattr_check(handle,path); //idenfity total data size of stripe
-      if ( ret != 0 ) {
+      if ( ret < 0 ) {
 #ifdef DEBUG
          fprintf( stderr, "ne_open: extended attribute check has failed\n" );
 #endif
          free( handle );
          return NULL;
+      }
+      else if ( ret == 1 ) {
+         ret = xattr_check(handle,path); //perform the check again, identifying mismatched values
+         if ( ret != 0 ) {
+#ifdef DEBUG
+            fprintf( stderr, "ne_open: extended attribute check has failed\n" );
+#endif
+            free( handle );
+            return NULL;
+         }
       }
    }
    else if ( mode != NE_WRONLY ) { //reject improper mode arguments
@@ -1254,7 +1264,7 @@ int ne_close( ne_handle handle )
    while (counter < N+E) {
       if ( handle->mode == NE_WRONLY  ||  (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1) ) { 
          bzero(xattrval,sizeof(xattrval));
-         sprintf(xattrval,"%d %d %d %lu %lu %llu %llu",N,E,bsz,handle->nsz[counter],handle->ncompsz[counter],(unsigned long long)handle->csum[counter],(unsigned long long)handle->totsz);
+         sprintf(xattrval,"%d %d %d %d %lu %lu %llu %llu",N,E,handle->erasure_offset,bsz,handle->nsz[counter],handle->ncompsz[counter],(unsigned long long)handle->csum[counter],(unsigned long long)handle->totsz);
 #ifdef DEBUG
          fprintf( stdout, "ne_close: setting file %d xattr = \"%s\"\n", counter, xattrval );
 #endif
@@ -1348,11 +1358,13 @@ int xattr_check( ne_handle handle, char *path )
    char xattrchunksizek[20];   /* char array to get chunksize from xattr */
    char xattrnsize[20];        /* char array to get total size from xattr */
    char xattrerasure[20];      /* char array to get erasure from xattr */
+   char xattroffset[20];      /* char array to get erasure_offset from xattr */
    char xattrncompsize[20];    /* general char for xattr manipulation */
    char xattrnsum[50];         /* char array to get xattr sum from xattr */
    char xattrtotsize[160];
    int N = handle->N;
    int E = handle->E;
+   int erasure_offset = handle->erasure_offset;
    unsigned int bsz = handle->bsz;
    unsigned long nsz;
    unsigned long ncompsz;
@@ -1364,10 +1376,12 @@ int xattr_check( ne_handle handle, char *path )
 #endif
    int N_list[ MAXE ] = { 0 };
    int E_list[ MAXE ] = { 0 };
+   int O_list[ MAXE ] = { -1 };
    int bsz_list[ MAXE ] = { 0 };
    int totsz_list[ MAXE ] = { 0 };
    int N_match[ MAXE ] = { 0 };
    int E_match[ MAXE ] = { 0 };
+   int O_match[ MAXE ] = { 0 };
    int bsz_match[ MAXE ] = { 0 };
    int totsz_match[ MAXE ] = { 0 };
    struct stat* partstat = malloc (sizeof(struct stat));
@@ -1382,10 +1396,7 @@ int xattr_check( ne_handle handle, char *path )
    lN = N;
    lE = E;
 
-   printf ( " Max = %d", lN+lE ); //REMOVE
- 
    for ( counter = 0; counter < lN+lE; counter++ ) {
-      printf( " counter = %d\n", counter ); //REMOVE
       bzero(file,sizeof(file));
       sprintf( file, path, (counter+handle->erasure_offset)%(lN+lE) );
       ret = stat( file, partstat );
@@ -1423,9 +1434,10 @@ int xattr_check( ne_handle handle, char *path )
          continue;
       }
 
-      sscanf(xattrval,"%s %s %s %s %s %s %s",xattrchunks,xattrerasure,xattrchunksizek,xattrnsize,xattrncompsize,xattrnsum,xattrtotsize);
+      sscanf(xattrval,"%s %s %s %s %s %s %s %s",xattrchunks,xattrerasure,xattroffset,xattrchunksizek,xattrnsize,xattrncompsize,xattrnsum,xattrtotsize);
       N = atoi(xattrchunks);
       E = atoi(xattrerasure);
+      erasure_offset = atoi(xattroffset);
       bsz = atoi(xattrchunksizek);
       nsz = strtol(xattrnsize,NULL,0);
       ncompsz = strtol(xattrncompsize,NULL,0);
@@ -1440,7 +1452,7 @@ int xattr_check( ne_handle handle, char *path )
          /* verify xattr */
          if ( N != handle->N ) {
    #ifdef DEBUG
-            fprintf (stderr, "xattr_check: filexattr N = %d did not match handle value  %d \n", N, handle->N); 
+            fprintf (stderr, "xattr_check: filexattr N = %d did not match handle value  %d\n", N, handle->N); 
    #endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
@@ -1449,7 +1461,7 @@ int xattr_check( ne_handle handle, char *path )
          }
          else if ( E != handle->E ) {
    #ifdef DEBUG
-            fprintf (stderr, "xattr_check: filexattr E = %d did not match handle value  %d \n", E, handle->E); 
+            fprintf (stderr, "xattr_check: filexattr E = %d did not match handle value  %d\n", E, handle->E); 
    #endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
@@ -1458,7 +1470,16 @@ int xattr_check( ne_handle handle, char *path )
          }
          else if ( bsz != handle->bsz ) {
    #ifdef DEBUG
-            fprintf (stderr, "xattr_check: filexattr bsz = %d did not match handle value  %d \n", bsz, handle->bsz); 
+            fprintf (stderr, "xattr_check: filexattr bsz = %d did not match handle value  %d\n", bsz, handle->bsz); 
+   #endif
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+            continue;
+         }
+         else if ( erasure_offset != handle->erasure_offset ) {
+   #ifdef DEBUG
+            fprintf (stderr, "xattr_check: filexattr offset = %d did not match handle value  %d\n", erasure_offset, handle->erasure_offset); 
    #endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
@@ -1490,7 +1511,15 @@ int xattr_check( ne_handle handle, char *path )
          handle->nerr++;
          continue;
       }
-
+      else if ( (N + E) <= erasure_offset ) {
+#ifdef DEBUG
+         fprintf (stderr, "xattr_check: filexattr offset = %d is inconsistent with stripe width %d\n", erasure_offset, (N+E)); 
+#endif
+         handle->src_in_err[counter] = 1;
+         handle->src_err_list[handle->nerr] = counter;
+         handle->nerr++;
+         continue;
+      }
 #ifdef INT_CRC
       else if ( ( ncompsz + (blocks*sizeof(crc)) ) != partstat->st_size ) {
 #else
@@ -1521,8 +1550,8 @@ int xattr_check( ne_handle handle, char *path )
          }
 
          // This bundle of spaghetti acts to individually verify each "important" xattr value and count matches amongst all files
-         char nc = 1, ec = 1, bc = 1, tc = 1;
-         for ( bcounter = 0; ( nc || ec || bc || tc )  &&  bcounter < MAXE; bcounter++ ) {
+         char nc = 1, ec = 1, of = 1, bc = 1, tc = 1;
+         for ( bcounter = 0; ( nc || ec || bc || tc || of )  &&  bcounter < MAXE; bcounter++ ) {
             if ( nc ) {
                if ( N_list[bcounter] == N ) {
                   N_match[bcounter]++;
@@ -1542,6 +1571,17 @@ int xattr_check( ne_handle handle, char *path )
                else if ( E_list[bcounter] == 0 ) {
                   E_list[bcounter] = E;
                   ec = 0;
+               }
+            }
+
+            if ( of ) {
+               if ( O_list[bcounter] == erasure_offset ) {
+                  O_match[bcounter]++;
+                  of = 0;
+               }
+               else if ( O_list[bcounter] == -1 ) {
+                  O_list[bcounter] = erasure_offset;
+                  of = 0;
                }
             }
 
@@ -1568,13 +1608,13 @@ int xattr_check( ne_handle handle, char *path )
             }
          } //end of value-check loop
 
-         printf("Max = %d, counter = %d\n", lN+lE, counter); //REMOVE
       } //end of else at end of xattr checks
 
 
    } //end of loop over files
 
    free(partstat);
+   ret = 0;
 
    if ( handle->mode != NE_RDONLY ) { //if the handle is uninitialized, store the necessary info
       int maxmatch=0;
@@ -1582,6 +1622,7 @@ int xattr_check( ne_handle handle, char *path )
       //loop through the counts of matching xattr values and identify the most prevalent match
       for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
          if ( N_match[bcounter] > maxmatch ) { maxmatch = N_match[bcounter]; match = bcounter; }
+         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
       }
 
       if ( match != -1 ) {
@@ -1600,6 +1641,7 @@ int xattr_check( ne_handle handle, char *path )
       //loop through the counts of matching xattr values and identify the most prevalent match
       for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
          if ( E_match[bcounter] > maxmatch ) { maxmatch = E_match[bcounter]; match = bcounter; }
+         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
       }
 
       if ( match != -1 ) {
@@ -1617,7 +1659,27 @@ int xattr_check( ne_handle handle, char *path )
       match=-1;
       //loop through the counts of matching xattr values and identify the most prevalent match
       for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
+         if ( O_match[bcounter] > maxmatch ) { maxmatch = O_match[bcounter]; match = bcounter; }
+         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
+      }
+
+      if ( match != -1 ) {
+         handle->erasure_offset = O_list[match];
+      }
+      else {
+#ifdef DEBUG
+         fprintf( stderr, "xattr_check: number of mismatched offset xattr vals exceeds erasure limits\n" );
+#endif
+         errno = ENODATA;
+         return -1;
+      }
+
+      maxmatch=0;
+      match=-1;
+      //loop through the counts of matching xattr values and identify the most prevalent match
+      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
          if ( bsz_match[bcounter] > maxmatch ) { maxmatch = bsz_match[bcounter]; match = bcounter; }
+         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
       }
 
       if ( match != -1 ) {
@@ -1636,6 +1698,7 @@ int xattr_check( ne_handle handle, char *path )
       //loop through the counts of matching xattr values and identify the most prevalent match
       for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
          if ( totsz_match[bcounter] > maxmatch ) { maxmatch = totsz_match[bcounter]; match = bcounter; }
+         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
       }
 
       if ( match != -1 ) {
@@ -1655,6 +1718,11 @@ int xattr_check( ne_handle handle, char *path )
    if ( handle->nerr > handle->E ) {
       errno = ENODATA;
       return -1;
+   }
+
+   if ( ret != 0 ) {
+      fprintf( stderr, "xattr_check: mismatched xattr values were detected, but not identified!" );
+      return 1;
    }
 
    return 0;
@@ -2465,11 +2533,10 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 /**
  * Retrieves the health and parameters for the erasure striping indicated by the provided path and offset
  * @param char* path : Name structure for the files of the desired striping.  This should contain a single "%d" field.
- * @param int erasure_offset : Offset of the erasure stripe, defining the name of the first N file
  * @return nestat : Status structure containing the encoded error pattern of the stripe (as with ne_close) as well as 
  *                  the number of data parts (N), number of erasure parts (E), and blocksize (bsz) for the stripe.
  */
-ne_stat ne_status( char *path, int erasure_offset )
+ne_stat ne_status( char *path )
 {
 
    char file[MAXNAME];       /* array name of files */
@@ -2491,14 +2558,6 @@ ne_stat ne_status( char *path, int erasure_offset )
       return NULL;
    }
 
-   if ( erasure_offset < 0 ) {
-#ifdef DEBUG
-      fprintf( stderr, "ne_status: improper erasure_offset arguement received - %d\n", erasure_offset );
-#endif
-      errno = EINVAL;
-      return NULL;
-   }
-
    /* initialize stored info */
    for ( counter=0; counter < MAXPARTS; counter++ ) {
       handle->src_in_err[counter] = 0;
@@ -2517,7 +2576,7 @@ ne_stat ne_status( char *path, int erasure_offset )
    handle->N = 0;
    handle->E = 0;
    handle->bsz = 0;
-   handle->erasure_offset = erasure_offset;
+   handle->erasure_offset = 0;
    handle->mode = NE_STAT;
    handle->e_ready = 0;
    handle->buff_offset = 0;
@@ -2533,14 +2592,6 @@ ne_stat ne_status( char *path, int erasure_offset )
       fprintf( stderr, "ne_status: extended attribute check has failed\n" );
 #endif
       free( handle );
-      return NULL;
-   }
-
-   if ( erasure_offset >= (handle->N+handle->E) ) {
-#ifdef DEBUG
-      fprintf( stderr, "ne_status: erasure offset (%d) is inconsistent with xattr values\n", erasure_offset );
-#endif
-      errno = EINVAL;
       return NULL;
    }
 
@@ -2597,7 +2648,7 @@ ne_stat ne_status( char *path, int erasure_offset )
       handle->nsz[counter] = 0;
       handle->ncompsz[counter] = 0;
       bzero( file, MAXNAME );
-      sprintf( file, path, (counter+erasure_offset)%(handle->N+handle->E) );
+      sprintf( file, path, (counter+handle->erasure_offset)%(handle->N+handle->E) );
 
 #ifdef INT_CRC
       if ( counter > handle->N ) {
