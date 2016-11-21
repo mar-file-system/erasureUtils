@@ -2300,6 +2300,21 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 
 
 /**
+ * Performs a rebuild operation on the erasure striping indicated by the given handle, but ignores faulty xattr values.
+ * @param ne_handle handle : The handle for the erasure striping to be repaired
+ * @return int : Status code.  Success is indicated by 0 and failure by -1
+ */
+ne_noxattr_rebuild(ne_handle handle) {
+   while ( handle->nerr > 0 ) {
+      handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
+      handle->src_err_list[handle->nerr] = 0;
+      handle->nerr--;
+   }
+   return ne_rebuild( handle ); 
+}
+
+
+/**
  * Retrieves the health and parameters for the erasure striping indicated by the provided path and offset
  * @param char* path : Name structure for the files of the desired striping.  This should contain a single "%d" field.
  * @return nestat : Status structure containing the encoded error pattern of the stripe (as with ne_close) as well as 

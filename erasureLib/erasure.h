@@ -151,6 +151,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset );
 int ne_write( ne_handle handle, void *buffer, int nbytes );
 int ne_close( ne_handle handle );
 int ne_rebuild( ne_handle handle );
+int ne_noxattr_rebuild( ne_handle handle );
 ne_stat ne_status( char *path );
 int ne_flush( ne_handle handle );
 
