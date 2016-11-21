@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <errno.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -144,50 +145,111 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
  * @param int E : Erasure width of the striping
  * @return ne_handle : The new handle for the opened erasure striping
  */
-ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
+ne_handle ne_open( char *path, ne_mode mode, ... )
 {
 
    char file[MAXNAME];       /* array name of files */
    int counter;
    int ret;
+   int N = 0;
+   int E = 0;
+   int erasure_offset = 0;
 #ifdef INT_CRC
    int crccount;
-   unsigned int bsz = BLKSZ - sizeof( u32 );
-#else
-   unsigned int bsz = BLKSZ;
+#endif
+   int bsz = BLKSZ;
+
+   counter = 3;
+   if ( mode >= NE_SETBSZ ) {
+      counter++;
+      mode -= NE_SETBSZ;
+   }
+   if ( mode >= NE_NOINFO ) {
+      counter -= 3;
+      mode -= NE_NOINFO;
+   }
+
+   va_list ap;
+   va_start( ap, mode );
+   
+   if ( counter == 1 ) {
+      bsz = va_arg( ap, int );
+   }
+   else if ( counter > 1 ){
+      erasure_offset = va_arg( ap, int );
+      N = va_arg( ap, int );
+      E = va_arg( ap, int );
+      if ( counter == 4 ){
+         bsz = va_arg( ap, int );
+      }
+   }
+
+   va_end( ap );
+
+   if ( mode == NE_WRONLY  &&  counter < 2 ) {
+#ifdef DEBUG
+      fprintf( stderr, "ne_open: recieved an invalid \"NE_NOINFO\" flag for \"NE_WRONLY\" operation\n");
+#endif
+      errno = EINVAL;
+      return NULL;
+   }
+
+#ifdef INT_CRC
+   //shrink data size to fit crc within block
+   bsz -= sizeof( u32 );
 #endif
 
    ne_handle handle = malloc( sizeof( struct handle ) );
 
-   if ( N < 1  ||  N > MAXN ) {
+   if ( counter > 1 ) {
+      if ( N < 1  ||  N > MAXN ) {
 #ifdef DEBUG
-      fprintf( stderr, "improper N arguement received - %d\n", N );
+         fprintf( stderr, "ne_open: improper N arguement received - %d\n", N );
 #endif
-      errno = EINVAL;
-      return NULL;
-   }
-   if ( E < 0  ||  E > MAXE ) {
+         errno = EINVAL;
+         return NULL;
+      }
+      if ( E < 0  ||  E > MAXE ) {
 #ifdef DEBUG
-      fprintf( stderr, "improper E arguement received - %d\n", E );
+         fprintf( stderr, "ne_open: improper E arguement received - %d\n", E );
 #endif
-      errno = EINVAL;
-      return NULL;
-   }
-//   if ( bsz < 0 ) {
-//      fprintf( stderr, "improper bsz arguement received - %d\n", bsz );
-//      errno = EINVAL;
-//      return NULL;
-//   }
-   if ( erasure_offset < 0  ||  erasure_offset >= N+E ) {
+         errno = EINVAL;
+         return NULL;
+      }
+      if ( erasure_offset < 0  ||  erasure_offset >= N+E ) {
 #ifdef DEBUG
-      fprintf( stderr, "improper erasure_offset arguement received - %d\n", erasure_offset );
+         fprintf( stderr, "ne_open: improper erasure_offset arguement received - %d\n", erasure_offset );
+#endif
+         errno = EINVAL;
+         return NULL;
+      }
+   }
+   if ( bsz < 0 ) {
+#ifdef DEBUG
+      fprintf( stderr, "ne_open: improper bsz arguement received - %d\n", bsz );
 #endif
       errno = EINVAL;
       return NULL;
    }
 
    /* initialize stored info */
-   for ( counter=0; counter < N+E; counter++ ) {
+   handle->nerr = 0;
+   handle->totsz = 0;
+   handle->N = N;
+   handle->E = E;
+   handle->bsz = bsz;
+   handle->erasure_offset = erasure_offset;
+   if ( counter < 2 ) {
+      handle->mode = NE_STAT;
+   }
+   else {
+      handle->mode = mode;
+   }
+   handle->e_ready = 0;
+   handle->buff_offset = 0;
+   handle->buff_rem = 0;
+
+   for ( counter=0; counter < MAXPARTS; counter++ ) {
       handle->src_in_err[counter] = 0;
       handle->src_err_list[counter] = 0;
 #ifdef XATTR_CRC
@@ -197,27 +259,16 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
       handle->crc_list[counter]->tail = NULL;
 #endif
    }
-   handle->nerr = 0;
-   handle->totsz = 0;
-   handle->N = N;
-   handle->E = E;
-   handle->bsz = bsz;
-   handle->erasure_offset = erasure_offset;
-   handle->mode = mode;
-   handle->e_ready = 0;
-   handle->buff_offset = 0;
-   handle->buff_rem = 0;
 
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
       ret = xattr_check(handle,path); //idenfity total data size of stripe
-      if ( ret < 0 ) {
-#ifdef DEBUG
-         fprintf( stderr, "ne_open: extended attribute check has failed\n" );
-#endif
-         free( handle );
-         return NULL;
-      }
-      else if ( ret == 1 ) {
+      handle->mode = mode;
+      if ( ret != 0  ||  handle->nerr != 0 ) {
+         while ( handle->nerr > 0 ) {
+            handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
+            handle->src_err_list[handle->nerr] = 0;
+            handle->nerr--;
+         }
          ret = xattr_check(handle,path); //perform the check again, identifying mismatched values
          if ( ret != 0 ) {
 #ifdef DEBUG
@@ -233,6 +284,7 @@ ne_handle ne_open( char *path, ne_mode mode, int erasure_offset, int N, int E )
       fprintf( stderr, "improper mode argument received - %d\n", mode );
 #endif
       errno = EINVAL;
+      free( handle );
       return NULL;
    }
 
@@ -2301,7 +2353,11 @@ ne_stat ne_status( char *path )
 
    ret = xattr_check(handle,path); //idenfity total data size of stripe
    if ( handle->nerr != 0  ||  ret != 0 ) {
-      handle->nerr = 0;
+      while ( handle->nerr > 0 ) {
+         handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
+         handle->src_err_list[handle->nerr] = 0;
+         handle->nerr--;
+      }
       ret = xattr_check(handle,path); //verify the stripe, now that values have been established
    }
    if ( ret != 0 ) {
