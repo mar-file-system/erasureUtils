@@ -113,25 +113,25 @@ typedef struct handle {
    ne_mode mode;
    u64 totsz;
    void *buffer;
-   unsigned char *buffs[ MAXN + MAXE ];
+   unsigned char *buffs[ MAXPARTS ];
    unsigned long buff_rem;
    off_t buff_offset;
-   int FDArray[ MAXN + MAXE ];
+   int FDArray[ MAXPARTS ];
 #ifdef XATTR_CRC
    crc_list crc_list[ MAXPARTS ];
 #endif
 
    /* Per-part Info */
-   u64 csum[ MAXN + MAXE ];
-   unsigned long nsz[ MAXN + MAXE ];
-   unsigned long ncompsz[ MAXN + MAXE ];
+   u64 csum[ MAXPARTS ];
+   unsigned long nsz[ MAXPARTS ];
+   unsigned long ncompsz[ MAXPARTS ];
 
    /* Error Pattern Info */
    int nerr;
    int erasure_offset;
    unsigned char e_ready;
-   unsigned char src_in_err[ MAXN + MAXE ];
-   unsigned char src_err_list[ MAXN + MAXE ];
+   unsigned char src_in_err[ MAXPARTS ];
+   unsigned char src_err_list[ MAXPARTS ];
 
    /* Erasure Manipulation Structures */
    unsigned char *encode_matrix;

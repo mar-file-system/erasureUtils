@@ -250,6 +250,9 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
    handle->buff_rem = 0;
 
    for ( counter=0; counter < MAXPARTS; counter++ ) {
+      handle->csum[counter] = 0;
+      handle->nsz[counter] = 0;
+      handle->ncompsz[counter] = 0;
       handle->src_in_err[counter] = 0;
       handle->src_err_list[counter] = 0;
 #ifdef XATTR_CRC
@@ -323,9 +326,6 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
 #endif
    mode_t mask = umask(0000);
    while ( counter < N+E ) {
-      handle->csum[counter] = 0;
-      handle->nsz[counter] = 0;
-      handle->ncompsz[counter] = 0;
       bzero( file, MAXNAME );
       sprintf( file, path, (counter+erasure_offset)%(N+E) );
 
@@ -349,7 +349,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
       }
       else if ( mode == NE_REBUILD  &&  handle->src_in_err[counter] == 1 ) {
 #ifdef DEBUG
-         fprintf( stdout, "   opening %s for write\n", file );
+         fprintf( stdout, "   opening %s.rebuild for write\n", file );
 #endif
          handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
 
@@ -1420,6 +1420,7 @@ int xattr_check( ne_handle handle, char *path )
    unsigned long nsz;
    unsigned long ncompsz;
    char goodfile = 0;
+   u64 csum;
    u64 totsz;
 #ifdef INT_CRC
    unsigned int blocks;
@@ -1492,6 +1493,7 @@ int xattr_check( ne_handle handle, char *path )
       bsz = atoi(xattrchunksizek);
       nsz = strtol(xattrnsize,NULL,0);
       ncompsz = strtol(xattrncompsize,NULL,0);
+      csum = strtoll(xattrnsum,NULL,0);
       totsz = strtoll(xattrtotsize,NULL,0);
 
 #ifdef INT_CRC
@@ -1594,6 +1596,8 @@ int xattr_check( ne_handle handle, char *path )
          continue;
       }
       else {
+         printf( "setting csum for file %d to %llu\n", counter, (unsigned long long)csum);
+         handle->csum[counter] = csum;
          if ( handle->mode == NE_RDONLY ) {
             handle->totsz = totsz;
             break;
@@ -1793,6 +1797,7 @@ int ne_rebuild( ne_handle handle ) {
    int tmp;
    unsigned char *temp_buffs[ MAXPARTS ];
    unsigned int decode_index[ MAXPARTS ];
+   u64 csum[ MAXPARTS ];
    char init;
    u32 crc;
    u64 totsizetest;
@@ -1832,6 +1837,14 @@ int ne_rebuild( ne_handle handle ) {
    init = 0;
 
 rebuild:
+   for ( counter = 0; counter < (handle->N + handle->E); counter++ ) {
+      if ( handle->src_in_err[counter] == 0 ) {
+         csum[counter] = 0;
+      }
+      else {
+         handle->csum[counter] = 0;
+      }
+   }
 
 #ifdef DEBUG
    fprintf( stdout, "ne_rebuild: initiating rebuild operation...\n" );
@@ -1945,13 +1958,15 @@ rebuild:
                goto rebuild;
             }
 
-#ifdef INT_CRC
-            //calculate and verify crc
 #ifdef HAVE_LIBISAL
             crc = crc32_ieee( TEST_SEED, handle->buffs[counter], handle->bsz );
 #else
             crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], handle->bsz );
 #endif
+            csum[counter] += crc;
+
+#ifdef INT_CRC
+            //verify crc
             if ( memcmp( handle->buffs[counter]+(handle->bsz), &crc, sizeof(u32) ) != 0 ){
 #ifdef DEBUG
                fprintf(stderr, "ne_rebuild: mismatch of int-crc for file %d\n", counter);
@@ -2075,6 +2090,50 @@ rebuild:
       }
       totsizetest += handle->N*handle->bsz;  
       init=0;
+   }
+
+   //verify crc sums
+   mode_t mask = umask(0000);
+   for ( counter = 0; counter < (handle->N + handle->E); counter++ ) {
+      if ( handle->csum[counter] != csum[counter]  &&  handle->src_in_err[counter] == 0 ) {
+#ifdef DEBUG
+         fprintf(stderr, "ne_rebuild: mismatch of crc sum for file %d, handle:%llu  data:%llu\n", counter, (unsigned long long)handle->csum[counter], (unsigned long long)csum[counter]);
+#endif
+         handle->src_in_err[counter] = 1;
+
+         if ( handle->mode != NE_STAT ) {
+            bzero( file, MAXNAME );
+            sprintf( file, handle->path, (counter+handle->erasure_offset)%(handle->N+handle->E) );
+#ifdef DEBUG
+            fprintf( stdout, "   closing %s\n", file );
+#endif
+            close( handle->FDArray[counter] );
+#ifdef DEBUG
+            fprintf( stdout, "   opening %s.rebuild for write\n", file );
+#endif
+            handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
+         }
+
+         //ensure that sources are listed in order
+         for ( i = 0; i < handle->nerr; i++ ) {
+            if ( handle->src_err_list[i] > counter) { break; }
+         }
+         while ( i < handle->nerr ) {
+            tmp = handle->src_err_list[i];
+            handle->src_err_list[i] = counter;
+            counter = tmp;
+            i++;
+         }
+
+         handle->src_err_list[i] = counter;
+         handle->nerr++;
+         handle->e_ready = 0; //indicate that erasure structs require re-initialization
+         init = 1;
+      }
+   }
+   umask(mask);
+   if ( handle->e_ready == 0  &&  handle->mode != NE_STAT ){
+      goto rebuild;
    }
 
    for ( counter = 0; counter < (handle->N + handle->E); counter++ ) {
@@ -2344,6 +2403,9 @@ ne_stat ne_status( char *path )
 
    /* initialize stored info */
    for ( counter=0; counter < MAXPARTS; counter++ ) {
+      handle->csum[counter] = 0;
+      handle->nsz[counter] = 0;
+      handle->ncompsz[counter] = 0;
       handle->src_in_err[counter] = 0;
       handle->src_err_list[counter] = 0;
       stat->data_status[counter] = 0;
@@ -2433,9 +2495,6 @@ ne_stat ne_status( char *path )
    fprintf( stdout, "ne_status: opening file descriptors...\n" );
 #endif
    while ( counter < (handle->N+handle->E) ) {
-      handle->csum[counter] = 0;
-      handle->nsz[counter] = 0;
-      handle->ncompsz[counter] = 0;
       bzero( file, MAXNAME );
       sprintf( file, path, (counter+handle->erasure_offset)%(handle->N+handle->E) );
 
