@@ -2385,9 +2385,9 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
  */
 ne_noxattr_rebuild(ne_handle handle) {
    while ( handle->nerr > 0 ) {
+      handle->nerr--;
       handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
       handle->src_err_list[handle->nerr] = 0;
-      handle->nerr--;
    }
    return ne_rebuild( handle ); 
 }
@@ -2451,9 +2451,9 @@ ne_stat ne_status( char *path )
    ret = xattr_check(handle,path); //idenfity total data size of stripe
    if ( handle->nerr != 0  ||  ret != 0 ) {
       while ( handle->nerr > 0 ) {
+         handle->nerr--;
          handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
          handle->src_err_list[handle->nerr] = 0;
-         handle->nerr--;
       }
       ret = xattr_check(handle,path); //verify the stripe, now that values have been established
    }
