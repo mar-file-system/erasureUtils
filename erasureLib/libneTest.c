@@ -214,7 +214,13 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
-      handle = ne_open( (char *)argv[3], NE_RDONLY, start, N, E );
+      if ( N == 0 ) {
+         handle = ne_open( (char *)argv[3], NE_RDONLY | NE_NOINFO );
+      }
+      else {
+         handle = ne_open( (char *)argv[3], NE_RDONLY, start, N, E );
+      }
+
       if ( handle == NULL ) {
          fprintf( stderr, "libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
          return -1;
@@ -251,7 +257,14 @@ int main( int argc, const char* argv[] )
    }
    else if ( wr == 2 ) { //rebuild
       fprintf( stdout, "libneTest: rebuilding erasure striping (N=%d,E=%d,offset=%d)\n", N, E, start );
-      handle = ne_open( (char *)argv[2], NE_REBUILD, start, N, E );
+
+      if ( N == 0 ) {
+         handle = ne_open( (char *)argv[2], NE_REBUILD | NE_NOINFO );
+      }
+      else {
+         handle = ne_open( (char *)argv[2], NE_REBUILD, start, N, E );
+      }
+
       tmp = ne_rebuild( handle );
       if ( tmp != 0 ) {
          fprintf( stderr, "libneTest: rebuild failed!\n" );

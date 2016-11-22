@@ -291,6 +291,10 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
       return NULL;
    }
 
+   N = handle->N;
+   E = handle->E;
+   bsz = handle->bsz;
+
    /* allocate a big buffer for all the N chunks plus a bit extra for reading in crcs */
 #ifdef INT_CRC
    crccount = 1;
