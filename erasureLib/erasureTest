@@ -170,108 +170,132 @@ while [[ $cnt -lt $ITER ]]; do
    incnt=0
    while [[ $incnt -lt $INITER ]]; do
 
-   if [[ $incnt -ne 0 ]]; then
-      echo "Continuing with the same $n+$e striping..."
-      echo >> $LOGFILE
-      echo "Continuring to use $n+$e striping with start $start..." >> $LOGFILE
-      echo
-   fi
-
-   nerr=$RANDOM
-   let "nerr %= $(( e + 1 ))"
-
-   if [[ $nerr -eq 0 ]]; then
-      if [[ $err_free -eq 1 ]]; then
-         nerr=$e
+      if [[ $incnt -ne 0 ]]; then
+         echo "Continuing with the same $n+$e striping..."
+         echo >> $LOGFILE
+         echo "Continuring to use $n+$e striping with start $start..." >> $LOGFILE
+         echo
       fi
-      err_free=1
-   fi
 
-   npat=""
-   maxpos=$(( n + e - nerr + 1 ))
-   oldpos=0
-   errcnt=0
-   errpos=-1
-   readerr=0
-   silent_count=0
+      nerr=$RANDOM
+      let "nerr %= $(( e + 1 ))"
 
-   echo "$nerr error(s) are to be inserted..."
-   echo "Inserting $nerr error(s)..." >> $LOGFILE
-   
-   {
+      if [[ $nerr -eq 0 ]]; then
+         if [[ $err_free -eq 1 ]]; then
+            nerr=$e
+         fi
+         err_free=1
+      fi
 
-      stat=0
+      npat=""
+      maxpos=$(( n + e - nerr + 1 ))
+      oldpos=0
+      errcnt=0
+      errpos=-1
+      readerr=0
+      silent_count=0
 
-      while [[ $errcnt -lt $nerr ]]; do
-         while [[ $errpos -lt $oldpos ]]; do
-            errpos=$RANDOM
-            let "errpos %= maxpos"
+      echo "$nerr error(s) are to be inserted..."
+      echo "Inserting $nerr error(s)..." >> $LOGFILE
+      
+      {
+
+         stat=0
+
+         while [[ $errcnt -lt $nerr ]]; do
+            while [[ $errpos -lt $oldpos ]]; do
+               errpos=$RANDOM
+               let "errpos %= maxpos"
+            done
+
+            echo "   placing error at $errpos""..."
+            echo "   placing error at $errpos""..." >> $LOGFILE
+            stat=$(( stat + 2**errpos ))
+
+            efile="testout.$errpos.$$"
+
+            echo "   creating backup of $efile""..."
+            cp $efile "$efile".backup
+
+            truepos=$(( errpos - start ))
+            if [[ $truepos -lt 0 ]]; then
+               truepos=$(( truepos + n + e ))
+            fi
+               
+            if [[ $truepos -lt $n ]]; then
+               readerr=1
+            fi
+
+            ctype=$(( RANDOM % (3-ICRC) ))
+            if [[ $ctype -eq 0 ]]; then
+               echo "   corrupting file $efile ( corruption-type : removal )"
+               echo "   corrupting file $efile ( corruption-type : removal )" >> $LOGFILE
+               rm $efile
+            elif [[ $ctype -eq 1 ]]; then
+               err_list[$silent_count]=$errpos
+               silent_count=$(( silent_count + 1 ))
+               echo "   corrupting file $efile ( corruption-type : truncate )"
+               echo "   corrupting file $efile ( corruption-type : truncate )" >> $LOGFILE
+               fsize=$( stat $stfmt $efile )
+               corr=$(( RANDOM % fsize ))
+               echo "      truncating from $fsize to $corr bytes"
+               echo "      truncating from $fsize to $corr bytes" >> $LOGFILE
+               dd if=$efile of=$efile.tmp bs=1 count=$corr > /dev/null 2>&1
+               rm $efile
+               mv $efile.tmp $efile
+               echo "   creating backup of corrupted file..."
+               cp $efile "$efile".corrupted
+            else
+               err_list[$silent_count]=$errpos
+               silent_count=$(( silent_count + 1 ))
+               echo "   corrupting file $efile ( corruption-type : silent )"
+               echo "   corrupting file $efile ( corruption-type : silent )" >> $LOGFILE
+               fsize=$( stat $stfmt $efile )
+               corr=$(( RANDOM % fsize ))
+               offset=$(( RANDOM % ( fsize - corr ) ))
+               echo "      inserting $corr random bytes at offset $offset"
+               echo "      inserting $corr random bytes at offset $offset" >> $LOGFILE
+
+               cp $efile $efile".tmp"
+               diff=0
+               while [[ $diff -eq 0 ]]; do
+                  dd if=/dev/urandom of=$efile bs=1 count=$corr seek=$offset conv=notrunc > /dev/null 2>&1
+                  diff $efile $efile".tmp" > /dev/null 2>&1
+                  diff=$?
+                  if [[ $diff -eq 0 ]]; then
+                     echo "      corrption insertion did not alter file, retrying..."
+                  fi
+               done
+               rm $efile".tmp"
+               echo "   creating backup of corrupted file..."
+               cp $efile "$efile".corrupted
+            fi
+
+            while [[ $oldpos -lt $errpos ]]; do
+               if [[ $npat == "" ]]; then
+                  npat="0"
+               else
+                  npat="$npat"".0"
+               fi
+               oldpos=$(( oldpos + 1 ))
+            done
+
+            if [[ $npat == "" ]]; then
+               npat="1"
+            else
+               npat="$npat"".1"
+            fi
+            echo "   error creation successful"
+            echo "   error creation successful" >> $LOGFILE
+            oldpos=$(( oldpos + 1 ))
+            
+            errcnt=$(( errcnt + 1 ))
+            maxpos=$(( maxpos + 1 ))
          done
 
-         echo "   placing error at $errpos""..."
-         echo "   placing error at $errpos""..." >> $LOGFILE
-         stat=$(( stat + 2**errpos ))
+         maxpos=$(( maxpos - 1 ))
 
-         efile="testout.$errpos.$$"
-
-         echo "   creating backup of $efile""..."
-         cp $efile "$efile".backup
-
-         truepos=$(( errpos - start ))
-         if [[ $truepos -lt 0 ]]; then
-            truepos=$(( truepos + n + e ))
-         fi
-            
-         if [[ $truepos -lt $n ]]; then
-            readerr=1
-         fi
-
-         ctype=$(( RANDOM % (3-ICRC) ))
-         if [[ $ctype -eq 0 ]]; then
-            echo "   corrupting file $efile ( corruption-type : removal )"
-            echo "   corrupting file $efile ( corruption-type : removal )" >> $LOGFILE
-            rm $efile
-         elif [[ $ctype -eq 1 ]]; then
-            err_list[$silent_count]=$errpos
-            silent_count=$(( silent_count + 1 ))
-            echo "   corrupting file $efile ( corruption-type : truncate )"
-            echo "   corrupting file $efile ( corruption-type : truncate )" >> $LOGFILE
-            fsize=$( stat $stfmt $efile )
-            corr=$(( RANDOM % fsize ))
-            echo "      truncating from $fsize to $corr bytes"
-            echo "      truncating from $fsize to $corr bytes" >> $LOGFILE
-            dd if=$efile of=$efile.tmp bs=1 count=$corr > /dev/null 2>&1
-            rm $efile
-            mv $efile.tmp $efile
-            echo "   creating backup of corrupted file..."
-            cp $efile "$efile".corrupted
-         else
-            err_list[$silent_count]=$errpos
-            silent_count=$(( silent_count + 1 ))
-            echo "   corrupting file $efile ( corruption-type : silent )"
-            echo "   corrupting file $efile ( corruption-type : silent )" >> $LOGFILE
-            fsize=$( stat $stfmt $efile )
-            corr=$(( RANDOM % fsize ))
-            offset=$(( RANDOM % ( fsize - corr ) ))
-            echo "      inserting $corr random bytes at offset $offset"
-            echo "      inserting $corr random bytes at offset $offset" >> $LOGFILE
-
-            cp $efile $efile".tmp"
-            diff=0
-            while [[ $diff -eq 0 ]]; do
-               dd if=/dev/urandom of=$efile bs=1 count=$corr seek=$offset conv=notrunc > /dev/null 2>&1
-               diff $efile $efile".tmp" > /dev/null 2>&1
-               diff=$?
-               if [[ $diff -eq 0 ]]; then
-                  echo "      corrption insertion did not alter file, retrying..."
-               fi
-            done
-            rm $efile".tmp"
-            echo "   creating backup of corrupted file..."
-            cp $efile "$efile".corrupted
-         fi
-
-         while [[ $oldpos -lt $errpos ]]; do
+         while [[ $oldpos -lt $maxpos ]]; do
             if [[ $npat == "" ]]; then
                npat="0"
             else
@@ -280,179 +304,175 @@ while [[ $cnt -lt $ITER ]]; do
             oldpos=$(( oldpos + 1 ))
          done
 
-         if [[ $npat == "" ]]; then
-            npat="1"
-         else
-            npat="$npat"".1"
-         fi
-         echo "   error creation successful"
-         echo "   error creation successful" >> $LOGFILE
-         oldpos=$(( oldpos + 1 ))
-         
-         errcnt=$(( errcnt + 1 ))
-         maxpos=$(( maxpos + 1 ))
-      done
+         echo "...errors inserted."
+         echo "Error pattern is  $npat"
+         echo "Errors inserted, pattern is  $npat" >> $LOGFILE
+         echo
 
-      maxpos=$(( maxpos - 1 ))
-
-      while [[ $oldpos -lt $maxpos ]]; do
-         if [[ $npat == "" ]]; then
-            npat="0"
-         else
-            npat="$npat"".0"
-         fi
-         oldpos=$(( oldpos + 1 ))
-      done
-
-      echo "...errors inserted."
-      echo "Error pattern is  $npat"
-      echo "Errors inserted, pattern is  $npat" >> $LOGFILE
-      echo
-
-      tstat=$stat
-      tmp=0
-      while [[ $readerr -eq 0  &&  $tmp -lt $silent_count ]]; do
-         errpos=${err_list[$tmp]}
-         truepos=$(( errpos - start ))
-         if [[ $truepos -lt 0 ]]; then
-            truepos=$(( truepos + n + e ))
-         fi
-
-         if [[ ! $truepos -lt $n ]]; then
-            tstat=$(( tstat - (2**errpos) ))
-         fi
-
-         tmp=$(( tmp + 1 ))
-      done
-
-      echo >> $LIBTLOG
-
-      echo "Verifying corruption pattern (expecting pattern $stat)..."
-      echo "Verifying corruption pattern (expecting pattern $stat)..." >> $LOGFILE
-
-      { ret=$( time -p ./libneTest status testout.%d.$$ 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
-
-      if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
-         echo -e "\033[0;31mFAIL - status check returned an unexpected error pattern"
-         echo -e "CMD = ./libneTest status testout.%d.$$\033[0m"
-         echo "FAIL - status check returned an unexpected error pattern" >> $LOGFILE
-         echo "CMD = ./libneTest status testout.%d.$$" >> $LOGFILE
-         exit -1
-      fi
-      echo
-
-      echo "Performing a read of all data from striping (expected return value = $tstat)..."
-      echo "Performing read of all data from striping (expected return value = $tstat)..." >> $LOGFILE
-      
-      { ret=$( time -p ./libneTest read outfile.$$ testout.%d.$$ $n $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.read
-      
-      if [[ ! $ret =~ $re  ||  $ret -ne $tstat ]]; then
-         echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but recieved $ret"
-         echo -e "CMD = ./libneTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
-         echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but recieved $ret" >> $LOGFILE
-         echo "CMD = ./libneTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
-         exit -1
-      fi
-      echo
-      
-      echo "Performing comparison..."
-      echo "Performing comparison..." >> $LOGFILE
-      cmp testfile.$$ outfile.$$
-
-      if [[ $? -ne 0 ]]; then
-         echo -e "\033[0;31mFAIL - output does not match expected data"
-         echo -e "        compared testfile.$$ and outfile.$$"
-         echo -e "CMD = ./libneTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
-         echo "   FAILURE: output of ne_read does not match the expected data" >> $LOGFILE
-         echo "            compared testfile.$$ and outfile.$$" >> $LOGFILE
-         echo "CMD = ./libneTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
-         exit -1
-      fi
-      echo "Comparison passed"
-      echo "Comparison passed" >> $LOGFILE
-   
-      echo "Cleaining up outputs..."
-      echo "Cleaining up outputs..." >> $LOGFILE
-      rm outfile.$$
-      echo
-
-      if [[ $npat == *"1"* ]]; then
-         echo >> $LIBTLOG
-         echo "Attempting error recovery..."
-         echo "Attempting error recovery..." >> $LOGFILE
-         
-         { ret=$( time -p ./libneTest rebuild testout.%d.$$ $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>>$TLOGPREF$$.recovery
-
-
-         if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
-            echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of $stat but recieved $ret"
-            echo -e "CMD = ./libneTest rebuild testout.%d.$$ $n $e $start\033[0m"
-            echo "   FAILURE: an error occured within ne_rebuild, expected return of $stat but recieved $ret" >> $LOGFILE
-            echo "CMD = "./libneTest rebuild testout.%d.$$ $n $e $start >> $LOGFILE
-            exit $ret
-         fi
-
-         ls testout.*.$$* | while read -r line; do
-            if [[ -e "$line".backup ]]; then
-               echo "Performing comparison against original file = \"""$line"".backup\"..."
-               echo "Performing comparison against original file = \"""$line"".backup\"..." >> $LOGFILE
-               cmp "$line" "$line".backup
-
-               if [[ $? -ne 0 ]]; then
-                  echo -e "\033[0;31mFAIL - rebuild output does not match expected data"
-                  echo -e "        compared $line and $line"".backup"
-                  echo -e "CMD = ./libneTest rebuild testout.%d.$$ $n $e $start\033[0m"
-                  echo "   FAILURE: output of ne_rebuild does not match the expected data" >> $LOGFILE
-                  echo "            compared $line and $line"".backup" >> $LOGFILE
-                  echo "CMD = ./libneTest rebuild testout.%d.$$ $n $e $start" >> $LOGFILE
-                  exit -1
-               fi
-               echo "Comparison passed. Removing backup file(s)."
-               echo "Comparison passed. Removing backup file(s)." >> $LOGFILE
-               rm "$line".*
+         tstat=$stat
+         tmp=0
+         while [[ $readerr -eq 0  &&  $tmp -lt $silent_count ]]; do
+            errpos=${err_list[$tmp]}
+            truepos=$(( errpos - start ))
+            if [[ $truepos -lt 0 ]]; then
+               truepos=$(( truepos + n + e ))
             fi
+
+            if [[ ! $truepos -lt $n ]]; then
+               tstat=$(( tstat - (2**errpos) ))
+            fi
+
+            tmp=$(( tmp + 1 ))
          done
 
-         if [[ $? -ne 0 ]]; then
+         echo >> $LIBTLOG
+
+         echo "Verifying corruption pattern (expecting pattern $stat)..."
+         echo "Verifying corruption pattern (expecting pattern $stat)..." >> $LOGFILE
+
+         { ret=$( time -p ./libneTest status testout.%d.$$ 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
+
+         if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
+            echo -e "\033[0;31mFAIL - status check returned an unexpected error pattern"
+            echo -e "CMD = ./libneTest status testout.%d.$$\033[0m"
+            echo "FAIL - status check returned an unexpected error pattern" >> $LOGFILE
+            echo "CMD = ./libneTest status testout.%d.$$" >> $LOGFILE
             exit -1
          fi
+         echo
 
-      fi
+         echo "Performing a read of all data from striping (expected return value = $tstat)..."
+         echo "Performing read of all data from striping (expected return value = $tstat)..." >> $LOGFILE
 
-      echo "Checking the striping for corruption..."
-      echo "Checking the striping for corruption..." >> $LOGFILE
+         noinfo=$RANDOM
+         let "noinfo %= 2"
+         if [[ $noinfo -eq 1 ]]; then
+            echo "   Using N=0 to perform read while ignoring stripe state..."
+            echo "   Using N=0 to perform read while ignoring stripe state..." >> $LOGFILE
+            tN=0
+         else
+            tN=$n
+         fi
+         
+         { ret=$( time -p ./libneTest read outfile.$$ testout.%d.$$ $tN $e $start 209715200 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.read
+         
+         if [[ ! $ret =~ $re  ||  $ret -ne $tstat ]]; then
+            echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but recieved $ret"
+            echo -e "CMD = ./libneTest read outfile.$$ testout.%d.$$ $tN $e $start 209715200\033[0m"
+            echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but recieved $ret" >> $LOGFILE
+            echo "CMD = ./libneTest read outfile.$$ testout.%d.$$ $tN $e $start 209715200" >> $LOGFILE
+            exit -1
+         fi
+         echo
+         
+         echo "Performing comparison..."
+         echo "Performing comparison..." >> $LOGFILE
+         cmp testfile.$$ outfile.$$
 
-      { ret=$( time -p ./libneTest status testout.%d.$$ 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
+         if [[ $? -ne 0 ]]; then
+            echo -e "\033[0;31mFAIL - output does not match expected data"
+            echo -e "        compared testfile.$$ and outfile.$$"
+            echo -e "CMD = ./libneTest read outfile.$$ testout.%d.$$ $n $e $start 209715200\033[0m"
+            echo "   FAILURE: output of ne_read does not match the expected data" >> $LOGFILE
+            echo "            compared testfile.$$ and outfile.$$" >> $LOGFILE
+            echo "CMD = ./libneTest read outfile.$$ testout.%d.$$ $n $e $start 209715200" >> $LOGFILE
+            exit -1
+         fi
+         echo "Comparison passed"
+         echo "Comparison passed" >> $LOGFILE
+      
+         echo "Cleaining up outputs..."
+         echo "Cleaining up outputs..." >> $LOGFILE
+         rm outfile.$$
+         echo
 
-      if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
-         echo -e "\033[0;31mFAIL - status check indicates corruption present in erasure striping ( code : $ret )"
-         echo -e "CMD = ./libneTest status testout.%d.$$\033[0m"
-         echo "FAIL - status check indicates corruption present in erasure striping ( code : $ret )" >> $LOGFILE
-         echo "CMD = ./libneTest status testout.%d.$$" >> $LOGFILE
-         exit $ret
-      fi
-      echo
+         if [[ $npat == *"1"* ]]; then
+            echo >> $LIBTLOG
+            echo "Attempting error recovery..."
+            echo "Attempting error recovery..." >> $LOGFILE
 
-      #All tests passed for this iteration
-      if [[ $incnt -gt 0 ]]; then
-         echo -e "\033[0;32mPASS - $n+$e with start position $start (reused)"
-      else
-         echo -e "\033[0;32mPASS - $n+$e with start position $start"
-      fi
-      echo -e "       and error pattern   $npat"
-      echo -e "       ( Test $(( (cnt*INITER) + incnt + 1 )) )\033[0m"
+            noinfo=$RANDOM
+            let "noinfo %= 2"
+            if [[ $noinfo -eq 1 ]]; then
+               echo "   Using N=0 to perform rebuild while ignoring stripe state..."
+               echo "   Using N=0 to perform rebuild while ignoring stripe state..." >> $LOGFILE
+               tN=0
+            else
+               tN=$n
+            fi
+            
+            { ret=$( time -p ./libneTest rebuild testout.%d.$$ $tN $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>>$TLOGPREF$$.recovery
 
-      echo "PASS - $n+$e with start position $start" >> $LOGFILE 
-      echo "       and error pattern   $npat" >> $LOGFILE
-      echo "       ( Test $(( (cnt + 1) * (incnt + 1) )) )" >> $LOGFILE
-   }
 
-   sleep $POSTSLEEP
+            if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
+               echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of $stat but recieved $ret"
+               echo -e "CMD = ./libneTest rebuild testout.%d.$$ $tN $e $start\033[0m"
+               echo "   FAILURE: an error occured within ne_rebuild, expected return of $stat but recieved $ret" >> $LOGFILE
+               echo "CMD = "./libneTest rebuild testout.%d.$$ $tN $e $start >> $LOGFILE
+               exit $ret
+            fi
 
-   echo "Removing libneTest log file..."
-   rm $LIBTLOG
+            ls testout.*.$$* | while read -r line; do
+               if [[ -e "$line".backup ]]; then
+                  echo "Performing comparison against original file = \"""$line"".backup\"..."
+                  echo "Performing comparison against original file = \"""$line"".backup\"..." >> $LOGFILE
+                  cmp "$line" "$line".backup
 
-   incnt=$(( incnt + 1 ))
+                  if [[ $? -ne 0 ]]; then
+                     echo -e "\033[0;31mFAIL - rebuild output does not match expected data"
+                     echo -e "        compared $line and $line"".backup"
+                     echo -e "CMD = ./libneTest rebuild testout.%d.$$ $n $e $start\033[0m"
+                     echo "   FAILURE: output of ne_rebuild does not match the expected data" >> $LOGFILE
+                     echo "            compared $line and $line"".backup" >> $LOGFILE
+                     echo "CMD = ./libneTest rebuild testout.%d.$$ $n $e $start" >> $LOGFILE
+                     exit -1
+                  fi
+                  echo "Comparison passed. Removing backup file(s)."
+                  echo "Comparison passed. Removing backup file(s)." >> $LOGFILE
+                  rm "$line".*
+               fi
+            done
+
+            if [[ $? -ne 0 ]]; then
+               exit -1
+            fi
+
+         fi
+
+         echo "Checking the striping for corruption..."
+         echo "Checking the striping for corruption..." >> $LOGFILE
+
+         { ret=$( time -p ./libneTest status testout.%d.$$ 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
+
+         if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
+            echo -e "\033[0;31mFAIL - status check indicates corruption present in erasure striping ( code : $ret )"
+            echo -e "CMD = ./libneTest status testout.%d.$$\033[0m"
+            echo "FAIL - status check indicates corruption present in erasure striping ( code : $ret )" >> $LOGFILE
+            echo "CMD = ./libneTest status testout.%d.$$" >> $LOGFILE
+            exit $ret
+         fi
+         echo
+
+         #All tests passed for this iteration
+         if [[ $incnt -gt 0 ]]; then
+            echo -e "\033[0;32mPASS - $n+$e with start position $start (reused)"
+         else
+            echo -e "\033[0;32mPASS - $n+$e with start position $start"
+         fi
+         echo -e "       and error pattern   $npat"
+         echo -e "       ( Test $(( (cnt*INITER) + incnt + 1 )) )\033[0m"
+
+         echo "PASS - $n+$e with start position $start" >> $LOGFILE 
+         echo "       and error pattern   $npat" >> $LOGFILE
+         echo "       ( Test $(( (cnt + 1) * (incnt + 1) )) )" >> $LOGFILE
+      }
+
+      sleep $POSTSLEEP
+
+      echo "Removing libneTest log file..."
+      rm $LIBTLOG
+
+      incnt=$(( incnt + 1 ))
    done
 
    echo "Cleaining up file array..."

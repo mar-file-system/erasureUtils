@@ -163,10 +163,16 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
    if ( mode >= NE_SETBSZ ) {
       counter++;
       mode -= NE_SETBSZ;
+#ifdef DEBUG
+      fprintf( stdout, "ne_open: NE_SETBSZ flag detected\n");
+#endif
    }
    if ( mode >= NE_NOINFO ) {
       counter -= 3;
       mode -= NE_NOINFO;
+#ifdef DEBUG
+      fprintf( stdout, "ne_open: NE_NOINFO flag detected\n");
+#endif
    }
 
    va_list ap;
@@ -241,6 +247,9 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
    handle->erasure_offset = erasure_offset;
    if ( counter < 2 ) {
       handle->mode = NE_STAT;
+#ifdef DEBUG
+      fprintf( stdout, "ne_open: temporarily setting mode to NE_STAT\n");
+#endif
    }
    else {
       handle->mode = mode;
@@ -266,11 +275,14 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
       ret = xattr_check(handle,path); //idenfity total data size of stripe
       handle->mode = mode;
+#ifdef DEBUG
+      fprintf( stdout, "ne_open: resetting mode to %d\n", mode);
+#endif
       if ( ret != 0  ||  handle->nerr != 0 ) {
          while ( handle->nerr > 0 ) {
+            handle->nerr--;
             handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
             handle->src_err_list[handle->nerr] = 0;
-            handle->nerr--;
          }
          ret = xattr_check(handle,path); //perform the check again, identifying mismatched values
          if ( ret != 0 ) {
@@ -294,6 +306,10 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
    N = handle->N;
    E = handle->E;
    bsz = handle->bsz;
+   erasure_offset = handle->erasure_offset;
+#ifdef DEBUG
+   fprintf( stdout, "ne_open: using stripe values (N=%d,E=%d,bsz=%d,offset=%d)\n", N,E,bsz,erasure_offset);
+#endif
 
    /* allocate a big buffer for all the N chunks plus a bit extra for reading in crcs */
 #ifdef INT_CRC
@@ -313,7 +329,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
    }
 
 #ifdef DEBUG
-   fprintf(stdout,"ne_open: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n", (N+E)*bsz, bsz, N, E);
+   fprintf(stdout,"ne_open: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n", ret, bsz, N, E);
 #endif
 
    /* allocate matrices */
@@ -2099,7 +2115,7 @@ rebuild:
    //verify crc sums
    mode_t mask = umask(0000);
    for ( counter = 0; counter < (handle->N + handle->E); counter++ ) {
-      if ( handle->csum[counter] != csum[counter]  &&  handle->src_in_err[counter] == 0 ) {
+      if ( handle->src_in_err[counter] == 0  &&  handle->csum[counter] != csum[counter] ) {
 #ifdef DEBUG
          fprintf(stderr, "ne_rebuild: mismatch of crc sum for file %d, handle:%llu  data:%llu\n", counter, (unsigned long long)handle->csum[counter], (unsigned long long)csum[counter]);
 #endif
