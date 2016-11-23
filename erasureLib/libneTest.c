@@ -86,9 +86,6 @@ int main( int argc, const char* argv[] )
    int tmp;
    unsigned long long totbytes;
 
-   fprintf(stdout, "libneTest: Running.  Preparing to parse args...\n");
-
-
    if ( argc < 2 ) {
       fprintf( stderr, "libneTest: no operation (read/write) was specified!\n");
       return -1;
@@ -123,6 +120,7 @@ int main( int argc, const char* argv[] )
       wr = 3;
    }
    else if ( strncmp( argv[1], "crc-status", strlen(argv[1]) ) == 0 ) {
+      printf("MAX-N: %d   MAX-E: %d\n", MAXN, MAXE);
       return crc_status();
    }
    else {
@@ -311,9 +309,11 @@ int main( int argc, const char* argv[] )
 
 int crc_status() {
    #ifdef INT_CRC
-      return 0;
+   printf("Intermediate-CRCs: Active\n");
+   return 0;
    #else
-      return 1;
+   printf("Intermediate-CRCs: Inactive\n");
+   return 1;
    #endif
 }
 

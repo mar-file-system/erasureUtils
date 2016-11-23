@@ -83,7 +83,6 @@ fi
 echo
 echo "Testing erasure library functions..."
 echo "   Tests to perform:  $ITER stripings with $INITER error patterns apiece"
-echo
 
 stfmt="-c%s"
 
@@ -104,8 +103,12 @@ if [[ ! -e libneTest ]]; then
    exit 1
 fi
 
-./libneTest crc-status > /dev/null
+ret=$( ./libneTest crc-status | tail -n 2 | head -n 1 )
 ICRC=$?
+maxN=$( echo "$ret" | awk '{print $2}' )
+maxE=$( echo "$ret" | awk '{print $4}' )
+echo "   MaxN: $maxN   MaxE: $maxE"
+echo
 if [[ $ICRC -eq 0 ]]; then
    echo "INTERMEDIATE CRCS - ACTIVE"
 else
@@ -130,10 +133,10 @@ echo >> $LOGFILE
 cnt=0
 while [[ $cnt -lt $ITER ]]; do
    n=$RANDOM
-   let "n %= 13"
-   n=$(( n + 2 ))
+   let "n %= maxN"
+   n=$(( n + 1 ))
    e=$RANDOM
-   let "e %= 3"
+   let "e %= maxE"
    e=$(( e + 1 ))
    start=$RANDOM
    let "start %= $(( n + e ))"

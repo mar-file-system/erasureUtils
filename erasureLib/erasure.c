@@ -274,11 +274,11 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
 
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
       ret = xattr_check(handle,path); //idenfity total data size of stripe
-      handle->mode = mode;
+      if ( handle->mode == NE_STAT ) {
+         handle->mode = mode;
 #ifdef DEBUG
-      fprintf( stdout, "ne_open: resetting mode to %d\n", mode);
+         fprintf( stdout, "ne_open: resetting mode to %d\n", mode);
 #endif
-      if ( ret != 0  ||  handle->nerr != 0 ) {
          while ( handle->nerr > 0 ) {
             handle->nerr--;
             handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
@@ -2449,14 +2449,12 @@ ne_stat ne_status( char *path )
    handle->buff_rem = 0;
 
    ret = xattr_check(handle,path); //idenfity total data size of stripe
-   if ( handle->nerr != 0  ||  ret != 0 ) {
-      while ( handle->nerr > 0 ) {
-         handle->nerr--;
-         handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
-         handle->src_err_list[handle->nerr] = 0;
-      }
-      ret = xattr_check(handle,path); //verify the stripe, now that values have been established
+   while ( handle->nerr > 0 ) {
+      handle->nerr--;
+      handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
+      handle->src_err_list[handle->nerr] = 0;
    }
+   ret = xattr_check(handle,path); //verify the stripe, now that values have been established
    if ( ret != 0 ) {
 #ifdef DEBUG
       fprintf( stderr, "ne_status: extended attribute check has failed\n" );
