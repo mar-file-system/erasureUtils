@@ -1616,7 +1616,9 @@ int xattr_check( ne_handle handle, char *path )
          continue;
       }
       else {
-         printf( "setting csum for file %d to %llu\n", counter, (unsigned long long)csum);
+#ifdef DEBUG
+         fprintf( stdout, "setting csum for file %d to %llu\n", counter, (unsigned long long)csum);
+#endif
          handle->csum[counter] = csum;
          if ( handle->mode == NE_RDONLY ) {
             handle->totsz = totsz;
@@ -1633,6 +1635,7 @@ int xattr_check( ne_handle handle, char *path )
                }
                else if ( N_list[bcounter] == 0 ) {
                   N_list[bcounter] = N;
+                  N_match[bcounter]++;
                   nc = 0;
                }
             }
@@ -1644,6 +1647,7 @@ int xattr_check( ne_handle handle, char *path )
                }
                else if ( E_list[bcounter] == 0 ) {
                   E_list[bcounter] = E;
+                  E_match[bcounter]++;
                   ec = 0;
                }
             }
@@ -1655,6 +1659,7 @@ int xattr_check( ne_handle handle, char *path )
                }
                else if ( O_list[bcounter] == -1 ) {
                   O_list[bcounter] = erasure_offset;
+                  O_match[bcounter]++;
                   of = 0;
                }
             }
@@ -1666,6 +1671,7 @@ int xattr_check( ne_handle handle, char *path )
                }
                else if ( bsz_list[bcounter] == 0 ) {
                   bsz_list[bcounter] = bsz;
+                  bsz_match[bcounter]++;
                   bc = 0;
                }
             }
@@ -1677,6 +1683,7 @@ int xattr_check( ne_handle handle, char *path )
                }
                else if ( totsz_list[bcounter] == 0 ) {
                   totsz_list[bcounter] = totsz;
+                  totsz_match[bcounter]++;
                   tc = 0;
                }
             }

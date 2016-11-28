@@ -481,8 +481,10 @@ while [[ $cnt -lt $ITER ]]; do
       incnt=$(( incnt + 1 ))
    done
 
-   echo "Cleaining up file array..."
+   echo "Cleaning up file array..."
    rm testout.*.$$
+   echo "Cleaning up test log..."
+   rm $LOGFILE
 
    cnt=$(( cnt + 1 ))
 done
@@ -566,8 +568,7 @@ fi
 
 echo "Cleaning up remaining files..."
 rm testfile.$$
-echo "Removing log files..."
-rm $LOGFILE
+echo "Removing time files..."
 rm $TLOGPREF$$.*
 echo "...done"
 
