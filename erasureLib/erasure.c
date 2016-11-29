@@ -175,9 +175,9 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
 #endif
    }
 
+   // Parse variadic arguments
    va_list ap;
    va_start( ap, mode );
-   
    if ( counter == 1 ) {
       bsz = va_arg( ap, int );
    }
@@ -189,7 +189,6 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
          bsz = va_arg( ap, int );
       }
    }
-
    va_end( ap );
 
    if ( mode == NE_WRONLY  &&  counter < 2 ) {
@@ -230,7 +229,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
          return NULL;
       }
    }
-   if ( bsz < 0 ) {
+   if ( bsz < 0  ||  bsz > MAXBLKSZ ) {
 #ifdef DEBUG
       fprintf( stderr, "ne_open: improper bsz arguement received - %d\n", bsz );
 #endif

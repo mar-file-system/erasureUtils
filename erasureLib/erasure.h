@@ -77,8 +77,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define MAXE 5
 #define MAXNAME 1024 
 #define MAXBUF 4096 
-#define MAXBLKSZ 256
+#define MAXBLKSZ 16777216
 #define BLKSZ 65536
+#define HEADSZ 70
 #define TEST_SEED 57
 
 #define XATTRKEY "user.n.e.offset.bsz.nsz.ncompsz.ncrcsum.totsz"
@@ -140,9 +141,9 @@ typedef struct handle {
    unsigned char *g_tbls;
    unsigned char *recov[ MAXPARTS ];
 
-  /* Used for rebuilds to restore the original ownership to the rebuilt file. */
-  uid_t owner;
-  gid_t group;
+   /* Used for rebuilds to restore the original ownership to the rebuilt file. */
+   uid_t owner;
+   gid_t group;
 } *ne_handle;
 
 /* Erasure Utility Functions */
