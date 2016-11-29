@@ -64,8 +64,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #endif
 
-//#define DEBUG
+#define DEBUG
 #define INT_CRC
+#define XATTR_META
 //#define XATTR_CRC
 
 #include "config.h"

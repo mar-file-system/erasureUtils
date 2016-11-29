@@ -284,13 +284,13 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
             handle->src_err_list[handle->nerr] = 0;
          }
          ret = xattr_check(handle,path); //perform the check again, identifying mismatched values
-         if ( ret != 0 ) {
+      }
+      if ( ret != 0 ) {
 #ifdef DEBUG
-            fprintf( stderr, "ne_open: extended attribute check has failed\n" );
+         fprintf( stderr, "ne_open: metadata check has failed\n" );
 #endif
-            free( handle );
-            return NULL;
-         }
+         free( handle );
+         return NULL;
       }
    }
    else if ( mode != NE_WRONLY ) { //reject improper mode arguments
@@ -1421,17 +1421,20 @@ int xattr_check( ne_handle handle, char *path )
    int counter;
    int bcounter;
    int ret;
-   int ret_in;
-   int filefd;
-   char xattrval[strlen(XATTRKEY)+80];
+   int tmp;
+#ifdef XATTR_META
+   char* xattrval = malloc( strlen(XATTRKEY)+80 );
    char xattrchunks[20];       /* char array to get n parts from xattr */
    char xattrchunksizek[20];   /* char array to get chunksize from xattr */
    char xattrnsize[20];        /* char array to get total size from xattr */
    char xattrerasure[20];      /* char array to get erasure from xattr */
-   char xattroffset[20];      /* char array to get erasure_offset from xattr */
+   char xattroffset[20];       /* char array to get erasure_offset from xattr */
    char xattrncompsize[20];    /* general char for xattr manipulation */
    char xattrnsum[50];         /* char array to get xattr sum from xattr */
    char xattrtotsize[160];
+#else
+   char* xattrval = malloc( HEADSZ );
+#endif
    int N = handle->N;
    int E = handle->E;
    int erasure_offset = handle->erasure_offset;
@@ -1468,6 +1471,7 @@ int xattr_check( ne_handle handle, char *path )
    lE = E;
 
    for ( counter = 0; counter < lN+lE; counter++ ) {
+
       bzero(file,sizeof(file));
       sprintf( file, path, (counter+handle->erasure_offset)%(lN+lE) );
       ret = stat( file, partstat );
@@ -1487,17 +1491,26 @@ int xattr_check( ne_handle handle, char *path )
       handle->group = partstat->st_gid;
       bzero(xattrval,sizeof(xattrval));
 
+#ifdef XATTR_META
 #if (AXATTR_GET_FUNC == 4)
-      ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
+      ret = getxattr(file,XATTRKEY,xattrval,sizeof(xattrval));
 #else
-      ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+      ret = getxattr(file,XATTRKEY,xattrval,sizeof(xattrval),0,0);
 #endif
 #ifdef DEBUG
-      fprintf(stdout,"xattr_check: file %s xattr returned %d\n",file,ret);
+      fprintf(stdout,"xattr_check: file %s xattr retreival returned %d\n",file,ret);
 #endif
+#else
+      handle->FDArray[counter] = open( file, O_RDONLY );
+      ret = read( handle->FDArray[counter], xattrval, HEADSZ );
+#ifdef DEBUG
+      fprintf(stdout,"xattr_check: file %s metadata read returned %d\n",file,ret);
+#endif
+#endif //XATTR_META
+
       if (ret < 0) {
 #ifdef DEBUG
-         fprintf(stderr, "xattr_check: failure of xattr retrieval for file %s\n", file);
+         fprintf(stderr, "xattr_check: failure of metadata retrieval for file %s\n", file);
 #endif
          handle->src_in_err[counter] = 1;
          handle->src_err_list[handle->nerr] = counter;
@@ -1505,6 +1518,7 @@ int xattr_check( ne_handle handle, char *path )
          continue;
       }
 
+#ifdef XATTR_META
       sscanf(xattrval,"%s %s %s %s %s %s %s %s",xattrchunks,xattrerasure,xattroffset,xattrchunksizek,xattrnsize,xattrncompsize,xattrnsum,xattrtotsize);
       N = atoi(xattrchunks);
       E = atoi(xattrerasure);
@@ -1514,6 +1528,39 @@ int xattr_check( ne_handle handle, char *path )
       ncompsz = strtol(xattrncompsize,NULL,0);
       csum = strtoll(xattrnsum,NULL,0);
       totsz = strtoll(xattrtotsize,NULL,0);
+#else
+      ret=0;
+      tmp=sizeof(N);
+      memcpy( &N, xattrval, tmp );
+      ret+=tmp;
+
+      tmp=sizeof(E);
+      memcpy( &E, xattrval+ret, tmp );
+      ret+=tmp;
+
+      tmp=sizeof(erasure_offset);
+      memcpy( &erasure_offset, xattrval+ret, tmp );
+      ret+=tmp;
+
+      tmp=sizeof(bsz);
+      memcpy( &bsz, xattrval+ret, tmp );
+      ret+=tmp;
+
+      tmp=sizeof(nsz);
+      memcpy( &nsz, xattrval+ret, tmp );
+      ret+=tmp;
+
+      tmp=sizeof(ncompsz);
+      memcpy( &ncompsz, xattrval+ret, tmp );
+      ret+=tmp;
+
+      tmp=sizeof(csum);
+      memcpy( &csum, xattrval+ret, tmp );
+      ret+=tmp;
+
+      tmp=sizeof(totsz);
+      memcpy( &totsz, xattrval+ret, tmp );
+#endif
 
 #ifdef INT_CRC
       blocks = nsz / bsz;
@@ -1521,38 +1568,38 @@ int xattr_check( ne_handle handle, char *path )
 
       if ( handle->mode != NE_STAT ) { //branch skips checks involving uninitialized handle values (i.e. for stat)
 
-         /* verify xattr */
+         /* verify metadata */
          if ( N != handle->N ) {
-   #ifdef DEBUG
+#ifdef DEBUG
             fprintf (stderr, "xattr_check: filexattr N = %d did not match handle value  %d\n", N, handle->N); 
-   #endif
+#endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
             continue;
          }
          else if ( E != handle->E ) {
-   #ifdef DEBUG
+#ifdef DEBUG
             fprintf (stderr, "xattr_check: filexattr E = %d did not match handle value  %d\n", E, handle->E); 
-   #endif
+#endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
             continue;
          }
          else if ( bsz != handle->bsz ) {
-   #ifdef DEBUG
+#ifdef DEBUG
             fprintf (stderr, "xattr_check: filexattr bsz = %d did not match handle value  %d\n", bsz, handle->bsz); 
-   #endif
+#endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
             continue;
          }
          else if ( erasure_offset != handle->erasure_offset ) {
-   #ifdef DEBUG
+#ifdef DEBUG
             fprintf (stderr, "xattr_check: filexattr offset = %d did not match handle value  %d\n", erasure_offset, handle->erasure_offset); 
-   #endif
+#endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
@@ -1693,6 +1740,17 @@ int xattr_check( ne_handle handle, char *path )
 
    } //end of loop over files
 
+#ifndef XATTR_META
+   //close all opened files
+   while ( counter > 0 ) {
+      counter--;
+      if ( handle->FDArray[counter] > 0 ) {
+         close( handle->FDArray[counter] );
+      }
+   }
+#endif
+
+   free(xattrval);
    free(partstat);
    ret = 0;
 
