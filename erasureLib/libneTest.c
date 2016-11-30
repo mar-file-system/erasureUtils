@@ -119,6 +119,14 @@ int main( int argc, const char* argv[] )
       }
       wr = 3;
    }
+   else if ( strncmp( argv[1], "delete", strlen(argv[1]) ) == 0 ) {
+      if ( argc != 4 ) {
+         fprintf(stderr,"libneTest: inappropriate arguments for a delete operation\nlibneTest:   expected \'%s %s erasure_path stripe_width\'\n", argv[0], argv[1] ); 
+         return -1;
+      }
+      N = atoi(argv[3]);
+      wr = 4;
+   }
    else if ( strncmp( argv[1], "crc-status", strlen(argv[1]) ) == 0 ) {
       printf("MAX-N: %d   MAX-E: %d\n", MAXN, MAXE);
       return crc_status();
@@ -297,6 +305,15 @@ int main( int argc, const char* argv[] )
       printf("%d\n",tmp);
 
       return tmp;
+   }
+   else if ( wr == 4 ) { //delete
+      fprintf( stdout, "libneTest: deleting striping corresponding to path \"%s\" with width %d...\n", (char*)argv[2], N );
+      if ( ne_delete( (char*) argv[2], N ) ) {
+         fprintf( stderr, "libneTest: deletion attempt indicates a failure for path \"%s\"\n", (char*)argv[2], N );
+         return -1;
+      }
+      fprintf( stdout, "libneTest: deletion successful\n" );
+      return 0;
    }
 
    tmp = ne_close( handle );

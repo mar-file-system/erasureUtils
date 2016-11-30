@@ -64,7 +64,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #endif
 
-#define DEBUG
+//#define DEBUG
 #define INT_CRC
 #define META_FILES
 
@@ -145,6 +145,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... );
 int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset );
 int ne_write( ne_handle handle, void *buffer, int nbytes );
 int ne_close( ne_handle handle );
+int ne_delete( char *path, int width );
 int ne_rebuild( ne_handle handle );
 int ne_noxattr_rebuild( ne_handle handle );
 ne_stat ne_status( char *path );

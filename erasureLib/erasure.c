@@ -387,6 +387,15 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
 
 }
 
+
+/**
+ * Reads nbytes of data at offset from the erasure striping referenced by the given handle
+ * @param ne_handle handle : Handle referencing the desired erasure striping
+ * @param void* buffer : Memory location in which to store the retrieved data
+ * @param int nbytes : Integer number of bytes to be read
+ * @param off_t offset : Offset within the data at which to begin the read
+ * @return int : The number of bytes read or -1 on a failure
+ */
 int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset ) 
 {
    int mtot = (handle->N)+(handle->E);
@@ -1026,7 +1035,7 @@ read:
  * @param ne_handle handle : Handle for the erasure striping to be written to
  * @param void* buffer : Buffer containing the data to be written
  * @param int nbytes : Number of data bytes to be written from buffer
- * @return int : Number of bytes written, or -1 on error.
+ * @return int : Number of bytes written or -1 on error
  */
 int ne_write( ne_handle handle, void *buffer, int nbytes )
 {
@@ -1372,6 +1381,31 @@ int ne_close( ne_handle handle )
    
    return ret;
 
+}
+
+
+/**
+ * Deletes the erasure striping of the specified width with the specified path format
+ * @param char* path : Name structure for the files of the desired striping.  This should contain a single "%d" field.
+ * @param int width : Total width of the erasure striping (i.e. N+E)
+ * @return int : 0 on success and -1 on failure
+ */
+ne_delete( char* path, int width ) {
+   char file[MAXNAME];       /* array name of files */
+   int counter;
+   int ret = 0;
+   
+   for( counter=0; counter<width; counter++ ) {
+      bzero( file, sizeof(file) );
+      sprintf( file, path, counter );
+      if ( unlink( file ) ) ret = 1;
+#ifdef META_FILES
+      strncat( file, ".meta", 6 );
+      if ( unlink( file ) ) ret = 1;
+#endif
+   }
+
+   return ret;
 }
 
 
