@@ -110,20 +110,6 @@ extern void gf_vect_mul_init(unsigned char c, unsigned char *tbl);
 extern unsigned char gf_mul(unsigned char a, unsigned char b);
 extern int gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);
 
-#ifdef XATTR_CRC
-typedef struct node {
-   struct node *next;
-   struct node *prev;
-   u32 crc;
-} *crc_node;
-
-typedef struct node_list {
-   crc_node head;
-   crc_node tail;
-   unsigned int length;
-} *crc_list;
-#endif
-
 int xattr_check( ne_handle handle, char *path );
 void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls);
 static int gf_gen_decode_matrix(unsigned char *encode_matrix,
@@ -263,13 +249,11 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
       handle->ncompsz[counter] = 0;
       handle->src_in_err[counter] = 0;
       handle->src_err_list[counter] = 0;
-#ifdef XATTR_CRC
-      handle->crc_list[counter] = malloc( sizeof(struct node_list) );
-      handle->crc_list[counter]->length = 0;
-      handle->crc_list[counter]->head = NULL;
-      handle->crc_list[counter]->tail = NULL;
-#endif
    }
+
+   char* nfile = malloc( strlen(path) + 1 );
+   strncpy( nfile, path, strlen(path) + 1 );
+   handle->path = nfile;
 
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
       ret = xattr_check(handle,path); //idenfity total data size of stripe
@@ -398,13 +382,6 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
       counter++;
    }
    umask(mask);
-
-   char *nfile = NULL;
-   if ( mode == NE_REBUILD ) {
-      nfile = malloc( sizeof( file ) );
-      strncpy( nfile, path, strlen(path) + 1 );
-   }
-   handle->path = nfile;
 
    return handle;
 
@@ -1129,22 +1106,6 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
             crc = crc32_ieee_base(TEST_SEED, handle->buffs[counter], bsz);
 #endif
 
-#ifdef XATTR_CRC
-            //attatch this crc to the list for the given file
-            crc_node node = malloc(sizeof(struct node));
-            node->crc = crc;
-            node->prev = handle->crc_list[counter]->tail;
-            node->next = NULL;
-            if ( handle->crc_list[counter]->length == 0 ) {
-               handle->crc_list[counter]->head = node;
-            }
-            else {
-               handle->crc_list[counter]->tail->next = node;
-            }
-            handle->crc_list[counter]->tail = node;
-            handle->crc_list[counter]->length++;
-#endif
-
 #ifdef INT_CRC
             // write out per-block-crc
             memcpy( handle->buffs[counter]+writesize, &crc, sizeof(crc) );
@@ -1218,22 +1179,6 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
          crc = crc32_ieee_base(TEST_SEED, handle->buffs[counter+ecounter], bsz); 
 #endif
 
-#ifdef XATTR_CRC
-         //attatch this crc to the list for the given file
-         crc_node node = malloc(sizeof(struct node));
-         node->crc = crc;
-         node->prev = handle->crc_list[counter+ecounter]->tail;
-         node->next = NULL;
-         if ( handle->crc_list[counter+ecounter]->length == 0 ) {
-            handle->crc_list[counter+ecounter]->head = node;
-         }
-         else {
-            handle->crc_list[counter+ecounter]->tail->next = node;
-         }
-         handle->crc_list[counter+ecounter]->tail = node;
-         handle->crc_list[counter+ecounter]->length++;
-#endif
-
          writesize = bsz;
 #ifdef INT_CRC
          // write out per-block-crc
@@ -1292,6 +1237,10 @@ int ne_close( ne_handle handle )
    unsigned int bsz;
    int ret = 0;
    int tmp;
+#ifdef META_FILES
+   int val;
+   int fd;
+#endif
    unsigned char *zero_buff;
 
 
@@ -1338,11 +1287,41 @@ int ne_close( ne_handle handle )
 #ifdef DEBUG
          fprintf( stdout, "ne_close: setting file %d xattr = \"%s\"\n", counter, xattrval );
 #endif
+
+#ifdef META_FILES
+
+         sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
+         strncat( file, ".meta", 6 );
+         fd = open( file, O_WRONLY | O_CREAT, 0666 );
+         if ( fd < 0 ){ 
+#ifdef DEBUG
+            fprintf(stderr,"ne_close: failed to open file %s\n",file);
+#endif
+            tmp = -1;
+         }
+         else {
+            val = write( fd, xattrval, strlen(xattrval) + 1 );
+            if ( val != strlen(xattrval) + 1 ) {
+#ifdef DEBUG
+               fprintf(stderr,"ne_close: failed to write to file %s\n",file);
+#endif
+               tmp = -1;
+               close( fd );
+            }
+            else {
+               tmp = close( fd );
+            }
+         }
+
+#else
+
 #if (AXATTR_SET_FUNC == 5)
          tmp = fsetxattr(handle->FDArray[counter],XATTRKEY, xattrval,strlen(xattrval),0); 
 #else
          tmp = fsetxattr(handle->FDArray[counter],XATTRKEY, xattrval,strlen(xattrval),0,0); 
 #endif
+
+#endif //META_FILES
 
          if ( tmp != 0 ) {
 #ifdef DEBUG
@@ -1350,19 +1329,6 @@ int ne_close( ne_handle handle )
 #endif
             ret = -1;
          }
-
-#ifdef XATTR_CRC
-//TODO set crc xattr
-
-         crc_node node = handle->crc_list[counter]->head;
-         crc_node tmp_node = NULL;
-         for( tmp = 0; tmp < handle->crc_list[counter]->length; tmp++ ) {
-            tmp_node = node;
-            node = node->next;
-            free(tmp_node);
-         }
-         free( handle->crc_list[counter] );
-#endif
 
       }
       if ( handle->FDArray[counter] != -1 ) { close(handle->FDArray[counter]); }
@@ -1418,10 +1384,13 @@ int ne_close( ne_handle handle )
 int xattr_check( ne_handle handle, char *path ) 
 {
    char file[MAXNAME];       /* array name of files */
+#ifdef META_FILES
+   char nfile[MAXNAME];       /* array name of files */
+#endif
    int counter;
    int bcounter;
    int ret;
-   int ret_in;
+   int tmp;
    int filefd;
    char xattrval[strlen(XATTRKEY)+80];
    char xattrchunks[20];       /* char array to get n parts from xattr */
@@ -1487,13 +1456,48 @@ int xattr_check( ne_handle handle, char *path )
       handle->group = partstat->st_gid;
       bzero(xattrval,sizeof(xattrval));
 
+#ifdef META_FILES
+
+      sprintf( nfile, handle->path, (counter+handle->erasure_offset)%(N+E) );
+      strncat( nfile, ".meta", 9 );
+#ifdef DEBUG
+      fprintf(stdout,"xattr_check: opening file %s\n",nfile);
+#endif
+      ret = open( nfile, O_RDONLY );
+      if ( ret >= 0 ) {
+         tmp = read( ret, &xattrval[0], sizeof(xattrval) );
+         if ( tmp < 0 ) {
+#ifdef DEBUG
+            fprintf(stderr,"xattr_check: failed to read from file %s\n",nfile);
+#endif
+            ret = tmp;
+         }
+         tmp = close( ret );
+         if ( tmp < 0 ) {
+#ifdef DEBUG
+            fprintf(stderr,"xattr_check: failed to close file %s\n",nfile);
+#endif
+            ret = tmp;
+         }
+      }
+      else {
+#ifdef DEBUG
+      fprintf(stderr,"xattr_check: failed to open file %s\n",nfile);
+#endif
+      }
+
+#else
+
 #if (AXATTR_GET_FUNC == 4)
       ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
 #else
       ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
 #endif
+
+#endif //META_FILES
+
 #ifdef DEBUG
-      fprintf(stdout,"xattr_check: file %s xattr returned %d\n",file,ret);
+      fprintf(stdout,"xattr_check: file %s xattr returned %s\n",file,xattrval);
 #endif
       if (ret < 0) {
 #ifdef DEBUG
@@ -2436,12 +2440,6 @@ ne_stat ne_status( char *path )
       handle->src_err_list[counter] = 0;
       stat->data_status[counter] = 0;
       stat->xattr_status[counter] = 0;
-#ifdef XATTR_CRC
-      handle->crc_list[counter] = malloc( sizeof(struct node_list) );
-      handle->crc_list[counter]->length = 0;
-      handle->crc_list[counter]->head = NULL;
-      handle->crc_list[counter]->tail = NULL;
-#endif
    }
    handle->nerr = 0;
    handle->totsz = 0;
@@ -2453,6 +2451,10 @@ ne_stat ne_status( char *path )
    handle->e_ready = 0;
    handle->buff_offset = 0;
    handle->buff_rem = 0;
+
+   char* nfile = malloc( strlen(path) + 1 );
+   strncpy( nfile, path, strlen(path) + 1 );
+   handle->path = nfile;
 
    ret = xattr_check(handle,path); //idenfity total data size of stripe
    while ( handle->nerr > 0 ) {
@@ -2571,17 +2573,6 @@ ne_stat ne_status( char *path )
    /* Close file descriptors and free bufs */
    counter = 0;
    while (counter < (handle->N+handle->E) ) {
-#ifdef XATTR_CRC
-//TODO verify this logic
-      crc_node node = handle->crc_list[counter]->head;
-      crc_node tmp_node = NULL;
-      for( tmp = 0; tmp < handle->crc_list[counter]->length; tmp++ ) {
-         tmp_node = node;
-         node = node->next;
-         free(tmp_node);
-      }
-      free( handle->crc_list[counter] );
-#endif
 
       if ( handle->src_in_err[counter] == 0  &&  handle->FDArray[counter] != -1 ) { close(handle->FDArray[counter]); }
 

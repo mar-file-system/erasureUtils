@@ -433,9 +433,14 @@ while [[ $cnt -lt $ITER ]]; do
                      echo "CMD = ./libneTest rebuild testout.%d.$$ $n $e $start" >> $LOGFILE
                      exit -1
                   fi
-                  echo "Comparison passed. Removing backup file(s)."
-                  echo "Comparison passed. Removing backup file(s)." >> $LOGFILE
-                  rm "$line".*
+                  echo "Comparison passed. Removing backup file."
+                  echo "Comparison passed. Removing backup file." >> $LOGFILE
+                  rm "$line".backup
+                  if [[ -e "$line".corrupted ]]; then
+                     echo "Removing backup corrupted file."
+                     echo "Removing backup corrupted file." >> $LOGFILE
+                     rm "$line".corrupted
+                  fi
                fi
             done
 
@@ -482,6 +487,9 @@ while [[ $cnt -lt $ITER ]]; do
    done
 
    echo "Cleaning up file array..."
+   if [[ -e testout.0.$$.meta ]]; then
+      rm testout.*.$$.meta
+   fi
    rm testout.*.$$
    echo "Cleaning up test log..."
    rm $LOGFILE

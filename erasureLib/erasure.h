@@ -64,9 +64,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #endif
 
-//#define DEBUG
+#define DEBUG
 #define INT_CRC
-//#define XATTR_CRC
+#define META_FILES
 
 #include "config.h"
 #include <stdlib.h>
@@ -83,9 +83,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define TEST_SEED 57
 
 #define XATTRKEY "user.n.e.offset.bsz.nsz.ncompsz.ncrcsum.totsz"
-#ifdef XATTR_CRC
-#define XCRCKEY "crc_list"
-#endif
 #define MAXPARTS (MAXN + MAXE)
 #define NO_INVERT_MATRIX -2
 
@@ -118,9 +115,6 @@ typedef struct handle {
    unsigned long buff_rem;
    off_t buff_offset;
    int FDArray[ MAXPARTS ];
-#ifdef XATTR_CRC
-   crc_list crc_list[ MAXPARTS ];
-#endif
 
    /* Per-part Info */
    u64 csum[ MAXPARTS ];
