@@ -285,7 +285,7 @@ int main( int argc, const char* argv[] )
          fprintf( stderr, "libneTest: ne_status failed!\n" );
          return -1;
       }
-      printf( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %d\nExtended Attribute Errors : ", stat->N, stat->E, stat->bsz, stat->start, stat->totsz );
+      printf( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\nExtended Attribute Errors : ", stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
       for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
          printf( "%d ", stat->xattr_status[tmp] );
       }
@@ -309,7 +309,7 @@ int main( int argc, const char* argv[] )
    else if ( wr == 4 ) { //delete
       fprintf( stdout, "libneTest: deleting striping corresponding to path \"%s\" with width %d...\n", (char*)argv[2], N );
       if ( ne_delete( (char*) argv[2], N ) ) {
-         fprintf( stderr, "libneTest: deletion attempt indicates a failure for path \"%s\"\n", (char*)argv[2], N );
+         fprintf( stderr, "libneTest: deletion attempt indicates a failure for path \"%s\"\n", (char*)argv[2] );
          return -1;
       }
       fprintf( stdout, "libneTest: deletion successful\n" );

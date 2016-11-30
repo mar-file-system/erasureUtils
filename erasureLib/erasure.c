@@ -1390,7 +1390,7 @@ int ne_close( ne_handle handle )
  * @param int width : Total width of the erasure striping (i.e. N+E)
  * @return int : 0 on success and -1 on failure
  */
-ne_delete( char* path, int width ) {
+int ne_delete( char* path, int width ) {
    char file[MAXNAME];       /* array name of files */
    int counter;
    int ret = 0;
@@ -2427,7 +2427,7 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
  * @param ne_handle handle : The handle for the erasure striping to be repaired
  * @return int : Status code.  Success is indicated by 0 and failure by -1
  */
-ne_noxattr_rebuild(ne_handle handle) {
+int ne_noxattr_rebuild(ne_handle handle) {
    while ( handle->nerr > 0 ) {
       handle->nerr--;
       handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
