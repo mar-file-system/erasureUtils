@@ -1300,8 +1300,13 @@ int ne_close( ne_handle handle )
 #ifdef META_FILES
 
          sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
+         if ( handle->mode == NE_REBUILD ) {
+            strncat( file, ".rebuild", 9 );
+         }
          strncat( file, ".meta", 6 );
+         mode_t mask = umask(0000);
          fd = open( file, O_WRONLY | O_CREAT, 0666 );
+         umask(mask);
          if ( fd < 0 ){ 
 #ifdef DEBUG
             fprintf(stderr,"ne_close: failed to open file %s\n",file);
@@ -1321,6 +1326,7 @@ int ne_close( ne_handle handle )
                tmp = close( fd );
             }
          }
+         chown(file, handle->owner, handle->group);
 
 #else
 
@@ -1346,12 +1352,43 @@ int ne_close( ne_handle handle )
          sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
          strncpy( nfile, file, strlen(file) + 1);
          strncat( file, ".rebuild", 9 );
-         chown(file, handle->owner, handle->group);
-         if ( rename( file, nfile ) != 0 ) {
+
+         if ( handle->e_ready == 1 ) {
+
+            chown(file, handle->owner, handle->group);
+            if ( rename( file, nfile ) != 0 ) {
 #ifdef DEBUG
-            fprintf( stderr, "ne_close: failed to rename rebuilt file\n" );
+               fprintf( stderr, "ne_close: failed to rename rebuilt file\n" );
 #endif
-            ret = -1;
+               ret = -1;
+            }
+
+#ifdef META_FILES
+            strncat( file, ".meta", 6 );
+            strncat( nfile, ".meta", 6 );
+            if ( rename( file, nfile ) != 0 ) {
+#ifdef DEBUG
+               fprintf( stderr, "ne_close: failed to rename rebuilt meta file\n" );
+#endif
+               ret = -1;
+            }
+#endif
+
+         }
+         else{
+
+#ifdef DEBUG
+            fprintf( stderr, "ne_close: cleaning up file %s from failed rebuild\n", file );
+#endif
+            unlink( file );
+#ifdef META_FILES
+            strncat( file, ".meta", 6 );
+#ifdef DEBUG
+            fprintf( stderr, "ne_close: cleaning up file %s from failed rebuild\n", file );
+#endif
+            unlink( file );
+#endif
+
          }
       }
 
@@ -1930,6 +1967,7 @@ rebuild:
                fprintf( stderr, "ne_rebuild: failed to seek file %d\n", counter );
 #endif
                if ( handle->src_in_err[counter] == 1 ) {
+                  handle->e_ready = 0;
                   return -1;
                }
                handle->src_in_err[counter] = 1;
@@ -2081,6 +2119,7 @@ rebuild:
          fprintf( stderr, "ne_rebuild: errors exceed regeneration capacity of erasure\n" );
 #endif
          errno = ENODATA;
+         handle->e_ready = 0;
          return -1;
       }
 
