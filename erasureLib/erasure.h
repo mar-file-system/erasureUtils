@@ -83,6 +83,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define TEST_SEED 57
 
 #define XATTRKEY "user.n.e.offset.bsz.nsz.ncompsz.ncrcsum.totsz"
+#define REBUILD_SFX ".rebuild"
+#define META_SFX ".meta"
 #define MAXPARTS (MAXN + MAXE)
 #define NO_INVERT_MATRIX -2
 

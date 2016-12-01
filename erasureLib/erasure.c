@@ -352,9 +352,9 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
       }
       else if ( mode == NE_REBUILD  &&  handle->src_in_err[counter] == 1 ) {
 #ifdef DEBUG
-         fprintf( stdout, "   opening %s.rebuild for write\n", file );
+         fprintf( stdout, "   opening %s%s for write\n", file, REBUILD_SFX );
 #endif
-         handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
+         handle->FDArray[counter] = open( strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
 
       }
       else {
@@ -1301,9 +1301,9 @@ int ne_close( ne_handle handle )
 
          sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
          if ( handle->mode == NE_REBUILD ) {
-            strncat( file, ".rebuild", 9 );
+            strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 );
          }
-         strncat( file, ".meta", 6 );
+         strncat( file, META_SFX, strlen(META_SFX) + 1 );
          mode_t mask = umask(0000);
          fd = open( file, O_WRONLY | O_CREAT, 0666 );
          umask(mask);
@@ -1351,7 +1351,7 @@ int ne_close( ne_handle handle )
       if (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1 ) {
          sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
          strncpy( nfile, file, strlen(file) + 1);
-         strncat( file, ".rebuild", 9 );
+         strncat( file, REBUILD_SFX, strlen(REBUILD_SFX) );
 
          if ( handle->e_ready == 1 ) {
 
@@ -1364,8 +1364,8 @@ int ne_close( ne_handle handle )
             }
 
 #ifdef META_FILES
-            strncat( file, ".meta", 6 );
-            strncat( nfile, ".meta", 6 );
+            strncat( file, META_SFX, strlen(META_SFX)+1 );
+            strncat( nfile, META_SFX, strlen(META_SFX)+1 );
             if ( rename( file, nfile ) != 0 ) {
 #ifdef DEBUG
                fprintf( stderr, "ne_close: failed to rename rebuilt meta file\n" );
@@ -1382,7 +1382,7 @@ int ne_close( ne_handle handle )
 #endif
             unlink( file );
 #ifdef META_FILES
-            strncat( file, ".meta", 6 );
+            strncat( file, META_SFX, strlen(META_SFX)+1 );
 #ifdef DEBUG
             fprintf( stderr, "ne_close: cleaning up file %s from failed rebuild\n", file );
 #endif
@@ -1437,7 +1437,7 @@ int ne_delete( char* path, int width ) {
       sprintf( file, path, counter );
       if ( unlink( file ) ) ret = 1;
 #ifdef META_FILES
-      strncat( file, ".meta", 6 );
+      strncat( file, META_SFX, strlen(META_SFX)+1 );
       if ( unlink( file ) ) ret = 1;
 #endif
    }
@@ -1530,7 +1530,7 @@ int xattr_check( ne_handle handle, char *path )
 #ifdef META_FILES
 
       sprintf( nfile, handle->path, (counter+handle->erasure_offset)%(N+E) );
-      strncat( nfile, ".meta", 9 );
+      strncat( nfile, META_SFX, strlen(META_SFX)+1 );
 #ifdef DEBUG
       fprintf(stdout,"xattr_check: opening file %s\n",nfile);
 #endif
@@ -1984,7 +1984,7 @@ rebuild:
 #endif
 
                mode_t mask = umask(0000);
-               handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
+               handle->FDArray[counter] = open( strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
                umask(mask);
                init = 1;
 
@@ -2035,10 +2035,10 @@ rebuild:
 #endif
                   close( handle->FDArray[counter] );
 #ifdef DEBUG
-                  fprintf( stdout, "   opening %s.rebuild for write\n", file );
+                  fprintf( stdout, "   opening %s%s for write\n", file, REBUILD_SFX );
 #endif
                   mode_t mask = umask(0000);
-                  handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
+                  handle->FDArray[counter] = open( strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
                   umask(mask);
                }
 
@@ -2083,10 +2083,10 @@ rebuild:
 #endif
                   close( handle->FDArray[counter] );
 #ifdef DEBUG
-                  fprintf( stdout, "   opening %s.rebuild for write\n", file );
+                  fprintf( stdout, "   opening %s%s for write\n", file, REBUILD_SFX );
 #endif
                   mode_t mask = umask(0000);
-                  handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
+                  handle->FDArray[counter] = open( strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
                   umask(mask);
                }
 
@@ -2212,9 +2212,9 @@ rebuild:
 #endif
             close( handle->FDArray[counter] );
 #ifdef DEBUG
-            fprintf( stdout, "   opening %s.rebuild for write\n", file );
+            fprintf( stdout, "   opening %s%s for write\n", file, REBUILD_SFX );
 #endif
-            handle->FDArray[counter] = open( strcat( file, ".rebuild" ), O_WRONLY | O_CREAT, 0666 );
+            handle->FDArray[counter] = open( strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
          }
 
          //ensure that sources are listed in order
