@@ -62,6 +62,9 @@ POSTSLEEP=0 # Number of seconds the program should sleep after a test
 TLOGPREF="log_time."    # Prefix for execution time logfiles
 LOGFILE=log_errTests.$$ # Name of the test logfile
 LIBTLOG=log_libneTests.$$ # Name of the libneTest output logfile
+DATAFILE=testfile.$$
+OUTFILE=outfile.$$
+EPAT=/gpfs/mc/repo10+2/pod0/block%d/cap0/scatter0/testout.$$
 FSZ=20  # Size of the input file in 10s of MBytes (i.e. a value of 20 -> 200M file)
 
 re='^[0-9]+$'
@@ -130,14 +133,14 @@ if [[ $BC -ne 0 ]]; then
    echo "Note: command 'bc' could not be found.  Times will be displayed as ranges and averages will be skipped!"
 fi
 
-echo "Generating input file 'testfile.$$' (this will take some time)..."
-dd if=/dev/urandom of=testfile.$$ bs=10485760 count=$FSZ
+echo "Generating input file '$DATAFILE' (this will take some time)..."
+dd if=/dev/urandom of=$DATAFILE bs=10485760 count=$FSZ
 echo "done"
 echo
 
 FSZ=$(( FSZ * 10485760 ))
 
-echo "Created testfile.$$" >> $LOGFILE
+echo "Created $DATAFILE" >> $LOGFILE
 echo >> $LOGFILE
 
 cnt=0
@@ -159,7 +162,7 @@ while [[ $cnt -lt $ITER ]]; do
    echo >> $LIBTLOG
    echo "Generating $n+$e striping starting at file $start""..." >> $LOGFILE
 #   tcnt=$( date +%s%N )
-   { ret=$( time -p ./libneTest write testfile.$$ testout.%d.$$ $n $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.write
+   { ret=$( time -p ./libneTest write $DATAFILE $EPAT $n $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.write
 
 #   tcnt="`date +%s%N` - $tcnt"
 #   if [[ $BC -eq 0 ]]; then
@@ -168,16 +171,16 @@ while [[ $cnt -lt $ITER ]]; do
 
    if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
       echo -e "\033[0;31mFAIL - write operation returned an unexpected status"
-      echo -e "CMD = ./libneTest write testfile.$$ testout.%d.$$ $n $e $start $FSZ\033[0m"
+      echo -e "CMD = ./libneTest write $DATAFILE $EPAT $n $e $start $FSZ\033[0m"
       echo "   FAILURE: wite operation returned a non-sero status" >> $LOGFILE
-      echo "CMD = ./libneTest write testfile.$$ testout.%d.$$ $n $e $start $FSZ" >> $LOGFILE
+      echo "CMD = ./libneTest write $DATAFILE $EPAT $n $e $start $FSZ" >> $LOGFILE
       exit -1
    fi
 #   echo "...done.  Elapsed time = $tcnt""."
    echo "   stripe generation complete" >> $LOGFILE
 #   echo "$tcnt" >> $TLOGPREF$$.write
    echo
-   ls testout.*.$$
+   ls $( echo "$EPAT" | sed 's/%d/\*/' )
    echo
 
    incnt=0
@@ -225,7 +228,7 @@ while [[ $cnt -lt $ITER ]]; do
             echo "   placing error at $errpos""..." >> $LOGFILE
             stat=$(( stat + 2**errpos ))
 
-            efile="testout.$errpos.$$"
+            efile=$( echo "$EPAT" | sed 's/%d/'"$errpos"'/' )
 
             echo "   creating backup of $efile""..."
             cp $efile "$efile".backup
@@ -342,14 +345,14 @@ while [[ $cnt -lt $ITER ]]; do
          echo -n "Verifying corruption pattern (expecting pattern $stat)..."
          echo "Verifying corruption pattern (expecting pattern $stat)..." >> $LOGFILE
 
-         { ret=$( time -p ./libneTest status testout.%d.$$ 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
+         { ret=$( time -p ./libneTest status $EPAT 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
 
          if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
             echo
             echo -e "\033[0;31mFAIL - status check returned an unexpected error pattern"
-            echo -e "CMD = ./libneTest status testout.%d.$$\033[0m"
+            echo -e "CMD = ./libneTest status $EPAT\033[0m"
             echo "FAIL - status check returned an unexpected error pattern" >> $LOGFILE
-            echo "CMD = ./libneTest status testout.%d.$$" >> $LOGFILE
+            echo "CMD = ./libneTest status $EPAT" >> $LOGFILE
             exit -1
          fi
          echo "corruption pattern matches"
@@ -368,14 +371,14 @@ while [[ $cnt -lt $ITER ]]; do
             tN=$n
          fi
          
-         { ret=$( time -p ./libneTest read outfile.$$ testout.%d.$$ $tN $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.read
+         { ret=$( time -p ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.read
          
          if [[ ! $ret =~ $re  ||  $ret -ne $tstat ]]; then
             echo
             echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but recieved $ret"
-            echo -e "CMD = ./libneTest read outfile.$$ testout.%d.$$ $tN $e $start $FSZ\033[0m"
+            echo -e "CMD = ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ\033[0m"
             echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but recieved $ret" >> $LOGFILE
-            echo "CMD = ./libneTest read outfile.$$ testout.%d.$$ $tN $e $start $FSZ" >> $LOGFILE
+            echo "CMD = ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ" >> $LOGFILE
             exit -1
          fi
          echo "read completed"
@@ -383,16 +386,16 @@ while [[ $cnt -lt $ITER ]]; do
          
          echo -n "Performing comparison..."
          echo "Performing comparison..." >> $LOGFILE
-         cmp testfile.$$ outfile.$$
+         cmp $DATAFILE $OUTFILE
 
          if [[ $? -ne 0 ]]; then
             echo
             echo -e "\033[0;31mFAIL - output does not match expected data"
-            echo -e "        compared testfile.$$ and outfile.$$"
-            echo -e "CMD = ./libneTest read outfile.$$ testout.%d.$$ $n $e $start $FSZ\033[0m"
+            echo -e "        compared $DATAFILE and $OUTFILE"
+            echo -e "CMD = ./libneTest read $OUTFILE $EPAT $n $e $start $FSZ\033[0m"
             echo "   FAILURE: output of ne_read does not match the expected data" >> $LOGFILE
-            echo "            compared testfile.$$ and outfile.$$" >> $LOGFILE
-            echo "CMD = ./libneTest read outfile.$$ testout.%d.$$ $n $e $start $FSZ" >> $LOGFILE
+            echo "            compared $DATAFILE and $OUTFILE" >> $LOGFILE
+            echo "CMD = ./libneTest read $OUTFILE $EPAT $n $e $start $FSZ" >> $LOGFILE
             exit -1
          fi
          echo "Comparison passed"
@@ -400,7 +403,7 @@ while [[ $cnt -lt $ITER ]]; do
       
          echo -n "Cleaining up outputs..."
          echo "Cleaining up outputs..." >> $LOGFILE
-         rm outfile.$$
+         rm $OUTFILE
          echo "done"
          echo
 
@@ -419,21 +422,21 @@ while [[ $cnt -lt $ITER ]]; do
                tN=$n
             fi
             
-            { ret=$( time -p ./libneTest rebuild testout.%d.$$ $tN $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>>$TLOGPREF$$.recovery
+            { ret=$( time -p ./libneTest rebuild $EPAT $tN $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>>$TLOGPREF$$.recovery
 
 
             if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
                echo
                echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of $stat but recieved $ret"
-               echo -e "CMD = ./libneTest rebuild testout.%d.$$ $tN $e $start\033[0m"
+               echo -e "CMD = ./libneTest rebuild $EPAT $tN $e $start\033[0m"
                echo "   FAILURE: an error occured within ne_rebuild, expected return of $stat but recieved $ret" >> $LOGFILE
-               echo "CMD = "./libneTest rebuild testout.%d.$$ $tN $e $start >> $LOGFILE
+               echo "CMD = "./libneTest rebuild $EPAT $tN $e $start >> $LOGFILE
                exit $ret
             fi
             echo "rebuild completed"
             echo
 
-            ls testout.*.$$* | while read -r line; do
+            ls $( echo "$EPAT*" | sed 's/%d/\*/' ) | while read -r line; do
                if [[ -e "$line".backup ]]; then
                   echo -n "Performing comparison against original file = \"""$line"".backup\"..."
                   echo "Performing comparison against original file = \"""$line"".backup\"..." >> $LOGFILE
@@ -443,10 +446,10 @@ while [[ $cnt -lt $ITER ]]; do
                      echo
                      echo -e "\033[0;31mFAIL - rebuild output does not match expected data"
                      echo -e "        compared $line and $line"".backup"
-                     echo -e "CMD = ./libneTest rebuild testout.%d.$$ $n $e $start\033[0m"
+                     echo -e "CMD = ./libneTest rebuild $EPAT $n $e $start\033[0m"
                      echo "   FAILURE: output of ne_rebuild does not match the expected data" >> $LOGFILE
                      echo "            compared $line and $line"".backup" >> $LOGFILE
-                     echo "CMD = ./libneTest rebuild testout.%d.$$ $n $e $start" >> $LOGFILE
+                     echo "CMD = ./libneTest rebuild $EPAT $n $e $start" >> $LOGFILE
                      exit -1
                   fi
                   echo "Comparison passed"
@@ -471,14 +474,14 @@ while [[ $cnt -lt $ITER ]]; do
          echo -n "Checking the striping for corruption..."
          echo "Checking the striping for corruption..." >> $LOGFILE
 
-         { ret=$( time -p ./libneTest status testout.%d.$$ 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>>$TLOGPREF$$.status
+         { ret=$( time -p ./libneTest status $EPAT 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>>$TLOGPREF$$.status
 
          if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
             echo
             echo -e "\033[0;31mFAIL - status check indicates corruption present in erasure striping ( code : $ret )"
-            echo -e "CMD = ./libneTest status testout.%d.$$\033[0m"
+            echo -e "CMD = ./libneTest status $EPAT\033[0m"
             echo "FAIL - status check indicates corruption present in erasure striping ( code : $ret )" >> $LOGFILE
-            echo "CMD = ./libneTest status testout.%d.$$" >> $LOGFILE
+            echo "CMD = ./libneTest status $EPAT" >> $LOGFILE
             exit $ret
          fi
          echo "done"
@@ -508,7 +511,7 @@ while [[ $cnt -lt $ITER ]]; do
    done
 
    echo -n "Cleaning up file array..."
-   ./libneTest delete testout.%d.$$ $(( n + e )) > /dev/null
+   ./libneTest delete $EPAT $(( n + e )) > /dev/null
    if [[ $? -ne 0 ]]; then
       echo
       echo -e "\033[0;31mDeletion failure...continuing.\033[0m"
@@ -601,7 +604,7 @@ if [[ $BC -eq 0 ]]; then
 fi
 
 echo -n "Cleaning up remaining files..."
-rm testfile.$$
+rm $DATAFILE
 echo "done"
 echo -n "Removing time files..."
 rm $TLOGPREF$$.*
