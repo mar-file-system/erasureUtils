@@ -64,7 +64,7 @@ LOGFILE=log_errTests.$$ # Name of the test logfile
 LIBTLOG=log_libneTests.$$ # Name of the libneTest output logfile
 DATAFILE=testfile.$$
 OUTFILE=outfile.$$
-EPAT=/gpfs/mc/repo10+2/pod0/block%d/cap0/scatter0/testout.$$
+EPAT=testout.%d.$$
 FSZ=20  # Size of the input file in 10s of MBytes (i.e. a value of 20 -> 200M file)
 
 re='^[0-9]+$'

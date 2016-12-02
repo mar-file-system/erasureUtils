@@ -1022,7 +1022,7 @@ read:
       free(temp_buffs[counter]);
    }
 
-#ifdef INT_CRC
+#ifdef DEBUG
    fprintf( stdout, "ne_read: cached %lu bytes from stripe at offset %zd\n", handle->buff_rem, handle->buff_offset );
 #endif
 
