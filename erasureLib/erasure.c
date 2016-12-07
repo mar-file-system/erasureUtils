@@ -1534,16 +1534,22 @@ int xattr_check( ne_handle handle, char *path )
 #ifdef DEBUG
       fprintf(stdout,"xattr_check: opening file %s\n",nfile);
 #endif
-      ret = open( nfile, O_RDONLY );
-      if ( ret >= 0 ) {
-         tmp = read( ret, &xattrval[0], sizeof(xattrval) );
+      int meta_fd = open( nfile, O_RDONLY );
+      if ( meta_fd >= 0 ) {
+         tmp = read( meta_fd, &xattrval[0], sizeof(xattrval) );
          if ( tmp < 0 ) {
 #ifdef DEBUG
             fprintf(stderr,"xattr_check: failed to read from file %s\n",nfile);
 #endif
             ret = tmp;
          }
-         tmp = close( ret );
+	 else if(tmp == 0) {
+#ifdef DEBUG
+	   fprintf(stderr, "xattr_check: read 0 bytes from metadata file %s\n", nfile);
+#endif
+	   ret = -1;
+	 }
+         tmp = close( meta_fd );
          if ( tmp < 0 ) {
 #ifdef DEBUG
             fprintf(stderr,"xattr_check: failed to close file %s\n",nfile);
@@ -1552,8 +1558,9 @@ int xattr_check( ne_handle handle, char *path )
          }
       }
       else {
+         ret = -1;
 #ifdef DEBUG
-      fprintf(stderr,"xattr_check: failed to open file %s\n",nfile);
+         fprintf(stderr,"xattr_check: failed to open file %s\n",nfile);
 #endif
       }
 
