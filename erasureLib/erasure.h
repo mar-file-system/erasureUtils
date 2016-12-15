@@ -93,6 +93,12 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define MAXPARTS (MAXN + MAXE)
 #define NO_INVERT_MATRIX -2
 
+#ifdef DEBUG
+#  define DBG_FPRINTF(...)   fprintf(__VA_ARGS__)
+#else
+#  define DBG_FPRINTF(...)
+#endif
+
 typedef uint32_t u32;
 typedef uint64_t u64;
 typedef enum {NE_RDONLY=0,NE_WRONLY,NE_REBUILD,NE_STAT,NE_NOINFO=4,NE_SETBSZ=8} ne_mode;
