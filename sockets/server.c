@@ -259,71 +259,19 @@ main(int argc, char* argv[]) {
      // --- read from socket, write to file
      while (!eof && !err) {
 
-
        // --- read data up to SERVER_BUF_SIZE, or EOF
-       char*  read_ptr    = &read_buf[0];
-       size_t read_total  = 0;
-       size_t read_remain = SERVER_BUF_SIZE;
-       while (read_remain && !eof && !err) {
-
-	 /// read_count = read(client_fd, read_ptr, read_remain);
-	 read_count = recv(client_fd, read_ptr, read_remain, 0);
-	 DBG("read_count(1): %lld\n", read_count);
-
-	 if (read_count < 0) {
-	   DBG("read error: %s\n", strerror(errno));
-	   exit(1);
-	 }
-	 else if (read_count == 0) {
-	   eof = 1;
-	   DBG("read EOF\n");
-	 }
-
-	 read_total  += read_count;
-	 read_ptr    += read_count;
-	 read_remain -= read_count;
+       ssize_t read_total = read_buffer(client_fd, read_buf, SERVER_BUF_SIZE);
+       if (read_total < 0) {
+	 err = 1;
+	 break;
        }
-       DBG("read_total: %lld\n", read_total);
-
-       // // wouldn't want to do this with large reads ...
-       // DBG("contents: %s\n", read_buf);
-
+       else if (read_total < SERVER_BUF_SIZE)
+	 eof = 1;
 
 
        // --- write buffer to file
-       char*  write_ptr     = &read_buf[0];
-       size_t write_remain  = read_total;
-       size_t write_total   = 0;
-       while (write_remain && !err) {
-
-	 write_count = write(zfs_fd, write_ptr, write_remain);
-	 DBG("write_count: %lld\n", write_count);
-	 if (write_count < 0) {
-	   fprintf(stderr, "write of %llu bytes failed, after writing %llu: %s\n",
-		   write_remain, write_total, strerror(errno));
-	   abort();
-	 }
-	 write_total   += write_count;
-	 write_ptr     += write_count;
-	 write_remain  -= write_count;
-
-#if 0
-	 if (errno == ENOSPC)
-	   printf("buffer is full.  ignoring.\n");
-	 else if (errno == EPIPE) {
-	   printf("client disconnected?\n");
-	   err = 1;
-	   break;
-	 }
-	 else if (errno) {
-	   perror("write failed\n");
-	   err = 1;
-	   break;
-	 }
-#endif
-       }
-       DBG("write_total: %lld\n", write_total);
-
+       if (write_buffer(zfs_fd, read_buf, read_total))
+	 err = 1;
      }
      DBG("copy-loop done.\n");
 

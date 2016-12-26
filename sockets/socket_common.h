@@ -49,8 +49,11 @@
 // #define CLIENT_BUF_SIZE         (1024 * 1024)
 // #define SERVER_BUF_SIZE         (1024 * 1024 * 10)
 
-#define CLIENT_BUF_SIZE         (512 * 1024)
-#define SERVER_BUF_SIZE         (512 * 1024)
+// #define CLIENT_BUF_SIZE         (512 * 1024)
+// #define SERVER_BUF_SIZE         (512 * 1024)
+
+#define CLIENT_BUF_SIZE         (1024 * 1024)
+#define SERVER_BUF_SIZE         (1024 * 1024)
 
 
 
@@ -119,6 +122,12 @@ typedef struct sockaddr_in                   SockAddr;
 
 #endif
 
+
+
+
+
+ssize_t read_buffer (int fd, char* buf, size_t size);
+int     write_buffer(int fd, char* buf, size_t size);
 
 
 

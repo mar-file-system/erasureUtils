@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <netdb.h>
+#include <time.h>
 
 #include "socket_common.h"
 
@@ -99,7 +100,6 @@ main(int argc, char* argv[]) {
   }
 
   const char* host  = argv[1];
-  const char* fname = argv[3];
   
   // parse <port>
   errno = 0;
@@ -110,6 +110,8 @@ main(int argc, char* argv[]) {
     perror(errmsg);
     exit(1);
   }
+  const char* fname = argv[3];
+
 
   struct hostent* server = gethostbyname(host);
   if (! server) {
@@ -215,12 +217,36 @@ main(int argc, char* argv[]) {
   }
   printf("zfname: %s\n", zfname);
 
+#define SKIP_READS 1
+#ifdef SKIP_READS
+  // int iters = 2048;
+  int iters = (10 * 1024); // we will write (<this> * CLIENT_BUF_SIZE) bytes
+#endif
 
 
-  int eof = 0;
+  struct timespec start;
+  if (clock_gettime(CLOCK_MONOTONIC_RAW, &start)) {
+    fprintf(stderr, "failed to get START timer '%s'\n", strerror(errno));
+    return -1;                // errno is set
+  }
+
+  size_t bytes_moved = 0;	/* total */
+  int    eof         = 0;
   while (!eof && !err) {
 
 
+#ifdef SKIP_READS
+    // don't waste time reading.  Just send a raw buffer.
+    size_t read_total  = CLIENT_BUF_SIZE;
+
+    if (iters-- == 0) {
+      eof = 1;
+      read_total  = 0;
+      break;
+    }
+    DBG("%d: fake read: %lld\n", iters, read_total);
+
+#else
     // --- read data up to CLIENT_BUF_SIZE or EOF
     char*  read_ptr    = &read_buf[0];
     size_t read_total  = 0;
@@ -244,13 +270,14 @@ main(int argc, char* argv[]) {
       read_remain -= read_count;
     }
     DBG("read_total: %llu\n", read_total);
+#endif
 
 
 
     // --- write buffer to socket
     char*   write_ptr    = &read_buf[0];
     size_t  write_remain = read_total;
-    size_t  write_total  = 0;
+    size_t  write_total  = 0;	/* per iteration */
     while (write_remain && !err) {
 
       write_count = WRITE(server_fd, write_ptr, write_remain);
@@ -280,10 +307,30 @@ main(int argc, char* argv[]) {
 #endif
     }
     DBG("write_total: %llu\n", write_total);
-
+    bytes_moved += write_total;
 
   }
-  DBG("copy-loop done.\n", read_count);
+  DBG("copy-loop done  (%llu bytes).\n", bytes_moved);
+
+
+  // compute bandwidth
+  struct timespec end;
+  if (clock_gettime(CLOCK_MONOTONIC_RAW, &end)) {
+    fprintf(stderr, "failed to get END timer '%s'\n", strerror(errno));
+    return -1;                // errno is set
+  }
+
+
+  size_t nsec = (end.tv_sec - start.tv_sec) * 1000UL * 1000 * 1000;
+  nsec += (end.tv_nsec - start.tv_nsec);
+
+  printf("start: %lu.%llu\n", start.tv_sec, start.tv_nsec);
+  printf("end:   %lu.%llu\n", end.tv_sec,   end.tv_nsec);
+  printf("nsec:  %llu\n", nsec);
+  printf("bytes: %llu\n", bytes_moved);
+
+  printf("%5.2f MB/s\n", ((double)bytes_moved / nsec) * 1000.0);
+
 
 
 #if 0

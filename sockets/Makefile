@@ -1,19 +1,24 @@
-# all: client server
-all: rsock.client rsock.server
+all: client server
+# all: rsock.client rsock.server
 
 
 ip: cleaner client server
 
 
+LDFLAGS += -lrt
 ifneq ($(GDB),)
 	CFLAGS += -g
 endif
 
-%: %.c socket_common.h
-	gcc $(CFLAGS) -o $@ $< $(DEFS) $(LDFLAGS)
 
-%: %.cpp socket_common.h
-	g++ -o $@ $< $(DEFS)
+socket_common.o: socket_common.c socket_common.h
+	gcc -c $(CFLAGS) -o $@ $< $(DEFS) $(LDFLAGS)
+
+%: %.c socket_common.o socket_common.h
+	gcc $(CFLAGS) -o $@ $< socket_common.o $(DEFS) $(LDFLAGS)
+
+### %: %.cpp socket_common.o socket_common.h
+### 	g++ -o $@ $< $(DEFS)
 
 
 # e.g. 'make unix.client'
