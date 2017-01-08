@@ -1,3 +1,59 @@
+/*
+Copyright (c) 2015, Los Alamos National Security, LLC
+All rights reserved.
+
+Copyright 2015.  Los Alamos National Security, LLC. This software was produced
+under U.S. Government contract DE-AC52-06NA25396 for Los Alamos National
+Laboratory (LANL), which is operated by Los Alamos National Security, LLC for
+the U.S. Department of Energy. The U.S. Government has rights to use, reproduce,
+and distribute this software.  NEITHER THE GOVERNMENT NOR LOS ALAMOS NATIONAL
+SECURITY, LLC MAKES ANY WARRANTY, EXPRESS OR IMPLIED, OR ASSUMES ANY LIABILITY
+FOR THE USE OF THIS SOFTWARE.  If software is modified to produce derivative
+works, such modified software should be clearly marked, so as not to confuse it
+with the version available from LANL.
+ 
+Additionally, redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+1. Redistributions of source code must retain the above copyright notice, this
+list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation
+and/or other materials provided with the distribution.
+3. Neither the name of Los Alamos National Security, LLC, Los Alamos National
+Laboratory, LANL, the U.S. Government, nor the names of its contributors may be
+used to endorse or promote products derived from this software without specific
+prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY LOS ALAMOS NATIONAL SECURITY, LLC AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL LOS ALAMOS NATIONAL SECURITY, LLC OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+-----
+NOTE:
+-----
+MarFS is released under the BSD license.
+
+MarFS was reviewed and released by LANL under Los Alamos Computer Code identifier:
+LA-CC-15-039.
+
+MarFS uses libaws4c for Amazon S3 object communication. The original version
+is at https://aws.amazon.com/code/Amazon-S3/2601 and under the LGPL license.
+LANL added functionality to the original work. The original work plus
+LANL contributions is found at https://github.com/jti-lanl/aws4c.
+
+GNU licenses can be found at http://www.gnu.org/licenses/.
+*/
+
+
+
 // This is like socket_server.c, but we now have multiple servers.
 //
 // CLIENT: The goal for the client is to maintain connections with as many
@@ -47,7 +103,8 @@ shut_down() {
 
   if (flags & _FLAG_SERVER_FD) {
     fprintf(stderr, "shut_down: closing socket_fd %d\n", server_fd);
-    close(server_fd);
+    SHUTDOWN(server_fd, SHUT_RDWR);
+    CLOSE(server_fd);
   }
 }
 
@@ -99,8 +156,10 @@ main(int argc, char* argv[]) {
      exit(1);
   }
 
-  const char* host  = argv[1];
-  
+  const char* host     = argv[1];
+  const char* port_str = argv[2];
+  const char* fname    = argv[3];
+
   // parse <port>
   errno = 0;
   int port = strtol(argv[2], NULL, 10);
@@ -110,8 +169,49 @@ main(int argc, char* argv[]) {
     perror(errmsg);
     exit(1);
   }
-  const char* fname = argv[3];
 
+  // for UNIX socket, this is fname, for INET this is just for diagnostics
+  sprintf(socket_name, "%s_%02d", SOCKET_NAME_PREFIX, port);
+
+
+#ifdef UNIX_SOCKETS
+  SockAddr          s_addr;
+  struct sockaddr*  s_addr_ptr = (struct sockaddr*)&s_addr;
+  socklen_t         s_addr_len = sizeof(SockAddr);
+
+  // initialize the sockaddr structs
+  memset(&s_addr, 0, s_addr_len);
+
+  //  (void)unlink(socket_name);
+  strcpy(s_addr.sun_path, socket_name);
+  s_addr.sun_family = AF_UNIX;
+
+
+#elif (defined RDMA_SOCKETS)
+  struct rdma_addrinfo  hints;
+  struct rdma_addrinfo* res;
+
+  memset(&hints, 0, sizeof(hints));
+  //  hints.ai_port_space = RDMA_PS_TCP;
+  hints.ai_port_space = RDMA_PS_IB;
+  int rc = rdma_getaddrinfo((char*)host, (char*)port_str, &hints, &res);
+  if (rc) {
+    fprintf(stderr, "rdma_getaddrinfo(%s) failed: %s\n", host, strerror(errno));
+    exit(1);
+  }
+
+  struct sockaddr*  s_addr_ptr = (struct sockaddr*)res->ai_dst_addr;
+  socklen_t         s_addr_len = res->ai_dst_len;
+# define  SKT_FAMILY  res->ai_family
+
+
+#else  // IP sockets
+  SockAddr          s_addr;
+  struct sockaddr*  s_addr_ptr = (struct sockaddr*)&s_addr;
+  socklen_t         s_addr_len = sizeof(SockAddr);
+
+  // initialize the sockaddr structs
+  memset(&s_addr, 0, s_addr_len);
 
   struct hostent* server = gethostbyname(host);
   if (! server) {
@@ -119,28 +219,6 @@ main(int argc, char* argv[]) {
     exit(1);
   }
 
-  // for UNIX socket, this is fname, for INET this is just for diagnostics
-  sprintf(socket_name, "%s_%02d", SOCKET_NAME_PREFIX, port);
-
-  // initialize the sockaddr struct
-#ifdef UNIX_SOCKETS
-# define ADDR_SIZE  sizeof(struct sockaddr_un)
-  socklen_t           c_addr_size;
-  struct sockaddr_un  c_addr;
-  struct sockaddr_un  s_addr;
-
-  memset(&s_addr, 0, ADDR_SIZE);
-  //  (void)unlink(socket_name);
-  strcpy(s_addr.sun_path, socket_name);
-  s_addr.sun_family = AF_UNIX;
-
-#else
-# define ADDR_SIZE  sizeof(struct sockaddr_in)
-  socklen_t           c_addr_size;
-  struct sockaddr_in  c_addr;
-  struct sockaddr_in  s_addr;
-
-  memset(&s_addr, 0, ADDR_SIZE);
   s_addr.sin_family      = AF_INET;
   s_addr.sin_port        = htons(port);
   memcpy((char *)&s_addr.sin_addr.s_addr,
@@ -150,11 +228,11 @@ main(int argc, char* argv[]) {
 
 
   // open socket to server
-  ///  SKT_CHECK( server_fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
-  SKT_CHECK( server_fd = SOCKET(PF_INET, SOCK_STREAM, 0) );
+  /// SKT_CHECK( server_fd = SOCKET(PF_INET, SOCK_STREAM, 0) );
+  SKT_CHECK( server_fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
 
   
-  SKT_CHECK( CONNECT(server_fd, (struct sockaddr*)&s_addr, ADDR_SIZE) );
+  SKT_CHECK( CONNECT(server_fd, s_addr_ptr, s_addr_len) );
   flags |= _FLAG_SERVER_FD;
 
   printf("server %s: connected\n", socket_name);
@@ -169,12 +247,12 @@ main(int argc, char* argv[]) {
 
   // interact with server.
   unsigned int  op;             /* 0=GET from zfile, 1=PUT, else quit connection */
-  char          zfname[ZFNAME_SIZE];
+  char          zfname[FNAME_SIZE];
   char          read_buf[CLIENT_BUF_SIZE]; /* copy stdin to socket */
 
   size_t zfname_size = strlen(zfname);
-  if (zfname_size >= ZFNAME_SIZE) {
-    fprintf(stderr, "filename size %llu is greater than %u\n", zfname_size, ZFNAME_SIZE);
+  if (zfname_size >= FNAME_SIZE) {
+    fprintf(stderr, "filename size %llu is greater than %u\n", zfname_size, FNAME_SIZE);
     exit(1);
   }
   strcpy(zfname, fname);
@@ -187,10 +265,11 @@ main(int argc, char* argv[]) {
   // send: <op> <zfname>
   // where:
   //   unsigned int <op>     = {GET | PUT}
-  //   char[ZFNAME_SIZE] <zfname> = path in mounted ZFS
+  //   char[FNAME_SIZE] <zfname> = path in mounted ZFS
   //              e.g. [on 10.10.0.2]  /mnt/repo10+2/pod1/block3/scatterN/foo
   //              e.g. [on 10.10.0.2]  /mnt/repo10+2/pod1/block4/scatterN/foo
 
+#if 0
   op = OP_PUT; // for now
 
   // write <op>
@@ -206,16 +285,26 @@ main(int argc, char* argv[]) {
   printf("op:     %u\n", op);
 
   // write <zfname>
-  write_count = WRITE(server_fd, &zfname, ZFNAME_SIZE);
-  if (write_count != ZFNAME_SIZE) {
+  write_count = WRITE(server_fd, &zfname, FNAME_SIZE);
+  if (write_count != FNAME_SIZE) {
     fprintf(stderr, "failed to write zfname (%lld)\n", write_count);
     exit(1);
   }
-  else if (!zfname[0] || zfname[ZFNAME_SIZE -1]) {
+  else if (!zfname[0] || zfname[FNAME_SIZE -1]) {
     fprintf(stderr, "bad zfname\n");
     exit(1);
   }
   printf("zfname: %s\n", zfname);
+
+#else
+  SocketHandle handle = { .fd    = server_fd,
+			  .flags = 0,
+			  .pos   = 0 };
+
+  CHECK_0( write_pseudo_packet(&handle, SKT_PUT, strlen(zfname) +1, zfname) );
+#endif
+
+
 
 #define SKIP_READS 1
 #ifdef SKIP_READS

@@ -1,6 +1,60 @@
 #ifndef SOCKET_COMMON_H
 #define SOCKET_COMMON_H
 
+/*
+Copyright (c) 2015, Los Alamos National Security, LLC
+All rights reserved.
+
+Copyright 2015.  Los Alamos National Security, LLC. This software was produced
+under U.S. Government contract DE-AC52-06NA25396 for Los Alamos National
+Laboratory (LANL), which is operated by Los Alamos National Security, LLC for
+the U.S. Department of Energy. The U.S. Government has rights to use, reproduce,
+and distribute this software.  NEITHER THE GOVERNMENT NOR LOS ALAMOS NATIONAL
+SECURITY, LLC MAKES ANY WARRANTY, EXPRESS OR IMPLIED, OR ASSUMES ANY LIABILITY
+FOR THE USE OF THIS SOFTWARE.  If software is modified to produce derivative
+works, such modified software should be clearly marked, so as not to confuse it
+with the version available from LANL.
+ 
+Additionally, redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+1. Redistributions of source code must retain the above copyright notice, this
+list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation
+and/or other materials provided with the distribution.
+3. Neither the name of Los Alamos National Security, LLC, Los Alamos National
+Laboratory, LANL, the U.S. Government, nor the names of its contributors may be
+used to endorse or promote products derived from this software without specific
+prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY LOS ALAMOS NATIONAL SECURITY, LLC AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL LOS ALAMOS NATIONAL SECURITY, LLC OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+-----
+NOTE:
+-----
+MarFS is released under the BSD license.
+
+MarFS was reviewed and released by LANL under Los Alamos Computer Code identifier:
+LA-CC-15-039.
+
+MarFS uses libaws4c for Amazon S3 object communication. The original version
+is at https://aws.amazon.com/code/Amazon-S3/2601 and under the LGPL license.
+LANL added functionality to the original work. The original work plus
+LANL contributions is found at https://github.com/jti-lanl/aws4c.
+
+GNU licenses can be found at http://www.gnu.org/licenses/.
+*/
+
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -30,9 +84,26 @@
     perror("expression failed: '" #EXPR "'\n");                  \
     exit(1);                                                     \
   }
-
-
 #define SKT_TRY(EXPR)      ((EXPR) != -1)
+
+
+#define CHECK_0(EXPR)						 \
+  do {								 \
+    DBG(#EXPR);							 \
+    if ((EXPR) != 0) {						 \
+      perror("expression failed: '" #EXPR "'\n");		 \
+      abort();							 \
+    }								 \
+  } while(0)
+
+#define CHECK_GT0(EXPR)						 \
+  do {								 \
+    DBG(#EXPR);							 \
+    if ((EXPR) <= 0) {						 \
+      perror("expression failed: '" #EXPR "'\n");		 \
+      abort();							 \
+    }								 \
+  } while(0)
 
 
 
@@ -42,26 +113,13 @@
 
 #define MAX_SOCKET            9
 
-
-#define ZFNAME_SIZE      128 /* incl final null */
-
-
-// #define CLIENT_BUF_SIZE         (1024 * 1024)
-// #define SERVER_BUF_SIZE         (1024 * 1024 * 10)
-
-// #define CLIENT_BUF_SIZE         (512 * 1024)
-// #define SERVER_BUF_SIZE         (512 * 1024)
+#define FNAME_SIZE      128 /* incl final null */
 
 #define CLIENT_BUF_SIZE         (1024 * 1024)
 #define SERVER_BUF_SIZE         (1024 * 1024)
 
-
-
-typedef enum {
-   OP_GET = 0,
-   OP_PUT = 1,
-   OP_DEL = 2,
-} StreamOp;
+#define XATTR_NAME_SIZE         128
+#define XATTR_VALUE_SIZE        128
 
 
 
@@ -80,7 +138,10 @@ typedef struct sockaddr_un                   SockAddr;
 #  define CONNECT(...)          connect(__VA_ARGS__)
 #  define CLOSE(...)            close(__VA_ARGS__)
 #  define WRITE(...)            write(__VA_ARGS__)
+#  define READ(...)             read(__VA_ARGS__)
+#  define SEND(...)             send(__VA_ARGS__)
 #  define RECV(...)             recv(__VA_ARGS__)
+#  define SHUTDOWN(...)         shutdown(__VA_ARGS__)
 
 
 /* -----------------------------------
@@ -88,8 +149,8 @@ typedef struct sockaddr_un                   SockAddr;
  * ----------------------------------- */
 #elif (defined RDMA_SOCKETS)
 #  include <rdma/rsocket.h>
-#  define SKT_FAMILY   AF_INET
-typedef struct sockaddr_in                   SockAddr;
+/// #  define SKT_FAMILY   AF_INET
+typedef struct rdma_addrinfo           SockAddr;
 
 #  define SOCKET(...)           rsocket(__VA_ARGS__)
 #  define SETSOCKOPT(...)       rsetsockopt(__VA_ARGS__)
@@ -99,7 +160,10 @@ typedef struct sockaddr_in                   SockAddr;
 #  define CONNECT(...)          rconnect(__VA_ARGS__)
 #  define CLOSE(...)            rclose(__VA_ARGS__)
 #  define WRITE(...)            rwrite(__VA_ARGS__)
+#  define READ(...)             rread(__VA_ARGS__)
+#  define SEND(...)             rsend(__VA_ARGS__)
 #  define RECV(...)             rrecv(__VA_ARGS__)
+#  define SHUTDOWN(...)         rshutdown(__VA_ARGS__)
 
 
 /* -----------------------------------
@@ -117,7 +181,10 @@ typedef struct sockaddr_in                   SockAddr;
 #  define CONNECT(...)          connect(__VA_ARGS__)
 #  define CLOSE(...)            close(__VA_ARGS__)
 #  define WRITE(...)            write(__VA_ARGS__)
+#  define READ(...)             read(__VA_ARGS__)
+#  define SEND(...)             send(__VA_ARGS__)
 #  define RECV(...)             recv(__VA_ARGS__)
+#  define SHUTDOWN(...)         shutdown(__VA_ARGS__)
 
 
 #endif
@@ -125,9 +192,92 @@ typedef struct sockaddr_in                   SockAddr;
 
 
 
+typedef struct {
+  uint8_t  op;
+  char     fname[FNAME_SIZE];
+  size_t   length;
+  char     xattr_name[XATTR_NAME_SIZE];
+  char     xattr_value[XATTR_VALUE_SIZE];
+} SocketHeader;
 
-ssize_t read_buffer (int fd, char* buf, size_t size);
-int     write_buffer(int fd, char* buf, size_t size);
+
+typedef struct {
+  int          fd;
+  // SocketHeader header;
+  uint8_t      flags;
+  size_t       pos;		// TBD: stream-position, to ignore redundant skt_seek()
+} SocketHandle;
+
+
+// "commands" for pseudo-packet
+// just a sequence of ints
+typedef enum {
+  SKT_GET   = 1,		// ignore <length>
+  SKT_PUT,
+  SKT_DEL,
+  SKT_DATA,
+  SKT_STAT,
+  SKT_SEEK_ABS,			// <length> has position to seek to
+  SKT_SEEK_FWD,
+  SKT_SEEK_BACK,
+  SKT_SET_XATTR,		// <length> is split into <name_len>, <value_len>
+  SKT_GET_XATTR,		// ditto
+
+  SKT_NULL,			// THIS IS ALWAYS LAST
+} SocketCommand;
+typedef uint32_t  SocketCommandType; // standardized for network transmission
+
+const char* command_str(SocketCommand cmd);
+
+
+
+// sequence of OR'able bits.
+typedef enum {
+  PKT_EOF =   0x01,
+  PKT_ERR =   0x02,
+} PacketFlags;
+
+// These demarcate blobs of data on the socket-stream, and allow OOB commands.
+typedef struct {
+  uint8_t            flags;
+  SocketCommandType  command;	// SocketCommand
+  //  union {
+  //    uint64_t  big;
+  //    uint32_t  small[2];
+  //  } length;
+  uint64_t           length;
+  // void*              buff;
+} PseudoPacketHeader;
+
+typedef struct {
+  uint32_t    command;
+  char        fname[FNAME_SIZE];
+  uint32_t    mode;
+} OpenPacketHeader;
+
+
+// For now, we'll use a open/read/write/close model, because that
+// will fit most easily into libne.
+
+SocketHandle  skt_open (const char* fname, int flags, mode_t mode);
+ssize_t       skt_write(SocketHandle* handle, const void* buf, size_t count);
+ssize_t       skt_read (SocketHandle* handle,       void* buf, size_t count);
+off_t         skt_seek (SocketHandle* handle, off_t offset, int whence);
+int           skt_close(SocketHandle* handle);
+
+
+// int encode_header(SocketHeader* hdr, char* buf, size_t size);
+// int decode_header(SocketHeader* hdr, char* buf, size_t size);
+
+int write_pseudo_packet(SocketHandle* handle, SocketCommand command, size_t length, void* buff);
+int read_pseudo_packet_header(int fd, PseudoPacketHeader* pkt);
+int read_fname(int fd, char* fname, size_t length);
+
+
+ssize_t read_buffer (int fd, char*       buf, size_t size, int is_socket);
+int     write_buffer(int fd, const char* buf, size_t size, int is_socket);
+
+
 
 
 
