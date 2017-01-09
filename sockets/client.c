@@ -74,7 +74,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <netdb.h>
 #include <time.h>
 
-#include "socket_common.h"
+#include "common.h"
 
 #define  _FLAG_FNAME       0x01
 #define  _FLAG_SERVER_FD   0x02
@@ -141,7 +141,7 @@ sig_handler(int sig) {
 //
 // -- abstract away the ad-hoc message-headers.  Let client/server use
 //    header generating/parsing functions, which could be implemented
-//    in socket_common.c
+//    in common.c
 //
 // ---------------------------------------------------------------------------
 
@@ -194,6 +194,8 @@ main(int argc, char* argv[]) {
   memset(&hints, 0, sizeof(hints));
   //  hints.ai_port_space = RDMA_PS_TCP;
   hints.ai_port_space = RDMA_PS_IB;
+  //  hints.ai_qp_type = IBV_QPT_RC; // amounts to SOCK_STREAM
+
   int rc = rdma_getaddrinfo((char*)host, (char*)port_str, &hints, &res);
   if (rc) {
     fprintf(stderr, "rdma_getaddrinfo(%s) failed: %s\n", host, strerror(errno));
@@ -306,10 +308,13 @@ main(int argc, char* argv[]) {
 
 
 
-#define SKIP_READS 1
-#ifdef SKIP_READS
+  // This allows cutting out the any performance cost of
+  // doing reads on the client side.
+#ifdef SKIP_CLIENT_READS
   // int iters = 2048;
-  int iters = (10 * 1024); // we will write (<this> * CLIENT_BUF_SIZE) bytes
+  // int iters = (10 * 1024); // we will write (<this> * CLIENT_BUF_SIZE) bytes
+  // int iters = (100); // we will write (<this> * CLIENT_BUF_SIZE) bytes
+  int iters = SKIP_CLIENT_READS; // we will write (<this> * CLIENT_BUF_SIZE) bytes
 #endif
 
 
@@ -324,7 +329,7 @@ main(int argc, char* argv[]) {
   while (!eof && !err) {
 
 
-#ifdef SKIP_READS
+#ifdef SKIP_CLIENT_READS
     // don't waste time reading.  Just send a raw buffer.
     size_t read_total  = CLIENT_BUF_SIZE;
 

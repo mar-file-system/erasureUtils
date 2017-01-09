@@ -60,6 +60,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/socket.h>
 #include <sys/un.h>             // struct sockaddr_un
 #include <netinet/in.h>         // struct sockaddr_in
+#include <infiniband/ib.h>	// AF_IB
 #include <sys/uio.h>            // read(), write()
 #include <unistd.h>             // read(), write()
 #include <stdlib.h>             // exit()

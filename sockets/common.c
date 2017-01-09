@@ -59,7 +59,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <errno.h>
 #include <string.h>
 
-#include "socket_common.h"
+#include "common.h"
 
 
 // Issue repeated reads until we've gotten <size> bytes, or error, or

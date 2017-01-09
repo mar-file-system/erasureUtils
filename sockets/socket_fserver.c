@@ -81,7 +81,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #include <pthread.h>
 
-#include "socket_common.h"
+#include "common.h"
 
 #define likely(x)      __builtin_expect(!!(x), 1)
 #define unlikely(x)    __builtin_expect(!!(x), 0)
@@ -158,7 +158,7 @@ void shut_down_thread(void* arg) {
   }
 
   if (ctx->flags & _FLAG_PRE_THREAD) {
-    fprintf(stderr, "shut_down_thread: closing client_fd %d\n", client_fd);
+    fprintf(stderr, "shut_down_thread: closing client_fd %d\n", ctx->client_fd);
     SHUTDOWN(ctx->client_fd, SHUT_RDWR);
     CLOSE(ctx->client_fd);
   }
@@ -246,6 +246,17 @@ int socket_get_or_put(ThreadContext* ctx) {
   //     out us having to require it).
   while (likely(! (ctx->flags & _FLAG_EOF))) {
 
+#ifdef SKIP_SERVER_WRITES
+    // short-circuit writing to file.
+    // NOTE: We also don't set _FLAG_FILE_OPEN, so shut_down_thread()
+    //       will skip trying to close it
+    if (cmd == SKT_PUT) {	// PUT: client_fd -> file_fd
+      src_fd        = client_fd;
+      src_is_socket = 1;
+    }
+    else
+#endif
+
     // --- open local file, if needed
     if (unlikely(! (ctx->flags & _FLAG_FILE_OPEN))) {
 
@@ -287,11 +298,13 @@ int socket_get_or_put(ThreadContext* ctx) {
       ctx->flags |= _FLAG_EOF;
 
 
+#ifndef SKIP_SERVER_WRITES
     // --- write buffer to <dest>
     if (write_buffer(dst_fd, read_buf, read_total, dst_is_socket)) {
       ctx->flags |= _FLAG_THREAD_ERR;
       break;
     }
+#endif
   }
   DBG("copy-loop done.\n");
 
@@ -492,6 +505,11 @@ main(int argc, char* argv[]) {
   //  hints.ai_port_space = RDMA_PS_TCP;
   hints.ai_port_space = RDMA_PS_IB;
   hints.ai_flags      = RAI_PASSIVE;
+
+  // testing:
+  hints.ai_flags |= RAI_FAMILY;
+  //  hints.ai_family = AF_IB;
+
   int rc = rdma_getaddrinfo(NULL, (char*)port_str, &hints, &res);
   if (rc) {
     fprintf(stderr, "rdma_getaddrinfo() failed: %s\n", strerror(errno));
