@@ -90,15 +90,15 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 // These are now only used in main_flags
 #define  _FLAG_BIND         0x0001
 #define  _FLAG_SOCKET_FD    0x0002
-// #define  _FLAG_CLIENT_FD    0x0004 /* now redundant with _FLAG_PRE_THREAD */
-#define  _FLAG_PRE_THREAD   0x0010
 
 // These are now only used in ThreadContext.flags
-#define  _FLAG_THREAD_EXIT  0x0040
-#define  _FLAG_THREAD_ERR   0x0080
+#define  _FLAG_PRE_THREAD   0x0010 /* client_fd has been opened */
+#define  _FLAG_THREAD_EXIT  0x0020
+#define  _FLAG_THREAD_ERR   0x0040
 
-#define  _FLAG_FILE_OPEN    0x0100
-#define  _FLAG_EOF          0x0200
+#define  _FLAG_RIOMAPPED    0x0100
+#define  _FLAG_FILE_OPEN    0x0200
+#define  _FLAG_EOF          0x0400
 
 
 static unsigned char  main_flags = 0;
@@ -106,7 +106,7 @@ static unsigned char  main_flags = 0;
 
 static char socket_name[MAX_SOCKET_NAME_SIZE +1];
 static int  socket_fd;               // listen() to this
-static int  client_fd;               // read/write to this
+// static int  client_fd;               // read/write to this
 // static int  file_fd;                  // writing client data to file
 
 
@@ -124,6 +124,8 @@ typedef struct {
   PseudoPacketHeader  hdr;	 // read/write "pseudo-packets" to/from socket
   int                 client_fd; // socket
   int                 file_fd;	 // server-side file
+  char*               buffer;	 // (currently static)
+  off_t               offset;	 // server-side riomap'ped offset for PUT
   char                fname[FNAME_SIZE];
 } ThreadContext;
 
@@ -137,12 +139,12 @@ typedef struct ServerConnection {
   ThreadContext  ctx;
 } SConn;
 
-#define MAX_SOCKET_CONNS  128
-
 SConn conn_list[MAX_SOCKET_CONNS];
 
 // // access to conn_list[] elements
 // pthread_mutex_t conn_lock;
+
+
 
 
 
@@ -159,8 +161,18 @@ void shut_down_thread(void* arg) {
 
   if (ctx->flags & _FLAG_PRE_THREAD) {
     fprintf(stderr, "shut_down_thread: closing client_fd %d\n", ctx->client_fd);
+    if (ctx->flags & _FLAG_RIOMAPPED) {
+      // is this unnecessary, if we're closing the fd?
+      fprintf(stderr, "shut_down_thread(%d): riounmap'ing\n", ctx->client_fd);
+      RIOUNMAP(ctx->client_fd, ctx->buffer, SERVER_BUF_SIZE+1);
+    }
+    fprintf(stderr, "shut_down_thread(%d): shutdown\n", ctx->client_fd);
     SHUTDOWN(ctx->client_fd, SHUT_RDWR);
+
+    fprintf(stderr, "shut_down_thread(%d): close\n", ctx->client_fd);
     CLOSE(ctx->client_fd);
+
+    fprintf(stderr, "shut_down_thread(%d): done\n", ctx->client_fd);
   }
 
   ctx->flags |= _FLAG_THREAD_EXIT;
@@ -211,7 +223,7 @@ sig_handler(int sig) {
 
 
 
-// ctx->hdr.command will be SKT_GET or SKT_PUT.
+// ctx->hdr.command will be CMD_GET or CMD_PUT.
 //
 // For PUT, client is sending us data to go into a file
 // For GET, we're reading from file and shipping to client.
@@ -219,14 +231,13 @@ sig_handler(int sig) {
 // Return 0 for success, non-zero for fail.
 //
 int socket_get_or_put(ThreadContext* ctx) {
-  char                 read_buf[SERVER_BUF_SIZE]  __attribute__ (( aligned(64) ));
 
   // shorthand
   int                  cmd       = ctx->hdr.command;
   int                  client_fd = ctx->client_fd;
   PseudoPacketHeader*  hdr       = &ctx->hdr;
   char*                fname     = ctx->fname;
-  int                  o_flags   = ((cmd == SKT_PUT)
+  int                  o_flags   = ((cmd == CMD_PUT)
 				    ? (O_WRONLY|O_CREAT|O_TRUNC)
 				    : (O_RDONLY));
   int                  src_fd;
@@ -234,23 +245,55 @@ int socket_get_or_put(ThreadContext* ctx) {
   int                  dst_fd;
   int                  dst_is_socket;
 
+  // extra byte is used in read_buffer()/write_buffer(), iff USE_RIOWRITE
+  char                 read_buf[SERVER_BUF_SIZE +1]  __attribute__ (( aligned(64) ));
+
+#if USE_RIOWRITE
+  //  unsigned mapsize = 1; // max number of riomap'ed buffers
+  //  SKT_CHECK( RSETSOCKOPT(client_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+
+  read_buf[SERVER_BUF_SIZE] = 0; // clear overflow-byte
+  ctx->offset = RIOMAP(client_fd, read_buf, SERVER_BUF_SIZE+1, PROT_WRITE, 0, -1);
+  if (ctx->offset == (off_t)-1) {
+    fprintf(stderr, "riomap failed: %s\n", strerror(errno));
+    return -1;
+  }
+  DBG("riomap offset: %llu\n", ctx->offset);
+
+  // clear "overflow byte", so we can check for completion of RDMA write
+  read_buf[SERVER_BUF_SIZE] = 0;
+
+  ///  SocketHandle handle = { .fd    = client_fd,
+  ///			  .flags = 0,
+  ///			  .pos   = 0 };
+  ///  CHECK_0( write_pseudo_packet(&handle, CMD_RIO_OFFSET, ctx->offset, NULL) );
+  CHECK_0( write_pseudo_packet(client_fd, CMD_RIO_OFFSET, ctx->offset, NULL) );
+
+  CHECK_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
+
+  ctx->buffer = read_buf;	// to allow the riounmap in shut_down_thread()
+  ctx->flags |= _FLAG_RIOMAPPED;
+#endif
+
 
   // --- read from socket, write to file
+  //
   // TBD: Client should eventually send data as a series of DATA
   //     pseudo-packets, each with a length followed by that much
-  //     data.  We'd then read SERVER_BUF_SIZE chunks out of that,
-  //     for writing into the file.  This "packetization" of the
-  //     data would allow out-of-band comms from the client (e.g.
-  //     we could return a demand-driven set of ACKs, with
-  //     checksums, to allow the client to validate the stream with
-  //     out us having to require it).
+  //     data.  We'd then read SERVER_BUF_SIZE-sized chunks out of
+  //     that, for writing into the file.  This "packetization" of the
+  //     data would allow out-of-band comms from the client (e.g.  we
+  //     could return a demand-driven set of ACKs, with checksums, to
+  //     allow the client to validate the stream with out us having to
+  //     require it).
+  //
   while (likely(! (ctx->flags & _FLAG_EOF))) {
 
 #ifdef SKIP_SERVER_WRITES
     // short-circuit writing to file.
     // NOTE: We also don't set _FLAG_FILE_OPEN, so shut_down_thread()
     //       will skip trying to close it
-    if (cmd == SKT_PUT) {	// PUT: client_fd -> file_fd
+    if (cmd == CMD_PUT) {	// PUT: client_fd -> file_fd
       src_fd        = client_fd;
       src_is_socket = 1;
     }
@@ -269,10 +312,10 @@ int socket_get_or_put(ThreadContext* ctx) {
 	return -1;
       }
       ctx->flags |= _FLAG_FILE_OPEN;
-      DBG("opened file '%s'\n", fname);
+      printf("opened file '%s'\n", fname);
 
       // prepare to copy data for GET/PUT
-      if (cmd == SKT_PUT) {	// PUT: client_fd -> file_fd
+      if (cmd == CMD_PUT) {	// PUT: client_fd -> file_fd
 	src_fd        = client_fd;
 	src_is_socket = 1;
 
@@ -300,11 +343,19 @@ int socket_get_or_put(ThreadContext* ctx) {
 
 #ifndef SKIP_SERVER_WRITES
     // --- write buffer to <dest>
-    if (write_buffer(dst_fd, read_buf, read_total, dst_is_socket)) {
+    if (write_buffer(dst_fd, read_buf, read_total, dst_is_socket, ctx->offset)) {
       ctx->flags |= _FLAG_THREAD_ERR;
       break;
     }
 #endif
+
+#ifdef USE_RIOWRITE
+    // tell client we are done with buffer, which will be overwrriten
+    // by the next riowrite()
+    if (src_is_socket)
+      CHECK_0( write_pseudo_packet(src_fd, CMD_ACK, 0, NULL) );
+#endif
+
   }
   DBG("copy-loop done.\n");
 
@@ -376,10 +427,10 @@ void* server_thread(void* arg) {
 
   // maybe read fname
   switch (hdr->command) {
-  case SKT_PUT:
-  case SKT_GET:
-  case SKT_DEL:
-  case SKT_STAT:
+  case CMD_PUT:
+  case CMD_GET:
+  case CMD_DEL:
+  case CMD_STAT:
     read_fname(client_fd, fname, hdr->length);
   };
 
@@ -387,10 +438,10 @@ void* server_thread(void* arg) {
 
   // perform command
   switch (hdr->command) {
-  case SKT_PUT:   socket_get_or_put(ctx);   break;
-  case SKT_GET:   socket_get_or_put(ctx);   break;
-  case SKT_DEL:   socket_del(ctx);          break;
-  case SKT_STAT:  socket_stat(ctx);         break;
+  case CMD_PUT:   socket_get_or_put(ctx);   break;
+  case CMD_GET:   socket_get_or_put(ctx);   break;
+  case CMD_DEL:   socket_del(ctx);          break;
+  case CMD_STAT:  socket_stat(ctx);         break;
 
   default:
     fprintf(stderr, "unsupported op: '%s'\n", command_str(hdr->command));
@@ -442,7 +493,7 @@ int push_thread(int client_fd) {
   conn_list[i].ctx.client_fd = client_fd;
   conn_list[i].ctx.flags |= _FLAG_PRE_THREAD;
 
-  printf("connection[%d] handles fd=%d\n", i, client_fd);
+  printf("connection[%d] -> fd=%d\n", i, client_fd);
   CHECK_0( pthread_create(&conn_list[i].thr, NULL, server_thread, &conn_list[i].ctx) );
 
   return 0;
@@ -548,6 +599,15 @@ main(int argc, char* argv[]) {
   int enable = 1;
   SKT_CHECK( SETSOCKOPT(socket_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) );
 
+  // int disable = 0;
+  // SKT_CHECK( RSETSOCKOPT(socket_fd, SOL_RDMA, RDMA_INLINE, &disable, sizeof(disable)) );
+
+  // you'd think we should do this on client_fd after the accept(), but that fails, and this succeeds
+  unsigned mapsize = MAX_SOCKET_CONNS; // max number of riomap'ed buffers
+  SKT_CHECK( RSETSOCKOPT(socket_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+
+
+
   SKT_CHECK( BIND(socket_fd, (struct sockaddr*)s_addr_ptr, s_addr_len) );
   main_flags |= _FLAG_BIND;
 
@@ -558,6 +618,7 @@ main(int argc, char* argv[]) {
   // receive connections and spin off threads to handle them
   while (1) {
 
+    int client_fd;
     ///  SKT_CHECK( client_fd = ACCEPT(socket_fd, (struct sockaddr*)&c_addr, &c_addr_size) );
     SKT_CHECK( client_fd = ACCEPT(socket_fd, NULL, 0) );
     printf("server %s: connected %s\n", socket_name);

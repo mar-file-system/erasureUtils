@@ -78,6 +78,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #define  _FLAG_FNAME       0x01
 #define  _FLAG_SERVER_FD   0x02
+#define  _FLAG_RIOMAPPED   0x04
 
 static unsigned char  flags = 0;
 
@@ -233,79 +234,76 @@ main(int argc, char* argv[]) {
   /// SKT_CHECK( server_fd = SOCKET(PF_INET, SOCK_STREAM, 0) );
   SKT_CHECK( server_fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
 
-  
+  //  // don't do this on the client?
+  int disable = 0;
+  SKT_CHECK( RSETSOCKOPT(server_fd, SOL_RDMA, RDMA_INLINE, &disable, sizeof(disable)) );
+
+  // unsigned mapsize = MAX_SOCKET_CONNS; // max number of riomap'ed buffers
+  unsigned mapsize = 1; // max number of riomap'ed buffers
+  SKT_CHECK( RSETSOCKOPT(server_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+
+
   SKT_CHECK( CONNECT(server_fd, s_addr_ptr, s_addr_len) );
   flags |= _FLAG_SERVER_FD;
 
+  //  // fails, if we do this after the connect() ?
+  //  unsigned mapsize = 1; // max number of riomap'ed buffers
+  //  SKT_CHECK( RSETSOCKOPT(server_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+
   printf("server %s: connected\n", socket_name);
+
+
 
   // interact with server.  Server reads custom header, then data.
   // For now, the header is just:
-  ssize_t       read_count = 0;
-  ssize_t       write_count = 0;
   unsigned int  err = 0;
-
-
 
   // interact with server.
   unsigned int  op;             /* 0=GET from zfile, 1=PUT, else quit connection */
   char          zfname[FNAME_SIZE];
-  char          read_buf[CLIENT_BUF_SIZE]; /* copy stdin to socket */
 
-  size_t zfname_size = strlen(zfname);
-  if (zfname_size >= FNAME_SIZE) {
-    fprintf(stderr, "filename size %llu is greater than %u\n", zfname_size, FNAME_SIZE);
+  // extra byte is used in read_buffer()/write_buffer(), iff USE_RIOWRITE
+  char          read_buf[CLIENT_BUF_SIZE+1] __attribute__ (( aligned(64) )); /* copy stdin to socket */
+
+
+  size_t fname_size = strlen(fname);
+  if (fname_size >= FNAME_SIZE) {
+    fprintf(stderr, "filename size %llu is greater than %u\n", fname_size, FNAME_SIZE);
     exit(1);
   }
   strcpy(zfname, fname);
   
 
+
   // -- TBD: authentication handshake
 
 
   // -- TBD: abstract into standard-header write/read functions
-  // send: <op> <zfname>
-  // where:
-  //   unsigned int <op>     = {GET | PUT}
-  //   char[FNAME_SIZE] <zfname> = path in mounted ZFS
-  //              e.g. [on 10.10.0.2]  /mnt/repo10+2/pod1/block3/scatterN/foo
-  //              e.g. [on 10.10.0.2]  /mnt/repo10+2/pod1/block4/scatterN/foo
+  // send: <op> <length> <zfname>
+  //   e.g. [on 10.10.0.2]  /mnt/repo10+2/pod1/block3/scatterN/foo
+  //   e.g. [on 10.10.0.2]  /mnt/repo10+2/pod1/block4/scatterN/foo
 
-#if 0
-  op = OP_PUT; // for now
+  ///  SocketHandle handle = { .fd    = server_fd,
+  ///			  .flags = 0,
+  ///			  .pos   = 0 };
+  ///  CHECK_0( write_pseudo_packet(&handle, CMD_PUT, strlen(zfname) +1, zfname) );
+  CHECK_0( write_pseudo_packet(server_fd, CMD_PUT, strlen(zfname) +1, zfname) );
 
-  // write <op>
-  write_count = WRITE(server_fd, &op, sizeof(op));
-  if (write_count != sizeof(op)) {
-    fprintf(stderr, "failed to write op (%lld)\n", write_count);
-    exit(1);
+
+
+#if USE_RIOWRITE
+  // server sends us the offset she got from riomap()
+  PseudoPacketHeader header;
+  CHECK_0( read_pseudo_packet_header(server_fd, &header) );
+  if (header.command != CMD_RIO_OFFSET) {
+    fprintf(stderr, "expected RIO_OFFSET pseudo-packet, not %s\n", command_str(header.command));
+    abort();
   }
-  else if (op != OP_PUT) {
-    fprintf(stderr, "only supporting PUT, for now (%u)\n", op);
-    exit(1);
-  }
-  printf("op:     %u\n", op);
+  off_t offset = header.length;
+  DBG("got riomap offset from server: 0x%llx\n", offset);
 
-  // write <zfname>
-  write_count = WRITE(server_fd, &zfname, FNAME_SIZE);
-  if (write_count != FNAME_SIZE) {
-    fprintf(stderr, "failed to write zfname (%lld)\n", write_count);
-    exit(1);
-  }
-  else if (!zfname[0] || zfname[FNAME_SIZE -1]) {
-    fprintf(stderr, "bad zfname\n");
-    exit(1);
-  }
-  printf("zfname: %s\n", zfname);
-
-#else
-  SocketHandle handle = { .fd    = server_fd,
-			  .flags = 0,
-			  .pos   = 0 };
-
-  CHECK_0( write_pseudo_packet(&handle, SKT_PUT, strlen(zfname) +1, zfname) );
-#endif
-
+  read_buf[CLIENT_BUF_SIZE] = 1; // set overflow-byte, for eventual copy
+#endif  
 
 
   // This allows cutting out the any performance cost of
@@ -315,11 +313,12 @@ main(int argc, char* argv[]) {
   // int iters = (10 * 1024); // we will write (<this> * CLIENT_BUF_SIZE) bytes
   // int iters = (100); // we will write (<this> * CLIENT_BUF_SIZE) bytes
   int iters = SKIP_CLIENT_READS; // we will write (<this> * CLIENT_BUF_SIZE) bytes
+  memset(read_buf, 1, CLIENT_BUF_SIZE);
 #endif
 
 
   struct timespec start;
-  if (clock_gettime(CLOCK_MONOTONIC_RAW, &start)) {
+  if (clock_gettime(CLOCK_REALTIME, &start)) {
     fprintf(stderr, "failed to get START timer '%s'\n", strerror(errno));
     return -1;                // errno is set
   }
@@ -330,86 +329,59 @@ main(int argc, char* argv[]) {
 
 
 #ifdef SKIP_CLIENT_READS
-    // don't waste time reading.  Just send a raw buffer.
-    size_t read_total  = CLIENT_BUF_SIZE;
+    // --- don't waste time reading.  Just send a raw buffer.
+    ssize_t read_count  = CLIENT_BUF_SIZE;
 
-    if (iters-- == 0) {
+    if (iters-- <= 0) {
       eof = 1;
-      read_total  = 0;
+      read_count  = 0;
       break;
     }
-    DBG("%d: fake read: %lld\n", iters, read_total);
+    DBG("%d: fake read: %lld\n", iters, read_count);
 
 #else
     // --- read data up to CLIENT_BUF_SIZE or EOF
-    char*  read_ptr    = &read_buf[0];
-    size_t read_total  = 0;
-    size_t read_remain = CLIENT_BUF_SIZE;
-    while (read_remain && !eof && !err) {
-
-      read_count = read(STDIN_FILENO, read_ptr, read_remain);
-      DBG("read_count(1): %lld\n", read_count);
-
-      if (read_count < 0) {
-	DBG("read error: %s\n", strerror(errno));
-	exit(1);
-      }
-      else if (read_count == 0) {
-	eof = 1;
-	DBG("read EOF\n");
-      }
-
-      read_total  += read_count;
-      read_ptr    += read_count;
-      read_remain -= read_count;
+    ssize_t read_count = read_buffer(STDIN_FILENO, read_buf, CLIENT_BUF_SIZE, 0);
+    if (read_count < 0) {
+      fprintf(stderr, "read error: %s\n", strerror(errno));
+      abort();
     }
-    DBG("read_total: %llu\n", read_total);
+    else if (read_count == 0) {
+      eof = 1;
+      DBG("read EOF\n");
+    }
+    DBG("read_count: %llu\n", read_count);
 #endif
 
 
 
     // --- write buffer to socket
-    char*   write_ptr    = &read_buf[0];
-    size_t  write_remain = read_total;
-    size_t  write_total  = 0;	/* per iteration */
-    while (write_remain && !err) {
-
-      write_count = WRITE(server_fd, write_ptr, write_remain);
-      DBG("write_count: %lld\n", write_count);
-      if (write_count < 0) {
-	fprintf(stderr, "write of %llu bytes failed, after writing %llu: %s\n",
-		write_remain, write_total, strerror(errno));
-	exit(0);
-      }
-      write_total  += write_count;
-      write_ptr    += write_count;
-      write_remain -= write_count;
-
-#if 0
-      if (errno == ENOSPC)
-	printf("buffer is full.  ignoring.\n");
-      else if (errno == EPIPE) {
-	printf("client disconnected?\n");
-	err = 1;
-	break;
-      }
-      else if (errno) {
-	perror("write failed\n");
-	err = 1;
-	break;
-      }
-#endif
+#ifdef USE_RIOWRITE
+    // We're about to overwrite teh destination buffer via RDMA.
+    // Don't call write_buffer() until the other-end reports that it
+    // is finished with the buffer.
+    CHECK_0( read_pseudo_packet_header(server_fd, &header) );
+    if (header.command != CMD_ACK) {
+      fprintf(stderr, "expected an ACK, but got %s\n", command_str(header.command));
+      return -1;
     }
-    DBG("write_total: %llu\n", write_total);
-    bytes_moved += write_total;
+#endif
 
+    CHECK_0( write_buffer(server_fd, read_buf, read_count, 1, offset) );
+    bytes_moved += read_count;
   }
   DBG("copy-loop done  (%llu bytes).\n", bytes_moved);
 
 
+#ifdef USE_RIOWRITE
+  // let the other end know that there's no more data
+  CHECK_0( write_pseudo_packet(server_fd, CMD_DATA, 0, NULL) );
+#endif
+
+
   // compute bandwidth
   struct timespec end;
-  if (clock_gettime(CLOCK_MONOTONIC_RAW, &end)) {
+  if (clock_gettime(CLOCK_REALTIME, &end)) {
     fprintf(stderr, "failed to get END timer '%s'\n", strerror(errno));
     return -1;                // errno is set
   }

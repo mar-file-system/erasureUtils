@@ -68,7 +68,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 
-// #define DEBUG
+// use 'make ... DEBUG=1' to enable the DBG() statements
 
 #ifdef DEBUG
 #  define DBG(...)   fprintf(stderr, ##__VA_ARGS__)
@@ -83,14 +83,14 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
   socket_check_info(#EXPR);                                      \
   if ((EXPR) == -1) {                                            \
     perror("expression failed: '" #EXPR "'\n");                  \
-    exit(1);                                                     \
+    abort();							 \
   }
 #define SKT_TRY(EXPR)      ((EXPR) != -1)
 
 
 #define CHECK_0(EXPR)						 \
   do {								 \
-    DBG(#EXPR);							 \
+    DBG(#EXPR "\n");						 \
     if ((EXPR) != 0) {						 \
       perror("expression failed: '" #EXPR "'\n");		 \
       abort();							 \
@@ -99,7 +99,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #define CHECK_GT0(EXPR)						 \
   do {								 \
-    DBG(#EXPR);							 \
+    DBG(#EXPR "\n");						 \
     if ((EXPR) <= 0) {						 \
       perror("expression failed: '" #EXPR "'\n");		 \
       abort();							 \
@@ -114,14 +114,16 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #define MAX_SOCKET            9
 
+#define MAX_SOCKET_CONNS  128
+
 #define FNAME_SIZE      128 /* incl final null */
 
+// now that we are using riomap(), these must be the same?  [for rsocket builds]
 #define CLIENT_BUF_SIZE         (1024 * 1024)
 #define SERVER_BUF_SIZE         (1024 * 1024)
 
 #define XATTR_NAME_SIZE         128
 #define XATTR_VALUE_SIZE        128
-
 
 
 /* -----------------------------------
@@ -143,6 +145,10 @@ typedef struct sockaddr_un                   SockAddr;
 #  define SEND(...)             send(__VA_ARGS__)
 #  define RECV(...)             recv(__VA_ARGS__)
 #  define SHUTDOWN(...)         shutdown(__VA_ARGS__)
+
+#  define RIOMAP(...)
+#  define RIOUNMAP(...)
+#  define RSETSOCKOPT(...)
 
 
 /* -----------------------------------
@@ -166,6 +172,11 @@ typedef struct rdma_addrinfo           SockAddr;
 #  define RECV(...)             rrecv(__VA_ARGS__)
 #  define SHUTDOWN(...)         rshutdown(__VA_ARGS__)
 
+#  define RIOMAP(...)           riomap(__VA_ARGS__)
+#  define RIOUNMAP(...)         riounmap(__VA_ARGS__)
+#  define RSETSOCKOPT(...)      rsetsockopt(__VA_ARGS__)
+
+
 
 /* -----------------------------------
  * IP sockets (default)
@@ -187,6 +198,10 @@ typedef struct sockaddr_in                   SockAddr;
 #  define RECV(...)             recv(__VA_ARGS__)
 #  define SHUTDOWN(...)         shutdown(__VA_ARGS__)
 
+#  define RIOMAP(...)
+#  define RIOUNMAP(...)
+#  define RSETSOCKOPT(...)
+
 
 #endif
 
@@ -202,29 +217,40 @@ typedef struct {
 } SocketHeader;
 
 
+typedef enum {
+  SH_IS_SOCKET  = 0x01,	       // read/write-buffer also work on files
+  SH_RIOWRITE   = 0x02,
+  SH_DOUBLE     = 0x04,		// double-buffering
+} SHFlags;
+
 typedef struct {
   int          fd;
   // SocketHeader header;
   uint8_t      flags;
+  off_t        rio_offset;
   size_t       pos;		// TBD: stream-position, to ignore redundant skt_seek()
 } SocketHandle;
 
 
 // "commands" for pseudo-packet
 // just a sequence of ints
+//
+// NOTE: Co-maintain _command_str[], in common.c
 typedef enum {
-  SKT_GET   = 1,		// ignore <length>
-  SKT_PUT,
-  SKT_DEL,
-  SKT_DATA,
-  SKT_STAT,
-  SKT_SEEK_ABS,			// <length> has position to seek to
-  SKT_SEEK_FWD,
-  SKT_SEEK_BACK,
-  SKT_SET_XATTR,		// <length> is split into <name_len>, <value_len>
-  SKT_GET_XATTR,		// ditto
+  CMD_GET   = 1,		// ignore <length>
+  CMD_PUT,
+  CMD_DEL,
+  CMD_DATA,			// 
+  CMD_ACK,			// data received (ready for riowrite)
+  CMD_STAT,
+  CMD_RIO_OFFSET,
+  CMD_SEEK_ABS,			// <length> has position to seek to
+  CMD_SEEK_FWD,
+  CMD_SEEK_BACK,
+  CMD_SET_XATTR,		// <length> is split into <name_len>, <value_len>
+  CMD_GET_XATTR,		// ditto
 
-  SKT_NULL,			// THIS IS ALWAYS LAST
+  CMD_NULL,			// THIS IS ALWAYS LAST
 } SocketCommand;
 typedef uint32_t  SocketCommandType; // standardized for network transmission
 
@@ -266,17 +292,14 @@ ssize_t       skt_read (SocketHandle* handle,       void* buf, size_t count);
 off_t         skt_seek (SocketHandle* handle, off_t offset, int whence);
 int           skt_close(SocketHandle* handle);
 
-
-// int encode_header(SocketHeader* hdr, char* buf, size_t size);
-// int decode_header(SocketHeader* hdr, char* buf, size_t size);
-
-int write_pseudo_packet(SocketHandle* handle, SocketCommand command, size_t length, void* buff);
+int write_pseudo_packet(int fd, SocketCommand command, size_t length, void* buff);
 int read_pseudo_packet_header(int fd, PseudoPacketHeader* pkt);
 int read_fname(int fd, char* fname, size_t length);
 
 
 ssize_t read_buffer (int fd, char*       buf, size_t size, int is_socket);
-int     write_buffer(int fd, const char* buf, size_t size, int is_socket);
+// int     write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset);
+int     write_buffer(int fd, char* buf, size_t size, int is_socket, off_t offset);
 
 
 

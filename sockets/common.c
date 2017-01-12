@@ -62,18 +62,61 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "common.h"
 
 
+
+
 // Issue repeated reads until we've gotten <size> bytes, or error, or
 // EOF.  Return negative for error.  Otherwise, return the total
 // number of bytes that could be read.  If return-value is positive,
 // but less than <size>, there must've been an EOF.
 
 ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
-  DBG("read_buffer(%d, 0x%llx, %lld\n", fd, buf, size);
-  if (size > SSIZE_MAX) {
-    fprintf(stderr, "<size> %llu exceeds maximum signed return value\n",
-	    size, SSIZE_MAX);
-    return -1;
+  DBG("read_buffer(%d, 0x%llx, %lld, %d)\n", fd, buf, size, is_socket);
+
+#ifdef USE_RIOWRITE
+  // If we would be reading from an rsocket where the writer is using
+  // riowrite(), we won't see anything in the fd; it's just doing RDMA
+  // directly into our buffer.  Writer will write one extra byte,
+  // beyond the end (which we will have allocated), and will have set
+  // it to zero before the transfer.  After the transfer, this will be
+  // set to 1.
+  //
+  // TBD? buffers are all aligned to 64-byte boundaries anyhow.  If
+  // size was always a multiple of size_t, the the overflow could be a
+  // size_t, which would let the writer communicate that less than the
+  // expected size was written.  This may be unnecessary, because we
+  // have pseudo-packet headers that could always be used to
+  // pre-arrange the amount of data to be transmitted.  So, a single
+  // byte would work fine.
+
+  ///   if (is_socket) {
+  ///     char* overflow = buf + size;
+  /// 
+  ///     while (! *overflow)
+  ///       sched_yield();
+  /// 
+  ///     uint8_t code = (uint8_t)*overflow;
+  ///     DBG("overflow-code = %d\n", (int)code);
+  ///     if (code == (uint8_t)-1)
+  ///       return -1;
+  /// 
+  ///     // reset for next read/write
+  ///     *overflow = 0;
+  /// 
+  ///     return size;
+  ///   }
+
+  if (is_socket) {
+    PseudoPacketHeader header;
+    CHECK_0( read_pseudo_packet_header(fd, &header) );
+    if (header.flags & PKT_EOF)
+      return 0;
+    else if (header.command != CMD_DATA) {
+      fprintf(stderr, "unexpected pseudo-packet: %s\n", command_str(header.command));
+      return -1;
+    }
+    return header.length;
   }
+#endif
 
   char*   read_ptr    = buf;
   size_t  read_total  = 0;
@@ -84,8 +127,7 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 
     ssize_t read_count;
     if (is_socket)
-      // read_count = READ(fd, read_ptr, read_remain);
-      read_count = RECV(fd, read_ptr, read_remain, 0);
+      read_count = READ(fd, read_ptr, read_remain);
     else
       read_count = read(fd, read_ptr, read_remain);
 
@@ -117,8 +159,12 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 
 // write bytes until <size>, or error.
 // Return 0 for success, negative for error.
-int write_buffer(int fd, const char* buf, size_t size, int is_socket) {
-  DBG("write_buffer(%d, 0x%llx, %lld\n", fd, buf, size);
+//
+// WARNING: in the case of USE_RIOWRITE to a socket, we actually write
+//     size +1 bytes, so read_buffer() on the other end can detect
+//     completion..
+int write_buffer(int fd, char* buf, size_t size, int is_socket, off_t offset) {
+  DBG("write_buffer(%d, 0x%llx, %lld, %d, 0x%llx)\n", fd, buf, size, is_socket, offset);
 
   const char*  write_ptr     = buf;
   size_t       write_remain  = size;
@@ -126,8 +172,13 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket) {
   while (write_remain) {
 
     ssize_t write_count;
-    if (is_socket)
+    if (is_socket) {
+#ifdef USE_RIOWRITE
+      write_count = riowrite(fd, write_ptr, write_remain, offset + write_total, 0);
+#else
       write_count = WRITE(fd, write_ptr, write_remain);
+#endif
+    }
     else
       write_count = write(fd, write_ptr, write_remain);
 
@@ -158,8 +209,50 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket) {
   }
   DBG("write_total: %lld\n", write_total);
 
+
+#ifdef USE_RIOWRITE
+  //  // reader can't tell that the previous riowrite has completed until
+  //  // it sees this byte change
+  //  if (is_socket) {
+  //    uint8_t one = 1;
+  //    if (riowrite(fd, (char*)&one, 1, offset+size, 0)) {
+  //      perror("riowrite overflow failed");
+  //      return -1;
+  //    }
+  //  }
+
+  if (is_socket) {
+    CHECK_0( write_pseudo_packet(fd, CMD_DATA, size, NULL) );
+  }
+#endif
+
   return 0;
 }
+
+
+
+
+
+
+
+// for small socket-reads that don't use RDMA
+ssize_t read_raw(int fd, char* buf, size_t size) {
+  DBG("read_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
+  return RECV(fd, buf, size, MSG_WAITALL);
+}
+  
+// for small socket-writes that don't use RDMA
+int write_raw(int fd, char* buf, size_t size) {
+  DBG("write_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
+
+  ssize_t write_count = WRITE(fd, buf, size);
+  if (write_count != size) {
+    fprintf(stderr, "failed to write %lld bytes\n", size);
+    return -1;
+  }
+  return 0;
+}
+
 
 
 
@@ -225,44 +318,48 @@ uint64_t ntohll(uint64_t ll) {
   }
 
 
-
+// co-maintain SocketCommand, in common.h
 const char* _command_str[] = {
   "unknown_command",
   "GET",
   "PUT",
   "DEL",
   "DATA",
+  "ACK",
+  "STAT",
+  "RIO_OFFSET",
   "SEEK_ABS",
   "SEEK_FWD",
   "SEEK_BACK",
   "SET_XATTR",
   "GET_XATTR",
+  "NULL"
 };
 const char* command_str(SocketCommand command) {
-  if (command > SKT_NULL)
+  if (command > CMD_NULL)
     command = 0;
   return _command_str[command];
 }
 
 
 // for now, this is only used by client
-int write_pseudo_packet(SocketHandle* handle, SocketCommand command, size_t length, void* buf) {
+int write_pseudo_packet(int fd, SocketCommand command, size_t length, void* buf) {
   ssize_t write_count;
 
-  // write <command>
-  DBG("command: %s\n", command_str(command));
+  // --- write <command>
+  DBG("-> command: %s\n", command_str(command));
   uint32_t cmd = htonl(command);
-  CHECK_0( write_buffer(handle->fd, (const char*)&cmd, sizeof(cmd), 1) );
+  CHECK_0( write_raw(fd, (char*)&cmd, sizeof(cmd)) );
 
-  // write <length>
-  DBG("length:  %ull\n", length);
+  // --- write <length>
+  DBG("-> length:  %llu\n", length);
   uint64_t len = htonll(length);
-  CHECK_0( write_buffer(handle->fd, (const char*)&len, sizeof(len), 1) );
+  CHECK_0( write_raw(fd, (char*)&len, sizeof(len)) );
 
-  // maybe write <buf>
+  // --- maybe write <buf>
   if (buf) {
-    DBG("buf:     0x%08x\n", (size_t)buf);
-    CHECK_0( write_buffer(handle->fd, (const char*)buf, length, 1) );
+    DBG("-> buf:     0x%08x\n", (size_t)buf);
+    CHECK_0( write_raw(fd, (char*)buf, length) );
   }
 
   return 0;
@@ -272,28 +369,36 @@ int write_pseudo_packet(SocketHandle* handle, SocketCommand command, size_t leng
 int read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr) {
   ssize_t read_count;
 
-  // read <command>
+  // --- read <command>
   uint32_t cmd;
-  read_count = read_buffer(fd, (char*)&cmd, sizeof(cmd), 1);
-  if (read_count != sizeof(cmd)) {
+  read_count = read_raw(fd, (char*)&cmd, sizeof(cmd));
+  if (! read_count) {
     hdr->flags |= PKT_EOF;
     DBG("EOF\n");
     return -1;
   }
+  else if (read_count != sizeof(cmd)) {
+    DBG("read err %lld\n", read_count);
+    return -1;
+  }
   hdr->command = ntohl(cmd);
-  DBG("command: %s\n", command_str(hdr->command));
+  DBG("<- command: %s\n", command_str(hdr->command));
 
 
-  // read <length>
+  // --- read <length>
   uint64_t len;
-  read_count = read_buffer(fd, (char*)&len, sizeof(len), 1);
-  if (read_count != sizeof(len)) {
+  read_count = read_raw(fd, (char*)&len, sizeof(len));
+  if (! read_count) {
     hdr->flags |= (PKT_EOF & PKT_ERR);
     DBG("EOF\n");
     return -1;
   }
+  else if (read_count != sizeof(len)) {
+    DBG("read err %lld\n", read_count);
+    return -1;
+  }
   hdr->length = ntohll(len);
-  DBG("length:  %ull\n", hdr->length);
+  DBG("<- length:  %llu\n", hdr->length);
 
   return 0;
 }
@@ -305,11 +410,12 @@ int read_fname(int fd, char* fname, size_t length) {
 
   size_t fname_size = length;
   if (fname_size > FNAME_SIZE) {
-    fprintf(stderr, "fname-length %ull exceeds maximum %u\n", fname_size, FNAME_SIZE);
+    fprintf(stderr, "fname-length %llu exceeds maximum %u\n", fname_size, FNAME_SIZE);
     return -1;
   }
-  // read_count = read(client_fd, &fname, FNAME_SIZE);
-  ssize_t read_count = read_buffer(fd, fname, fname_size, 1);
+  // ssize_t read_count = read(client_fd, &fname, FNAME_SIZE);
+  // ssize_t read_count = read_buffer(fd, fname, fname_size, 1);
+  ssize_t read_count = read_raw(fd, fname, fname_size);
   if (read_count != fname_size) {
     fprintf(stderr, "failed to read fname (%lld)\n", read_count);
     return -1;
