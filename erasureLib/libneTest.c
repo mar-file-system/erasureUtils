@@ -266,13 +266,17 @@ int main( int argc, const char* argv[] )
 
       if ( N == 0 ) {
          handle = ne_open( (char *)argv[2], NE_REBUILD | NE_NOINFO );
+         if(handle == NULL) {
+           perror("ne_open()");
+         }
       }
       else {
          handle = ne_open( (char *)argv[2], NE_REBUILD, start, N, E );
       }
 
       tmp = ne_rebuild( handle );
-      if ( tmp <= 0 ) {
+      if ( tmp < 0 ) {
+        printf("rebuild result %d, errno=%d (%s)\n", tmp, errno, strerror(errno));
          fprintf( stderr, "libneTest: rebuild failed!\n" );
          return -1;
       }

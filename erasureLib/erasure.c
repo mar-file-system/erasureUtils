@@ -277,8 +277,8 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
          }
       }
       else if(ret == -1) {
-#if DEBUG
-        fprintf("ne_open: failed xattr_check\n");
+#ifdef DEBUG
+        fprintf(stderr, "ne_open: failed xattr_check\n");
 #endif
         return NULL;
       }
