@@ -58,6 +58,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <limits.h>
 #include <errno.h>
 #include <string.h>
+#include <fcntl.h>
 
 #include "common.h"
 
@@ -107,7 +108,7 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 
   if (is_socket) {
     PseudoPacketHeader header;
-    CHECK_0( read_pseudo_packet_header(fd, &header) );
+    TEST_0( read_pseudo_packet_header(fd, &header) );
     if (header.flags & PKT_EOF)
       return 0;
     else if (header.command != CMD_DATA) {
@@ -163,7 +164,7 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 // WARNING: in the case of USE_RIOWRITE to a socket, we actually write
 //     size +1 bytes, so read_buffer() on the other end can detect
 //     completion..
-int write_buffer(int fd, char* buf, size_t size, int is_socket, off_t offset) {
+int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset) {
   DBG("write_buffer(%d, 0x%llx, %lld, %d, 0x%llx)\n", fd, buf, size, is_socket, offset);
 
   const char*  write_ptr     = buf;
@@ -222,7 +223,7 @@ int write_buffer(int fd, char* buf, size_t size, int is_socket, off_t offset) {
   //  }
 
   if (is_socket) {
-    CHECK_0( write_pseudo_packet(fd, CMD_DATA, size, NULL) );
+    TEST_0( write_pseudo_packet(fd, CMD_DATA, size, NULL) );
   }
 #endif
 
@@ -349,17 +350,17 @@ int write_pseudo_packet(int fd, SocketCommand command, size_t length, void* buf)
   // --- write <command>
   DBG("-> command: %s\n", command_str(command));
   uint32_t cmd = htonl(command);
-  CHECK_0( write_raw(fd, (char*)&cmd, sizeof(cmd)) );
+  TEST_0( write_raw(fd, (char*)&cmd, sizeof(cmd)) );
 
   // --- write <length>
   DBG("-> length:  %llu\n", length);
   uint64_t len = htonll(length);
-  CHECK_0( write_raw(fd, (char*)&len, sizeof(len)) );
+  TEST_0( write_raw(fd, (char*)&len, sizeof(len)) );
 
   // --- maybe write <buf>
   if (buf) {
     DBG("-> buf:     0x%08x\n", (size_t)buf);
-    CHECK_0( write_raw(fd, (char*)buf, length) );
+    TEST_0( write_raw(fd, (char*)buf, length) );
   }
 
   return 0;
@@ -432,26 +433,319 @@ int read_fname(int fd, char* fname, size_t length) {
 
 
 
+
+// paths to the server can be specified as  host:port/path/to/file
+// eventually, we'll allow   prot://host:port/path/to/file
+//
+// <service_path>   unparsed server-spec
+// <spec>           parsed components of <service_path>
+//
+// Shoulda just used sscanf.  Chris got me thinking about maximizing
+// parsing efficiency, but that was a different context.
+//
+int parse_service_path(PathSpec* spec, const char* service_path) {
+
+  // --- parse <host>
+  const char*  ptr = service_path;
+  size_t length    = strcspn(ptr, ":");
+
+  if (! ptr[length]) {
+    fprintf(stderr, "couldn't find port in '%s'\n", ptr);
+    return -1;
+  }
+  else if (length >= HOST_SIZE) {
+    fprintf(stderr, "host token-length (plus NULL) %u exceeds max %u in '%s'\n",
+	    length +1, HOST_SIZE, service_path);
+    return -1;
+  }
+  else if (! strcmp(ptr + length, "://")) {
+    fprintf(stderr, "protocol-specs not yet supported, for '%s'\n",
+	    service_path);
+    return -1;
+  }
+  strncpy(spec->host, ptr, length);
+  spec->host[length] = 0;
+
+
+  // --- parse <port> (string)
+  ptr += length +1;		// skip over ':'
+  length = strcspn(ptr, "/");
+
+  if (! ptr[length]) {
+    fprintf(stderr, "couldn't find file-path in '%s'\n", ptr);
+    return -1;
+  }
+  else if (length >= PORT_STR_SIZE) {
+    fprintf(stderr, "port-token length (plus NULL) %u exceeds max %u in '%s'\n",
+	    length +1, PORT_STR_SIZE, service_path);
+    return -1;
+  }
+  strncpy(spec->port_str, ptr, length);
+  spec->port_str[length] = 0;
+
+  // --- parse <port> (value)
+  errno = 0;
+  unsigned long  port = strtoul(ptr, NULL, 10);
+  if (errno) {
+    fprintf(stderr, "couldn't read port from '%s': %s", ptr, strerror(errno));
+    return -1;
+  }
+  if (port >> 16) {
+    fprintf(stderr, "port %lu is greater than %u\n", port, ((uint32_t)1 << 16) -1);
+    return -1;
+  }
+  spec->port = port;
+
+
+  // --- parse file-path
+  ptr += length;		// don't skip over '/'
+  length = strlen(ptr);
+  if (! length) {
+    fprintf(stderr, "couldn't find file-component in '%s'\n", service_path);
+    return -1;
+  }
+  else if (length >= FNAME_SIZE) {
+    fprintf(stderr, "file-token length (plus NULL) %u exceeds max %u in '%s'\n",
+	    length +1, FNAME_SIZE, ptr);
+    return -1;
+  }
+  strncpy(spec->fname, ptr, length);
+  spec->fname[length] = 0;
+
+  return 0;
+}
+
+
+
+
+
+// ---------------------------------------------------------------------------
+// client interface
+// ---------------------------------------------------------------------------
+
+
 #define NO_IMPL()						\
   fprintf(stderr, "%s not implemented\n", __FUNCTION__);	\
   abort()
 
-SocketHandle  skt_open (const char* fname, int flags, mode_t mode) {
+
+
+
+
+// .................................................................
+// OPEN
+// ...........................................................................
+
+int  skt_open (SocketHandle* handle, const char* service_path, int flags, mode_t mode) {
+
+  // shorthand
+  PathSpec* spec = &handle->path_spec;
+
+  memset(handle, 0, sizeof(SocketHandle));
+  TEST_0( parse_service_path(spec, service_path) );
+
+  handle->open_flags = flags;
+  handle->open_mode  = mode;
+
+  if (flags & (O_RDWR)) {
+    errno = ENOTSUP;		// we don't support this
+    return -1;
+  }
+  else if (flags & O_RDONLY)
+    handle->flags |= HNDL_PUT;
+  else
+    handle->flags |= HNDL_GET;
+
+
+
+#ifdef UNIX_SOCKETS
+  SockAddr          s_addr;
+  struct sockaddr*  s_addr_ptr = (struct sockaddr*)&s_addr;
+  socklen_t         s_addr_len = sizeof(SockAddr);
+
+  // initialize the sockaddr structs
+  memset(&s_addr, 0, s_addr_len);
+
+  //  (void)unlink(socket_name);
+  strcpy(s_addr.sun_path, socket_name);
+  s_addr.sun_family = AF_UNIX;
+
+
+#elif (defined RDMA_SOCKETS)
+  struct rdma_addrinfo  hints;
+  struct rdma_addrinfo* res;
+
+  memset(&hints, 0, sizeof(hints));
+  //  hints.ai_port_space = RDMA_PS_TCP;
+  hints.ai_port_space = RDMA_PS_IB;
+  //  hints.ai_qp_type = IBV_QPT_RC; // amounts to SOCK_STREAM
+
+  int rc = rdma_getaddrinfo((char*)spec->host, (char*)spec->port_str, &hints, &res);
+  if (rc) {
+    fprintf(stderr, "rdma_getaddrinfo(%s) failed: %s\n", spec->host, strerror(errno));
+    return -1;
+  }
+
+  struct sockaddr*  s_addr_ptr = (struct sockaddr*)res->ai_dst_addr;
+  socklen_t         s_addr_len = res->ai_dst_len;
+# define  SKT_FAMILY  res->ai_family
+
+
+#else  // IP sockets
+  SockAddr          s_addr;
+  struct sockaddr*  s_addr_ptr = (struct sockaddr*)&s_addr;
+  socklen_t         s_addr_len = sizeof(SockAddr);
+
+  // initialize the sockaddr structs
+  memset(&s_addr, 0, s_addr_len);
+
+  struct hostent* server = gethostbyname(spec->host);
+  if (! server) {
+    fprintf(stderr, "gethostbyname(%s) failed: %s\n", spec->host, strerror(errno));
+    return -1;
+  }
+
+  s_addr.sin_family      = AF_INET;
+  s_addr.sin_port        = htons(spec->port);
+  memcpy((char *)&s_addr.sin_addr.s_addr,
+	 (char *)server->h_addr, 
+	 server->h_length);
+#endif
+
+
+  // open socket to server
+  /// TEST_0( handle->fd = SOCKET(PF_INET, SOCK_STREAM, 0) );
+  TEST_GT0( handle->fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
+
+  //  // don't do this on the client?
+  int disable = 0;
+  TEST_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_INLINE, &disable, sizeof(disable)) );
+
+  // unsigned mapsize = MAX_SOCKET_CONNS; // max number of riomap'ed buffers
+  unsigned mapsize = 1; // max number of riomap'ed buffers
+  TEST_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+
+
+  TEST_0( CONNECT(handle->fd, s_addr_ptr, s_addr_len) );
+  handle->flags |= HNDL_SERVER_FD;
+
+  //  // fails, if we do this after the connect() ?
+  //  unsigned mapsize = 1; // max number of riomap'ed buffers
+  //  TEST_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+
+  printf("server: connected '%s'\n", spec->fname);
+
+
+  return 0;
+}
+
+
+
+
+// ...........................................................................
+// PUT
+//
+// We allow a sequence of "writes" on an open socket, but because of
+// the client-server interactions needed for RDMA sockets, each write
+// is an all-or-nothing thing.  We write all of your buffer to the
+// server, or we fail.  For compatibility with write(2), we return an
+// ssize_t, but it will always either match the size of your buffer,
+// or be negative.
+//
+// For RDMA+IB, we communicate with the server to receive the memory-mapped
+// offset for server-side buffer we will write into.
+// ...........................................................................
+
+ssize_t skt_write(SocketHandle* handle, const void* buf, size_t count) {
+
+  PseudoPacketHeader header;
+
+  // shorthand
+  PathSpec* spec = &handle->path_spec;
+
+  // --- first time through, initialize comms with server
+  if (! (handle->flags & HNDL_OP_INIT)) {
+
+    TEST_0( write_pseudo_packet(handle->fd, CMD_PUT, strlen(spec->fname)+1, spec->fname) );
+
+#if USE_RIOWRITE
+    // server sends us the offset she got from riomap()
+    TEST_0( read_pseudo_packet_header(handle->fd, &header) );
+    if (header.command != CMD_RIO_OFFSET) {
+      fprintf(stderr, "expected RIO_OFFSET pseudo-packet, not %s\n", command_str(header.command));
+      return -1;
+    }
+    handle->rio_offset = header.length;
+    DBG("got riomap offset from server: 0x%llx\n", header.length);
+#endif  
+
+    handle->flags |= HNDL_OP_INIT;
+  }
+
+
+#ifdef USE_RIOWRITE
+  // --- We're about to overwrite the destination buffer via RDMA.
+  //     Don't call write_buffer() until the other-end reports that it
+  //     is finished with the buffer.
+  TEST_0( read_pseudo_packet_header(handle->fd, &header) );
+  if (header.command != CMD_ACK) {
+    fprintf(stderr, "expected an ACK, but got %s\n", command_str(header.command));
+    return -1;
+  }
+#endif
+
+  TEST_0( write_buffer(handle->fd, buf, count, 1, handle->rio_offset) );
+  return count;
+}
+
+
+
+// ...........................................................................
+// READ
+// ...........................................................................
+
+ssize_t skt_read(SocketHandle* handle,       void* buf, size_t count) {
   NO_IMPL();
 }
 
-ssize_t       skt_write(SocketHandle* handle, const void* buf, size_t count) {
+
+// ...........................................................................
+// SEEK
+//
+// libne uses lseek().  It appears that under normal circumstances all
+// those seeks might redundantly seek to the current position.  We
+// could detect that by tracking the current position in the stream,
+// and just turn it into a no-op, in the case where the seek is
+// redundant.  (Or, if we can feasibly do that in libne, then we could
+// skip implementation.)
+// 
+// ...........................................................................
+
+off_t skt_seek(SocketHandle* handle, off_t offset, int whence) {
   NO_IMPL();
 }
 
-ssize_t       skt_read (SocketHandle* handle,       void* buf, size_t count) {
-  NO_IMPL();
-}
 
-off_t         skt_seek (SocketHandle* handle, off_t offset, int whence) {
-  NO_IMPL();
-}
+// ...........................................................................
+// CLOSE
+//
+// Finalize comms with server.  Server will fsync().
+// ...........................................................................
 
-int           skt_close(SocketHandle* handle) {
-  NO_IMPL();
+int skt_close(SocketHandle* handle) {
+
+  if (handle->flags & HNDL_OP_INIT) {
+#ifdef USE_RIOWRITE
+    // let the other end know that there's no more data
+    TEST_0( write_pseudo_packet(handle->fd, CMD_DATA, 0, NULL) );
+#endif
+
+    // wait for the other end to fsync
+    PseudoPacketHeader hdr;
+    TEST_0( read_pseudo_packet_header(handle->fd, &hdr) );
+    TEST(   (hdr.command == CMD_ACK) );
+  }
+  handle->flags |= HNDL_CLOSED;
+
+  return 0;
 }

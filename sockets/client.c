@@ -68,27 +68,17 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 #include <stdio.h>              // sprintf()
-#include <string.h>             // strcpy()
-#include <errno.h>
 #include <stdint.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <time.h>
+#include <string.h>             // strcpy()
+#include <errno.h>
 
 #include "common.h"
 
-#define  _FLAG_FNAME       0x01
-#define  _FLAG_SERVER_FD   0x02
-#define  _FLAG_RIOMAPPED   0x04
 
-static unsigned char  flags = 0;
-
-static char socket_name[MAX_SOCKET_NAME_SIZE +1];
-static int  server_fd;               // listen() to this
-
-// called from SKT_CHECK, to print diagnostics
-static void socket_check_info(const char* expr) {
-  printf("client:  running '%s'\n", expr);
-}
+static SocketHandle handle = {0};
 
 
 
@@ -96,16 +86,16 @@ void
 shut_down() {
 
 #if UNIX_SOCKETS
-  if (flags & _FLAG_FNAME) {
-    fprintf(stderr, "shut_down: unlinking '%s'\n", socket_name);
-    (void)unlink(socket_name);
+  if (handle.flags & HNDL_FNAME) {
+    fprintf(stderr, "shut_down: unlinking '%s'\n", handle.fname);
+    (void)unlink(handle.fname);
   }
 #endif
 
-  if (flags & _FLAG_SERVER_FD) {
-    fprintf(stderr, "shut_down: closing socket_fd %d\n", server_fd);
-    SHUTDOWN(server_fd, SHUT_RDWR);
-    CLOSE(server_fd);
+  if (handle.flags & HNDL_SERVER_FD) {
+    fprintf(stderr, "shut_down: closing socket_fd %d\n", handle.fd);
+    SHUTDOWN(handle.fd, SHUT_RDWR);
+    CLOSE(handle.fd);
   }
 }
 
@@ -151,168 +141,29 @@ sig_handler(int sig) {
 int
 main(int argc, char* argv[]) {
 
-  if (argc != 4) {
-     fprintf(stderr, "Usage: %s <host> <port> <fname>\n", argv[0]);
+  if (argc != 2) {
+     fprintf(stderr, "Usage: %s <host>:<port>/<fname>\n", argv[0]);
      fprintf(stderr, "For now, we are just reading from stdin, and writing to remote file\n", argv[0]);
      exit(1);
   }
 
-  const char* host     = argv[1];
-  const char* port_str = argv[2];
-  const char* fname    = argv[3];
-
-  // parse <port>
-  errno = 0;
-  int port = strtol(argv[2], NULL, 10);
-  if (errno) {
-    char errmsg[128];
-    sprintf("couldn't read integer from '%s'", argv[2]);
-    perror(errmsg);
-    exit(1);
-  }
-
-  // for UNIX socket, this is fname, for INET this is just for diagnostics
-  sprintf(socket_name, "%s_%02d", SOCKET_NAME_PREFIX, port);
+  char read_buf[CLIENT_BUF_SIZE] __attribute__ (( aligned(64) )); /* copy stdin to socket */
 
 
-#ifdef UNIX_SOCKETS
-  SockAddr          s_addr;
-  struct sockaddr*  s_addr_ptr = (struct sockaddr*)&s_addr;
-  socklen_t         s_addr_len = sizeof(SockAddr);
+  // --- TBD: authentication handshake
+  REQUIRE_0( skt_open(&handle, argv[1], (O_WRONLY|O_CREAT), 0660) );
 
-  // initialize the sockaddr structs
-  memset(&s_addr, 0, s_addr_len);
-
-  //  (void)unlink(socket_name);
-  strcpy(s_addr.sun_path, socket_name);
-  s_addr.sun_family = AF_UNIX;
-
-
-#elif (defined RDMA_SOCKETS)
-  struct rdma_addrinfo  hints;
-  struct rdma_addrinfo* res;
-
-  memset(&hints, 0, sizeof(hints));
-  //  hints.ai_port_space = RDMA_PS_TCP;
-  hints.ai_port_space = RDMA_PS_IB;
-  //  hints.ai_qp_type = IBV_QPT_RC; // amounts to SOCK_STREAM
-
-  int rc = rdma_getaddrinfo((char*)host, (char*)port_str, &hints, &res);
-  if (rc) {
-    fprintf(stderr, "rdma_getaddrinfo(%s) failed: %s\n", host, strerror(errno));
-    exit(1);
-  }
-
-  struct sockaddr*  s_addr_ptr = (struct sockaddr*)res->ai_dst_addr;
-  socklen_t         s_addr_len = res->ai_dst_len;
-# define  SKT_FAMILY  res->ai_family
-
-
-#else  // IP sockets
-  SockAddr          s_addr;
-  struct sockaddr*  s_addr_ptr = (struct sockaddr*)&s_addr;
-  socklen_t         s_addr_len = sizeof(SockAddr);
-
-  // initialize the sockaddr structs
-  memset(&s_addr, 0, s_addr_len);
-
-  struct hostent* server = gethostbyname(host);
-  if (! server) {
-    fprintf(stderr, "gethostbyname(%s) failed: %s\n", host, strerror(errno));
-    exit(1);
-  }
-
-  s_addr.sin_family      = AF_INET;
-  s_addr.sin_port        = htons(port);
-  memcpy((char *)&s_addr.sin_addr.s_addr,
-	 (char *)server->h_addr, 
-	 server->h_length);
-#endif
-
-
-  // open socket to server
-  /// SKT_CHECK( server_fd = SOCKET(PF_INET, SOCK_STREAM, 0) );
-  SKT_CHECK( server_fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
-
-  //  // don't do this on the client?
-  int disable = 0;
-  SKT_CHECK( RSETSOCKOPT(server_fd, SOL_RDMA, RDMA_INLINE, &disable, sizeof(disable)) );
-
-  // unsigned mapsize = MAX_SOCKET_CONNS; // max number of riomap'ed buffers
-  unsigned mapsize = 1; // max number of riomap'ed buffers
-  SKT_CHECK( RSETSOCKOPT(server_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
-
-
-  SKT_CHECK( CONNECT(server_fd, s_addr_ptr, s_addr_len) );
-  flags |= _FLAG_SERVER_FD;
-
-  //  // fails, if we do this after the connect() ?
-  //  unsigned mapsize = 1; // max number of riomap'ed buffers
-  //  SKT_CHECK( RSETSOCKOPT(server_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
-
-  printf("server %s: connected\n", socket_name);
-
-
-
-  // interact with server.  Server reads custom header, then data.
-  // For now, the header is just:
-  unsigned int  err = 0;
-
-  // interact with server.
-  unsigned int  op;             /* 0=GET from zfile, 1=PUT, else quit connection */
-  char          zfname[FNAME_SIZE];
-
-  // extra byte is used in read_buffer()/write_buffer(), iff USE_RIOWRITE
-  char          read_buf[CLIENT_BUF_SIZE+1] __attribute__ (( aligned(64) )); /* copy stdin to socket */
-
-
-  size_t fname_size = strlen(fname);
-  if (fname_size >= FNAME_SIZE) {
-    fprintf(stderr, "filename size %llu is greater than %u\n", fname_size, FNAME_SIZE);
-    exit(1);
-  }
-  strcpy(zfname, fname);
   
 
 
-  // -- TBD: authentication handshake
 
-
-  // -- TBD: abstract into standard-header write/read functions
-  // send: <op> <length> <zfname>
-  //   e.g. [on 10.10.0.2]  /mnt/repo10+2/pod1/block3/scatterN/foo
-  //   e.g. [on 10.10.0.2]  /mnt/repo10+2/pod1/block4/scatterN/foo
-
-  ///  SocketHandle handle = { .fd    = server_fd,
-  ///			  .flags = 0,
-  ///			  .pos   = 0 };
-  ///  CHECK_0( write_pseudo_packet(&handle, CMD_PUT, strlen(zfname) +1, zfname) );
-  CHECK_0( write_pseudo_packet(server_fd, CMD_PUT, strlen(zfname) +1, zfname) );
-
-
-
-#if USE_RIOWRITE
-  // server sends us the offset she got from riomap()
-  PseudoPacketHeader header;
-  CHECK_0( read_pseudo_packet_header(server_fd, &header) );
-  if (header.command != CMD_RIO_OFFSET) {
-    fprintf(stderr, "expected RIO_OFFSET pseudo-packet, not %s\n", command_str(header.command));
-    abort();
-  }
-  off_t offset = header.length;
-  DBG("got riomap offset from server: 0x%llx\n", offset);
-
-  read_buf[CLIENT_BUF_SIZE] = 1; // set overflow-byte, for eventual copy
-#endif  
-
-
-  // This allows cutting out the any performance cost of
+  // This allows cutting out the performance cost of
   // doing reads on the client side.
-#ifdef SKIP_CLIENT_READS
+#ifdef SKIP_FILE_READS
   // int iters = 2048;
   // int iters = (10 * 1024); // we will write (<this> * CLIENT_BUF_SIZE) bytes
   // int iters = (100); // we will write (<this> * CLIENT_BUF_SIZE) bytes
-  int iters = SKIP_CLIENT_READS; // we will write (<this> * CLIENT_BUF_SIZE) bytes
+  int iters = SKIP_FILE_READS; // we will write (<this> * CLIENT_BUF_SIZE) bytes
   memset(read_buf, 1, CLIENT_BUF_SIZE);
 #endif
 
@@ -325,14 +176,16 @@ main(int argc, char* argv[]) {
 
   size_t bytes_moved = 0;	/* total */
   int    eof         = 0;
+  int    err         = 0;
   while (!eof && !err) {
 
 
-#ifdef SKIP_CLIENT_READS
+#ifdef SKIP_FILE_READS
     // --- don't waste time reading.  Just send a raw buffer.
     ssize_t read_count  = CLIENT_BUF_SIZE;
 
     if (iters-- <= 0) {
+      DBG("fake EOF\n");
       eof = 1;
       read_count  = 0;
       break;
@@ -347,8 +200,9 @@ main(int argc, char* argv[]) {
       abort();
     }
     else if (read_count == 0) {
-      eof = 1;
       DBG("read EOF\n");
+      eof = 1;
+      break;
     }
     DBG("read_count: %llu\n", read_count);
 #endif
@@ -356,30 +210,19 @@ main(int argc, char* argv[]) {
 
 
     // --- write buffer to socket
-#ifdef USE_RIOWRITE
-    // We're about to overwrite teh destination buffer via RDMA.
-    // Don't call write_buffer() until the other-end reports that it
-    // is finished with the buffer.
-    CHECK_0( read_pseudo_packet_header(server_fd, &header) );
-    if (header.command != CMD_ACK) {
-      fprintf(stderr, "expected an ACK, but got %s\n", command_str(header.command));
-      return -1;
-    }
-#endif
-
-    CHECK_0( write_buffer(server_fd, read_buf, read_count, 1, offset) );
+    /// REQUIRE_0( write_buffer(handle.fd, read_buf, read_count, 1, offset) );
+    REQUIRE_GT0( skt_write(&handle, read_buf, read_count) );
     bytes_moved += read_count;
   }
   DBG("copy-loop done  (%llu bytes).\n", bytes_moved);
 
 
-#ifdef USE_RIOWRITE
-  // let the other end know that there's no more data
-  CHECK_0( write_pseudo_packet(server_fd, CMD_DATA, 0, NULL) );
-#endif
+  REQUIRE_0( skt_close(&handle) );
 
 
-  // compute bandwidth
+
+
+  // --- compute bandwidth
   struct timespec end;
   if (clock_gettime(CLOCK_REALTIME, &end)) {
     fprintf(stderr, "failed to get END timer '%s'\n", strerror(errno));
@@ -404,7 +247,7 @@ main(int argc, char* argv[]) {
   if (eof && !err) {
     DBG("waiting for ACK ...\n", read_count);
     uint32_t ack;
-    read_count = READ(server_fd, &ack, sizeof(uint32_t));
+    read_count = READ(handle.fd, &ack, sizeof(uint32_t));
     DBG("read_count(2): %lld\n", read_count);
     if ((read_count < 0) || (ack != 1))
       DBG("ACK fail\n");

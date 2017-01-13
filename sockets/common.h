@@ -79,44 +79,45 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 
-#define SKT_CHECK(EXPR)                                          \
-  socket_check_info(#EXPR);                                      \
-  if ((EXPR) == -1) {                                            \
-    perror("expression failed: '" #EXPR "'\n");                  \
-    abort();							 \
-  }
-#define SKT_TRY(EXPR)      ((EXPR) != -1)
-
-
-#define CHECK_0(EXPR)						 \
+#define _TEST(EXPR, TEST, PRINT, RETURN)			 \
   do {								 \
-    DBG(#EXPR "\n");						 \
-    if ((EXPR) != 0) {						 \
-      perror("expression failed: '" #EXPR "'\n");		 \
-      abort();							 \
-    }								 \
-  } while(0)
-
-#define CHECK_GT0(EXPR)						 \
-  do {								 \
-    DBG(#EXPR "\n");						 \
-    if ((EXPR) <= 0) {						 \
-      perror("expression failed: '" #EXPR "'\n");		 \
-      abort();							 \
+    PRINT(#EXPR "\n");						 \
+    if (! ((EXPR) TEST)) {					 \
+      fprintf(stderr, "%s:%d test failed: '%s': %s\n",		 \
+	      __FILE__, __LINE__, #EXPR, strerror(errno));	 \
+      RETURN;							 \
     }								 \
   } while(0)
 
 
+// fail if expression is false
+#define TRY(EXPR)           _TEST(EXPR,    , printf,          )
+#define TEST(EXPR)          _TEST(EXPR,    , DBG,    return -1)
+#define REQUIRE(EXPR)       _TEST(EXPR,    , DBG,    abort()  )
+
+// fail if expression is non-zero
+#define TRY_0(EXPR)         _TEST(EXPR, ==0, printf,          )
+#define TEST_0(EXPR)        _TEST(EXPR, ==0, DBG,    return -1)
+#define REQUIRE_0(EXPR)     _TEST(EXPR, ==0, DBG,    abort()  )
+
+// fail if expression is <= 0
+#define TRY_GT0(EXPR)       _TEST(EXPR,  >0, printf,          )
+#define TEST_GT0(EXPR)      _TEST(EXPR,  >0, DBG,    return -1)
+#define REQUIRE_GT0(EXPR)   _TEST(EXPR,  >0, DBG,    abort()  )
 
 
-#define SOCKET_NAME_PREFIX    "socket_"
-#define MAX_SOCKET_NAME_SIZE  (sizeof(SOCKET_NAME_PREFIX) + 10)
 
-#define MAX_SOCKET            9
 
-#define MAX_SOCKET_CONNS  128
+#define SOCKET_NAME_PREFIX      "socket_"
+#define MAX_SOCKET_NAME_SIZE    (sizeof(SOCKET_NAME_PREFIX) + 10)
 
-#define FNAME_SIZE      128 /* incl final null */
+#define MAX_SOCKET              9
+
+#define MAX_SOCKET_CONNS        256
+
+#define FNAME_SIZE              128 /* incl final null */
+#define HOST_SIZE               128 /* incl final null */
+#define PORT_STR_SIZE            16 /* incl final null */
 
 // now that we are using riomap(), these must be the same?  [for rsocket builds]
 #define CLIENT_BUF_SIZE         (1024 * 1024)
@@ -206,29 +207,48 @@ typedef struct sockaddr_in                   SockAddr;
 #endif
 
 
-
+// Unused, for now
+typedef enum {
+  PROT_UNIX = 1,
+  PROT_IP,
+  PROT_IB,
+  PROT_IB_RDMA,			// default
+} ProtoType;
 
 typedef struct {
-  uint8_t  op;
-  char     fname[FNAME_SIZE];
-  size_t   length;
-  char     xattr_name[XATTR_NAME_SIZE];
-  char     xattr_value[XATTR_VALUE_SIZE];
-} SocketHeader;
+  ProtoType    prot;  // unused, for now
+  char         host[HOST_SIZE];
+  uint16_t     port;
+  char         port_str[PORT_STR_SIZE];
+  char         fname[FNAME_SIZE];
+} PathSpec;
 
 
 typedef enum {
-  SH_IS_SOCKET  = 0x01,	       // read/write-buffer also work on files
-  SH_RIOWRITE   = 0x02,
-  SH_DOUBLE     = 0x04,		// double-buffering
+  HNDL_FNAME     = 0x01,
+  HNDL_SERVER_FD = 0x02,
+  HNDL_RIOMAPPED = 0x04,
+
+  HNDL_IS_SOCKET = 0x10,       // read/write-buffer also work on files
+  HNDL_RIOWRITE  = 0x20,
+  HNDL_DOUBLE    = 0x40,	// double-buffering
+
+  HNDL_GET       = 0x0100,
+  HNDL_PUT       = 0x0200,
+  HNDL_OP_INIT   = 0x0400,
+  HNDL_CLOSED    = 0x0800,
 } SHFlags;
 
+
+
 typedef struct {
+  PathSpec     path_spec;
+  int          open_flags;
+  mode_t       open_mode;
   int          fd;
-  // SocketHeader header;
-  uint8_t      flags;
   off_t        rio_offset;
   size_t       pos;		// TBD: stream-position, to ignore redundant skt_seek()
+  uint16_t     flags;		// SHFlags
 } SocketHandle;
 
 
@@ -286,7 +306,7 @@ typedef struct {
 // For now, we'll use a open/read/write/close model, because that
 // will fit most easily into libne.
 
-SocketHandle  skt_open (const char* fname, int flags, mode_t mode);
+int           skt_open (SocketHandle* handle, const char* fname, int flags, mode_t mode);
 ssize_t       skt_write(SocketHandle* handle, const void* buf, size_t count);
 ssize_t       skt_read (SocketHandle* handle,       void* buf, size_t count);
 off_t         skt_seek (SocketHandle* handle, off_t offset, int whence);
@@ -298,8 +318,7 @@ int read_fname(int fd, char* fname, size_t length);
 
 
 ssize_t read_buffer (int fd, char*       buf, size_t size, int is_socket);
-// int     write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset);
-int     write_buffer(int fd, char* buf, size_t size, int is_socket, off_t offset);
+int     write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset);
 
 
 
