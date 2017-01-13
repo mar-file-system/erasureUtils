@@ -78,7 +78,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define MAXNAME 1024 
 #define MAXBUF 4096 
 #define MAXBLKSZ 16777216
-#define BLKSZ 65536
+#define BLKSZ 1048576
 #define HEADSZ 70
 #define TEST_SEED 57
 

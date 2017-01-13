@@ -276,6 +276,13 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
             return NULL;
          }
       }
+      else if(ret == -1) {
+#if DEBUG
+        fprintf("ne_open: failed xattr_check\n");
+#endif
+        return NULL;
+      }
+
    }
    else if ( mode != NE_WRONLY ) { //reject improper mode arguments
 #ifdef DEBUG
@@ -310,10 +317,6 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
       errno = ret;
       return NULL;
    }
-
-#ifdef DEBUG
-   fprintf(stdout,"ne_open: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n", ret, bsz, N, E);
-#endif
 
    /* allocate matrices */
    handle->encode_matrix = malloc(MAXPARTS * MAXPARTS);
@@ -1650,9 +1653,9 @@ int xattr_check( ne_handle handle, char *path )
             continue;
          }
          else if ( bsz != handle->bsz ) {
-   #ifdef DEBUG
+#ifdef DEBUG
             fprintf (stderr, "xattr_check: filexattr bsz = %d did not match handle value  %d\n", bsz, handle->bsz); 
-   #endif
+#endif
             handle->src_in_err[counter] = 1;
             handle->src_err_list[handle->nerr] = counter;
             handle->nerr++;
@@ -1919,9 +1922,13 @@ int xattr_check( ne_handle handle, char *path )
 
 
 /**
- * Performs a rebuild operation on the erasure striping indicated by the given handle.
+ * Performs a rebuild operation on the erasure striping indicated by
+ * the given handle.
+ *
  * @param ne_handle handle : The handle for the erasure striping to be repaired
- * @return int : Status code.  Success is indicated by 0 and failure by -1
+ * @return int : Status code.  0 indicates that the object was intact,
+ * -1 indicates failure to rebuild, > 0 indicates that the object was
+ * degraded and has been rebuilt successfully.
  */
 int ne_rebuild( ne_handle handle ) {
    int counter;
@@ -2191,7 +2198,6 @@ rebuild:
          fprintf( stdout, "ne_rebuild: init erasure tables nsrcerr = %d...\n", nsrcerr );
 #endif
          ec_init_tables(handle->N, handle->nerr, handle->decode_matrix, handle->g_tbls);
-
          handle->e_ready = 1; //indicate that rebuild structures are initialized
       }
 #ifdef DEBUG
@@ -2277,7 +2283,7 @@ rebuild:
       free( temp_buffs[counter] );
    }
 
-   return 0;
+   return handle->nerr;
 }
 
 

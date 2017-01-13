@@ -272,7 +272,7 @@ int main( int argc, const char* argv[] )
       }
 
       tmp = ne_rebuild( handle );
-      if ( tmp != 0 ) {
+      if ( tmp <= 0 ) {
          fprintf( stderr, "libneTest: rebuild failed!\n" );
          return -1;
       }
