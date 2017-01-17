@@ -675,11 +675,7 @@ read:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
-#ifdef HAVE_LIBISAL
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
-#else
-               crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], bsz );
-#endif
                if ( memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) ) != 0 ){
                   DBG_FPRINTF(stderr, "ne_read: mismatch of int-crc for file %d while reading with rebuild\n", counter);
                   if ( counter > maxNerr )  maxNerr = counter;
@@ -758,11 +754,7 @@ read:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
-#ifdef HAVE_LIBISAL
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
-#else
-               crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], bsz );
-#endif
                if ( memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) ) != 0 ){
                   DBG_FPRINTF(stderr, "ne_read: mismatch of int-crc for file %d (erasure)\n", counter);
                   if ( counter > maxNerr )  maxNerr = counter;
@@ -818,11 +810,7 @@ read:
          }
          DBG_FPRINTF( stdout, "ne_read: performing regeneration from erasure...\n" );
 
-#ifdef HAVE_LIBISAL
          ec_encode_data(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
-#else
-         ec_encode_data_base(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
-#endif
       }
 
       /**** write appropriate data out ****/
@@ -988,11 +976,7 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 
          if ( handle->src_in_err[counter] == 0 ) {
             /* this is the crcsum for each part */
-#ifdef HAVE_LIBISAL
             crc = crc32_ieee(TEST_SEED, handle->buffs[counter], bsz);
-#else
-            crc = crc32_ieee_base(TEST_SEED, handle->buffs[counter], bsz);
-#endif
 
 #ifdef INT_CRC
             // write out per-block-crc
@@ -1046,19 +1030,11 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
       DBG_FPRINTF(stdout, "ne_write: caculating %d recovery stripes from %d data stripes\n",E,N);
       // Perform matrix dot_prod for EC encoding
       // using g_tbls from encode matrix encode_matrix
-#ifdef HAVE_LIBISAL
       ec_encode_data( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
-#else
-      ec_encode_data_base( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
-#endif
 
       ecounter = 0;
       while (ecounter < E) {
-#ifdef HAVE_LIBISAL
          crc = crc32_ieee(TEST_SEED, handle->buffs[counter+ecounter], bsz); 
-#else
-         crc = crc32_ieee_base(TEST_SEED, handle->buffs[counter+ecounter], bsz); 
-#endif
 
          writesize = bsz;
 #ifdef INT_CRC
@@ -1877,11 +1853,7 @@ rebuild:
                goto rebuild;
             }
 
-#ifdef HAVE_LIBISAL
             crc = crc32_ieee( TEST_SEED, handle->buffs[counter], handle->bsz );
-#else
-            crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], handle->bsz );
-#endif
             csum[counter] += crc;
 
 #ifdef INT_CRC
@@ -1964,19 +1936,11 @@ rebuild:
       }
       DBG_FPRINTF( stdout, "ne_rebuild: performing regeneration from erasure...\n" );
 
-#ifdef HAVE_LIBISAL
       ec_encode_data(handle->bsz, handle->N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[handle->N]);
-#else
-      ec_encode_data_base(handle->bsz, handle->N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[handle->N]);
-#endif
 
       for (i = 0; i < handle->nerr; i++) {
 
-#ifdef HAVE_LIBISAL
          crc = crc32_ieee(TEST_SEED, temp_buffs[handle->N+i], handle->bsz);
-#else
-         crc = crc32_ieee_base(TEST_SEED, temp_buffs[handle->N+i], handle->bsz);
-#endif
 
          if ( handle->mode != NE_STAT ) {
 #ifdef INT_CRC

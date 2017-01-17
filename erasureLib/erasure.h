@@ -99,6 +99,10 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  define DBG_FPRINTF(...)
 #endif
 
+#ifndef HAVE_LIBISAL
+#define crc32_ieee(...) crc32_ieee_base(__VA_ARGS__)
+#endif
+
 typedef uint32_t u32;
 typedef uint64_t u64;
 typedef enum {NE_RDONLY=0,NE_WRONLY,NE_REBUILD,NE_STAT,NE_NOINFO=4,NE_SETBSZ=8} ne_mode;
