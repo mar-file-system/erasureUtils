@@ -1151,7 +1151,8 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
          counter++;
       } //end of writes for N
 
-      //if we haven't written a whole stripe, terminate
+      // If we haven't written a whole stripe, terminate. This happens
+      // if there is not enough data to form a complete stripe.
       if ( counter != N ) {
          break;
       }
@@ -1204,15 +1205,17 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
 #ifdef DEBUG
          fprintf( stdout, "ne_write: writing out erasure stripe %d\n", ecounter );
 #endif
-         ret_out = write(handle->FDArray[counter+ecounter],handle->buffs[counter+ecounter],writesize); 
+         if( handle->src_in_err[counter+ecounter] == 0) {
+           ret_out = write(handle->FDArray[counter+ecounter],handle->buffs[counter+ecounter],writesize);
 
-         if ( ret_out != writesize ) {
+           if ( ret_out != writesize ) {
 #ifdef DEBUG
-            fprintf( stderr, "ne_write: write to erasure file %d, returned %zd instead of expected %d\n" , ecounter, ret_out, writesize );
+             fprintf( stderr, "ne_write: write to erasure file %d, returned %zd instead of expected %d\n" , ecounter, ret_out, writesize );
 #endif
-            handle->src_in_err[counter + ecounter] = 1;
-            handle->src_err_list[handle->nerr] = counter + ecounter;
-            handle->nerr++;
+             handle->src_in_err[counter + ecounter] = 1;
+             handle->src_err_list[handle->nerr] = counter + ecounter;
+             handle->nerr++;
+           }
          }
 
          ecounter++;
@@ -1222,8 +1225,16 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
       handle->buff_rem = 0; 
    }
    handle->totsz += totsize; //as it is impossible to write at an offset, the sum of writes will be the total size
- 
-   return totsize;
+
+   // If the errors exceed the minimum protection threshold number of
+   // errrors then fail the write.
+   if( handle->nerr > handle->E-MIN_PROTECTION ) {
+     errno = EIO;
+     return -1;
+   }
+   else {
+     return totsize;
+   }
 }
 
 

@@ -73,6 +73,10 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <stdint.h>
 #include <sys/types.h>
 
+/* MIN_PROTECTION sets the threshold for when writes will fail.  If
+   fewer than n+MIN_PROTECTION blocks were written successfully, then
+   the write will fail. */
+#define MIN_PROTECTION 1
 #define MAXN 15
 #define MAXE 5
 #define MAXNAME 1024 
