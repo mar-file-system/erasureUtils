@@ -161,9 +161,6 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 // write bytes until <size>, or error.
 // Return 0 for success, negative for error.
 //
-// WARNING: in the case of USE_RIOWRITE to a socket, we actually write
-//     size +1 bytes, so read_buffer() on the other end can detect
-//     completion..
 int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset) {
   DBG("write_buffer(%d, 0x%llx, %lld, %d, 0x%llx)\n", fd, buf, size, is_socket, offset);
 

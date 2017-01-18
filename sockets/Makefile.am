@@ -53,67 +53,32 @@
 #LANL contributions is found at https://github.com/jti-lanl/aws4c.
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
-#
-#                                               -*- Autoconf -*-
-# Process this file with autoconf to produce a configure script.
 
-AC_PREREQ([2.69])
-AC_INIT([erasureUtils], [1.0], [gransom@lanl.gov])
-AC_CONFIG_SRCDIR([COPYRIGHT.h])
-AC_CONFIG_HEADERS([config.h])
-AC_CONFIG_MACRO_DIR([m4])
-AM_INIT_AUTOMAKE
-AC_PROG_RANLIB
 
-# Checks for programs.
-AC_PROG_CC
+if RDMA_SOCKETS
+  SOCKET_LIBS = -lrdmacm
+  SOCKET_DEFS = -DRDMA_SOCKETS -DUSE_RIOWRITE
+endif
 
-# Checks for libraries.
-AC_CHECK_LIB([isal], [crc32_ieee], [],
-   [AC_CHECK_LIB([isal], [crc32_ieee_base],
-      [echo
-       echo "WARNING:  Could not properly link 'crc32_ieee' from isa-l, defaulting to '_base' implementation"
-       echo "          IN THIS STATE, THESE UTILITES MAY NOT FUNCTION AND WILL ALMOST CERTAINLY HAVE VERY POOR PERFORMANCE"
-       echo], 
-         [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!  Please verify that the proper version of the library (v2.16.0 or higher) is installed."])])])
+lib_LIBRARIES = librdma_sockets.a
+librdma_sockets_a_SOURCES = common.c common.h
+librdma_sockets_a_CPPFLAGS = $(SOCKET_DEFS)
 
-# Checks for header files.
-AC_CHECK_HEADERS([fcntl.h stdint.h stdlib.h string.h unistd.h])
-AXATTR_CHECK
+include_HEADERS = common.h
 
-# Checks for typedefs, structures, and compiler characteristics.
-AC_TYPE_OFF_T
-AC_TYPE_SSIZE_T
-AC_CHECK_HEADER_STDBOOL
-AC_TYPE_UINT32_T
-AC_TYPE_UINT64_T
-AC_TYPE_UINT8_T
 
-# Checks for library functions.
-AC_FUNC_MALLOC
-AC_CHECK_FUNCS([bzero ftruncate memset strerror strtol strtoul])
 
-# optional build uses RDMA-sockets
-# The server must be running on remote hosts to support this mode.
-AC_ARG_ENABLE([sockets],
-              [File operations go thorugh a remote server via sockets {rdma,ip,unix}],
-	      [case "${enableval}" in
-	       rdma) enable_sockets=rdma ;;
-	       no)   enable_sockets=no ;;
-	       *)    AC_MSG_FAILURE([enable-sockets={rdma,ip,unix}. Currently, only rdma is supported]) ;;
-	       esac],
-	       [enable_sockets=no])
+bin_PROGRAMS = client socket_fserver
 
-AM_CONDITIONAL([BUILD_SOCKETS], [test "$enable_sockets" != no ])
-AM_CONDITIONAL([RDMA_SOCKETS], [test "$enable_sockets"  == rdma])
+socket_fserver_SOURCES = socket_fserver.c
+socket_fserver_CPPFLAGS = $(SOCKET_DEFS)
+socket_fserver_LDADD = librdma_sockets.a
+socket_fserver_LDFLAGS = -lrt -lpthread $(SOCKET_LIBS)
 
-       
+client_SOURCES = client.c
+client_CPPFLAGS = $(SOCKET_DEFS)
+client_LDADD = librdma_sockets.a
+client_LDFLAGS = -lrt $(SOCKET_LIBS)
 
-AXATTR_GET_FUNC_CHECK
-AXATTR_SET_FUNC_CHECK
 
-AC_CONFIG_FILES([Makefile
-                 sockets/Makefile
-                 fileraid/Makefile
-                 erasureLib/Makefile])
-AC_OUTPUT
+

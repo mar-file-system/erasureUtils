@@ -56,5 +56,10 @@
 #
 
 AUTOMAKE_OPTIONS = foreign
-SUBDIRS = erasureLib fileraid
+
+
+if BUILD_SOCKETS
+  MAYBE_SOCKETS = sockets
+endif
+SUBDIRS = $(MAYBE_SOCKETS) erasureLib fileraid
 

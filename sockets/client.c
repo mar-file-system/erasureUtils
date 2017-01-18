@@ -159,11 +159,9 @@ main(int argc, char* argv[]) {
 
   // This allows cutting out the performance cost of
   // doing reads on the client side.
+  //  size_t iters = (size_t)-1;
 #ifdef SKIP_FILE_READS
-  // int iters = 2048;
-  // int iters = (10 * 1024); // we will write (<this> * CLIENT_BUF_SIZE) bytes
-  // int iters = (100); // we will write (<this> * CLIENT_BUF_SIZE) bytes
-  int iters = SKIP_FILE_READS; // we will write (<this> * CLIENT_BUF_SIZE) bytes
+  size_t iters = SKIP_FILE_READS; // we will write (<this> * CLIENT_BUF_SIZE) bytes
   memset(read_buf, 1, CLIENT_BUF_SIZE);
 #endif
 

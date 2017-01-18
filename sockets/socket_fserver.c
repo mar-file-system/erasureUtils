@@ -152,7 +152,14 @@ shut_down_thread(void* arg) {
 
   // maybe close the local file
   if (ctx->flags & CTX_FILE_OPEN) {
-    TRY_0( close(ctx->file_fd) );
+#ifndef SKIP_FILE_WRITES
+    if (ctx->hdr.command == CMD_PUT)
+      TRY_0( close(ctx->file_fd) );
+#endif
+#ifndef SKIP_FILE_READS
+    if (ctx->hdr.command == CMD_GET)
+      TRY_0( close(ctx->file_fd) );
+#endif
   }
 
   if (ctx->flags & CTX_PRE_THREAD) {
@@ -227,7 +234,259 @@ sig_handler(int sig) {
 //
 // Return 0 for success, non-zero for fail.
 //
-int socket_get_or_put(ThreadContext* ctx) {
+int server_put(ThreadContext* ctx) {
+
+  // shorthand
+  int                  cmd       = ctx->hdr.command;
+  int                  client_fd = ctx->client_fd;
+  PseudoPacketHeader*  hdr       = &ctx->hdr;
+  char*                fname     = ctx->fname;
+  int                  o_flags   = ((cmd == CMD_PUT)
+				    ? (O_WRONLY|O_CREAT|O_TRUNC)
+				    : (O_RDONLY));
+
+  int                  src_fd;
+  int                  src_is_socket;
+  int                  dst_fd;
+  int                  dst_is_socket;
+
+  char                 buf[SERVER_BUF_SIZE]  __attribute__ (( aligned(64) ));
+  
+#if USE_RIOWRITE
+    // --- send client the offset we got from riomap()
+    //     She'll need this for riowrite(), in write_buffer()
+
+    //  unsigned mapsize = 1; // max number of riomap'ed buffers
+    //  TEST_0( RSETSOCKOPT(client_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+
+    ctx->offset = RIOMAP(client_fd, buf, SERVER_BUF_SIZE+1, PROT_WRITE, 0, -1);
+    if (ctx->offset == (off_t)-1) {
+      fprintf(stderr, "riomap failed: %s\n", strerror(errno));
+      return -1;
+    }
+    DBG("riomap offset: %llu\n", ctx->offset);
+
+    TEST_0( write_pseudo_packet(client_fd, CMD_RIO_OFFSET, ctx->offset, NULL) );
+    TEST_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
+
+    ctx->buffer = buf;	// to allow the riounmap in shut_down_thread()
+    ctx->flags |= CTX_RIOMAPPED;
+#endif
+
+
+  // --- PUT: read from socket, write to file
+  //
+  // In the case of USE_RIOWRITE, data is sent (by client for PUT, by
+  // server for GET) via RDMA.  This means the reader has no awareness
+  // of when the write has been completed.  So we use the socket to
+  // send a series of DATA pseudo-packets, each with a length
+  // indicating the amount of data transferred via RDMA.  A final DATA
+  // 0 is sent to indicate EOF.
+  //
+  // This "packetization" of the data could allow out-of-band comms
+  // (e.g.  we could return a set of ACKs, with checksums, on demand,
+  // to allow the client to validate the stream, without requiring
+  // that we do that for clients that don't want it.).
+  //
+  while (likely(! (ctx->flags & CTX_EOF))) {
+
+    // --- first pass: open local file, if needed
+    if (unlikely(! (ctx->flags & CTX_FILE_OPEN))) {
+
+#ifndef SKIP_FILE_WRITES
+      // open local file for writing
+      ctx->file_fd = open(fname, o_flags);
+      if (ctx->file_fd < 0) {
+	fprintf(stderr, "couldn't open '%s' for command '%s': %s\n",
+		fname, command_str(cmd), strerror(errno));
+	ctx->flags |= CTX_THREAD_ERR;
+	return -1;
+      }
+      printf("opened file '%s'\n", fname);
+#endif
+      ctx->flags |= CTX_FILE_OPEN;
+    }
+
+
+    // --- read data up to SERVER_BUF_SIZE, or EOF, from client
+    ssize_t read_total = read_buffer(client_fd, buf, SERVER_BUF_SIZE, 1);
+    if (read_total < 0) {
+      ctx->flags |= CTX_THREAD_ERR;
+      break;
+    }
+    else if (read_total < SERVER_BUF_SIZE)
+      ctx->flags |= CTX_EOF;
+
+
+#ifndef SKIP_FILE_WRITES
+    // --- write buffer to file
+    if (read_total && write_buffer(ctx->file_fd, buf, read_total, 0, ctx->offset)) {
+      ctx->flags |= CTX_THREAD_ERR;
+      break;
+    }
+#endif
+
+#ifdef USE_RIOWRITE
+    // tell client we are done with buffer, which will be overwrriten
+    // by the next riowrite()
+    if( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) ) {
+      ctx->flags |= CTX_THREAD_ERR;
+      break;
+    }
+#endif
+
+  }
+  DBG("copy-loop done.\n");
+
+
+
+#ifndef SKIP_FILE_WRITES
+  // finished.  maybe close the local file we opened.
+  if (ctx->flags & CTX_FILE_OPEN) {
+    fsync(ctx->file_fd);	// for consistent sustained ZFS throughput
+    DBG("-- fsync'ed %d\n", ctx->file_fd);
+    close(ctx->file_fd);
+    DBG("-- closed   %d\n", ctx->file_fd);
+    ctx->flags &= ~CTX_FILE_OPEN;
+  }
+#endif
+
+
+  return 0;
+}
+
+
+
+
+
+
+
+
+
+// UNDER CONSTRUCTION ...
+// Assimilating GET-specific boilerplate from the generic version
+
+int server_get(ThreadContext* ctx) {
+
+  // shorthand
+  int                  cmd       = ctx->hdr.command;
+  int                  client_fd = ctx->client_fd;
+  PseudoPacketHeader*  hdr       = &ctx->hdr;
+  char*                fname     = ctx->fname;
+  int                  o_flags   = ((cmd == CMD_PUT)
+				    ? (O_WRONLY|O_CREAT|O_TRUNC)
+				    : (O_RDONLY));
+
+  int                  src_fd;
+  int                  src_is_socket;
+  int                  dst_fd;
+  int                  dst_is_socket;
+
+  char                 buf[SERVER_BUF_SIZE]  __attribute__ (( aligned(64) ));
+
+  
+#if USE_RIOWRITE
+  // --- client sends us the offset she got from riomap()
+  //     we'll need this for riowrite(), in write_buffer()
+  PseudoPacketHeader header;
+  TEST_0( read_pseudo_packet_header(client_fd, &header) );
+  if (header.command != CMD_RIO_OFFSET) {
+    fprintf(stderr, "expected RIO_OFFSET pseudo-packet, not %s\n", command_str(header.command));
+    return -1;
+  }
+  ctx->offset = header.length;
+  DBG("got riomap offset from client: 0x%llx\n", header.length);
+#endif
+
+
+  // --- GET: read from file, write to socket
+  //
+  // In the case of USE_RIOWRITE, data is sent (by client for PUT, by
+  // server for GET) via RDMA.  This means the reader has no awareness
+  // of when the write has been completed.  So we use the socket to
+  // send a series of DATA pseudo-packets, each with a length
+  // indicating the amount of data transferred via RDMA.  A final DATA
+  // 0 is sent to indicate EOF.
+  //
+  // This "packetization" of the data could allow out-of-band comms
+  // (e.g.  we could return a set of ACKs, with checksums, on demand,
+  // to allow the client to validate the stream, without requiring
+  // that we do that for clients that don't want it.).
+  //
+  while (likely(! (ctx->flags & CTX_EOF))) {
+
+    // --- open local file, if needed
+    if (unlikely(! (ctx->flags & CTX_FILE_OPEN))) {
+
+#ifndef SKIP_FILE_READS
+      // open local file for reading
+      ctx->file_fd = open(fname, o_flags);
+      if (ctx->file_fd < 0) {
+	fprintf(stderr, "couldn't open '%s' for command '%s': %s\n",
+		fname, command_str(cmd), strerror(errno));
+	ctx->flags |= CTX_THREAD_ERR;
+	return -1;
+      }
+      printf("opened file '%s'\n", fname);
+#endif
+      ctx->flags |= CTX_FILE_OPEN;
+    }
+
+    // --- read data up to SERVER_BUF_SIZE, or EOF, from <source>
+#ifndef SKIP_FILE_READS
+    ssize_t read_total = read_buffer(ctx->file_fd, buf, SERVER_BUF_SIZE, 0);
+    if (read_total < 0) {
+      ctx->flags |= CTX_THREAD_ERR;
+      break;
+    }
+    else if (read_total < SERVER_BUF_SIZE)
+      ctx->flags |= CTX_EOF;
+#endif
+
+    // --- write buffer to <dest>
+    if (write_buffer(client_fd, buf, read_total, 1, ctx->offset)) {
+      ctx->flags |= CTX_THREAD_ERR;
+      break;
+    }
+
+#ifdef USE_RIOWRITE
+    // tell client we are done with buffer, which will be overwrriten
+    // by the next riowrite()
+    if ( write_pseudo_packet(src_fd, CMD_ACK, 0, NULL) ) {
+      ctx->flags |= CTX_THREAD_ERR;
+      break;
+    }
+#endif
+
+  }
+  DBG("copy-loop done.\n");
+
+
+#ifndef SKIP_FILE_READS
+  // maybe close the local file we opened
+  if (ctx->flags & CTX_FILE_OPEN) {
+    fsync(ctx->file_fd);	// for consistent sustained ZFS throughput
+    DBG("-- fsync'ed %d\n", ctx->file_fd);
+    close(ctx->file_fd);
+    DBG("-- closed   %d\n", ctx->file_fd);
+    ctx->flags &= ~CTX_FILE_OPEN;
+  }
+#endif
+
+  return 0;
+}
+
+
+
+
+
+
+
+
+// THIS GENERIC PUT/GET WAS GETTING TOO UGLY.
+// KEEPING IT AROUND UNTIL server_put() AND server_get() ARE WORKING
+
+int server_put_or_get(ThreadContext* ctx) {
 
   // shorthand
   int                  cmd       = ctx->hdr.command;
@@ -386,7 +645,8 @@ int socket_get_or_put(ThreadContext* ctx) {
 }
 
 
-int socket_del(ThreadContext* ctx) {
+
+int server_del(ThreadContext* ctx) {
   if (unlink(ctx->fname)) {
     fprintf(stderr, "couldn't unlink '%s'\n", ctx->fname);
     ctx->flags |= CTX_THREAD_ERR;
@@ -398,8 +658,8 @@ int socket_del(ThreadContext* ctx) {
 
 // TBD: do the stat, translate fields to net-byte-order, ship to client.
 //      We will want write_stat()/read_stat() functions in socket_common.
-int socket_stat(ThreadContext* ctx) {
-  fprintf(stderr, "socket_stat('%s' not implemented\n", ctx->fname);
+int server_stat(ThreadContext* ctx) {
+  fprintf(stderr, "server_stat('%s' not implemented\n", ctx->fname);
   ctx->flags |= CTX_THREAD_ERR;
   return -1;
 }
@@ -442,10 +702,10 @@ void* server_thread(void* arg) {
 
   // perform command
   switch (hdr->command) {
-  case CMD_PUT:   socket_get_or_put(ctx);   break;
-  case CMD_GET:   socket_get_or_put(ctx);   break;
-  case CMD_DEL:   socket_del(ctx);          break;
-  case CMD_STAT:  socket_stat(ctx);         break;
+  case CMD_PUT:   server_put(ctx);   break;
+  case CMD_GET:   server_get(ctx);   break;
+  case CMD_DEL:   server_del(ctx);          break;
+  case CMD_STAT:  server_stat(ctx);         break;
 
   default:
     fprintf(stderr, "unsupported op: '%s'\n", command_str(hdr->command));

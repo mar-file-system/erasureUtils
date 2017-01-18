@@ -73,6 +73,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <stdint.h>
 #include <sys/types.h>
 
+#include "../sockets/common.h"
+
 #define MAXN 15
 #define MAXE 5
 #define MAXNAME 1024 
@@ -97,7 +99,14 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 typedef uint32_t u32;
 typedef uint64_t u64;
-typedef enum {NE_RDONLY=0,NE_WRONLY,NE_REBUILD,NE_STAT,NE_NOINFO=4,NE_SETBSZ=8} ne_mode;
+typedef enum {
+  NE_RDONLY = 0,
+  NE_WRONLY,
+  NE_REBUILD,
+  NE_STAT,
+  NE_NOINFO = 4,
+  NE_SETBSZ = 8
+} ne_mode;
 
 typedef struct ne_stat_struct {
    char xattr_status[ MAXPARTS ];

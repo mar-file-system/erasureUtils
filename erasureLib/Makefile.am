@@ -54,6 +54,12 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
+
+if BUILD_SOCKETS
+  SOCKET_LIBS = ../sockets/librdma_sockets.a
+endif
+
+
 lib_LIBRARIES = libne.a
 libne_a_SOURCES = erasure.c erasure.h
 
@@ -61,7 +67,7 @@ include_HEADERS = erasure.h
 
 bin_PROGRAMS = libneTest
 libneTest_SOURCES = libneTest.c
-libneTest_LDADD = libne.a
+libneTest_LDADD = libne.a $(SOCKET_LIBS)
 libneTest_LDFLAGS = -lisal
 
 TESTS=erasureTest
