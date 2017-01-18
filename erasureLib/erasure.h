@@ -100,7 +100,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #endif
 
 #ifndef HAVE_LIBISAL
-#define crc32_ieee(...) crc32_ieee_base(__VA_ARGS__)
+#define crc32_ieee(...)     crc32_ieee_base(__VA_ARGS__)
+#define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
 #endif
 
 typedef uint32_t u32;
