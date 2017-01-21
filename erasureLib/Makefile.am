@@ -56,19 +56,29 @@
 
 
 if BUILD_SOCKETS
+  SOCKET_DEFS = -DSOCKETS=RDMA
+  SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
   SOCKET_LIBS = ../sockets/librdma_sockets.a
+  SOCKET_LD = -lrdmacm
 endif
+
+# erasure.h includes "skt_common.h".  Programs in this dir are built
+# before 'make install' will have put ../sockets/skt_common.h into the
+# install directory.  So the following allows these executables to be
+# built.
+AM_CPPFLAGS = $(SOCKET_CPPFLAGS) $(SOCKET_DEFS)
 
 
 lib_LIBRARIES = libne.a
 libne_a_SOURCES = erasure.c erasure.h
+libne_a_LIBADD = $(SOCKET_LIBS)
 
 include_HEADERS = erasure.h
 
 bin_PROGRAMS = libneTest
 libneTest_SOURCES = libneTest.c
 libneTest_LDADD = libne.a $(SOCKET_LIBS)
-libneTest_LDFLAGS = -lisal
+libneTest_LDFLAGS = -lisal $(SOCKET_LD)
 
 TESTS=erasureTest
 

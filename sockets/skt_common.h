@@ -60,7 +60,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/socket.h>
 #include <sys/un.h>             // struct sockaddr_un
 #include <netinet/in.h>         // struct sockaddr_in
-#include <infiniband/ib.h>	// AF_IB
+#include <infiniband/ib.h>      // AF_IB
 #include <sys/uio.h>            // read(), write()
 #include <unistd.h>             // read(), write()
 #include <stdlib.h>             // exit()
@@ -79,30 +79,30 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 
-#define _TEST(EXPR, TEST, PRINT, RETURN)			 \
-  do {								 \
-    PRINT(#EXPR "\n");						 \
-    if (! ((EXPR) TEST)) {					 \
-      fprintf(stderr, "%s:%d test failed: '%s': %s\n",		 \
-	      __FILE__, __LINE__, #EXPR, strerror(errno));	 \
-      RETURN;							 \
-    }								 \
+#define _TEST(EXPR, TEST, PRINT, RETURN)                         \
+  do {                                                           \
+    PRINT(#EXPR "\n");                                           \
+    if (! ((EXPR) TEST)) {                                       \
+      fprintf(stderr, "%s:%d test failed: '%s': %s\n",           \
+              __FILE__, __LINE__, #EXPR, strerror(errno));       \
+      RETURN;                                                    \
+    }                                                            \
   } while(0)
 
 
-// fail if expression is false
-#define TRY(EXPR)           _TEST(EXPR,    , printf,          )
-#define TEST(EXPR)          _TEST(EXPR,    , DBG,    return -1)
+// print warning, if expression doesn't have expected value
+#define EXPECT(EXPR)        _TEST(EXPR,    , printf,          )
+#define EXPECT_0(EXPR)      _TEST(EXPR, ==0, printf,          )
+#define EXPECT_GT0(EXPR)    _TEST(EXPR,  >0, printf,          )
+
+// return -1, if expr doesn't have expected value
+#define NEED(EXPR)          _TEST(EXPR,    , DBG,    return -1)
+#define NEED_0(EXPR)        _TEST(EXPR, ==0, DBG,    return -1)
+#define NEED_GT0(EXPR)      _TEST(EXPR,  >0, DBG,    return -1)
+
+// abort(), if expr doesn't have expected value
 #define REQUIRE(EXPR)       _TEST(EXPR,    , DBG,    abort()  )
-
-// fail if expression is non-zero
-#define TRY_0(EXPR)         _TEST(EXPR, ==0, printf,          )
-#define TEST_0(EXPR)        _TEST(EXPR, ==0, DBG,    return -1)
 #define REQUIRE_0(EXPR)     _TEST(EXPR, ==0, DBG,    abort()  )
-
-// fail if expression is <= 0
-#define TRY_GT0(EXPR)       _TEST(EXPR,  >0, printf,          )
-#define TEST_GT0(EXPR)      _TEST(EXPR,  >0, DBG,    return -1)
 #define REQUIRE_GT0(EXPR)   _TEST(EXPR,  >0, DBG,    abort()  )
 
 
@@ -115,7 +115,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #define MAX_SOCKET_CONNS        256
 
-#define FNAME_SIZE              128 /* incl final null */
+#define FNAME_SIZE              512 /* incl final null */
 #define HOST_SIZE               128 /* incl final null */
 #define PORT_STR_SIZE            16 /* incl final null */
 
@@ -212,7 +212,7 @@ typedef enum {
   PROT_UNIX = 1,
   PROT_IP,
   PROT_IB,
-  PROT_IB_RDMA,			// default
+  PROT_IB_RDMA,                 // default
 } ProtoType;
 
 typedef struct {
@@ -231,7 +231,7 @@ typedef enum {
 
   HNDL_IS_SOCKET = 0x10,       // read/write-buffer also work on files
   HNDL_RIOWRITE  = 0x20,
-  HNDL_DOUBLE    = 0x40,	// double-buffering
+  HNDL_DOUBLE    = 0x40,        // double-buffering
 
   HNDL_GET       = 0x0100,
   HNDL_PUT       = 0x0200,
@@ -247,8 +247,8 @@ typedef struct {
   mode_t       open_mode;
   int          fd;
   off_t        rio_offset;
-  size_t       pos;		// TBD: stream-position, to ignore redundant skt_seek()
-  uint16_t     flags;		// SHFlags
+  size_t       stream_pos;      // TBD: stream-position, to ignore redundant skt_seek()
+  uint16_t     flags;           // SHFlags
 } SocketHandle;
 
 
@@ -257,20 +257,20 @@ typedef struct {
 //
 // NOTE: Co-maintain _command_str[], in common.c
 typedef enum {
-  CMD_GET   = 1,		// ignore <length>
+  CMD_GET   = 1,                // ignore <length>
   CMD_PUT,
   CMD_DEL,
-  CMD_DATA,			// 
-  CMD_ACK,			// data received (ready for riowrite)
+  CMD_DATA,                     // 
+  CMD_ACK,                      // data received (ready for riowrite)
   CMD_STAT,
   CMD_RIO_OFFSET,
-  CMD_SEEK_ABS,			// <length> has position to seek to
+  CMD_SEEK_ABS,                 // <length> has position to seek to
   CMD_SEEK_FWD,
   CMD_SEEK_BACK,
-  CMD_SET_XATTR,		// <length> is split into <name_len>, <value_len>
-  CMD_GET_XATTR,		// ditto
+  CMD_SET_XATTR,                // <length> is split into <name_len>, <value_len>
+  CMD_GET_XATTR,                // ditto
 
-  CMD_NULL,			// THIS IS ALWAYS LAST
+  CMD_NULL,                     // THIS IS ALWAYS LAST
 } SocketCommand;
 typedef uint32_t  SocketCommandType; // standardized for network transmission
 
@@ -287,7 +287,7 @@ typedef enum {
 // These demarcate blobs of data on the socket-stream, and allow OOB commands.
 typedef struct {
   uint8_t            flags;
-  SocketCommandType  command;	// SocketCommand
+  SocketCommandType  command;   // SocketCommand
   //  union {
   //    uint64_t  big;
   //    uint32_t  small[2];
@@ -306,11 +306,12 @@ typedef struct {
 // For now, we'll use a open/read/write/close model, because that
 // will fit most easily into libne.
 
-int           skt_open (SocketHandle* handle, const char* fname, int flags, mode_t mode);
-ssize_t       skt_write(SocketHandle* handle, const void* buf, size_t count);
-ssize_t       skt_read (SocketHandle* handle,       void* buf, size_t count);
-off_t         skt_seek (SocketHandle* handle, off_t offset, int whence);
-int           skt_close(SocketHandle* handle);
+int           skt_open     (SocketHandle* handle, const char* fname, int flags, ...);
+ssize_t       skt_write    (SocketHandle* handle, const void* buf, size_t count);
+ssize_t       skt_read     (SocketHandle* handle,       void* buf, size_t count);
+off_t         skt_lseek    (SocketHandle* handle, off_t offset, int whence);
+int           skt_fsetxattr(SocketHandle* handle, const char* name, const void* value, size_t size, int flags);
+int           skt_close    (SocketHandle* handle);
 
 int write_pseudo_packet(int fd, SocketCommand command, size_t length, void* buff);
 int read_pseudo_packet_header(int fd, PseudoPacketHeader* pkt);

@@ -73,7 +73,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <stdint.h>
 #include <sys/types.h>
 
-#include "../sockets/common.h"
+#include "skt_common.h"
 
 #define MAXN 15
 #define MAXE 5
@@ -118,6 +118,25 @@ typedef struct ne_stat_struct {
    u64 totsz;
 } *ne_stat;
 
+
+// This allows ne_open() and other functions to perform arbitrary
+// conversions of a given block-number (in the range [0, N+E-1]), into
+// the hostname, block-subdir, etc, for the supplied path.  This is
+// mainly needed with --enable-sockets.  It allows the caller to use
+// its own configuration-info to control these computations within
+// ne_open().
+
+typedef  int (*SnprintfFunc)(char* dest, size_t size, const char* format, u32 block, void* state);
+
+// SnprintfFunc ne_default_snprintf;
+int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, void* state);
+
+
+typedef union {
+  int           fd;
+  SocketHandle  handle;
+} FileDesc;
+
 typedef struct handle {
    /* Erasure Info */
    int N;
@@ -132,7 +151,7 @@ typedef struct handle {
    unsigned char *buffs[ MAXPARTS ];
    unsigned long buff_rem;
    off_t buff_offset;
-   int FDArray[ MAXPARTS ];
+   FileDesc FDArray[ MAXPARTS ];
 
    /* Per-part Info */
    u64 csum[ MAXPARTS ];
@@ -156,18 +175,30 @@ typedef struct handle {
    /* Used for rebuilds to restore the original ownership to the rebuilt file. */
    uid_t owner;
    gid_t group;
+
+   /* path-printing technique provided by caller */
+   SnprintfFunc   snprintf;
+   void*          state;        // caller-data to be provided to <snprintf>
 } *ne_handle;
 
-/* Erasure Utility Functions */
-ne_handle ne_open( char *path, ne_mode mode, ... );
-int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset );
-int ne_write( ne_handle handle, void *buffer, int nbytes );
-int ne_close( ne_handle handle );
-int ne_delete( char *path, int width );
-int ne_rebuild( ne_handle handle );
-int ne_noxattr_rebuild( ne_handle handle );
-ne_stat ne_status( char *path );
-int ne_flush( ne_handle handle );
+
+/* Erasure Utility Functions taking a raw path argument */
+// default devolves to str
+ne_handle ne_open1  ( SnprintfFunc func, void* state, char *path, ne_mode mode, ... );
+int       ne_delete1( SnprintfFunc func, void* state, char *path, int width );
+ne_stat   ne_status1( SnprintfFunc func, void* state, char *path );
+
+#define ne_open(   PATH, MODE, ... )  ne_open1  (ne_default_snprintf, NULL, (PATH), (MODE), ##__VA_ARGS__)
+#define ne_delete( PATH, WIDTH )      ne_delete1(ne_default_snprintf, NULL, (PATH), (WIDTH))
+#define ne_status( PATH )             ne_status1(ne_default_snprintf, NULL, (PATH))
+
+/* Erause Utility functions taking a <handle> argument */
+int       ne_read ( ne_handle handle, void       *buffer, u32 nbytes, off_t offset );
+int       ne_write( ne_handle handle, const void *buffer, u32 nbytes );
+int       ne_close( ne_handle handle );
+int       ne_rebuild( ne_handle handle );
+int       ne_noxattr_rebuild( ne_handle handle );
+int       ne_flush( ne_handle handle );
 
 #endif
 

@@ -75,7 +75,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <string.h>             // strcpy()
 #include <errno.h>
 
-#include "common.h"
+#include "skt_common.h"
 
 
 static SocketHandle handle = {0};
@@ -132,7 +132,7 @@ sig_handler(int sig) {
 //
 // -- abstract away the ad-hoc message-headers.  Let client/server use
 //    header generating/parsing functions, which could be implemented
-//    in common.c
+//    in skt_common.c
 //
 // ---------------------------------------------------------------------------
 

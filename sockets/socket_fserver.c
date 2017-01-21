@@ -81,7 +81,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #include <pthread.h>
 
-#include "common.h"
+#include "skt_common.h"
 
 #define likely(x)      __builtin_expect(!!(x), 1)
 #define unlikely(x)    __builtin_expect(!!(x), 0)
@@ -154,11 +154,11 @@ shut_down_thread(void* arg) {
   if (ctx->flags & CTX_FILE_OPEN) {
 #ifndef SKIP_FILE_WRITES
     if (ctx->hdr.command == CMD_PUT)
-      TRY_0( close(ctx->file_fd) );
+      EXPECT_0( close(ctx->file_fd) );
 #endif
 #ifndef SKIP_FILE_READS
     if (ctx->hdr.command == CMD_GET)
-      TRY_0( close(ctx->file_fd) );
+      EXPECT_0( close(ctx->file_fd) );
 #endif
   }
 
@@ -257,7 +257,7 @@ int server_put(ThreadContext* ctx) {
     //     She'll need this for riowrite(), in write_buffer()
 
     //  unsigned mapsize = 1; // max number of riomap'ed buffers
-    //  TEST_0( RSETSOCKOPT(client_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+    //  NEED_0( RSETSOCKOPT(client_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
 
     ctx->offset = RIOMAP(client_fd, buf, SERVER_BUF_SIZE+1, PROT_WRITE, 0, -1);
     if (ctx->offset == (off_t)-1) {
@@ -266,8 +266,8 @@ int server_put(ThreadContext* ctx) {
     }
     DBG("riomap offset: %llu\n", ctx->offset);
 
-    TEST_0( write_pseudo_packet(client_fd, CMD_RIO_OFFSET, ctx->offset, NULL) );
-    TEST_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
+    NEED_0( write_pseudo_packet(client_fd, CMD_RIO_OFFSET, ctx->offset, NULL) );
+    NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
 
     ctx->buffer = buf;	// to allow the riounmap in shut_down_thread()
     ctx->flags |= CTX_RIOMAPPED;
@@ -389,7 +389,7 @@ int server_get(ThreadContext* ctx) {
   // --- client sends us the offset she got from riomap()
   //     we'll need this for riowrite(), in write_buffer()
   PseudoPacketHeader header;
-  TEST_0( read_pseudo_packet_header(client_fd, &header) );
+  NEED_0( read_pseudo_packet_header(client_fd, &header) );
   if (header.command != CMD_RIO_OFFSET) {
     fprintf(stderr, "expected RIO_OFFSET pseudo-packet, not %s\n", command_str(header.command));
     return -1;
@@ -512,7 +512,7 @@ int server_put_or_get(ThreadContext* ctx) {
     //     She'll need this for riowrite(), in write_buffer()
 
     //  unsigned mapsize = 1; // max number of riomap'ed buffers
-    //  TEST_0( RSETSOCKOPT(client_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+    //  NEED_0( RSETSOCKOPT(client_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
 
     ctx->offset = RIOMAP(client_fd, buf, SERVER_BUF_SIZE+1, PROT_WRITE, 0, -1);
     if (ctx->offset == (off_t)-1) {
@@ -521,8 +521,8 @@ int server_put_or_get(ThreadContext* ctx) {
     }
     DBG("riomap offset: %llu\n", ctx->offset);
 
-    TEST_0( write_pseudo_packet(client_fd, CMD_RIO_OFFSET, ctx->offset, NULL) );
-    TEST_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
+    NEED_0( write_pseudo_packet(client_fd, CMD_RIO_OFFSET, ctx->offset, NULL) );
+    NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
 
     ctx->buffer = buf;	// to allow the riounmap in shut_down_thread()
     ctx->flags |= CTX_RIOMAPPED;
@@ -532,7 +532,7 @@ int server_put_or_get(ThreadContext* ctx) {
     // --- client sends us the offset she got from riomap()
     //     we'll need this for riowrite(), in write_buffer()
     PseudoPacketHeader header;
-    TEST_0( read_pseudo_packet_header(client_fd, &header) );
+    NEED_0( read_pseudo_packet_header(client_fd, &header) );
     if (header.command != CMD_RIO_OFFSET) {
       fprintf(stderr, "expected RIO_OFFSET pseudo-packet, not %s\n", command_str(header.command));
       return -1;
@@ -624,7 +624,7 @@ int server_put_or_get(ThreadContext* ctx) {
     // tell client we are done with buffer, which will be overwrriten
     // by the next riowrite()
     if (src_is_socket)
-      TEST_0( write_pseudo_packet(src_fd, CMD_ACK, 0, NULL) );
+      NEED_0( write_pseudo_packet(src_fd, CMD_ACK, 0, NULL) );
 #endif
 
   }
@@ -657,7 +657,7 @@ int server_del(ThreadContext* ctx) {
 
 
 // TBD: do the stat, translate fields to net-byte-order, ship to client.
-//      We will want write_stat()/read_stat() functions in socket_common.
+//      We will want write_stat()/read_stat() functions in skt_common.
 int server_stat(ThreadContext* ctx) {
   fprintf(stderr, "server_stat('%s' not implemented\n", ctx->fname);
   ctx->flags |= CTX_THREAD_ERR;
@@ -758,7 +758,7 @@ int push_thread(int client_fd) {
   conn_list[i].ctx.flags |= CTX_PRE_THREAD;
 
   printf("connection[%d] <- fd=%d\n", i, client_fd);
-  TEST_0( pthread_create(&conn_list[i].thr, NULL, server_thread, &conn_list[i].ctx) );
+  NEED_0( pthread_create(&conn_list[i].thr, NULL, server_thread, &conn_list[i].ctx) );
 
   return 0;
 }

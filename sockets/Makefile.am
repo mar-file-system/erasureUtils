@@ -55,16 +55,23 @@
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
+# Undo the effect of AC_CHECK_LIB() in configure.ac
+# Otherwise we get linker complaints running socket_fserver,
+# unless it can find libisal  (but why?)
+LIBS =
+
+
 if RDMA_SOCKETS
-  SOCKET_LIBS = -lrdmacm
   SOCKET_DEFS = -DRDMA_SOCKETS -DUSE_RIOWRITE
+  SOCKET_LIBS = -lrdmacm
 endif
 
+include_HEADERS = skt_common.h
+
 lib_LIBRARIES = librdma_sockets.a
-librdma_sockets_a_SOURCES = common.c common.h
+librdma_sockets_a_SOURCES = skt_common.c
 librdma_sockets_a_CPPFLAGS = $(SOCKET_DEFS)
 
-include_HEADERS = common.h
 
 
 

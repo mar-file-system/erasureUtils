@@ -59,8 +59,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <errno.h>
 #include <string.h>
 #include <fcntl.h>
+#include <stdarg.h>
 
-#include "common.h"
+#include "skt_common.h"
 
 
 
@@ -108,7 +109,7 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 
   if (is_socket) {
     PseudoPacketHeader header;
-    TEST_0( read_pseudo_packet_header(fd, &header) );
+    NEED_0( read_pseudo_packet_header(fd, &header) );
     if (header.flags & PKT_EOF)
       return 0;
     else if (header.command != CMD_DATA) {
@@ -220,7 +221,7 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
   //  }
 
   if (is_socket) {
-    TEST_0( write_pseudo_packet(fd, CMD_DATA, size, NULL) );
+    NEED_0( write_pseudo_packet(fd, CMD_DATA, size, NULL) );
   }
 #endif
 
@@ -255,7 +256,7 @@ int write_raw(int fd, char* buf, size_t size) {
 
 
 
-// [from marfs_common.c]
+// [lifted from marfs_common.c]
 // htonll() / ntohll() are not provided in our environment.  <endian.h> or
 // <byteswap.h> make things easier, but these are non-standard.  Also, we're
 // compiled with -Wall, so we avoid pointer-aliasing that makes gcc whine.
@@ -267,6 +268,7 @@ int write_raw(int fd, char* buf, size_t size) {
 // see http://esr.ibiblio.org/?p=5095
 #define IS_LITTLE_ENDIAN (*(uint16_t *)"\0\xff" >= 0x100)
 
+static
 uint64_t htonll(uint64_t ll) {
   if (IS_LITTLE_ENDIAN) {
     uint64_t result;
@@ -280,6 +282,7 @@ uint64_t htonll(uint64_t ll) {
   else
     return ll;
 }
+static
 uint64_t ntohll(uint64_t ll) {
   if (IS_LITTLE_ENDIAN) {
     uint64_t result;
@@ -316,7 +319,7 @@ uint64_t ntohll(uint64_t ll) {
   }
 
 
-// co-maintain SocketCommand, in common.h
+// co-maintain SocketCommand, in skt_common.h
 const char* _command_str[] = {
   "unknown_command",
   "GET",
@@ -347,17 +350,17 @@ int write_pseudo_packet(int fd, SocketCommand command, size_t length, void* buf)
   // --- write <command>
   DBG("-> command: %s\n", command_str(command));
   uint32_t cmd = htonl(command);
-  TEST_0( write_raw(fd, (char*)&cmd, sizeof(cmd)) );
+  NEED_0( write_raw(fd, (char*)&cmd, sizeof(cmd)) );
 
   // --- write <length>
   DBG("-> length:  %llu\n", length);
   uint64_t len = htonll(length);
-  TEST_0( write_raw(fd, (char*)&len, sizeof(len)) );
+  NEED_0( write_raw(fd, (char*)&len, sizeof(len)) );
 
   // --- maybe write <buf>
   if (buf) {
     DBG("-> buf:     0x%08x\n", (size_t)buf);
-    TEST_0( write_raw(fd, (char*)buf, length) );
+    NEED_0( write_raw(fd, (char*)buf, length) );
   }
 
   return 0;
@@ -531,15 +534,33 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
 
 // .................................................................
 // OPEN
+//
+// Return -1 for failures, to match behavior of open(2).
+// Like open(2), we allow an optional <mode> argument:
+//
+//   open(SocketHandle* handle, const char* svc_path, int flags)
+//   open(SocketHandle* handle, const char* svc_path, int flags, mode_t mode)
+//
+// <mode> is used iff <flags> includes O_CREAT
+//
+// TBD: Set errcode "appropriately".
 // ...........................................................................
 
-int  skt_open (SocketHandle* handle, const char* service_path, int flags, mode_t mode) {
+int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
+
+  mode_t mode = 0;
+  if (flags & O_CREAT) {
+   va_list ap;
+   va_start( ap, flags );
+   mode = va_arg( ap, int );    /* compiler can't handle "mode_t"? */
+   va_end( ap );
+  }
 
   // shorthand
   PathSpec* spec = &handle->path_spec;
 
   memset(handle, 0, sizeof(SocketHandle));
-  TEST_0( parse_service_path(spec, service_path) );
+  NEED_0( parse_service_path(spec, service_path) );
 
   handle->open_flags = flags;
   handle->open_mode  = mode;
@@ -611,24 +632,24 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, mode_t
 
 
   // open socket to server
-  /// TEST_0( handle->fd = SOCKET(PF_INET, SOCK_STREAM, 0) );
-  TEST_GT0( handle->fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
+  /// NEED_0( handle->fd = SOCKET(PF_INET, SOCK_STREAM, 0) );
+  NEED_GT0( handle->fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
 
   //  // don't do this on the client?
   int disable = 0;
-  TEST_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_INLINE, &disable, sizeof(disable)) );
+  NEED_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_INLINE, &disable, sizeof(disable)) );
 
   // unsigned mapsize = MAX_SOCKET_CONNS; // max number of riomap'ed buffers
   unsigned mapsize = 1; // max number of riomap'ed buffers
-  TEST_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+  NEED_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
 
 
-  TEST_0( CONNECT(handle->fd, s_addr_ptr, s_addr_len) );
+  NEED_0( CONNECT(handle->fd, s_addr_ptr, s_addr_len) );
   handle->flags |= HNDL_SERVER_FD;
 
   //  // fails, if we do this after the connect() ?
   //  unsigned mapsize = 1; // max number of riomap'ed buffers
-  //  TEST_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+  //  NEED_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
 
   printf("server: connected '%s'\n", spec->fname);
 
@@ -663,11 +684,11 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t count) {
   // --- first time through, initialize comms with server
   if (! (handle->flags & HNDL_OP_INIT)) {
 
-    TEST_0( write_pseudo_packet(handle->fd, CMD_PUT, strlen(spec->fname)+1, spec->fname) );
+    NEED_0( write_pseudo_packet(handle->fd, CMD_PUT, strlen(spec->fname)+1, spec->fname) );
 
 #if USE_RIOWRITE
     // server sends us the offset she got from riomap()
-    TEST_0( read_pseudo_packet_header(handle->fd, &header) );
+    NEED_0( read_pseudo_packet_header(handle->fd, &header) );
     if (header.command != CMD_RIO_OFFSET) {
       fprintf(stderr, "expected RIO_OFFSET pseudo-packet, not %s\n", command_str(header.command));
       return -1;
@@ -684,14 +705,16 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t count) {
   // --- We're about to overwrite the destination buffer via RDMA.
   //     Don't call write_buffer() until the other-end reports that it
   //     is finished with the buffer.
-  TEST_0( read_pseudo_packet_header(handle->fd, &header) );
+  NEED_0( read_pseudo_packet_header(handle->fd, &header) );
   if (header.command != CMD_ACK) {
     fprintf(stderr, "expected an ACK, but got %s\n", command_str(header.command));
     return -1;
   }
 #endif
 
-  TEST_0( write_buffer(handle->fd, buf, count, 1, handle->rio_offset) );
+  NEED_0( write_buffer(handle->fd, buf, count, 1, handle->rio_offset) );
+  handle->stream_pos += count;  /* tracking for skt_lseek() */
+
   return count;
 }
 
@@ -703,6 +726,7 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t count) {
 
 ssize_t skt_read(SocketHandle* handle,       void* buf, size_t count) {
   NO_IMPL();
+  handle->stream_pos += count;  /* tracking for skt_lseek() */
 }
 
 
@@ -710,15 +734,37 @@ ssize_t skt_read(SocketHandle* handle,       void* buf, size_t count) {
 // SEEK
 //
 // libne uses lseek().  It appears that under normal circumstances all
-// those seeks might redundantly seek to the current position.  We
-// could detect that by tracking the current position in the stream,
-// and just turn it into a no-op, in the case where the seek is
-// redundant.  (Or, if we can feasibly do that in libne, then we could
-// skip implementation.)
-// 
+// those seeks might be redundant with the current position.  We
+// detect that by tracking the current position in the stream.
+// In that case, we can trivially return success.  Otherwise, for now,
+// we report an error.
+//
+// TBD: Add seeking to the repertoire of commands that the server
+//      supports.
 // ...........................................................................
 
-off_t skt_seek(SocketHandle* handle, off_t offset, int whence) {
+off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
+
+  if ((whence == SEEK_SET) && (offset == handle->stream_pos)) {
+    return handle->stream_pos;
+  }
+  if ((whence == SEEK_CUR) && (offset == 0)) {
+    return handle->stream_pos;
+  }
+
+  errno = EINVAL;
+  return (off_t)-1;
+}
+
+
+// ...........................................................................
+// FSETXATTR
+//
+// libne uses this in some cases, but maybe we can get away with not
+// supporting it, for now.
+// ...........................................................................
+
+int skt_fsetxattr(SocketHandle* handle, const char* name, const void* value, size_t size, int flags) {
   NO_IMPL();
 }
 
@@ -734,13 +780,13 @@ int skt_close(SocketHandle* handle) {
   if (handle->flags & HNDL_OP_INIT) {
 #ifdef USE_RIOWRITE
     // let the other end know that there's no more data
-    TEST_0( write_pseudo_packet(handle->fd, CMD_DATA, 0, NULL) );
+    NEED_0( write_pseudo_packet(handle->fd, CMD_DATA, 0, NULL) );
 #endif
 
     // wait for the other end to fsync
     PseudoPacketHeader hdr;
-    TEST_0( read_pseudo_packet_header(handle->fd, &hdr) );
-    TEST(   (hdr.command == CMD_ACK) );
+    NEED_0( read_pseudo_packet_header(handle->fd, &hdr) );
+    NEED(   (hdr.command == CMD_ACK) );
   }
   handle->flags |= HNDL_CLOSED;
 
