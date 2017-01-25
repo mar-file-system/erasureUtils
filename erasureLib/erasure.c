@@ -914,7 +914,7 @@ read:
  * @param int nbytes : Number of data bytes to be written from buffer
  * @return int : Number of bytes written or -1 on error
  */
-int ne_write( ne_handle handle, void *buffer, int nbytes )
+int ne_write( ne_handle handle, void *buffer, size_t nbytes )
 {
  
    int N;                       /* number of raid parts not including E */ 
@@ -1070,6 +1070,9 @@ int ne_write( ne_handle handle, void *buffer, int nbytes )
    // If the errors exceed the minimum protection threshold number of
    // errrors then fail the write.
    if( handle->nerr > handle->E-MIN_PROTECTION ) {
+     DBG_FPRINTF(stderr,
+                 "ne_write: errors exceed minimum protection level (%d)\n",
+                 MIN_PROTECTION);
      errno = EIO;
      return -1;
    }
@@ -2044,10 +2047,11 @@ int ne_rebuild( ne_handle handle ) {
 
    //   init = 0; init should be set to 0 before entering rebuild/retry loop.
    mode_t mask = umask(0000);
-   do_rebuild(handle);
+   int rebuild_result = do_rebuild(handle);
    umask(mask);
 
-   return handle->nerr;
+   return (handle->nerr < handle->E) && (rebuild_result == 0) ?
+     handle->nerr : -1;
 }
 
 
@@ -2401,7 +2405,7 @@ ne_stat ne_status( char *path )
 
    handle->path = NULL;
 
-   if ( ne_rebuild( handle ) != 0 ) {
+   if ( ne_rebuild( handle ) < 0 ) {
       DBG_FPRINTF( stderr, "ne_status: rebuild indicates that data is unrecoverable\n" );
    }
 

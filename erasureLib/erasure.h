@@ -161,7 +161,7 @@ typedef struct handle {
 /* Erasure Utility Functions */
 ne_handle ne_open( char *path, ne_mode mode, ... );
 int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset );
-int ne_write( ne_handle handle, void *buffer, int nbytes );
+int ne_write( ne_handle handle, void *buffer, size_t nbytes );
 int ne_close( ne_handle handle );
 int ne_delete( char *path, int width );
 int ne_rebuild( ne_handle handle );
