@@ -93,6 +93,17 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define MAXPARTS (MAXN + MAXE)
 #define NO_INVERT_MATRIX -2
 
+#ifdef DEBUG
+#  define DBG_FPRINTF(...)   fprintf(__VA_ARGS__)
+#else
+#  define DBG_FPRINTF(...)
+#endif
+
+#ifndef HAVE_LIBISAL
+#define crc32_ieee(...)     crc32_ieee_base(__VA_ARGS__)
+#define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
+#endif
+
 typedef uint32_t u32;
 typedef uint64_t u64;
 typedef enum {NE_RDONLY=0,NE_WRONLY,NE_REBUILD,NE_STAT,NE_NOINFO=4,NE_SETBSZ=8} ne_mode;
@@ -150,7 +161,7 @@ typedef struct handle {
 /* Erasure Utility Functions */
 ne_handle ne_open( char *path, ne_mode mode, ... );
 int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset );
-int ne_write( ne_handle handle, void *buffer, int nbytes );
+int ne_write( ne_handle handle, void *buffer, size_t nbytes );
 int ne_close( ne_handle handle );
 int ne_delete( char *path, int width );
 int ne_rebuild( ne_handle handle );
