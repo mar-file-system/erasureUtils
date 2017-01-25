@@ -83,8 +83,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #include "skt_common.h"
 
-#define likely(x)      __builtin_expect(!!(x), 1)
-#define unlikely(x)    __builtin_expect(!!(x), 0)
 
 
 // These are now only used in main_flags
@@ -113,13 +111,33 @@ static int  socket_fd;               // listen() to this
 
 
 // all the state needed to make server-threads thread-safe.
+//
+// NOTE: The point of ThreadContext.buf, is to store a pointer to the
+//     buffer that is provided to riomap(), in server_put(), so that
+//     we can riounmap it, in shut_down_thread().  Currently, we are
+//     just allocating this on the stack in server_put(), which means
+//     that it is out of scope in shut_down_thread().  Apparently,
+//     this is fine.  All that riounmap really cares about is the
+//     address of the buffer that was mapped.
+//
+//     If we really cared about ThreadContext.buf pointing to
+//     something that is still valid in shut_down_thread(), and wanted
+//     to avoid the overhead and possible leaking of dynamic alloc, we
+//     could make it a member of the ThreadContext, as is commented
+//     out, here.  That works, but means our ThreadContexts always
+//     take up that much more space, even if they are just going to be
+//     handling a CMD_CHOWN, or something.
+//   
 typedef struct {
   volatile int        flags;	 // lockless: see ServerConnection 
   int                 err_no;	 // TBD
   PseudoPacketHeader  hdr;	 // read/write "pseudo-packets" to/from socket
   int                 client_fd; // socket
   int                 file_fd;	 // server-side file
-  char*               buffer;	 // (currently static)
+
+  char*               buf;	 // (currently static)
+  /// char                buf[SERVER_BUF_SIZE]  __attribute__ (( aligned(64) ));
+  
   off_t               offset;	 // server-side riomap'ped offset for PUT
   char                fname[FNAME_SIZE];
 } ThreadContext;
@@ -152,30 +170,40 @@ shut_down_thread(void* arg) {
 
   // maybe close the local file
   if (ctx->flags & CTX_FILE_OPEN) {
+
 #ifndef SKIP_FILE_WRITES
     if (ctx->hdr.command == CMD_PUT)
       EXPECT_0( close(ctx->file_fd) );
 #endif
+
 #ifndef SKIP_FILE_READS
     if (ctx->hdr.command == CMD_GET)
       EXPECT_0( close(ctx->file_fd) );
 #endif
+
   }
 
   if (ctx->flags & CTX_PRE_THREAD) {
-    fprintf(stderr, "shut_down_thread: closing client_fd %d\n", ctx->client_fd);
+    DBG("shut_down_thread: closing client_fd %d\n", ctx->client_fd);
+
+    // Without doing our own riounmap, we get a segfault in the
+    // CLOSE() below, when rclose() calls riounmap() itself.
+    //
+    // It's okay if ctx->buf only has local scope, in server_put(),
+    // we're just unmapping the address here, not using it.
+    //
     if (ctx->flags & CTX_RIOMAPPED) {
-      // is this unnecessary, if we're closing the fd?
-      fprintf(stderr, "shut_down_thread(%d): riounmap'ing\n", ctx->client_fd);
-      RIOUNMAP(ctx->client_fd, ctx->buffer, SERVER_BUF_SIZE+1);
+      DBG("shut_down_thread(%d): riounmap'ing\n", ctx->client_fd);
+      RIOUNMAP(ctx->client_fd, ctx->buf, SERVER_BUF_SIZE);
     }
-    fprintf(stderr, "shut_down_thread(%d): shutdown\n", ctx->client_fd);
+
+    DBG("shut_down_thread(%d): shutdown\n", ctx->client_fd);
     SHUTDOWN(ctx->client_fd, SHUT_RDWR);
 
-    fprintf(stderr, "shut_down_thread(%d): close\n", ctx->client_fd);
+    DBG("shut_down_thread(%d): close\n", ctx->client_fd);
     CLOSE(ctx->client_fd);
 
-    fprintf(stderr, "shut_down_thread(%d): done\n", ctx->client_fd);
+    DBG("shut_down_thread(%d): done\n", ctx->client_fd);
   }
 
   ctx->flags |= CTX_THREAD_EXIT;
@@ -191,20 +219,20 @@ shut_down() {
   for (i=0; i<MAX_SOCKET_CONNS; ++i) {
     if ((conn_list[i].ctx.flags & (CTX_PRE_THREAD | CTX_THREAD_EXIT))
 	== CTX_PRE_THREAD) {
-      fprintf(stderr, "shut_down: cancelling conn %d ...", i);
+      DBG("shut_down: cancelling conn %d ...", i);
       pthread_cancel(conn_list[i].thr);
       pthread_join(conn_list[i].thr, NULL);
-      fprintf(stderr, "done.\n");
+      DBG("done.\n");
     }
   }
 
   // close up shop
   if (main_flags & MAIN_BIND) {
-    fprintf(stderr, "shut_down: unlinking '%s'\n", server_name);
+    DBG("shut_down: unlinking '%s'\n", server_name);
     (void)unlink(server_name);
   }
   if (main_flags & MAIN_SOCKET_FD) {
-    fprintf(stderr, "shut_down: closing socket_fd %d\n", socket_fd);
+    DBG("shut_down: closing socket_fd %d\n", socket_fd);
     CLOSE(socket_fd);
   }
 }
@@ -250,27 +278,28 @@ int server_put(ThreadContext* ctx) {
   int                  dst_fd;
   int                  dst_is_socket;
 
+  ///  char*  buf = ctx->buf;
   char                 buf[SERVER_BUF_SIZE]  __attribute__ (( aligned(64) ));
   
 #if USE_RIOWRITE
-    // --- send client the offset we got from riomap()
-    //     She'll need this for riowrite(), in write_buffer()
+  // --- send client the offset we got from riomap()
+  //     She'll need this for riowrite(), in write_buffer()
 
-    //  unsigned mapsize = 1; // max number of riomap'ed buffers
-    //  NEED_0( RSETSOCKOPT(client_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+  //  unsigned mapsize = 1; // max number of riomap'ed buffers
+  //  NEED_0( RSETSOCKOPT(client_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
 
-    ctx->offset = RIOMAP(client_fd, buf, SERVER_BUF_SIZE+1, PROT_WRITE, 0, -1);
-    if (ctx->offset == (off_t)-1) {
-      fprintf(stderr, "riomap failed: %s\n", strerror(errno));
-      return -1;
-    }
-    DBG("riomap offset: %llu\n", ctx->offset);
+  ctx->offset = RIOMAP(client_fd, buf, SERVER_BUF_SIZE, PROT_WRITE, 0, -1);
+  if (ctx->offset == (off_t)-1) {
+    fprintf(stderr, "riomap failed: %s\n", strerror(errno));
+    return -1;
+  }
+  DBG("riomap offset: %llu\n", ctx->offset);
+  ctx->buf = buf;	// to allow the riounmap in shut_down_thread()
+  ctx->flags |= CTX_RIOMAPPED;
 
-    NEED_0( write_pseudo_packet(client_fd, CMD_RIO_OFFSET, ctx->offset, NULL) );
-    NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
+  NEED_0( write_pseudo_packet(client_fd, CMD_RIO_OFFSET, ctx->offset, NULL) );
+  NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
 
-    ctx->buffer = buf;	// to allow the riounmap in shut_down_thread()
-    ctx->flags |= CTX_RIOMAPPED;
 #endif
 
 
@@ -314,7 +343,7 @@ int server_put(ThreadContext* ctx) {
       ctx->flags |= CTX_THREAD_ERR;
       break;
     }
-    else if (read_total < SERVER_BUF_SIZE)
+    else if (read_total == 0)
       ctx->flags |= CTX_EOF;
 
 
@@ -327,9 +356,9 @@ int server_put(ThreadContext* ctx) {
 #endif
 
 #ifdef USE_RIOWRITE
-    // tell client we are done with buffer, which will be overwrriten
-    // by the next riowrite()
-    if( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) ) {
+    // tell client we are done with buffer, so she can begin
+    // overwriting with her next riowrite()
+    if( write_pseudo_packet(client_fd, CMD_ACK, read_total, NULL) ) {
       ctx->flags |= CTX_THREAD_ERR;
       break;
     }
@@ -373,9 +402,7 @@ int server_get(ThreadContext* ctx) {
   int                  client_fd = ctx->client_fd;
   PseudoPacketHeader*  hdr       = &ctx->hdr;
   char*                fname     = ctx->fname;
-  int                  o_flags   = ((cmd == CMD_PUT)
-				    ? (O_WRONLY|O_CREAT|O_TRUNC)
-				    : (O_RDONLY));
+  int                  o_flags   = O_RDONLY;
 
   int                  src_fd;
   int                  src_is_socket;
@@ -388,7 +415,7 @@ int server_get(ThreadContext* ctx) {
 #if USE_RIOWRITE
   // --- client sends us the offset she got from riomap()
   //     we'll need this for riowrite(), in write_buffer()
-  PseudoPacketHeader header;
+  PseudoPacketHeader header = {0};
   NEED_0( read_pseudo_packet_header(client_fd, &header) );
   if (header.command != CMD_RIO_OFFSET) {
     fprintf(stderr, "expected RIO_OFFSET pseudo-packet, not %s\n", command_str(header.command));
@@ -433,7 +460,12 @@ int server_get(ThreadContext* ctx) {
     }
 
     // --- read data up to SERVER_BUF_SIZE, or EOF, from <source>
-#ifndef SKIP_FILE_READS
+#ifdef SKIP_FILE_READS
+    // TBD: Keep some state in the handle, to limit the number of fake
+    //      reads we do before faking an EOF.  As it stands, this will
+    //      succeed forever.
+    ssize_t read_total = SERVER_BUF_SIZE;
+#else
     ssize_t read_total = read_buffer(ctx->file_fd, buf, SERVER_BUF_SIZE, 0);
     if (read_total < 0) {
       ctx->flags |= CTX_THREAD_ERR;
@@ -514,7 +546,7 @@ int server_put_or_get(ThreadContext* ctx) {
     //  unsigned mapsize = 1; // max number of riomap'ed buffers
     //  NEED_0( RSETSOCKOPT(client_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
 
-    ctx->offset = RIOMAP(client_fd, buf, SERVER_BUF_SIZE+1, PROT_WRITE, 0, -1);
+    ctx->offset = RIOMAP(client_fd, buf, SERVER_BUF_SIZE, PROT_WRITE, 0, -1);
     if (ctx->offset == (off_t)-1) {
       fprintf(stderr, "riomap failed: %s\n", strerror(errno));
       return -1;
@@ -524,14 +556,14 @@ int server_put_or_get(ThreadContext* ctx) {
     NEED_0( write_pseudo_packet(client_fd, CMD_RIO_OFFSET, ctx->offset, NULL) );
     NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
 
-    ctx->buffer = buf;	// to allow the riounmap in shut_down_thread()
+    ctx->buf = buf;	// to allow the riounmap in shut_down_thread()
     ctx->flags |= CTX_RIOMAPPED;
   }
   else {
 
     // --- client sends us the offset she got from riomap()
     //     we'll need this for riowrite(), in write_buffer()
-    PseudoPacketHeader header;
+    PseudoPacketHeader header = {0};
     NEED_0( read_pseudo_packet_header(client_fd, &header) );
     if (header.command != CMD_RIO_OFFSET) {
       fprintf(stderr, "expected RIO_OFFSET pseudo-packet, not %s\n", command_str(header.command));
@@ -656,6 +688,59 @@ int server_del(ThreadContext* ctx) {
 }
 
 
+
+int server_chown(ThreadContext* ctx) {
+
+  int                client_fd = ctx->client_fd;
+  PseudoPacketHeader header = {0};
+
+  // read UID
+  uint64_t uid_buf;
+  NEED_0( read_raw(client_fd, (char*)&uid_buf, sizeof(uid_buf)) );
+  uid_t uid = ntoh64(uid_buf);
+
+  // read GID
+  uint64_t gid_buf;
+  NEED_0( read_raw(client_fd, (char*)&gid_buf, sizeof(gid_buf)) );
+  gid_t gid = ntoh64(gid_buf);
+
+  // perform op
+  int rc = lchown(ctx->fname, uid, gid);
+
+  // send ACK with return-code
+  NEED_0( write_pseudo_packet(client_fd, CMD_ACK_CMD, rc, NULL) );
+
+  return rc;
+}
+
+
+int server_rename(ThreadContext* ctx) {
+
+  int                client_fd = ctx->client_fd;
+  PseudoPacketHeader header = {0};
+
+  // read destination-fname length (incl terminal NULL)
+  uint64_t len;
+  NEED_0( read_raw(client_fd, (char*)&len, sizeof(len)) );
+  len = ntoh64(len);
+  NEED( len <= FNAME_SIZE );
+
+  // read fname
+  char fname[FNAME_SIZE];
+  NEED_0( read_raw(client_fd, (char*)&fname, len) );
+  NEED( fname[len-1] == 0 );    // caller sent terminal-NULL?
+
+  // perform op
+  int rc = rename(ctx->fname, fname);
+
+  // send ACK with return-code
+  NEED_0( write_pseudo_packet(client_fd, CMD_ACK_CMD, rc, NULL) );
+
+  return rc;
+}
+
+
+
 // TBD: do the stat, translate fields to net-byte-order, ship to client.
 //      We will want write_stat()/read_stat() functions in skt_common.
 int server_stat(ThreadContext* ctx) {
@@ -663,6 +748,11 @@ int server_stat(ThreadContext* ctx) {
   ctx->flags |= CTX_THREAD_ERR;
   return -1;
 }
+
+
+
+
+
 
 
 
@@ -687,7 +777,10 @@ void* server_thread(void* arg) {
   char*                fname     = ctx->fname;
 
   // read initial header (incl client command)
-  read_pseudo_packet_header(client_fd, hdr);
+  if (read_pseudo_packet_header(client_fd, hdr)) {
+    DBG("failed to read pseudo-packet header\n");
+    pthread_exit(ctx);
+  }
 
   // maybe read fname
   switch (hdr->command) {
@@ -695,27 +788,31 @@ void* server_thread(void* arg) {
   case CMD_GET:
   case CMD_DEL:
   case CMD_STAT:
+  case CMD_CHOWN:
+  case CMD_RENAME:
     read_fname(client_fd, fname, hdr->length);
   };
 
+  // always print command and arg for log
   printf("server_thread (fd=%d): %s %s\n", client_fd, command_str(hdr->command), fname);
 
   // perform command
   switch (hdr->command) {
-  case CMD_PUT:   server_put(ctx);   break;
-  case CMD_GET:   server_get(ctx);   break;
-  case CMD_DEL:   server_del(ctx);          break;
-  case CMD_STAT:  server_stat(ctx);         break;
+  case CMD_PUT:    server_put(ctx);     break;
+  case CMD_GET:    server_get(ctx);     break;
+  case CMD_DEL:    server_del(ctx);     break;
+  case CMD_STAT:   server_stat(ctx);    break;
+  case CMD_CHOWN:  server_chown(ctx);   break;
+  case CMD_RENAME: server_rename(ctx);  break;
 
   default:
     fprintf(stderr, "unsupported op: '%s'\n", command_str(hdr->command));
     ctx->flags |= CTX_THREAD_ERR;
   }
 
-  shut_down_thread(ctx);
-  ctx->flags = 0;		// context is free for new thread
 
-  pthread_cleanup_pop(0);
+  // cleanup, and release context for use by another thread
+  pthread_cleanup_pop(1);
 }
 
 
@@ -731,8 +828,10 @@ int find_available_conn() {
   int i;
   for (i=0; i<MAX_SOCKET_CONNS; ++i) {
 
-    if (! conn_list[i].ctx.flags)
+    if (! conn_list[i].ctx.flags) {
+      memset(&conn_list[i].ctx, 0, sizeof(conn_list[i].ctx));
       return i;
+    }
 
     else if (conn_list[i].ctx.flags & CTX_THREAD_EXIT) {
       // TBD: handle threads that return failure?
@@ -757,7 +856,7 @@ int push_thread(int client_fd) {
   conn_list[i].ctx.client_fd = client_fd;
   conn_list[i].ctx.flags |= CTX_PRE_THREAD;
 
-  printf("connection[%d] <- fd=%d\n", i, client_fd);
+  DBG("connection[%d] <- fd=%d\n", i, client_fd);
   NEED_0( pthread_create(&conn_list[i].thr, NULL, server_thread, &conn_list[i].ctx) );
 
   return 0;
@@ -886,7 +985,7 @@ main(int argc, char* argv[]) {
     int client_fd;
     ///  REQUIRE_GT0( client_fd = ACCEPT(socket_fd, (struct sockaddr*)&c_addr, &c_addr_size) );
     REQUIRE_GT0( client_fd = ACCEPT(socket_fd, NULL, 0) );
-    printf("main: connected fd=%d\n", client_fd);
+    DBG("main: connected fd=%d\n", client_fd);
 
     if (push_thread(client_fd)) {
       fprintf(stderr, "main: couldn't allocate thread, dropping fd=%d\n", client_fd);

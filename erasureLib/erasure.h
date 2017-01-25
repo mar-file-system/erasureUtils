@@ -64,7 +64,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #endif
 
-//#define DEBUG
 #define INT_CRC
 #define META_FILES
 
@@ -91,10 +90,10 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define MAXPARTS (MAXN + MAXE)
 #define NO_INVERT_MATRIX -2
 
-#ifdef DEBUG
-#  define DBG_FPRINTF(...)   fprintf(__VA_ARGS__)
+#ifdef DEBUG_NE
+#  define FPRINTF(...)   fprintf(__VA_ARGS__)
 #else
-#  define DBG_FPRINTF(...)
+#  define FPRINTF(...)
 #endif
 
 typedef uint32_t u32;
@@ -183,14 +182,16 @@ typedef struct handle {
 
 
 /* Erasure Utility Functions taking a raw path argument */
-// default devolves to str
 ne_handle ne_open1  ( SnprintfFunc func, void* state, char *path, ne_mode mode, ... );
 int       ne_delete1( SnprintfFunc func, void* state, char *path, int width );
 ne_stat   ne_status1( SnprintfFunc func, void* state, char *path );
 
+// these interfaces provide a default SnprintfFunc, which supports the
+// expectations of the default MarFS multi-component implementation
 #define ne_open(   PATH, MODE, ... )  ne_open1  (ne_default_snprintf, NULL, (PATH), (MODE), ##__VA_ARGS__)
 #define ne_delete( PATH, WIDTH )      ne_delete1(ne_default_snprintf, NULL, (PATH), (WIDTH))
 #define ne_status( PATH )             ne_status1(ne_default_snprintf, NULL, (PATH))
+
 
 /* Erause Utility functions taking a <handle> argument */
 int       ne_read ( ne_handle handle, void       *buffer, u32 nbytes, off_t offset );

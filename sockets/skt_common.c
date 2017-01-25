@@ -56,10 +56,10 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #include <stdio.h>
 #include <limits.h>
-#include <errno.h>
-#include <string.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <errno.h>
+#include <string.h>
 
 #include "skt_common.h"
 
@@ -76,46 +76,21 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 
 #ifdef USE_RIOWRITE
   // If we would be reading from an rsocket where the writer is using
-  // riowrite(), we won't see anything in the fd; it's just doing RDMA
-  // directly into our buffer.  Writer will write one extra byte,
-  // beyond the end (which we will have allocated), and will have set
-  // it to zero before the transfer.  After the transfer, this will be
-  // set to 1.
-  //
-  // TBD? buffers are all aligned to 64-byte boundaries anyhow.  If
-  // size was always a multiple of size_t, the the overflow could be a
-  // size_t, which would let the writer communicate that less than the
-  // expected size was written.  This may be unnecessary, because we
-  // have pseudo-packet headers that could always be used to
-  // pre-arrange the amount of data to be transmitted.  So, a single
-  // byte would work fine.
-
-  ///   if (is_socket) {
-  ///     char* overflow = buf + size;
-  /// 
-  ///     while (! *overflow)
-  ///       sched_yield();
-  /// 
-  ///     uint8_t code = (uint8_t)*overflow;
-  ///     DBG("overflow-code = %d\n", (int)code);
-  ///     if (code == (uint8_t)-1)
-  ///       return -1;
-  /// 
-  ///     // reset for next read/write
-  ///     *overflow = 0;
-  /// 
-  ///     return size;
-  ///   }
+  // riowrite(), we won't see anything in the fd; RDMA is
+  // transparently moving data directly into our buffer.  In that
+  // case, the writer will send us a DATA pseudo-packet, to indicate
+  // when the RDMA is complete.
 
   if (is_socket) {
     PseudoPacketHeader header;
     NEED_0( read_pseudo_packet_header(fd, &header) );
-    if (header.flags & PKT_EOF)
-      return 0;
-    else if (header.command != CMD_DATA) {
+    if (header.command != CMD_DATA) {
       fprintf(stderr, "unexpected pseudo-packet: %s\n", command_str(header.command));
       return -1;
     }
+    else if (header.flags & PKT_EOF)
+      return 0;
+
     return header.length;
   }
 #endif
@@ -162,6 +137,8 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 // write bytes until <size>, or error.
 // Return 0 for success, negative for error.
 //
+// NOTE: If <size>==0, the server will treat it as EOF.
+//
 int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset) {
   DBG("write_buffer(%d, 0x%llx, %lld, %d, 0x%llx)\n", fd, buf, size, is_socket, offset);
 
@@ -193,9 +170,9 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 
 #if 0
     if (errno == ENOSPC)
-      printf("buffer is full.  ignoring.\n");
+      DBG("buffer is full.  ignoring.\n");
     else if (errno == EPIPE) {
-      printf("client disconnected?\n");
+      DBG("client disconnected?\n");
       return -1;
       break;
     }
@@ -210,16 +187,6 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 
 
 #ifdef USE_RIOWRITE
-  //  // reader can't tell that the previous riowrite has completed until
-  //  // it sees this byte change
-  //  if (is_socket) {
-  //    uint8_t one = 1;
-  //    if (riowrite(fd, (char*)&one, 1, offset+size, 0)) {
-  //      perror("riowrite overflow failed");
-  //      return -1;
-  //    }
-  //  }
-
   if (is_socket) {
     NEED_0( write_pseudo_packet(fd, CMD_DATA, size, NULL) );
   }
@@ -256,7 +223,9 @@ int write_raw(int fd, char* buf, size_t size) {
 
 
 
-// [lifted from marfs_common.c]
+// [lifted from marfs_common.c, with name changes to avoid link-time conflicts
+// when both impls are present.]
+//
 // htonll() / ntohll() are not provided in our environment.  <endian.h> or
 // <byteswap.h> make things easier, but these are non-standard.  Also, we're
 // compiled with -Wall, so we avoid pointer-aliasing that makes gcc whine.
@@ -268,8 +237,7 @@ int write_raw(int fd, char* buf, size_t size) {
 // see http://esr.ibiblio.org/?p=5095
 #define IS_LITTLE_ENDIAN (*(uint16_t *)"\0\xff" >= 0x100)
 
-static
-uint64_t htonll(uint64_t ll) {
+uint64_t hton64(uint64_t ll) {
   if (IS_LITTLE_ENDIAN) {
     uint64_t result;
     char* sptr = ((char*)&ll) +7; // gcc doesn't mind char* aliases
@@ -282,8 +250,8 @@ uint64_t htonll(uint64_t ll) {
   else
     return ll;
 }
-static
-uint64_t ntohll(uint64_t ll) {
+
+uint64_t ntoh64(uint64_t ll) {
   if (IS_LITTLE_ENDIAN) {
     uint64_t result;
     char* sptr = ((char*)&ll) +7; // gcc doesn't mind char* aliases
@@ -319,7 +287,7 @@ uint64_t ntohll(uint64_t ll) {
   }
 
 
-// co-maintain SocketCommand, in skt_common.h
+// *** co-maintain SocketCommand, in skt_common.h
 const char* _command_str[] = {
   "unknown_command",
   "GET",
@@ -334,6 +302,8 @@ const char* _command_str[] = {
   "SEEK_BACK",
   "SET_XATTR",
   "GET_XATTR",
+  "CHOWN",
+  "RENAME",
   "NULL"
 };
 const char* command_str(SocketCommand command) {
@@ -354,7 +324,7 @@ int write_pseudo_packet(int fd, SocketCommand command, size_t length, void* buf)
 
   // --- write <length>
   DBG("-> length:  %llu\n", length);
-  uint64_t len = htonll(length);
+  uint64_t len = hton64(length);
   NEED_0( write_raw(fd, (char*)&len, sizeof(len)) );
 
   // --- maybe write <buf>
@@ -369,6 +339,7 @@ int write_pseudo_packet(int fd, SocketCommand command, size_t length, void* buf)
 // for now, this is only used by server
 int read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr) {
   ssize_t read_count;
+  memset(hdr, 0, sizeof(PseudoPacketHeader));
 
   // --- read <command>
   uint32_t cmd;
@@ -380,6 +351,7 @@ int read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr) {
   }
   else if (read_count != sizeof(cmd)) {
     DBG("read err %lld\n", read_count);
+    hdr->flags |= PKT_ERR;
     return -1;
   }
   hdr->command = ntohl(cmd);
@@ -396,9 +368,10 @@ int read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr) {
   }
   else if (read_count != sizeof(len)) {
     DBG("read err %lld\n", read_count);
+    hdr->flags |= PKT_ERR;
     return -1;
   }
-  hdr->length = ntohll(len);
+  hdr->length = ntoh64(len);
   DBG("<- length:  %llu\n", hdr->length);
 
   return 0;
@@ -543,10 +516,24 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
 //
 // <mode> is used iff <flags> includes O_CREAT
 //
+// NOTE: The server_thread, dispatched as a result of skt_open(), will
+//     not actually presume what operation is being performed, until
+//     the respective skt_read() or skt_write() call.  Conveniently,
+//     that means we can also use this connection to perform other
+//     operations (e.g. SETXATTR, CHOWN, etc).  In these cases, the
+//     open flags are ignored.
+//
 // TBD: Set errcode "appropriately".
 // ...........................................................................
 
 int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
+  DBG("skt_open(0x%llx, '%s', %x, ...)\n", (size_t)handle, service_path, flags);
+
+  if (handle->flags && (! (handle->flags & HNDL_CLOSED))) {
+    fprintf(stderr, "attempt to open handle that is not closed\n");
+    return -1;
+  }
+  memset(handle, 0, sizeof(SocketHandle));
 
   mode_t mode = 0;
   if (flags & O_CREAT) {
@@ -558,8 +545,6 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 
   // shorthand
   PathSpec* spec = &handle->path_spec;
-
-  memset(handle, 0, sizeof(SocketHandle));
   NEED_0( parse_service_path(spec, service_path) );
 
   handle->open_flags = flags;
@@ -632,24 +617,17 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 
 
   // open socket to server
-  /// NEED_0( handle->fd = SOCKET(PF_INET, SOCK_STREAM, 0) );
   NEED_GT0( handle->fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
 
-  //  // don't do this on the client?
-  int disable = 0;
-  NEED_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_INLINE, &disable, sizeof(disable)) );
+  //  // don't do this on the PUT-client?
+  //  int disable = 0;
+  //  NEED_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_INLINE, &disable, sizeof(disable)) );
 
-  // unsigned mapsize = MAX_SOCKET_CONNS; // max number of riomap'ed buffers
-  unsigned mapsize = 1; // max number of riomap'ed buffers
+  unsigned mapsize = 1; // max number of riomap'ed buffers (on this fd ?)
   NEED_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
-
 
   NEED_0( CONNECT(handle->fd, s_addr_ptr, s_addr_len) );
   handle->flags |= HNDL_SERVER_FD;
-
-  //  // fails, if we do this after the connect() ?
-  //  unsigned mapsize = 1; // max number of riomap'ed buffers
-  //  NEED_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
 
   printf("server: connected '%s'\n", spec->fname);
 
@@ -670,16 +648,26 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 // ssize_t, but it will always either match the size of your buffer,
 // or be negative.
 //
-// For RDMA+IB, we communicate with the server to receive the memory-mapped
-// offset for server-side buffer we will write into.
+// For RDMA+IB, we communicate with the server to receive the
+// memory-mapped offset for server-side buffer we will write into.
+//
+// NOTE: The server understands DATA 0 to mean EOF.  We will send that
+//     in skt_close().  Therefore, if someone calls skt_write() with
+//     <size> 0, we'll treat it as a no-op.
+//
 // ...........................................................................
 
-ssize_t skt_write(SocketHandle* handle, const void* buf, size_t count) {
+ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
+
+  DBG("skt_write(%d, %llx, %llu)\n", handle->fd, (size_t)buf, size);
+  if (! size)
+    return 0;                   // see NOTE
 
   PseudoPacketHeader header;
 
   // shorthand
   PathSpec* spec = &handle->path_spec;
+
 
   // --- first time through, initialize comms with server
   if (! (handle->flags & HNDL_OP_INIT)) {
@@ -694,7 +682,7 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t count) {
       return -1;
     }
     handle->rio_offset = header.length;
-    DBG("got riomap offset from server: 0x%llx\n", header.length);
+    DBG("got riomap offset from peer: 0x%llx\n", header.length);
 #endif  
 
     handle->flags |= HNDL_OP_INIT;
@@ -712,10 +700,10 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t count) {
   }
 #endif
 
-  NEED_0( write_buffer(handle->fd, buf, count, 1, handle->rio_offset) );
-  handle->stream_pos += count;  /* tracking for skt_lseek() */
+  NEED_0( write_buffer(handle->fd, buf, size, 1, handle->rio_offset) );
+  handle->stream_pos += size;  /* tracking for skt_lseek() */
 
-  return count;
+  return size;
 }
 
 
@@ -724,9 +712,9 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t count) {
 // READ
 // ...........................................................................
 
-ssize_t skt_read(SocketHandle* handle,       void* buf, size_t count) {
+ssize_t skt_read(SocketHandle* handle,       void* buf, size_t size) {
   NO_IMPL();
-  handle->stream_pos += count;  /* tracking for skt_lseek() */
+  handle->stream_pos += size;  /* tracking for skt_lseek() */
 }
 
 
@@ -752,6 +740,8 @@ off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
     return handle->stream_pos;
   }
 
+  fprintf(stderr, "lseek(%llu, %d) from %llu -- non-zero head motion not yet supported\n",
+          offset, handle->stream_pos, whence);
   errno = EINVAL;
   return (off_t)-1;
 }
@@ -764,9 +754,11 @@ off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
 // supporting it, for now.
 // ...........................................................................
 
-int skt_fsetxattr(SocketHandle* handle, const char* name, const void* value, size_t size, int flags) {
-  NO_IMPL();
+int skt_fsetxattr(SocketHandle* handle, const char* service_path, const void* value, size_t size, int flags) {
+  NO_IMPL();  
 }
+
+
 
 
 // ...........................................................................
@@ -784,11 +776,155 @@ int skt_close(SocketHandle* handle) {
 #endif
 
     // wait for the other end to fsync
+    //
+    // NOTE: If there was a previous skt_write(), then our first the
+    //       the first pseudo-packet we see will be the ACK for that
+    //       write, rather than the ACK for the DATA 0 we just wrote.
+    //       Skip over the former to get to the latter.
     PseudoPacketHeader hdr;
-    NEED_0( read_pseudo_packet_header(handle->fd, &hdr) );
-    NEED(   (hdr.command == CMD_ACK) );
-  }
-  handle->flags |= HNDL_CLOSED;
+    EXPECT_0( read_pseudo_packet_header(handle->fd, &hdr) );
+    EXPECT(   (hdr.command == CMD_ACK) );
 
+    if ((hdr.command == CMD_ACK) && hdr.length) {
+      EXPECT_0( read_pseudo_packet_header(handle->fd, &hdr) );
+      EXPECT(   (hdr.command == CMD_ACK) );
+    }
+  }
+
+#if UNIX_SOCKETS
+  if (handle->flags & HNDL_FNAME) {
+    DBG("unlinking '%s'\n", handle->fname);
+    (void)unlink(handle.fname);
+  }
+#endif
+
+  if (handle->flags & HNDL_SERVER_FD) {
+    DBG("closing socket_fd %d\n", handle->fd);
+    SHUTDOWN(handle->fd, SHUT_RDWR);
+    CLOSE(handle->fd);
+  }
+
+  handle->flags |= HNDL_CLOSED;
   return 0;
 }
+
+
+
+
+
+
+// ===========================================================================
+// file-based ops
+//
+// The client-server setup currently creates/destroys socket
+// connections at open/close time, respectively.  For file-based ops,
+// like chown, etc, this is bound to add a fair amount of overhead, if
+// the only thing we really want to do with the socket is send a
+// pseudo-packet saying chown this file, etc.  But that's what we're
+// doing, for now.
+//
+// TBD: For the needs of libne, we could potentially "cheat" a little,
+//     and allow a socket that was opened for GET/PUT to be
+//     "pre-closed", or something, which would leave the socket in
+//     place, so we could send chown/chmod ops.  However, that gets a
+//     little ugly to do in an implementation-agnostic way, because
+//     the file-based version (i.e. as opposed to using this sockets
+//     library) will close first, then chown.
+//
+// ===========================================================================
+
+
+
+// ...........................................................................
+// UNLINK
+// ...........................................................................
+
+int skt_unlink(const char* service_path) {
+  NO_IMPL();
+}
+
+// ...........................................................................
+// CHOWN
+// ...........................................................................
+
+int  skt_chown (const char* service_path, uid_t uid, gid_t gid) {
+
+  SocketHandle       handle = {0};
+  PseudoPacketHeader hdr = {0};
+
+  // This does NOT actually open() the server-side file
+  NEED_0( skt_open(&handle, service_path, (O_WRONLY|O_CREAT)) );
+
+
+  // command pseudo-packet header
+  PathSpec* spec = &handle.path_spec;
+  NEED_0( write_pseudo_packet(handle.fd, CMD_CHOWN, strlen(spec->fname)+1, spec->fname) );
+
+  // write UID
+  uint64_t uid_buf = hton64(uid);
+  NEED_0( write_raw(handle.fd, (char*)&uid_buf, sizeof(uid_buf)) );
+
+  // write GID
+  uint64_t gid_buf = hton64(gid);
+  NEED_0( write_raw(handle.fd, (char*)&gid_buf, sizeof(gid_buf)) );
+
+
+  // read ACK, including return-code from the remote lchown().
+  NEED_0( read_pseudo_packet_header(handle.fd, &hdr) );
+  NEED(   (hdr.command == CMD_ACK_CMD) );
+  int rc =   (int)hdr.length;
+
+  // close()
+  NEED_0( skt_close(&handle) );
+
+  return rc;
+}
+
+
+
+// ...........................................................................
+// RENAME
+// ...........................................................................
+
+
+int  skt_rename (const char* service_path, const char* new_fname) {
+
+  SocketHandle       handle = {0};
+  PseudoPacketHeader hdr = {0};
+
+  // This does NOT actually open() the server-side file
+  NEED_0( skt_open(&handle, service_path, (O_WRONLY|O_CREAT)) );
+
+
+  // send command pseudo-packet
+  PathSpec* spec = &handle.path_spec;
+  NEED_0( write_pseudo_packet(handle.fd, CMD_RENAME, strlen(spec->fname)+1, spec->fname) );
+
+  // send new-fname
+  //  NEED_0( write_pseudo_packet(handle.fd, CMD_RENAME_VAL, strlen(new_fname)+1, new_fname) );
+  size_t len     = strlen(new_fname) +1;
+  size_t len_buf = hton64(len);
+  NEED_0( write_raw(handle.fd, (char*)&len_buf,   sizeof(len_buf)) );
+  NEED_0( write_raw(handle.fd, (char*)&new_fname, len) );
+
+
+  // read ACK, including return-code from the remote rename().
+  NEED_0( read_pseudo_packet_header(handle.fd, &hdr) );
+  NEED(   (hdr.command == CMD_ACK_CMD) );
+  int rc =   (int)hdr.length;
+
+  // close()
+  NEED_0( skt_close(&handle) );
+
+  return rc;
+}
+
+
+// ...........................................................................
+// STAT
+// ...........................................................................
+
+int skt_stat(const char* service_path, struct stat* st) {
+  NO_IMPL();
+}
+

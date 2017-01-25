@@ -61,9 +61,18 @@
 LIBS =
 
 
+# Allow automake to figure out what "+=" means
+SOCKET_DEFS=
+# number says how many buffers to fake reading from file, to send to server for PUT
+# SOCKET_DEFS=-DSKIP_FILE_READS=1
+
 if RDMA_SOCKETS
-  SOCKET_DEFS = -DRDMA_SOCKETS -DUSE_RIOWRITE
-  SOCKET_LIBS = -lrdmacm
+  SOCKET_DEFS += -DRDMA_SOCKETS -DUSE_RIOWRITE
+  SOCKET_LIBS  = -lrdmacm
+endif
+
+if DEBUG_SOCKETS
+  SOCKET_DEFS += -DDEBUG_SOCKETS
 endif
 
 include_HEADERS = skt_common.h

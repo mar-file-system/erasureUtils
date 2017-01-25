@@ -55,12 +55,20 @@
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
+# Allow automake to figure out what "+=" means
+SOCKET_DEFS =
+
 if BUILD_SOCKETS
-  SOCKET_DEFS = -DSOCKETS=RDMA
+  SOCKET_DEFS += -DSOCKETS=RDMA
   SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
   SOCKET_LIBS = ../sockets/librdma_sockets.a
   SOCKET_LD = -lrdmacm
 endif
+
+if DEBUG_NE
+  SOCKET_DEFS += -DDEBUG_NE
+endif
+
 
 # erasure.h includes "skt_common.h".  Programs in this dir are built
 # before 'make install' will have put ../sockets/skt_common.h into the

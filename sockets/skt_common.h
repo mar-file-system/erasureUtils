@@ -64,13 +64,14 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/uio.h>            // read(), write()
 #include <unistd.h>             // read(), write()
 #include <stdlib.h>             // exit()
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 
 
 
-// use 'make ... DEBUG=1' to enable the DBG() statements
-
-#ifdef DEBUG
+#ifdef DEBUG_SOCKETS
 #  define DBG(...)   fprintf(stderr, ##__VA_ARGS__)
 #else
 #  define DBG(...)
@@ -207,6 +208,15 @@ typedef struct sockaddr_in                   SockAddr;
 #endif
 
 
+#ifdef __GNUC__
+#  define likely(x)      __builtin_expect(!!(x), 1)
+#  define unlikely(x)    __builtin_expect(!!(x), 0)
+#else
+#  define likely(x)      (x)
+#  define unlikely(x)    (x)
+#endif
+
+
 // Unused, for now
 typedef enum {
   PROT_UNIX = 1,
@@ -241,11 +251,13 @@ typedef enum {
 
 
 
+// SocketHandle is only used on the client-side.
+// Server maintains per-connection state in its own ThreadContext.
 typedef struct {
   PathSpec     path_spec;
   int          open_flags;
   mode_t       open_mode;
-  int          fd;
+  int          fd;              // socket to server
   off_t        rio_offset;
   size_t       stream_pos;      // TBD: stream-position, to ignore redundant skt_seek()
   uint16_t     flags;           // SHFlags
@@ -255,7 +267,7 @@ typedef struct {
 // "commands" for pseudo-packet
 // just a sequence of ints
 //
-// NOTE: Co-maintain _command_str[], in common.c
+// *** NOTE: Co-maintain _command_str[], in skt_common.c
 typedef enum {
   CMD_GET   = 1,                // ignore <length>
   CMD_PUT,
@@ -269,6 +281,9 @@ typedef enum {
   CMD_SEEK_BACK,
   CMD_SET_XATTR,                // <length> is split into <name_len>, <value_len>
   CMD_GET_XATTR,                // ditto
+  CMD_CHOWN,
+  CMD_RENAME,
+  CMD_ACK_CMD,                  // command received (<length> has ack'ed cmd)
 
   CMD_NULL,                     // THIS IS ALWAYS LAST
 } SocketCommand;
@@ -303,8 +318,21 @@ typedef struct {
 } OpenPacketHeader;
 
 
-// For now, we'll use a open/read/write/close model, because that
-// will fit most easily into libne.
+
+// --- low-level tools
+uint64_t hton64(uint64_t ll);
+uint64_t ntoh64(uint64_t ll);
+
+int write_pseudo_packet(int fd, SocketCommand command, size_t length, void* buff);
+int read_pseudo_packet_header(int fd, PseudoPacketHeader* pkt);
+int read_fname(int fd, char* fname, size_t length);
+
+ssize_t read_buffer (int fd, char*       buf, size_t size, int is_socket);
+int     write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset);
+
+
+// --- For now, we'll use a open/read/write/close model, because that
+//     will fit most easily into libne.
 
 int           skt_open     (SocketHandle* handle, const char* fname, int flags, ...);
 ssize_t       skt_write    (SocketHandle* handle, const void* buf, size_t count);
@@ -313,13 +341,10 @@ off_t         skt_lseek    (SocketHandle* handle, off_t offset, int whence);
 int           skt_fsetxattr(SocketHandle* handle, const char* name, const void* value, size_t size, int flags);
 int           skt_close    (SocketHandle* handle);
 
-int write_pseudo_packet(int fd, SocketCommand command, size_t length, void* buff);
-int read_pseudo_packet_header(int fd, PseudoPacketHeader* pkt);
-int read_fname(int fd, char* fname, size_t length);
-
-
-ssize_t read_buffer (int fd, char*       buf, size_t size, int is_socket);
-int     write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset);
+int           skt_unlink(const char* service_path);
+int           skt_chown (const char* service_path, uid_t uid, gid_t gid);
+int           skt_rename(const char* service_path, const char* new_fname);
+int           skt_stat  (const char* service_path, struct stat* st);
 
 
 

@@ -96,18 +96,36 @@ AC_CHECK_FUNCS([bzero ftruncate memset strerror strtol strtoul])
 # optional build uses RDMA-sockets
 # The server must be running on remote hosts to support this mode.
 AC_ARG_ENABLE([sockets],
-              [File operations go thorugh a remote server via sockets {rdma,ip,unix}],
+               AS_HELP_STRING([--enable-sockets],
+                              [File operations go thorugh a remote server via sockets.  One of {rdma,ip,unix}]),
               [case "${enableval}" in
-               rdma) enable_sockets=rdma ;;
-               no)   enable_sockets=no ;;
-               *)    AC_MSG_FAILURE([enable-sockets={rdma,ip,unix}. Currently, only rdma is supported]) ;;
-               esac],
+                 rdma) enable_sockets=rdma ;;
+                 no)   enable_sockets=no ;;
+                 *)    AC_MSG_FAILURE([enable-sockets={rdma,ip,unix}. Currently, only rdma is supported]) ;;
+                esac],
                [enable_sockets=no])
 
 AM_CONDITIONAL([BUILD_SOCKETS], [test "$enable_sockets" != no ])
-AM_CONDITIONAL([RDMA_SOCKETS], [test "$enable_sockets"  == rdma])
+AM_CONDITIONAL([RDMA_SOCKETS],  [test "$enable_sockets"  == rdma])
 
        
+# Allow turning on debugging flags
+AC_ARG_ENABLE([debug],
+               AS_HELP_STRING([--enable-debug],
+                              [Turn on internal debugging.  One of {ne,sockets,all,no}]),
+               [case "${enableval}" in
+                  ne)        enable_debug=ne ;;
+                  sockets)   enable_debug=sockets ;;
+                  all)       enable_debug=all ;;
+                  *)    AC_MSG_FAILURE([enable-debug={ne,sockets,all,no}.]) ;;
+                esac],
+               [enable_debug=no])
+
+AM_CONDITIONAL([DEBUG_NE],      [test "$enable_debug" = ne      || test "$enable_debug" = all ])
+AM_CONDITIONAL([DEBUG_SOCKETS], [test "$enable_debug" = sockets || test "$enable_debug" = all ])
+
+
+
 
 AXATTR_GET_FUNC_CHECK
 AXATTR_SET_FUNC_CHECK
