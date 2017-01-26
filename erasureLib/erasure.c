@@ -1791,8 +1791,8 @@ static int fill_buffers(ne_handle handle, u64 *csum) {
 
 #ifdef INT_CRC
       // verify the stored crc
-      if( memcmp( handle->buffs[block_index]+(handle->bsz), &crc, sizeof(u32))
-          != 0 ) {
+      u32 *buff_crc = (u32*)(handle->buffs[block_index] + (handle->bsz));
+      if(*buff_crc != crc) {
         DBG_FPRINTF(stderr, "ne_rebuild: mismatch of int-crc for file %d\n",
                     block_index);
         reopen_for_rebuild(handle, block_index);
@@ -1818,7 +1818,8 @@ static int write_buffers(ne_handle handle, unsigned char *rebuild_buffs[]) {
     crc = crc32_ieee(TEST_SEED, rebuild_buffs[handle->N+i], handle->bsz);
     if(handle->mode != NE_STAT) {
 #ifdef INT_CRC
-      memcpy(rebuild_buffs[handle->N+i]+(handle->bsz), &crc, sizeof(crc));
+      u32 *buf_crc = (u32*)(rebuild_buffs[handle->N+i] + (handle->bsz));
+      *buf_crc = crc;
 #endif
       written = write(handle->FDArray[handle->src_err_list[i]],
                       rebuild_buffs[handle->N+i], BUFFER_SIZE);
