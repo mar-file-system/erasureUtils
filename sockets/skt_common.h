@@ -346,6 +346,9 @@ int           skt_chown (const char* service_path, uid_t uid, gid_t gid);
 int           skt_rename(const char* service_path, const char* new_fname);
 int           skt_stat  (const char* service_path, struct stat* st);
 
+// libne uses fsetxattr() [taking fd] for sets, but getxattr() [taking path] for gets.
+int           skt_getxattr(const char* service_path, const char* name, void* value, size_t size);
+
 
 
 

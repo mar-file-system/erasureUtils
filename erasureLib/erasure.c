@@ -1,16 +1,18 @@
 #include <erasure.h>
 
 #include <stdio.h>
-#include <string.h>
 #include <fcntl.h>
 #include <stdarg.h>
-#include <errno.h>
+#include <limits.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <errno.h>
+#include <string.h>
+
 #if (AXATTR_RES == 2)
-#include <attr/xattr.h>
+# include <attr/xattr.h>
 #else
-#include <sys/xattr.h>
+# include <sys/xattr.h>
 #endif
 
 #ifndef __MARFS_COPYRIGHT_H__
@@ -101,6 +103,7 @@ extern void ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsign
 extern uint32_t crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len);
 extern void ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 #endif
+
 extern void pq_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p and q */
 extern void xor_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p */
 extern int pq_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
@@ -233,10 +236,11 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
    }
 
    ne_handle handle = malloc( sizeof( struct handle ) );
+   memset(handle, 0, sizeof(struct handle));
 
-   /* initialize stored info */
-   handle->nerr = 0;
-   handle->totsz = 0;
+   /* initialize any non-zero handle members */
+   // handle->nerr = 0;
+   // handle->totsz = 0;
    handle->N = N;
    handle->E = E;
    handle->bsz = bsz;
@@ -248,20 +252,20 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
    else {
       handle->mode = mode;
    }
-   handle->e_ready = 0;
-   handle->buff_offset = 0;
-   handle->buff_rem = 0;
+   //   handle->e_ready = 0;
+   //   handle->buff_offset = 0;
+   //   handle->buff_rem = 0;
 
    handle->snprintf = fn;
    handle->state    = state;
 
-   for ( counter=0; counter < MAXPARTS; counter++ ) {
-      handle->csum[counter] = 0;
-      handle->nsz[counter] = 0;
-      handle->ncompsz[counter] = 0;
-      handle->src_in_err[counter] = 0;
-      handle->src_err_list[counter] = 0;
-   }
+   //   for ( counter=0; counter < MAXPARTS; counter++ ) {
+   //      handle->csum[counter] = 0;
+   //      handle->nsz[counter] = 0;
+   //      handle->ncompsz[counter] = 0;
+   //      handle->src_in_err[counter] = 0;
+   //      handle->src_err_list[counter] = 0;
+   //   }
 
    char* nfile = malloc( strlen(path) + 1 );
    strncpy( nfile, path, strlen(path) + 1 );
@@ -284,6 +288,11 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
             return NULL;
          }
       }
+      else if(ret == -1) {
+        FPRINTF(stderr, "ne_open: failed xattr_check\n");
+        return NULL;
+      }
+
    }
    else if ( mode != NE_WRONLY ) { //reject improper mode arguments
       FPRINTF( stderr, "improper mode argument received - %d\n", mode );
@@ -387,7 +396,7 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
  * @param off_t offset : Offset within the data at which to begin the read
  * @return int : The number of bytes read or -1 on a failure
  */
-int ne_read( ne_handle handle, void *buffer, u32 nbytes, off_t offset ) 
+ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) 
 {
    int mtot = (handle->N)+(handle->E);
    int minNerr = handle->N+1;  // greater than N
@@ -419,6 +428,13 @@ int ne_read( ne_handle handle, void *buffer, u32 nbytes, off_t offset )
 #endif
    ssize_t out_off;
    off_t seekamt;
+
+   
+   if (nbytes > UINT_MAX) {
+     FPRINTF( stderr, "ne_write: not yet validated for write-sizes above %lu\n", UINT_MAX);
+     errno = EFBIG;             /* sort of */
+     return -1;
+   }
 
    if ( handle->mode != NE_RDONLY ) {
       FPRINTF( stderr, "ne_read: handle is in improper mode for reading!\n" );
@@ -483,7 +499,8 @@ read:
    startpart = (offset + llcounter - (startstripe*bsz*N))/bsz;
    startoffset = offset+llcounter - (startstripe*bsz*N) - (startpart*bsz);
 
-   FPRINTF(stdout,"ne_read: read with rebuild from startstripe %d startpart %d and startoffset %d for nbytes %d\n",startstripe,startpart,startoffset,nbytes);
+   FPRINTF(stdout,"ne_read: read with rebuild from startstripe %d startpart %d and startoffset %d for nbytes %d\n",
+           startstripe, startpart, startoffset, nbytes);
 
    counter = 0;
 
@@ -697,11 +714,7 @@ read:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
-#  ifdef HAVE_LIBISAL
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
-#  else
-               crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], bsz );
-#  endif
                if ( memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) ) != 0 ){
                   FPRINTF(stderr, "ne_read: mismatch of int-crc for file %d while reading with rebuild\n", counter);
                   if ( counter > maxNerr )  maxNerr = counter;
@@ -780,11 +793,7 @@ read:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
-#  ifdef HAVE_LIBISAL
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
-#  else
-               crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], bsz );
-#  endif
                if ( memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) ) != 0 ){
                   FPRINTF(stderr, "ne_read: mismatch of int-crc for file %d (erasure)\n", counter);
                   if ( counter > maxNerr )  maxNerr = counter;
@@ -840,11 +849,7 @@ read:
          }
          FPRINTF( stdout, "ne_read: performing regeneration from erasure...\n" );
 
-#ifdef HAVE_LIBISAL
          ec_encode_data(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
-#else
-         ec_encode_data_base(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
-#endif
       }
 
       /**** write appropriate data out ****/
@@ -951,7 +956,7 @@ read:
  * @param int nbytes : Number of data bytes to be written from buffer
  * @return int : Number of bytes written or -1 on error
  */
-int ne_write( ne_handle handle, const void *buffer, u32 nbytes )
+ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
 {
  
    int N;                       /* number of raid parts not including E */ 
@@ -966,10 +971,16 @@ int ne_write( ne_handle handle, const void *buffer, u32 nbytes )
    u32 writesize;
    u32 crc;                     /* crc 32 */
 
+   if (nbytes > UINT_MAX) {
+     FPRINTF( stderr, "ne_write: not yet validated for write-sizes above %lu\n", UINT_MAX);
+     errno = EFBIG;             /* sort of */
+     return -1;
+   }
+
    if ( handle-> mode != NE_WRONLY  &&  handle->mode != NE_REBUILD ) {
-      FPRINTF( stderr, "ne_write: handle is in improper mode for writing!\n" );
-      errno = EPERM;
-      return -1;
+     FPRINTF( stderr, "ne_write: handle is in improper mode for writing!\n" );
+     errno = EPERM;
+     return -1;
    }
 
    N = handle->N;
@@ -998,7 +1009,9 @@ int ne_write( ne_handle handle, const void *buffer, u32 nbytes )
             break;
          }
 
-         FPRINTF( stdout, "ne_write: reading input for %lu bytes with offset of %llu\n          and writing to offset of %lu in handle buffer\n", (unsigned long)readsize, totsize, handle->buff_rem );
+         FPRINTF( stdout, "ne_write: reading input for %lu bytes with offset of %llu\n"
+                  "\tand writing to offset of %lu in handle buffer\n",
+                  (unsigned long)readsize, totsize, handle->buff_rem );
          memcpy ( handle->buffer + handle->buff_rem, buffer+totsize, readsize);
          FPRINTF(stdout, "ne_write:   ...copy complete.\n");
          totsize += readsize;
@@ -1013,11 +1026,7 @@ int ne_write( ne_handle handle, const void *buffer, u32 nbytes )
 
          if ( handle->src_in_err[counter] == 0 ) {
             /* this is the crcsum for each part */
-#ifdef HAVE_LIBISAL
             crc = crc32_ieee(TEST_SEED, handle->buffs[counter], bsz);
-#else
-            crc = crc32_ieee_base(TEST_SEED, handle->buffs[counter], bsz);
-#endif
 
 #ifdef INT_CRC
             // write out per-block-crc
@@ -1030,7 +1039,8 @@ int ne_write( ne_handle handle, const void *buffer, u32 nbytes )
             ret_out = HNDLOP(write, handle->FDArray[counter], handle->buffs[counter], writesize); 
 
             if ( ret_out != writesize ) {
-               FPRINTF( stderr, "ne_write: write to file %d returned %zd instead of expected %lu\n" , counter, ret_out, (unsigned long)writesize );
+               FPRINTF( stderr, "ne_write: write to file %d returned %zd instead of expected %lu\n",
+                        counter, ret_out, (unsigned long)writesize );
                handle->src_in_err[counter] = 1;
                handle->src_err_list[handle->nerr] = counter;
                handle->nerr++;
@@ -1048,7 +1058,8 @@ int ne_write( ne_handle handle, const void *buffer, u32 nbytes )
          counter++;
       } //end of writes for N
 
-      //if we haven't written a whole stripe, terminate
+      // If we haven't written a whole stripe, terminate. This happens
+      // if there is not enough data to form a complete stripe.
       if ( counter != N ) {
          break;
       }
@@ -1070,19 +1081,11 @@ int ne_write( ne_handle handle, const void *buffer, u32 nbytes )
       FPRINTF(stdout, "ne_write: caculating %d recovery stripes from %d data stripes\n",E,N);
       // Perform matrix dot_prod for EC encoding
       // using g_tbls from encode matrix encode_matrix
-#ifdef HAVE_LIBISAL
       ec_encode_data( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
-#else
-      ec_encode_data_base( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
-#endif
 
       ecounter = 0;
       while (ecounter < E) {
-#ifdef HAVE_LIBISAL
          crc = crc32_ieee(TEST_SEED, handle->buffs[counter+ecounter], bsz); 
-#else
-         crc = crc32_ieee_base(TEST_SEED, handle->buffs[counter+ecounter], bsz); 
-#endif
 
          writesize = bsz;
 #ifdef INT_CRC
@@ -1094,14 +1097,17 @@ int ne_write( ne_handle handle, const void *buffer, u32 nbytes )
          handle->csum[counter+ecounter] += crc; 
          handle->nsz[counter+ecounter] += bsz;
          handle->ncompsz[counter+ecounter] += bsz;
-         FPRINTF( stdout, "ne_write: writing out erasure stripe %d\n", ecounter );
-         ret_out = HNDLOP(write, handle->FDArray[counter+ecounter], handle->buffs[counter+ecounter], writesize);
 
-         if ( ret_out != writesize ) {
-            FPRINTF( stderr, "ne_write: write to erasure file %d, returned %zd instead of expected %d\n" , ecounter, ret_out, writesize );
-            handle->src_in_err[counter + ecounter] = 1;
-            handle->src_err_list[handle->nerr] = counter + ecounter;
-            handle->nerr++;
+         FPRINTF( stdout, "ne_write: writing out erasure stripe %d\n", ecounter );
+         if( handle->src_in_err[counter+ecounter] == 0) {
+           ret_out = HNDLOP(write, handle->FDArray[counter+ecounter], handle->buffs[counter+ecounter], writesize);
+
+           if ( ret_out != writesize ) {
+             FPRINTF( stderr, "ne_write: write to erasure file %d, returned %zd instead of expected %d\n" , ecounter, ret_out, writesize );
+             handle->src_in_err[counter + ecounter] = 1;
+             handle->src_err_list[handle->nerr] = counter + ecounter;
+             handle->nerr++;
+           }
          }
 
          ecounter++;
@@ -1111,8 +1117,19 @@ int ne_write( ne_handle handle, const void *buffer, u32 nbytes )
       handle->buff_rem = 0; 
    }
    handle->totsz += totsize; //as it is impossible to write at an offset, the sum of writes will be the total size
- 
-   return totsize;
+
+   // If the errors exceed the minimum protection threshold number of
+   // errrors then fail the write.
+   if( handle->nerr > handle->E-MIN_PROTECTION ) {
+     FPRINTF(stderr,
+             "ne_write: errors exceed minimum protection level (%d)\n",
+             MIN_PROTECTION);
+     errno = EIO;
+     return -1;
+   }
+   else {
+     return totsize;
+   }
 }
 
 
@@ -1158,7 +1175,7 @@ int ne_close( ne_handle handle )
 
    /* flush the handle buffer if necessary */
    if ( handle->mode == NE_WRONLY  &&  handle->buff_rem != 0 ) {
-      FPRINTF( stdout, "ne_close: flusing handle buffer...\n" );
+      FPRINTF( stdout, "ne_close: flushing handle buffer...\n" );
       //zero the buffer to the end of the stripe
       tmp = (N*bsz) - handle->buff_rem;
       zero_buff = malloc(sizeof(char) * tmp);
@@ -1460,9 +1477,9 @@ int xattr_check( ne_handle handle, char *path )
 #else
 
 #  if (AXATTR_GET_FUNC == 4)
-      ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
+      ret = FILEOP(getxattr, file, XATTRKEY, &xattrval[0], sizeof(xattrval));
 #  else
-      ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
+      ret = FILEOP(getxattr, file, XATTRKEY, &xattrval[0], sizeof(xattrval), 0, 0);
 #  endif
 
 #endif //META_FILES
@@ -1531,7 +1548,7 @@ int xattr_check( ne_handle handle, char *path )
          ( nsz != partstat->st_size )
 #endif
       {
-         FPRINTF (stderr, "xattr_check: filexattr nsize = %lu did not match stat value %zd\n", nsz, partstat->st_size); 
+         FPRINTF (stderr, "xattr_check: filexattr nsize = %lu did not match stat value %zd (possible missing internal crcs)\n", nsz, partstat->st_size); 
          handle->src_in_err[counter] = 1;
          handle->src_err_list[handle->nerr] = counter;
          handle->nerr++;
@@ -1558,7 +1575,7 @@ int xattr_check( ne_handle handle, char *path )
          ( ncompsz != partstat->st_size )
 #endif
       {
-         FPRINTF (stderr, "xattr_check: filexattr ncompsize = %lu did not match stat value %zd\n", ncompsz, partstat->st_size); 
+         FPRINTF (stderr, "xattr_check: filexattr ncompsize = %lu did not match stat value %zd (possible missing crcs)\n", ncompsz, partstat->st_size); 
          handle->src_in_err[counter] = 1;
          handle->src_err_list[handle->nerr] = counter;
          handle->nerr++;
@@ -1753,25 +1770,339 @@ int xattr_check( ne_handle handle, char *path )
    return 0;
 }
 
+static int reopen_for_rebuild(ne_handle handle, int block) {
+  char file[MAXNAME];
+
+  handle->src_in_err[block] = 1;
+
+  handle->snprintf(file, MAXNAME-1, handle->path,
+                   (block+handle->erasure_offset)%(handle->N+handle->E),
+                   handle->state);
+
+  FPRINTF( stdout, "   closing %s\n", file );
+  HNDLOP(close, handle->FDArray[block]);
+  FPRINTF( stdout, "   opening %s for write\n", file );
+
+  OPEN(handle->FDArray[block],
+       strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ),
+       O_WRONLY | O_CREAT, 0666 );
+
+  //ensure that sources are listed in order
+  int i, tmp;
+  for ( i = 0; i < handle->nerr; i++ ) {
+    if ( handle->src_err_list[i] > block)
+      break;
+  }
+  while ( i < handle->nerr ) {
+    // re-sort the error list.
+    tmp = handle->src_err_list[i];
+    handle->src_err_list[i] = block;
+    block = tmp;
+    i++;
+  }
+
+  handle->src_err_list[handle->nerr] = block;
+  handle->nerr++;
+  handle->e_ready = 0; //indicate that erasure structs require re-initialization
+
+  return 0;
+}
+
+// Seek to the start of each block file.
+// return -1 on fatal error (seek failed that was expected to succeed)
+// return 1 on non-fatal error (seek failed, but may still be recoverable).
+// return 0 on success.
+static int reset_blocks(ne_handle handle) {
+  int block_index;
+  for(block_index = 0; block_index < handle->N + handle->E; block_index++) {
+
+    if(handle->mode != NE_STAT || handle->src_in_err[block_index] == 0) {
+      FPRINTF(stdout,
+              "ne_rebuild: performing seek to offset 0 for file %d\n",
+              block_index);
+      if (HNDLOP(lseek, handle->FDArray[block_index], 0, SEEK_SET) == -1) {
+        if(handle->src_in_err[block_index] == 1) {
+          handle->e_ready = 0;
+          return -1;
+        }
+        else {
+          reopen_for_rebuild(handle, block_index);
+          return 1;
+        }
+      }
+    }
+  }
+  return 0;
+}
+
+static int fill_buffers(ne_handle handle, u64 *csum) {
+  int          block_index;
+  u32          crc;
+  const int    ERASURE_WIDTH = handle->N + handle->E;
+#ifdef INT_CRC
+  const size_t BUFFER_SIZE   = handle->bsz + sizeof(crc);
+#else
+  const size_t BUFFER_SIZE   = handle->bsz;
+#endif
+
+  for(block_index = 0; block_index < ERASURE_WIDTH; block_index++) {
+    if(!handle->src_in_err[block_index]) {
+      size_t read_size = HNDLOP(read, handle->FDArray[block_index],
+                                handle->buffs[block_index],
+                                BUFFER_SIZE);
+      if(read_size < BUFFER_SIZE) {
+        FPRINTF(stderr,
+                    "ne_rebuild: encountered error while reading file %d\n",
+                    block_index);
+        reopen_for_rebuild(handle, block_index);
+        return -1;
+      }
+      crc = crc32_ieee( TEST_SEED, handle->buffs[block_index], handle->bsz);
+      csum[block_index] += crc;
+
+#ifdef INT_CRC
+      // verify the stored crc
+      if( memcmp( handle->buffs[block_index]+(handle->bsz), &crc, sizeof(u32))
+          != 0 ) {
+        FPRINTF(stderr, "ne_rebuild: mismatch of int-crc for file %d\n",
+                    block_index);
+        reopen_for_rebuild(handle, block_index);
+        return -1;
+      }
+#endif
+    }
+  }
+  return 0;
+}
+
+static int write_buffers(ne_handle handle, unsigned char *rebuild_buffs[]) {
+  u32 crc;
+  int i;
+  int written, total_written = 0;
+#ifdef INT_CRC
+  const size_t BUFFER_SIZE = handle->bsz + sizeof(crc);
+#else
+  const size_t BUFFER_SIZE = handle->bsz;
+#endif
+
+  for(i = 0; i < handle->nerr; i++) {
+    crc = crc32_ieee(TEST_SEED, rebuild_buffs[handle->N+i], handle->bsz);
+    if(handle->mode != NE_STAT) {
+#ifdef INT_CRC
+      memcpy(rebuild_buffs[handle->N+i]+(handle->bsz), &crc, sizeof(crc));
+#endif
+      written = HNDLOP(write, handle->FDArray[handle->src_err_list[i]],
+                       rebuild_buffs[handle->N+i], BUFFER_SIZE);
+      if(written < BUFFER_SIZE) {
+        return -1;
+      }
+    }
+    handle->csum[handle->src_err_list[i]]    += crc;
+    handle->nsz[handle->src_err_list[i]]     += handle->bsz;
+    handle->ncompsz[handle->src_err_list[i]] += handle->bsz;
+    total_written                            += handle->bsz;
+  }
+  return total_written;
+}
+
+// free an array of pointers.
+static inline void free_buffers(unsigned char *buffs[], int size) {
+  int i;
+  for(i = 0; i < size; i++) {
+    free(buffs[i]);
+  }
+}
+
+int do_rebuild(ne_handle handle) {
+  int            block_index;
+  int            nsrcerr       = 0;
+  size_t         rebuilt_size  = 0;
+  unsigned char *rebuild_buffs[ MAXPARTS ];
+  unsigned int   decode_index[ MAXPARTS ];
+  u64            csum[ MAXPARTS ];
+  u32            crc;
+
+  const int      ERASURE_WIDTH = handle->N + handle->E;
+#ifdef INT_CRC
+  const size_t   BUFFER_SIZE = handle->bsz + sizeof(crc);
+#else
+  const size_t   BUFFER_SIZE = handle->bsz;
+#endif
+
+  for ( block_index = 0; block_index < ERASURE_WIDTH; block_index++ ) {
+    int tmp;
+    tmp = posix_memalign((void **)&(rebuild_buffs[block_index]),
+                         64, BUFFER_SIZE);
+    if ( tmp != 0 ) {
+      FPRINTF( stderr,
+                   "ne_rebuild: failed to allocate temporary data buffer\n" );
+      errno = tmp;
+      return -1;
+    }
+  }
+
+  FPRINTF( stdout, "ne_rebuild: initiating rebuild operation...\n" );
+
+  // loop over all the data to complete the rebuild.
+  while(rebuilt_size < handle->totsz) {
+
+    // (re)starting the rebuild. reset checksums. reset position in
+    // blocks.
+    if(rebuilt_size == 0) {
+      nsrcerr = 0;
+      for(block_index = 0; block_index < ERASURE_WIDTH; block_index++) {
+        if( handle->src_in_err[block_index] == 0 ) {
+          csum[block_index] = 0;
+        }
+        else {
+          handle->csum[block_index] = 0;
+        }
+      }
+
+      int reset_result = reset_blocks(handle);
+      if(reset_result == -1) {
+        handle->e_ready = 0;
+        free_buffers(rebuild_buffs, ERASURE_WIDTH);
+        return -1; // fail the rebuild. could not seek.
+      }
+      else if(reset_result == 1) {
+        FPRINTF(stderr, "ne_rebuild: restarting rebuild due to seek error");
+        rebuilt_size = 0; // restart.
+        continue;
+      }
+    }
+
+    for(block_index = 0; block_index < ERASURE_WIDTH; block_index++) {
+      if(handle->src_in_err[block_index]) {
+        // Zero buffers for faulty blocks
+        FPRINTF(stdout, "ne_rebuild: zeroing data for faulty_file %d\n",
+                   block_index);
+        if(block_index < handle->N) { nsrcerr++; }
+        // XXX: Do these account for INT_CRC????
+        bzero(handle->buffs[block_index], handle->bsz);
+        bzero(rebuild_buffs[block_index], handle->bsz);
+      }
+    }
+
+    // try to read data from the non-corrupted files, verifies
+    // checksums while reading.
+    if(fill_buffers(handle, csum) != 0) {
+      // failed to read something. Fill_buffers took care of
+      // reopening the necessary files.
+      rebuilt_size = 0;
+      continue;
+    }
+
+    /* Check that errors are still recoverable */
+    if(handle->nerr > handle->E) {
+      FPRINTF(stderr, "ne_rebuild: errors exceed regeneration "
+                  "capacity of erasure\n");
+      errno = ENODATA;
+      handle->e_ready = 0;
+      free_buffers(rebuild_buffs, ERASURE_WIDTH);
+      return -1;
+    }
+
+    /* Regenerate stripe from erasure */
+    /* If necessary, initialize the erasure structures */
+    if(handle->e_ready == 0) {
+      // Generate encode matrix encode_matrix. The matrix generated by
+      // gf_gen_rs_matrix is not always invertable.
+      FPRINTF(stdout,"ne_rebuild: initializing erasure structs...\n");
+      gf_gen_rs_matrix(handle->encode_matrix, handle->N + handle->E,
+                       handle->N);
+
+      // Generate g_tbls from encode matrix encode_matrix
+      ec_init_tables(handle->N, handle->E,
+                     &(handle->encode_matrix[handle->N * handle->N]),
+                     handle->g_tbls);
+
+      int decode_result = gf_gen_decode_matrix( handle->encode_matrix,
+                                                handle->decode_matrix,
+                                                handle->invert_matrix,
+                                                decode_index,
+                                                handle->src_err_list,
+                                                handle->src_in_err,
+                                                handle->nerr,
+                                                nsrcerr,
+                                                handle->N,
+                                                handle->N + handle->E);
+      if(decode_result != 0) {
+        FPRINTF(stderr, "ne_rebuild: failure to generate decode matrix\n");
+        errno = ENODATA;
+        free_buffers(rebuild_buffs, ERASURE_WIDTH);
+        return -1;
+      }
+
+      int i;
+      for(i = 0; i < handle->N; i++) {
+        handle->recov[i] = handle->buffs[decode_index[i]];
+      }
+
+      FPRINTF(stdout, "ne_rebuild: init erasure tables nsrcerr = %d...\n");
+      ec_init_tables(handle->N, handle->nerr,
+                     handle->decode_matrix, handle->g_tbls);
+      handle->e_ready = 1; // indicate that rebuild structures are initialized
+    }
+
+    FPRINTF( stdout,
+                 "ne_rebuild: performing regeneration from erasure...\n" );
+
+    ec_encode_data(handle->bsz, handle->N, handle->nerr,
+                   handle->g_tbls, handle->recov, &rebuild_buffs[handle->N]);
+    size_t size_written;
+    if((size_written = write_buffers(handle, rebuild_buffs)) < 0) {
+      free_buffers(rebuild_buffs, ERASURE_WIDTH);
+      return -1; // fail the rebuild. something went seriously wrong.
+    }
+
+    rebuilt_size += handle->N * handle->bsz;
+  }
+
+  // verify block-level crcs
+  int retry = 0;
+  for (block_index = 0; block_index < ERASURE_WIDTH; block_index++) {
+    if(handle->src_in_err[block_index] == 0
+       && handle->csum[block_index] != csum[block_index]) {
+      FPRINTF(stderr, "ne_rebuild: mismatch of crc sum for file %d, "
+                  "handle:%llu data:%llu\n", block_index,
+                  (unsigned long long)handle->csum[block_index],
+                  (unsigned long long)csum[block_index]);
+      reopen_for_rebuild(handle, block_index);
+      retry = 1;
+    }
+  }
+
+  if(retry && handle->mode != NE_STAT) {
+    // protect from an infinite recursion
+    if( handle->nerr > handle->E ) {
+      FPRINTF(stderr, "ne_rebuild: errors exceed regeneration "
+                   "capacity of erasure\n");
+      free_buffers(rebuild_buffs, ERASURE_WIDTH);
+      errno = ENODATA;
+      return -1;
+    }
+    else {
+      int i;
+      free_buffers(rebuild_buffs, ERASURE_WIDTH);
+      return do_rebuild(handle);
+    }
+  }
+
+  free_buffers(rebuild_buffs, ERASURE_WIDTH);
+  return 0;
+}
 
 /**
- * Performs a rebuild operation on the erasure striping indicated by the given handle.
+ * Performs a rebuild operation on the erasure striping indicated by
+ * the given handle.
+ *
  * @param ne_handle handle : The handle for the erasure striping to be repaired
- * @return int : Status code.  Success is indicated by 0 and failure by -1
+ * @return int : Status code.  0 indicates that the object was intact,
+ * -1 indicates failure to rebuild, > 0 indicates that the object was
+ * degraded and has been rebuilt successfully.
  */
 int ne_rebuild( ne_handle handle ) {
-   int counter;
-   char file[MAXNAME];       /* array name of files */
-   int ret_in;
-   int nsrcerr=0;
-   int i;
-   int tmp;
-   unsigned char *temp_buffs[ MAXPARTS ];
-   unsigned int decode_index[ MAXPARTS ];
-   u64 csum[ MAXPARTS ];
-   char init;
-   u32 crc;
-   u64 totsizetest;
 
    if ( handle == NULL ) {
       FPRINTF( stderr, "ne_rebuild: received NULL handle\n" );
@@ -1785,289 +2116,13 @@ int ne_rebuild( ne_handle handle ) {
       return -1;
    }
 
-   for ( counter = 0; counter < (handle->N + handle->E); counter++ ) {
-#ifdef INT_CRC
-      tmp = posix_memalign((void **)&(temp_buffs[counter]),64,(handle->bsz)+sizeof(crc));
-#else
-      tmp = posix_memalign((void **)&(temp_buffs[counter]),64,handle->bsz);
-#endif
-   }
-   if ( tmp != 0 ) {
-      FPRINTF( stderr, "ne_rebuild: failed to allocate temporary data buffer\n" );
-      errno = tmp;
-      return -1;
-   }
-
-
-   init = 0;
-
-rebuild:
-   for ( counter = 0; counter < (handle->N + handle->E); counter++ ) {
-      if ( handle->src_in_err[counter] == 0 ) {
-         csum[counter] = 0;
-      }
-      else {
-         handle->csum[counter] = 0;
-      }
-   }
-
-   FPRINTF( stdout, "ne_rebuild: initiating rebuild operation...\n" );
-
-   totsizetest = 0;
-   /* Perform rebuild over all data */
-   while (totsizetest < handle->totsz) {  
-      ret_in = 0;
-      counter = 0;
-      nsrcerr = 0;
-      while (counter < (handle->N + handle->E)) {
-         if ( init == 1  &&  (handle->mode != NE_STAT  ||  handle->src_in_err[counter] == 0) ) {
-            FPRINTF( stdout, "ne_rebuild: performing seek to offset 0 for file %d\n", counter);
-            if ( HNDLOP(lseek,handle->FDArray[counter],0,SEEK_SET) == -1 ) {
-               FPRINTF( stderr, "ne_rebuild: failed to seek file %d\n", counter );
-               if ( handle->src_in_err[counter] == 1 ) {
-                  handle->e_ready = 0;
-                  return -1;
-               }
-               handle->src_in_err[counter] = 1;
-
-               bzero( file, MAXNAME );
-               handle->snprintf( file, MAXNAME-1, handle->path, (counter+handle->erasure_offset)%(handle->N+handle->E), handle->state );
-
-               FPRINTF( stdout, "   closing %s\n", file );
-               HNDLOP(close, handle->FDArray[counter]);
-               FPRINTF( stdout, "   opening %s for write\n", file );
-
-               mode_t mask = umask(0000);
-               OPEN(handle->FDArray[counter], strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666);
-               umask(mask);
-               init = 1;
-
-               //ensure that sources are listed in order
-               for ( i = 0; i < handle->nerr; i++ ) {
-                  if ( handle->src_err_list[i] > counter) { break; }
-               }
-               while ( i < handle->nerr ) {
-                  tmp = handle->src_err_list[i];
-                  handle->src_err_list[i] = counter;
-                  counter = tmp;
-                  i++;
-               }
-
-               handle->src_err_list[handle->nerr] = counter;
-               handle->nerr++;
-               handle->e_ready = 0; //indicate that erasure structs require re-initialization
-               goto rebuild;
-            }
- 
-         }
-         if (handle->src_in_err[counter] == 1) {
-            FPRINTF( stdout, "ne_rebuild: zeroing data for faulty file %d\n", counter );
-            if ( counter < handle->N ) { nsrcerr++; }
-            bzero(handle->buffs[counter], handle->bsz); 
-            bzero(temp_buffs[counter], handle->bsz); 
-         } else {
-
-#ifdef INT_CRC
-            ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], (handle->bsz)+sizeof(crc)); 
-            if ( ret_in < (handle->bsz)+sizeof(crc) ) {
-#else
-               ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], handle->bsz);
-            if ( ret_in < (handle->bsz) ) {
-#endif
-               FPRINTF( stderr, "ne_rebuild: encountered error while reading file %d\n", counter );
-               handle->src_in_err[counter] = 1;
-
-               if ( handle->mode != NE_STAT ) {
-                  bzero( file, MAXNAME );
-                  handle->snprintf( file, MAXNAME-1, handle->path, (counter+handle->erasure_offset)%(handle->N+handle->E), handle->state );
-                  FPRINTF( stdout, "   closing %s\n", file );
-                  HNDLOP(close, handle->FDArray[counter]);
-                  FPRINTF( stdout, "   opening %s%s for write\n", file, REBUILD_SFX );
-                  mode_t mask = umask(0000);
-                  OPEN(handle->FDArray[counter], strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666);
-                  umask(mask);
-               }
-
-               //ensure that sources are listed in order
-               for ( i = 0; i < handle->nerr; i++ ) {
-                  if ( handle->src_err_list[i] > counter) { break; }
-               }
-               while ( i < handle->nerr ) {
-                  tmp = handle->src_err_list[i];
-                  handle->src_err_list[i] = counter;
-                  counter = tmp;
-                  i++;
-               }
-
-               handle->src_err_list[handle->nerr] = counter;
-               handle->nerr++;
-               handle->e_ready = 0; //indicate that erasure structs require re-initialization
-               init = 1;
-               goto rebuild;
-            }
-
-#ifdef HAVE_LIBISAL
-            crc = crc32_ieee( TEST_SEED, handle->buffs[counter], handle->bsz );
-#else
-            crc = crc32_ieee_base( TEST_SEED, handle->buffs[counter], handle->bsz );
-#endif
-            csum[counter] += crc;
-
-#ifdef INT_CRC
-            //verify crc
-            if ( memcmp( handle->buffs[counter]+(handle->bsz), &crc, sizeof(u32) ) != 0 ){
-               FPRINTF(stderr, "ne_rebuild: mismatch of int-crc for file %d\n", counter);
-               handle->src_in_err[counter] = 1;
-
-               if ( handle->mode != NE_STAT ) {
-                  bzero( file, MAXNAME );
-                  handle->snprintf( file, MAXNAME-1, handle->path, (counter+handle->erasure_offset)%(handle->N+handle->E), handle->state );
-                  FPRINTF( stdout, "   closing %s\n", file );
-                  HNDLOP(close, handle->FDArray[counter]);
-                  FPRINTF( stdout, "   opening %s%s for write\n", file, REBUILD_SFX );
-                  mode_t mask = umask(0000);
-                  OPEN(handle->FDArray[counter], strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666);
-                  umask(mask);
-               }
-
-               //ensure that sources are listed in order
-               for ( i = 0; i < handle->nerr; i++ ) {
-                  if ( handle->src_err_list[i] > counter) { break; }
-               }
-               while ( i < handle->nerr ) {
-                  tmp = handle->src_err_list[i];
-                  handle->src_err_list[i] = counter;
-                  counter = tmp;
-                  i++;
-               }
-
-               handle->src_err_list[i] = counter;
-               handle->nerr++;
-               handle->e_ready = 0; //indicate that erasure structs require re-initialization
-               init = 1;
-               goto rebuild;
-            }
-#endif
-
-         }
-         counter++;
-      }
-
-      /* Check that errors are still recoverable */
-      if ( handle->nerr > handle->E ) {
-         FPRINTF( stderr, "ne_rebuild: errors exceed regeneration capacity of erasure\n" );
-         errno = ENODATA;
-         handle->e_ready = 0;
-         return -1;
-      }
-
-      /* Regenerate stripe from erasure */
-      /* If necessary, initialize the erasure structures */
-      if ( handle->e_ready == 0 ) {
-         // Generate encode matrix encode_matrix
-         // The matrix generated by gf_gen_rs_matrix
-         // is not always invertable.
-         FPRINTF(stdout,"ne_rebuild: initializing erasure structs...\n");
-         gf_gen_rs_matrix(handle->encode_matrix, handle->N + handle->E, handle->N);
-
-         // Generate g_tbls from encode matrix encode_matrix
-         ec_init_tables(handle->N, handle->E, &(handle->encode_matrix[handle->N * handle->N]), handle->g_tbls);
-
-         ret_in = gf_gen_decode_matrix( handle->encode_matrix, handle->decode_matrix,
-               handle->invert_matrix, decode_index, handle->src_err_list, handle->src_in_err,
-               handle->nerr, nsrcerr, handle->N, handle->N + handle->E);
-
-         if (ret_in != 0) {
-            FPRINTF(stderr,"ne_rebuild: failure to generate decode matrix\n");
-            errno = ENODATA;
-            return -1;
-         }
-
-         for (i = 0; i < handle->N; i++) {
-            handle->recov[i] = handle->buffs[decode_index[i]];
-         }
-
-         FPRINTF( stdout, "ne_rebuild: init erasure tables nsrcerr = %d...\n", nsrcerr );
-         ec_init_tables(handle->N, handle->nerr, handle->decode_matrix, handle->g_tbls);
-
-         handle->e_ready = 1; //indicate that rebuild structures are initialized
-      }
-      FPRINTF( stdout, "ne_rebuild: performing regeneration from erasure...\n" );
-
-#ifdef HAVE_LIBISAL
-      ec_encode_data(handle->bsz, handle->N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[handle->N]);
-#else
-      ec_encode_data_base(handle->bsz, handle->N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[handle->N]);
-#endif
-
-      for (i = 0; i < handle->nerr; i++) {
-
-#ifdef HAVE_LIBISAL
-         crc = crc32_ieee(TEST_SEED, temp_buffs[handle->N+i], handle->bsz);
-#else
-         crc = crc32_ieee_base(TEST_SEED, temp_buffs[handle->N+i], handle->bsz);
-#endif
-
-         if ( handle->mode != NE_STAT ) {
-#ifdef INT_CRC
-            memcpy ( temp_buffs[handle->N+i]+(handle->bsz), &crc, sizeof(crc) );
-            HNDLOP(write, handle->FDArray[handle->src_err_list[i]], temp_buffs[handle->N+i], (handle->bsz)+sizeof(crc));
-#else
-            HNDLOP(write, handle->FDArray[handle->src_err_list[i]], temp_buffs[handle->N+i], handle->bsz);
-#endif
-         }
-
-         handle->csum[handle->src_err_list[i]] += crc;
-         handle->nsz[handle->src_err_list[i]] += handle->bsz;
-         handle->ncompsz[handle->src_err_list[i]] += handle->bsz;
-      }
-      totsizetest += handle->N*handle->bsz;  
-      init=0;
-   }
-
-   //verify crc sums
+   //   init = 0; init should be set to 0 before entering rebuild/retry loop.
    mode_t mask = umask(0000);
-   for ( counter = 0; counter < (handle->N + handle->E); counter++ ) {
-      if ( handle->src_in_err[counter] == 0  &&  handle->csum[counter] != csum[counter] ) {
-         FPRINTF(stderr, "ne_rebuild: mismatch of crc sum for file %d, handle:%llu  data:%llu\n", counter, (unsigned long long)handle->csum[counter], (unsigned long long)csum[counter]);
-         handle->src_in_err[counter] = 1;
-
-         if ( handle->mode != NE_STAT ) {
-            bzero( file, MAXNAME );
-            handle->snprintf( file, MAXNAME-1, handle->path, (counter+handle->erasure_offset)%(handle->N+handle->E), handle->state );
-            FPRINTF( stdout, "   closing %s\n", file );
-            HNDLOP(close, handle->FDArray[counter]);
-            FPRINTF( stdout, "   opening %s%s for write\n", file, REBUILD_SFX );
-            OPEN(handle->FDArray[counter], strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666);
-         }
-
-         //ensure that sources are listed in order
-         for ( i = 0; i < handle->nerr; i++ ) {
-            if ( handle->src_err_list[i] > counter) { break; }
-         }
-         while ( i < handle->nerr ) {
-            tmp = handle->src_err_list[i];
-            handle->src_err_list[i] = counter;
-            counter = tmp;
-            i++;
-         }
-
-         handle->src_err_list[i] = counter;
-         handle->nerr++;
-         handle->e_ready = 0; //indicate that erasure structs require re-initialization
-         init = 1;
-      }
-   }
+   int rebuild_result = do_rebuild(handle);
    umask(mask);
-   if ( handle->e_ready == 0  &&  handle->mode != NE_STAT ){
-      goto rebuild;
-   }
 
-   for ( counter = 0; counter < (handle->N + handle->E); counter++ ) {
-      free( temp_buffs[counter] );
-   }
-
-   return 0;
+   return (handle->nerr < handle->E) && (rebuild_result == 0) ?
+     handle->nerr : -1;
 }
 
 
@@ -2196,6 +2251,52 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 
         b = malloc(MAXPARTS * MAXPARTS);
         backup = malloc(MAXPARTS * MAXPARTS);
+
+        if (b == NULL || backup == NULL) {
+           FPRINTF(stderr,"gf_gen_decode_matrix: failure of malloc\n");
+           free(b);
+           free(backup);
+           errno = ENOMEM;
+           return -1;
+        }
+        // Construct matrix b by removing error rows
+        for (i = 0, r = 0; i < k; i++, r++) {
+                while (src_in_err[r])
+                        r++;
+                for (j = 0; j < k; j++) {
+                        b[k * i + j] = encode_matrix[k * r + j];
+                        backup[k * i + j] = encode_matrix[k * r + j];
+                }
+                decode_index[i] = r;
+        }
+        incr = 0;
+        while (gf_invert_matrix(b, invert_matrix, k) < 0) {
+                if (nerrs == (m - k)) {
+                        free(b);
+                        free(backup);
+                        FPRINTF(stderr,"gf_gen_decode_matrix: BAD MATRIX\n");
+                        return NO_INVERT_MATRIX;
+                }
+                incr++;
+                memcpy(b, backup, MAXPARTS * MAXPARTS);
+                for (i = nsrcerrs; i < nerrs - nsrcerrs; i++) {
+                        if (src_err_list[i] == (decode_index[k - 1] + incr)) {
+                                // skip the erased parity line
+                                incr++;
+                                continue;
+                        }
+                }
+                if (decode_index[k - 1] + incr >= m) {
+                        free(b);
+                        free(backup);
+                        FPRINTF(stderr,"gf_gen_decode_matrix: BAD MATRIX\n");
+                        return NO_INVERT_MATRIX;
+                }
+                decode_index[k - 1] += incr;
+                for (j = 0; j < k; j++)
+                        b[k * (k - 1) + j] = encode_matrix[k * decode_index[k - 1] + j];
+
+        };
 
         if (b == NULL || backup == NULL) {
            FPRINTF(stderr,"gf_gen_decode_matrix: failure of malloc\n");
@@ -2431,7 +2532,7 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, char *path )
 
    handle->path = NULL;
 
-   if ( ne_rebuild( handle ) != 0 ) {
+   if ( ne_rebuild( handle ) < 0 ) {
       FPRINTF( stderr, "ne_status: rebuild indicates that data is unrecoverable\n" );
    }
 

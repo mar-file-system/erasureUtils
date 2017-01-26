@@ -843,6 +843,7 @@ int skt_unlink(const char* service_path) {
   NO_IMPL();
 }
 
+
 // ...........................................................................
 // CHOWN
 // ...........................................................................
@@ -925,6 +926,15 @@ int  skt_rename (const char* service_path, const char* new_fname) {
 // ...........................................................................
 
 int skt_stat(const char* service_path, struct stat* st) {
+  NO_IMPL();
+}
+
+
+// ...........................................................................
+// GETXATTR
+// ...........................................................................
+
+int skt_getxattr(const char* service_path, const char* name, void* value, size_t size) {
   NO_IMPL();
 }
 

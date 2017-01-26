@@ -64,6 +64,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #endif
 
+
 #define INT_CRC
 #define META_FILES
 
@@ -74,12 +75,16 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #include "skt_common.h"
 
+/* MIN_PROTECTION sets the threshold for when writes will fail.  If
+   fewer than n+MIN_PROTECTION blocks were written successfully, then
+   the write will fail. */
+#define MIN_PROTECTION 1
 #define MAXN 15
 #define MAXE 5
 #define MAXNAME 1024 
 #define MAXBUF 4096 
 #define MAXBLKSZ 16777216
-#define BLKSZ 65536
+#define BLKSZ 1048576
 #define HEADSZ 70
 #define TEST_SEED 57
 
@@ -94,6 +99,11 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  define FPRINTF(...)   fprintf(__VA_ARGS__)
 #else
 #  define FPRINTF(...)
+#endif
+
+#ifndef HAVE_LIBISAL
+#define crc32_ieee(...)     crc32_ieee_base(__VA_ARGS__)
+#define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
 #endif
 
 typedef uint32_t u32;
@@ -194,8 +204,8 @@ ne_stat   ne_status1( SnprintfFunc func, void* state, char *path );
 
 
 /* Erause Utility functions taking a <handle> argument */
-int       ne_read ( ne_handle handle, void       *buffer, u32 nbytes, off_t offset );
-int       ne_write( ne_handle handle, const void *buffer, u32 nbytes );
+ssize_t   ne_read ( ne_handle handle, void       *buffer, size_t nbytes, off_t offset );
+ssize_t   ne_write( ne_handle handle, const void *buffer, size_t nbytes );
 int       ne_close( ne_handle handle );
 int       ne_rebuild( ne_handle handle );
 int       ne_noxattr_rebuild( ne_handle handle );
