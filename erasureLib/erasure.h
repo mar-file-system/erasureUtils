@@ -141,11 +141,6 @@ typedef  int (*SnprintfFunc)(char* dest, size_t size, const char* format, u32 bl
 int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, void* state);
 
 
-typedef union {
-  int           fd;
-  SocketHandle  handle;
-} FileDesc;
-
 typedef struct handle {
    /* Erasure Info */
    int N;

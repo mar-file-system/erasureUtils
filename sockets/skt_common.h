@@ -72,7 +72,18 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 #ifdef DEBUG_SOCKETS
-#  define DBG(...)   fprintf(stderr, ##__VA_ARGS__)
+// #  define DBG(FMT,...)   fprintf(stderr, "%-20.20s | " FMT, __FILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__)
+#  define IMAX(A, B) (((A) > (B)) ? (A) : (B))
+#  define DBG(FMT,...)                                                  \
+  do {                                                                  \
+    const int file_blob_size=24;                                        \
+    const int fn_blob_size=20;                                          \
+    int  file_pad_size = IMAX(1, file_blob_size - strlen(__FILE__));    \
+    fprintf(stderr, "%s:%-6d%.*s %-*.*s |  " FMT,                       \
+            __FILE__, __LINE__,                                         \
+            file_pad_size, "                                ",          \
+            fn_blob_size, fn_blob_size, __FUNCTION__, ##__VA_ARGS__);   \
+  } while(0)
 #else
 #  define DBG(...)
 #endif
@@ -82,7 +93,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #define _TEST(EXPR, TEST, PRINT, RETURN)                         \
   do {                                                           \
-    PRINT(#EXPR "\n");                                           \
+    PRINT(#EXPR " " #TEST "\n");                                 \
     if (! ((EXPR) TEST)) {                                       \
       fprintf(stderr, "%s:%d test failed: '%s': %s\n",           \
               __FILE__, __LINE__, #EXPR, strerror(errno));       \
@@ -114,7 +125,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #define MAX_SOCKET              9
 
-#define MAX_SOCKET_CONNS        256
+#define MAX_SOCKET_CONNS        256  /* server-side */
 
 #define FNAME_SIZE              512 /* incl final null */
 #define HOST_SIZE               128 /* incl final null */
@@ -235,18 +246,19 @@ typedef struct {
 
 
 typedef enum {
-  HNDL_FNAME     = 0x01,
-  HNDL_SERVER_FD = 0x02,
-  HNDL_RIOMAPPED = 0x04,
+  HNDL_FNAME       = 0x01,
+  HNDL_CONNECTED   = 0x02,
+  HNDL_SERVER_SIDE = 0x04,       // e.g. read_/write_init don't send GET/PUT
+  HNDL_RIOMAPPED   = 0x08,
 
-  HNDL_IS_SOCKET = 0x10,       // read/write-buffer also work on files
-  HNDL_RIOWRITE  = 0x20,
-  HNDL_DOUBLE    = 0x40,        // double-buffering
+  HNDL_IS_SOCKET   = 0x10,       // read/write-buffer also work on files
+  HNDL_RIOWRITE    = 0x20,
+  HNDL_DOUBLE      = 0x40,       // double-buffering (currently unused)
 
-  HNDL_GET       = 0x0100,
-  HNDL_PUT       = 0x0200,
-  HNDL_OP_INIT   = 0x0400,
-  HNDL_CLOSED    = 0x0800,
+  HNDL_GET         = 0x0100,
+  HNDL_PUT         = 0x0200,
+  HNDL_OP_INIT     = 0x0400,
+  HNDL_CLOSED      = 0x0800,
 } SHFlags;
 
 
@@ -254,14 +266,24 @@ typedef enum {
 // SocketHandle is only used on the client-side.
 // Server maintains per-connection state in its own ThreadContext.
 typedef struct {
-  PathSpec     path_spec;
-  int          open_flags;
-  mode_t       open_mode;
-  int          fd;              // socket to server
-  off_t        rio_offset;
+  PathSpec     path_spec;       // host,port,path parsed from URL
+  int          open_flags;      // skt_open()
+  mode_t       open_mode;       // skt_open()
+  int          peer_fd;         // fd for comms with socket-peer
+  off_t        rio_offset;      // reader sends mapping to writer, for riowrite()
+  char*        rio_buf;         // reader saves riomapp'ed address, for riounmap()
+  size_t       rio_size;        // reader saves riomapp'ed size, for riounmap()
   size_t       stream_pos;      // TBD: stream-position, to ignore redundant skt_seek()
   uint16_t     flags;           // SHFlags
 } SocketHandle;
+
+
+typedef union {
+  int           fd;
+  SocketHandle  handle;
+} FileDesc;
+
+
 
 
 // "commands" for pseudo-packet
@@ -269,21 +291,21 @@ typedef struct {
 //
 // *** NOTE: Co-maintain _command_str[], in skt_common.c
 typedef enum {
-  CMD_GET   = 1,                // ignore <length>
+  CMD_GET   = 1,                // ignore <size>
   CMD_PUT,
   CMD_DEL,
-  CMD_DATA,                     // 
-  CMD_ACK,                      // data received (ready for riowrite)
+  CMD_DATA,                     // amount of data sent (via riowrite)
+  CMD_ACK,                      // got data (ready for riowrite), <size> has read-size
   CMD_STAT,
-  CMD_RIO_OFFSET,
-  CMD_SEEK_ABS,                 // <length> has position to seek to
+  CMD_RIO_OFFSET,               // reader sends riomapped offset (for riowrite)
+  CMD_SEEK_ABS,                 // <size> has position to seek to
   CMD_SEEK_FWD,
   CMD_SEEK_BACK,
-  CMD_SET_XATTR,                // <length> is split into <name_len>, <value_len>
+  CMD_SET_XATTR,                // <size> is split into <name_len>, <value_len>
   CMD_GET_XATTR,                // ditto
   CMD_CHOWN,
   CMD_RENAME,
-  CMD_ACK_CMD,                  // command received (<length> has ack'ed cmd)
+  CMD_ACK_CMD,                  // command received (<size> has ack'ed cmd)
 
   CMD_NULL,                     // THIS IS ALWAYS LAST
 } SocketCommand;
@@ -299,15 +321,15 @@ typedef enum {
   PKT_ERR =   0x02,
 } PacketFlags;
 
-// These demarcate blobs of data on the socket-stream, and allow OOB commands.
+// These demarcate blobs of command-data on the socket-stream, and allow OOB commands.
 typedef struct {
   uint8_t            flags;
   SocketCommandType  command;   // SocketCommand
   //  union {
   //    uint64_t  big;
   //    uint32_t  small[2];
-  //  } length;
-  uint64_t           length;
+  //  } size;
+  uint64_t           size;
   // void*              buff;
 } PseudoPacketHeader;
 
@@ -323,12 +345,16 @@ typedef struct {
 uint64_t hton64(uint64_t ll);
 uint64_t ntoh64(uint64_t ll);
 
-int write_pseudo_packet(int fd, SocketCommand command, size_t length, void* buff);
-int read_pseudo_packet_header(int fd, PseudoPacketHeader* pkt);
-int read_fname(int fd, char* fname, size_t length);
+int      write_pseudo_packet(int fd, SocketCommand command, size_t size, void* buff);
+int      read_pseudo_packet_header(int fd, PseudoPacketHeader* pkt);
 
-ssize_t read_buffer (int fd, char*       buf, size_t size, int is_socket);
-int     write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset);
+ssize_t  read_buffer (int fd, char*       buf, size_t size, int is_socket);
+int      write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset);
+
+ssize_t  copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size);
+ssize_t  copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size);
+
+void     shut_down_handle(SocketHandle* handle);
 
 
 // --- For now, we'll use a open/read/write/close model, because that

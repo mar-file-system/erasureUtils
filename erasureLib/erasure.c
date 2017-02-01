@@ -239,12 +239,11 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
    memset(handle, 0, sizeof(struct handle));
 
    /* initialize any non-zero handle members */
-   // handle->nerr = 0;
-   // handle->totsz = 0;
    handle->N = N;
    handle->E = E;
    handle->bsz = bsz;
    handle->erasure_offset = erasure_offset;
+
    if ( counter < 2 ) {
       handle->mode = NE_STAT;
       FPRINTF( stdout, "ne_open: temporarily setting mode to NE_STAT\n");
@@ -252,20 +251,9 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
    else {
       handle->mode = mode;
    }
-   //   handle->e_ready = 0;
-   //   handle->buff_offset = 0;
-   //   handle->buff_rem = 0;
 
    handle->snprintf = fn;
    handle->state    = state;
-
-   //   for ( counter=0; counter < MAXPARTS; counter++ ) {
-   //      handle->csum[counter] = 0;
-   //      handle->nsz[counter] = 0;
-   //      handle->ncompsz[counter] = 0;
-   //      handle->src_in_err[counter] = 0;
-   //      handle->src_err_list[counter] = 0;
-   //   }
 
    char* nfile = malloc( strlen(path) + 1 );
    strncpy( nfile, path, strlen(path) + 1 );
@@ -387,6 +375,39 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
 
 }
 
+
+/**
+ * read(2) may return less than the requested read-size, without there being any errors.
+ * Call read() repeatedly until the buffer has been completely filled, or an error (or EOF) has occurred.
+ *
+ * @param FileDesc fd: the file/socket to read from
+ * @param void* buffer: buffer to be filled
+ * @param size_t nbytes: size of the buffer
+ *
+ * @return ssize_t: the amount read.  negative for errors.
+ */
+
+ssize_t read_all(FileDesc* fd, void* buffer, size_t nbytes) {
+  ssize_t     result = 0;
+  size_t      remain = nbytes;
+  char*       buf = buffer;
+  while (remain) {
+    errno = 0;
+    ssize_t count = HNDLOP(read, *fd, buf+result, remain);
+    if (count < 0)
+      return count;
+    else if (count == 0)
+      return result;            /* EOF */
+    else if (errno)
+      return -1;
+
+    remain -= count;
+    buf    += count;
+    result += count;
+  }
+
+  return result;
+}
 
 /**
  * Reads nbytes of data at offset from the erasure striping referenced by the given handle
@@ -665,15 +686,13 @@ read:
 
 #ifdef INT_CRC
             FPRINTF(stdout,"ne_read: read %lu from datafile %d\n", bsz+sizeof(crc), counter);
-#else
-            FPRINTF(stdout,"ne_read: read %d from datafile %d\n",readsize,counter);
-#endif
-
-#ifdef INT_CRC
-            ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], bsz+sizeof(crc));
+            // ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], bsz+sizeof(crc));
+            ret_in = read_all(&handle->FDArray[counter], handle->buffs[counter], bsz+sizeof(crc));
             ret_in -= (sizeof(u32)+tmpoffset);
 #else
-            ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], readsize);
+            FPRINTF(stdout,"ne_read: read %d from datafile %d\n", readsize, counter);
+            // ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], readsize);
+            ret_in = read_all(&handle->FDArray[counter], handle->buffs[counter], readsize);
 #endif
 
             //check for a read error
@@ -772,7 +791,8 @@ read:
 
          if ( handle->src_in_err[counter] == 0 ) {
             FPRINTF(stdout,"ne_read: reading %d from erasure %d\n",readsize,counter);
-            ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], readsize);
+            // ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], readsize);
+            ret_in = read_all(&handle->FDArray[counter], handle->buffs[counter], readsize);
             if ( ret_in < readsize ) {
                if ( ret_in < 0 ) {
                   ret_in = 0;
@@ -950,6 +970,38 @@ read:
 
 
 /**
+ * write(2) may return less than the requested write-size, without there being any errors.
+ * Call write() repeatedly until the buffer has been completely written, or an error has occurred.
+ *
+ * @param FileDesc fd: the file/socket to write to
+ * @param void* buffer: buffer to be written
+ * @param size_t nbytes: size of the buffer
+ *
+ * @return ssize_t: the amount written.  negative for errors.
+ */
+
+ssize_t write_all(FileDesc* fd, const void* buffer, size_t nbytes) {
+  ssize_t     result = 0;
+  size_t      remain = nbytes;
+  const char* buf = buffer;
+  while (remain) {
+    errno = 0;
+    ssize_t count = HNDLOP(write, *fd, (const uint8_t*)buf+result, remain);
+    if (count < 0)
+      return count;
+    else if (errno)
+      return -1;
+
+    remain -= count;
+    buf    += count;
+    result += count;
+  }
+
+  return result;
+}
+
+
+/**
  * Writes nbytes from buffer into the erasure striping specified by the provided handle
  * @param ne_handle handle : Handle for the erasure striping to be written to
  * @param void* buffer : Buffer containing the data to be written
@@ -1036,7 +1088,8 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
 
             /* if we were compressing we would compress here */
             FPRINTF(stdout,"ne_write: wr %d to file %d\n",writesize,counter);
-            ret_out = HNDLOP(write, handle->FDArray[counter], handle->buffs[counter], writesize); 
+            // ret_out = HNDLOP(write, handle->FDArray[counter], handle->buffs[counter], writesize); 
+            ret_out = write_all(&handle->FDArray[counter], handle->buffs[counter], writesize);
 
             if ( ret_out != writesize ) {
                FPRINTF( stderr, "ne_write: write to file %d returned %zd instead of expected %lu\n",
@@ -1100,10 +1153,12 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
 
          FPRINTF( stdout, "ne_write: writing out erasure stripe %d\n", ecounter );
          if( handle->src_in_err[counter+ecounter] == 0) {
-           ret_out = HNDLOP(write, handle->FDArray[counter+ecounter], handle->buffs[counter+ecounter], writesize);
+           // ret_out = HNDLOP(write, handle->FDArray[counter+ecounter], handle->buffs[counter+ecounter], writesize);
+           ret_out = write_all(&handle->FDArray[counter+ecounter], handle->buffs[counter+ecounter], writesize);
 
            if ( ret_out != writesize ) {
-             FPRINTF( stderr, "ne_write: write to erasure file %d, returned %zd instead of expected %d\n" , ecounter, ret_out, writesize );
+             FPRINTF( stderr, "ne_write: write to erasure file %d, returned %zd instead of expected %d\n",
+                      ecounter, ret_out, writesize );
              handle->src_in_err[counter + ecounter] = 1;
              handle->src_err_list[handle->nerr] = counter + ecounter;
              handle->nerr++;
@@ -1228,7 +1283,8 @@ int ne_close( ne_handle handle )
             tmp = -1;
          }
          else {
-            val = HNDLOP( write, fd, xattrval, strlen(xattrval) + 1 );
+            // val = HNDLOP( write, fd, xattrval, strlen(xattrval) + 1 );
+           val = write_all(&fd, xattrval, strlen(xattrval) +1);
             if ( val != strlen(xattrval) + 1 ) {
                FPRINTF(stderr,"ne_close: failed to write to file %s\n",file);
                tmp = -1;
@@ -1454,7 +1510,8 @@ int xattr_check( ne_handle handle, char *path )
       FileDesc meta_fd;
       OPEN( meta_fd, nfile, O_RDONLY );
       if ( FD(meta_fd) >= 0 ) {
-         tmp = HNDLOP(read, meta_fd, &xattrval[0], sizeof(xattrval));
+         // tmp = HNDLOP(read, meta_fd, &xattrval[0], sizeof(xattrval));
+         tmp = read_all(&meta_fd, &xattrval[0], sizeof(xattrval));
          if ( tmp < 0 ) {
             FPRINTF(stderr,"xattr_check: failed to read from file %s\n", nfile);
             ret = tmp;
@@ -1847,9 +1904,12 @@ static int fill_buffers(ne_handle handle, u64 *csum) {
 
   for(block_index = 0; block_index < ERASURE_WIDTH; block_index++) {
     if(!handle->src_in_err[block_index]) {
-      size_t read_size = HNDLOP(read, handle->FDArray[block_index],
-                                handle->buffs[block_index],
-                                BUFFER_SIZE);
+      //      size_t read_size = HNDLOP(read, handle->FDArray[block_index],
+      //                                handle->buffs[block_index],
+      //                                BUFFER_SIZE);
+      size_t read_size = read_all(&handle->FDArray[block_index],
+                                  handle->buffs[block_index],
+                                  BUFFER_SIZE);
       if(read_size < BUFFER_SIZE) {
         FPRINTF(stderr,
                     "ne_rebuild: encountered error while reading file %d\n",
@@ -1892,8 +1952,10 @@ static int write_buffers(ne_handle handle, unsigned char *rebuild_buffs[]) {
       u32 *buf_crc = (u32*)(rebuild_buffs[handle->N+i] + (handle->bsz));
       *buf_crc = crc;
 #endif
-      written = HNDLOP(write, handle->FDArray[handle->src_err_list[i]],
-                       rebuild_buffs[handle->N+i], BUFFER_SIZE);
+      //      written = HNDLOP(write, handle->FDArray[handle->src_err_list[i]],
+      //                       rebuild_buffs[handle->N+i], BUFFER_SIZE);
+      written = write_all(&handle->FDArray[handle->src_err_list[i]],
+                          rebuild_buffs[handle->N+i], BUFFER_SIZE);
       if(written < BUFFER_SIZE) {
         return -1;
       }

@@ -66,6 +66,47 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 
+
+// This is used for abnormal exits on client or server.
+// (e.g., server-thread exits or is cancelled)
+//
+void
+shut_down_handle(SocketHandle* handle) {
+
+#if UNIX_SOCKETS
+  if (handle->flags & HNDL_FNAME) {
+    DBG("shut_down_handle: unlinking '%s'\n", handle->fname);
+    unlink(handle->fname);
+  }
+#endif
+
+
+  if (handle->flags & HNDL_CONNECTED) {
+    // Without doing our own riounmap, we get a segfault in the
+    // CLOSE() below, when rclose() calls riounmap() itself.
+    //
+    // It's okay if handle->rio_buf only has local scope, in server_put(),
+    // we're just unmapping the address here, not using it.
+    //
+    if (handle->flags & HNDL_RIOMAPPED) {
+      DBG("shut_down_handle(%d): riounmap'ing\n", handle->peer_fd);
+      RIOUNMAP(handle->peer_fd, handle->rio_buf, handle->rio_size);
+      handle->flags &= ~HNDL_RIOMAPPED;
+    }
+
+    DBG("shut_down_handle(%d): shutdown\n", handle->peer_fd);
+    SHUTDOWN(handle->peer_fd, SHUT_RDWR);
+
+    DBG("shut_down_handle(%d): close\n", handle->peer_fd);
+    CLOSE(handle->peer_fd);
+    handle->flags &= ~HNDL_CONNECTED;
+  }
+
+  DBG("shut_down_handle(%d): done\n", handle->peer_fd);
+}
+
+
+
 // Issue repeated reads until we've gotten <size> bytes, or error, or
 // EOF.  Return negative for error.  Otherwise, return the total
 // number of bytes that could be read.  If return-value is positive,
@@ -74,9 +115,10 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
   DBG("read_buffer(%d, 0x%llx, %lld, %d)\n", fd, buf, size, is_socket);
 
+
 #ifdef USE_RIOWRITE
   // If we would be reading from an rsocket where the writer is using
-  // riowrite(), we won't see anything in the fd; RDMA is
+  // riowrite(), then we won't see anything in the fd; RDMA is
   // transparently moving data directly into our buffer.  In that
   // case, the writer will send us a DATA pseudo-packet, to indicate
   // when the RDMA is complete.
@@ -91,7 +133,7 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
     else if (header.flags & PKT_EOF)
       return 0;
 
-    return header.length;
+    return header.size;
   }
 #endif
 
@@ -137,6 +179,12 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 // write bytes until <size>, or error.
 // Return 0 for success, negative for error.
 //
+// WARNING: Do not use this to jam arbitrary amounts of data into a
+//    socket that might use RIOWRITE.  write_buffer() can be used to
+//    assure that the reader's request-amount is fully written, but
+//    not to assure that the writer's buffer is fully written.  See
+//    skt_write() for better understanding.
+//
 // NOTE: If <size>==0, the server will treat it as EOF.
 //
 int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset) {
@@ -161,7 +209,7 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
     DBG("write_count: %lld\n", write_count);
     if (write_count < 0) {
       fprintf(stderr, "write of %llu bytes failed, after writing %llu: %s\n",
-	      write_remain, write_total, strerror(errno));
+              write_remain, write_total, strerror(errno));
       return -1;
     }
     write_total   += write_count;
@@ -314,7 +362,7 @@ const char* command_str(SocketCommand command) {
 
 
 // for now, this is only used by client
-int write_pseudo_packet(int fd, SocketCommand command, size_t length, void* buf) {
+int write_pseudo_packet(int fd, SocketCommand command, size_t size, void* buf) {
   ssize_t write_count;
 
   // --- write <command>
@@ -322,15 +370,15 @@ int write_pseudo_packet(int fd, SocketCommand command, size_t length, void* buf)
   uint32_t cmd = htonl(command);
   NEED_0( write_raw(fd, (char*)&cmd, sizeof(cmd)) );
 
-  // --- write <length>
-  DBG("-> length:  %llu\n", length);
-  uint64_t len = hton64(length);
-  NEED_0( write_raw(fd, (char*)&len, sizeof(len)) );
+  // --- write <size>
+  DBG("-> size:  %llu\n", size);
+  uint64_t sz = hton64(size);
+  NEED_0( write_raw(fd, (char*)&sz, sizeof(sz)) );
 
   // --- maybe write <buf>
   if (buf) {
     DBG("-> buf:     0x%08x\n", (size_t)buf);
-    NEED_0( write_raw(fd, (char*)buf, length) );
+    NEED_0( write_raw(fd, (char*)buf, size) );
   }
 
   return 0;
@@ -358,47 +406,21 @@ int read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr) {
   DBG("<- command: %s\n", command_str(hdr->command));
 
 
-  // --- read <length>
-  uint64_t len;
-  read_count = read_raw(fd, (char*)&len, sizeof(len));
+  // --- read <size>
+  uint64_t sz;
+  read_count = read_raw(fd, (char*)&sz, sizeof(sz));
   if (! read_count) {
     hdr->flags |= (PKT_EOF & PKT_ERR);
     DBG("EOF\n");
     return -1;
   }
-  else if (read_count != sizeof(len)) {
+  else if (read_count != sizeof(sz)) {
     DBG("read err %lld\n", read_count);
     hdr->flags |= PKT_ERR;
     return -1;
   }
-  hdr->length = ntoh64(len);
-  DBG("<- length:  %llu\n", hdr->length);
-
-  return 0;
-}
-
-
-// --- read <fname>
-//     name must include terminal NULL.
-int read_fname(int fd, char* fname, size_t length) {
-
-  size_t fname_size = length;
-  if (fname_size > FNAME_SIZE) {
-    fprintf(stderr, "fname-length %llu exceeds maximum %u\n", fname_size, FNAME_SIZE);
-    return -1;
-  }
-  // ssize_t read_count = read(client_fd, &fname, FNAME_SIZE);
-  // ssize_t read_count = read_buffer(fd, fname, fname_size, 1);
-  ssize_t read_count = read_raw(fd, fname, fname_size);
-  if (read_count != fname_size) {
-    fprintf(stderr, "failed to read fname (%lld)\n", read_count);
-    return -1;
-  }
-  else if (!fname[0] || fname[fname_size -1]) {
-    fprintf(stderr, "bad fname\n");
-    return -1;
-  }
-  DBG("fname: %s\n", fname);
+  hdr->size = ntoh64(sz);
+  DBG("<- size:  %llu\n", hdr->size);
 
   return 0;
 }
@@ -419,8 +441,8 @@ int read_fname(int fd, char* fname, size_t length) {
 int parse_service_path(PathSpec* spec, const char* service_path) {
 
   // --- parse <host>
-  const char*  ptr = service_path;
-  size_t length    = strcspn(ptr, ":");
+  const char*  ptr    = service_path;
+  size_t       length = strcspn(ptr, ":");
 
   if (! ptr[length]) {
     fprintf(stderr, "couldn't find port in '%s'\n", ptr);
@@ -428,12 +450,12 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
   }
   else if (length >= HOST_SIZE) {
     fprintf(stderr, "host token-length (plus NULL) %u exceeds max %u in '%s'\n",
-	    length +1, HOST_SIZE, service_path);
+            length +1, HOST_SIZE, service_path);
     return -1;
   }
   else if (! strcmp(ptr + length, "://")) {
     fprintf(stderr, "protocol-specs not yet supported, for '%s'\n",
-	    service_path);
+            service_path);
     return -1;
   }
   strncpy(spec->host, ptr, length);
@@ -441,7 +463,7 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
 
 
   // --- parse <port> (string)
-  ptr += length +1;		// skip over ':'
+  ptr += length +1;             // skip over ':'
   length = strcspn(ptr, "/");
 
   if (! ptr[length]) {
@@ -450,7 +472,7 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
   }
   else if (length >= PORT_STR_SIZE) {
     fprintf(stderr, "port-token length (plus NULL) %u exceeds max %u in '%s'\n",
-	    length +1, PORT_STR_SIZE, service_path);
+            length +1, PORT_STR_SIZE, service_path);
     return -1;
   }
   strncpy(spec->port_str, ptr, length);
@@ -471,7 +493,7 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
 
 
   // --- parse file-path
-  ptr += length;		// don't skip over '/'
+  ptr += length;                // don't skip over '/'
   length = strlen(ptr);
   if (! length) {
     fprintf(stderr, "couldn't find file-component in '%s'\n", service_path);
@@ -479,7 +501,7 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
   }
   else if (length >= FNAME_SIZE) {
     fprintf(stderr, "file-token length (plus NULL) %u exceeds max %u in '%s'\n",
-	    length +1, FNAME_SIZE, ptr);
+            length +1, FNAME_SIZE, ptr);
     return -1;
   }
   strncpy(spec->fname, ptr, length);
@@ -490,6 +512,134 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
 
 
 
+// client-side PUT, or server-side GET
+//
+// <fd> should already be opened for read (unless SKIP_FILE_READS)
+// 
+// <handle> should already be opened for writing (e.g. with skt_open() in client,
+//      or fake_open() on server.
+//
+ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size) {
+
+#ifdef SKIP_FILE_READS
+  // This allows cutting out the performance cost of doing file reads
+  size_t iters = SKIP_FILE_READS; // we will write (SKIP_FILE_READ * <size>) bytes
+
+  // initialize once, to allow diagnosis of results?
+  memset(buf, 1, size);
+#endif
+
+  size_t bytes_moved = 0;       /* total */
+  int    eof         = 0;
+  int    err         = 0;
+
+  while (!eof && !err) {
+
+    // --- read from file (unless file-reads are suppressed)
+#ifdef SKIP_FILE_READS
+    // don't waste time reading.  Just send a raw buffer.
+    ssize_t read_count  = size;
+
+    if (unlikely(iters-- <= 0)) {
+      DBG("fake EOF\n");
+      eof = 1;
+      read_count  = 0;
+      break;
+    }
+    DBG("%d: fake read: %lld\n", iters, read_count);
+
+#else
+    // read data up to <size>, or EOF
+    ssize_t read_count = read_buffer(fd, buf, size, 0);
+    DBG("read_count: %lld\n", read_count);
+    NEED( read_count >= 0 );
+
+    if (read_count == 0) {
+      DBG("read EOF\n");
+      eof = 1;
+      break;
+    }
+#endif
+
+    // --- copy all of buffer to socket
+    //    Do not use write_buffer(handle->peer_fd, ... )
+    size_t remain = read_count;
+    size_t copied = 0;
+    while (remain) {
+      ssize_t write_count = skt_write(handle, buf+copied, remain);
+      NEED( write_count >= 0 ); // spin forever if server's FS is wedged?
+      remain -= write_count;
+      copied += write_count;
+    }
+
+    // entire read-buffer was moved
+    bytes_moved += read_count;
+  }
+  DBG("copy-loop done  (%llu bytes).\n", bytes_moved);
+
+
+  return bytes_moved;
+}
+
+
+
+
+
+// client-side GET, or server-side PUT
+//
+// <fd> should already be opened for writing (unless SKIP_FILE_WRITES)
+// 
+// <handle> should already be opened for writing (e.g. with skt_open() in client,
+//      or fake_open() on server.
+//
+ssize_t copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size) {
+
+  size_t bytes_moved = 0;       /* total */
+  int    eof         = 0;
+  int    err         = 0;
+
+  while (!eof && !err) {
+
+    // --- read from socket, up to <size>, or EOF
+    ssize_t read_count = skt_read(handle, buf, size);
+    DBG("read_count: %lld\n", read_count);
+    NEED( read_count >= 0 );
+
+    if (read_count == 0) {
+      DBG("read EOF\n");
+      eof = 1;
+      break;
+    }
+
+
+    // --- copy all of buffer to file (unless file-writes are suppressed)
+#ifdef SKIP_FILE_WRITES
+    // don't waste time writing to file
+    DBG("fake write: %lld\n", read_count);
+#else
+    // copy all of buffer to file
+    NEED_0( write_buffer(fd, buf, read_count, 0, 0) );
+    DBG("copied out\n");
+#endif
+
+
+    bytes_moved += read_count;
+  }
+  DBG("copy-loop done  (%llu bytes).\n", bytes_moved);
+
+  return bytes_moved;
+}
+
+
+
+
+
+
+
+
+
+
+
 
 
 // ---------------------------------------------------------------------------
@@ -497,8 +647,8 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
 // ---------------------------------------------------------------------------
 
 
-#define NO_IMPL()						\
-  fprintf(stderr, "%s not implemented\n", __FUNCTION__);	\
+#define NO_IMPL()                                               \
+  fprintf(stderr, "%s not implemented\n", __FUNCTION__);        \
   abort()
 
 
@@ -550,11 +700,13 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
   handle->open_flags = flags;
   handle->open_mode  = mode;
 
+  // RD/WR with RDMA would require riomaps on both ends, or else
+  // two different channels, each with a single riomap.
   if (flags & (O_RDWR)) {
-    errno = ENOTSUP;		// we don't support this
+    errno = ENOTSUP;            // TBD?
     return -1;
   }
-  else if (flags & O_RDONLY)
+  else if (flags & O_WRONLY)
     handle->flags |= HNDL_PUT;
   else
     handle->flags |= HNDL_GET;
@@ -611,25 +763,26 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
   s_addr.sin_family      = AF_INET;
   s_addr.sin_port        = htons(spec->port);
   memcpy((char *)&s_addr.sin_addr.s_addr,
-	 (char *)server->h_addr, 
-	 server->h_length);
+         (char *)server->h_addr, 
+         server->h_length);
 #endif
 
 
   // open socket to server
-  NEED_GT0( handle->fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
+  NEED_GT0( handle->peer_fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
 
   //  // don't do this on the PUT-client?
   //  int disable = 0;
-  //  NEED_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_INLINE, &disable, sizeof(disable)) );
+  //  NEED_0( RSETSOCKOPT(handle->peer_fd, SOL_RDMA, RDMA_INLINE, &disable, sizeof(disable)) );
 
-  unsigned mapsize = 1; // max number of riomap'ed buffers (on this fd ?)
-  NEED_0( RSETSOCKOPT(handle->fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+  if (handle->flags & HNDL_PUT) {
+    unsigned mapsize = 1; // max number of riomap'ed buffers (on this fd ?)
+    NEED_0( RSETSOCKOPT(handle->peer_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+  }
 
-  NEED_0( CONNECT(handle->fd, s_addr_ptr, s_addr_len) );
-  handle->flags |= HNDL_SERVER_FD;
-
-  printf("server: connected '%s'\n", spec->fname);
+  NEED_0( CONNECT(handle->peer_fd, s_addr_ptr, s_addr_len) );
+  handle->flags |= HNDL_CONNECTED;
+  DBG("skt_open: connected '%s'\n", spec->fname);
 
 
   return 0;
@@ -641,12 +794,25 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 // ...........................................................................
 // PUT
 //
-// We allow a sequence of "writes" on an open socket, but because of
-// the client-server interactions needed for RDMA sockets, each write
-// is an all-or-nothing thing.  We write all of your buffer to the
-// server, or we fail.  For compatibility with write(2), we return an
-// ssize_t, but it will always either match the size of your buffer,
-// or be negative.
+// When writing to a socket with RDMA, we can't write more than the
+// size of the reader's buffer.  So, we've extended the
+// command-protocol slightly: when the reader sends an ACK saying the
+// buffer is available, the value associated with the ACk tells us the
+// reader's buffer-size.  If <size> is bigger than that, we truncate
+// to reader's size.
+//
+// Libne formerly threw errors if writes returned less-than-expected
+// values.  We could force multiple writes here, to guarantee that
+// everything gets written, but a better approach seems to be to let
+// skt_write() act somewhat like write(), and have libne wrap its
+// writes in retries, until the full amount has been written.
+//
+// OBSOLETE: We allow a sequence of "writes" on an open socket, but
+//     because of the client-server interactions needed for RDMA
+//     sockets, each write is an all-or-nothing thing.  We write all
+//     of your buffer to the server, or we fail.  For compatibility
+//     with write(2), we return an ssize_t, but it will always either
+//     match the size of your buffer, or be negative.
 //
 // For RDMA+IB, we communicate with the server to receive the
 // memory-mapped offset for server-side buffer we will write into.
@@ -657,50 +823,77 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 //
 // ...........................................................................
 
-ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
 
-  DBG("skt_write(%d, %llx, %llu)\n", handle->fd, (size_t)buf, size);
-  if (! size)
-    return 0;                   // see NOTE
-
-  PseudoPacketHeader header;
-
-  // shorthand
-  PathSpec* spec = &handle->path_spec;
-
+// On the first call to skt_write(), the writer exchanges some
+// initialization-info with the peer.  If we are using riowrite(),
+// we need the peer's riomapped buffer-offset.
+//
+// In the case of writing on behalf of a client-PUT, this also
+// involves sending the PUT-request.  In the case of server-GET, it
+// does not.
+//
+int write_init(SocketHandle* handle) {
 
   // --- first time through, initialize comms with server
   if (! (handle->flags & HNDL_OP_INIT)) {
 
-    NEED_0( write_pseudo_packet(handle->fd, CMD_PUT, strlen(spec->fname)+1, spec->fname) );
+    if (! (handle->flags & HNDL_SERVER_SIDE)) {
+      PathSpec* spec = &handle->path_spec;
+      NEED_0( write_pseudo_packet(handle->peer_fd, CMD_PUT, strlen(spec->fname)+1, spec->fname) );
+    }
 
 #if USE_RIOWRITE
     // server sends us the offset she got from riomap()
-    NEED_0( read_pseudo_packet_header(handle->fd, &header) );
+    PseudoPacketHeader header;
+    NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
     if (header.command != CMD_RIO_OFFSET) {
       fprintf(stderr, "expected RIO_OFFSET pseudo-packet, not %s\n", command_str(header.command));
       return -1;
     }
-    handle->rio_offset = header.length;
-    DBG("got riomap offset from peer: 0x%llx\n", header.length);
+    handle->rio_offset = header.size;
+    DBG("got riomap offset from peer: 0x%llx\n", header.size);
 #endif  
 
     handle->flags |= HNDL_OP_INIT;
   }
 
+  return 0;
+}
+
+
+
+ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
+
+  DBG("skt_write(%d, %llx, %llu)\n", handle->peer_fd, (size_t)buf, size);
+  if (! size)
+    return 0;                   // see NOTE
+
+  // perform deferred initial protocol exchanges, if needed
+  NEED_0( write_init(handle) );
+
 
 #ifdef USE_RIOWRITE
-  // --- We're about to overwrite the destination buffer via RDMA.
-  //     Don't call write_buffer() until the other-end reports that it
-  //     is finished with the buffer.
-  NEED_0( read_pseudo_packet_header(handle->fd, &header) );
+  // We're about to overwrite the destination buffer via RDMA.
+  // Don't call write_buffer() until the other-end reports that it
+  // is finished with the buffer.
+  PseudoPacketHeader header;
+  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
+
   if (header.command != CMD_ACK) {
     fprintf(stderr, "expected an ACK, but got %s\n", command_str(header.command));
     return -1;
   }
+
+  // Reader's ACK now also includes the size of the reader's
+  // read-buffer.  For RDMA, don't write more than this amount.
+  if (size > header.size) {
+    size = header.size;
+  }
+
 #endif
 
-  NEED_0( write_buffer(handle->fd, buf, size, 1, handle->rio_offset) );
+  // write_buffer() is okay here, because we know how much the peer can handle
+  NEED_0( write_buffer(handle->peer_fd, buf, size, 1, handle->rio_offset) );
   handle->stream_pos += size;  /* tracking for skt_lseek() */
 
   return size;
@@ -710,11 +903,96 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
 
 // ...........................................................................
 // READ
+//
 // ...........................................................................
 
-ssize_t skt_read(SocketHandle* handle,       void* buf, size_t size) {
-  NO_IMPL();
-  handle->stream_pos += size;  /* tracking for skt_lseek() */
+
+// On the first call to skt_read(), the reader exchanges some
+// initialization-info with the peer.  The peer is the one doing the
+// writing, so, for riowrite, we need to send her our riomap offset
+// (which also implies that she she has already called
+// setsockopt(RDMA_IOMAPSIZE).)
+//
+// In the case of reading on behalf of a client-GET, this also
+// involves sending the initial GET-request to the server.  In the
+// case of server-PUT, it does not.
+//
+int read_init(SocketHandle* handle, char* buf, size_t size) {
+
+  if (! (handle->flags & HNDL_OP_INIT)) {
+
+    if (! (handle->flags & HNDL_SERVER_SIDE)) {
+      PathSpec* spec = &handle->path_spec;
+      NEED_0( write_pseudo_packet(handle->peer_fd, CMD_GET, strlen(spec->fname)+1, spec->fname) );
+    }
+
+#if USE_RIOWRITE
+    // send peer the offset we get from riomap()
+    // She'll need this for riowrite(), in write_buffer()
+
+    //  unsigned mapsize = 1; // max number of riomap'ed buffers
+    //  NEED_0( RSETSOCKOPT(handle->peer_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+
+    DBG("riomap(%d, 0x%llu, ...)\n", handle->peer_fd, (size_t)buf);
+    handle->rio_offset = RIOMAP(handle->peer_fd, buf, size, PROT_WRITE, 0, -1);
+    if (handle->rio_offset == (off_t)-1) {
+      fprintf(stderr, "riomap failed: %s\n", strerror(errno));
+      return -1;
+    }
+    DBG("riomap offset: %llu\n", handle->rio_offset);
+    handle->rio_buf  = buf;     // to allow the riounmap in shut_down_thread()
+    handle->rio_size = size;    // to allow the riounmap in shut_down_thread()
+    handle->flags |= HNDL_RIOMAPPED;
+
+    NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RIO_OFFSET, handle->rio_offset, NULL) );
+#endif
+
+    handle->flags |= HNDL_OP_INIT;
+  }
+
+  return 0;
+}
+
+
+// WARNING: If USE_RIOWRITE is defined, you must always call this
+//    function with the same buffer, because we will initially use it
+//    to riomap the destination offset for RDMA, and all subsequent
+//    RDMA writes from the peer will go there.
+
+ssize_t skt_read(SocketHandle* handle, void* buf, size_t size) {
+
+  ssize_t   read_count = 0;
+
+  // perform deferred initial protocol, if needed
+  NEED_0( read_init(handle, buf, size) );
+
+
+#ifdef USE_RIOWRITE
+  // tell peer we are done with buffer, so she can begin overwriting
+  // with her next riowrite().  We also indicate the maximum amount we
+  // can recv.
+  NEED_0( write_pseudo_packet(handle->peer_fd, CMD_ACK, size, NULL) );
+
+
+  // wait for peer to finish riowrite()
+  PseudoPacketHeader header;
+  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
+
+  if (header.command != CMD_DATA) {
+    fprintf(stderr, "expected an DATA, but got %s\n", command_str(header.command));
+    return -1;
+  }
+
+  // writer's DATA might conceivably be less than <size>
+  read_count = header.size;
+
+#else
+  read_count = read_buffer(handle->peer_fd, buf, size, 1);
+
+#endif
+
+  handle->stream_pos += read_count;  /* tracking for skt_lseek() */
+  return read_count;
 }
 
 
@@ -770,41 +1048,48 @@ int skt_fsetxattr(SocketHandle* handle, const char* service_path, const void* va
 int skt_close(SocketHandle* handle) {
 
   if (handle->flags & HNDL_OP_INIT) {
+    handle->flags &= ~HNDL_OP_INIT;
+
+    if (handle->flags & HNDL_PUT) {
+      // we were writing to this socket
+
 #ifdef USE_RIOWRITE
-    // let the other end know that there's no more data
-    NEED_0( write_pseudo_packet(handle->fd, CMD_DATA, 0, NULL) );
+      // let the other end know that there's no more data
+      NEED_0( write_pseudo_packet(handle->peer_fd, CMD_DATA, 0, NULL) );
 #endif
 
-    // wait for the other end to fsync
-    //
-    // NOTE: If there was a previous skt_write(), then our first the
-    //       the first pseudo-packet we see will be the ACK for that
-    //       write, rather than the ACK for the DATA 0 we just wrote.
-    //       Skip over the former to get to the latter.
-    PseudoPacketHeader hdr;
-    EXPECT_0( read_pseudo_packet_header(handle->fd, &hdr) );
-    EXPECT(   (hdr.command == CMD_ACK) );
-
-    if ((hdr.command == CMD_ACK) && hdr.length) {
-      EXPECT_0( read_pseudo_packet_header(handle->fd, &hdr) );
+      // wait for the other end to fsync
+      //
+      // NOTE: If we did a previous skt_write(), then the first
+      //       pseudo-packet we read will be the ACK for that write,
+      //       rather than the ACK for the DATA 0 we just wrote.  Skip
+      //       over the former to get to the latter.
+      PseudoPacketHeader hdr;
+      EXPECT_0( read_pseudo_packet_header(handle->peer_fd, &hdr) );
       EXPECT(   (hdr.command == CMD_ACK) );
+
+      if ((hdr.command == CMD_ACK) && hdr.size) {
+        EXPECT_0( read_pseudo_packet_header(handle->peer_fd, &hdr) );
+        EXPECT(   (hdr.command == CMD_ACK) );
+      }
+    }
+    else {
+      // we were reading from this socket
+
+#ifdef USE_RIOWRITE
+      // We got the DATA 0 indicating EOF.  Send an ACK 0, as a sign off.
+      NEED_0( write_pseudo_packet(handle->peer_fd, CMD_ACK, 0, NULL) );
+#endif
     }
   }
 
-#if UNIX_SOCKETS
-  if (handle->flags & HNDL_FNAME) {
-    DBG("unlinking '%s'\n", handle->fname);
-    (void)unlink(handle.fname);
-  }
-#endif
 
-  if (handle->flags & HNDL_SERVER_FD) {
-    DBG("closing socket_fd %d\n", handle->fd);
-    SHUTDOWN(handle->fd, SHUT_RDWR);
-    CLOSE(handle->fd);
-  }
+  // This is redundant with what would be done by the thread-cleanup
+  // handlers (in the server), or in the shut_down() call (in the
+  // client app), but regular applications (e.g. libne) won't have a
+  // shut-down handler.
+  shut_down_handle(handle);
 
-  handle->flags |= HNDL_CLOSED;
   return 0;
 }
 
@@ -859,21 +1144,21 @@ int  skt_chown (const char* service_path, uid_t uid, gid_t gid) {
 
   // command pseudo-packet header
   PathSpec* spec = &handle.path_spec;
-  NEED_0( write_pseudo_packet(handle.fd, CMD_CHOWN, strlen(spec->fname)+1, spec->fname) );
+  NEED_0( write_pseudo_packet(handle.peer_fd, CMD_CHOWN, strlen(spec->fname)+1, spec->fname) );
 
   // write UID
   uint64_t uid_buf = hton64(uid);
-  NEED_0( write_raw(handle.fd, (char*)&uid_buf, sizeof(uid_buf)) );
+  NEED_0( write_raw(handle.peer_fd, (char*)&uid_buf, sizeof(uid_buf)) );
 
   // write GID
   uint64_t gid_buf = hton64(gid);
-  NEED_0( write_raw(handle.fd, (char*)&gid_buf, sizeof(gid_buf)) );
+  NEED_0( write_raw(handle.peer_fd, (char*)&gid_buf, sizeof(gid_buf)) );
 
 
   // read ACK, including return-code from the remote lchown().
-  NEED_0( read_pseudo_packet_header(handle.fd, &hdr) );
+  NEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr) );
   NEED(   (hdr.command == CMD_ACK_CMD) );
-  int rc =   (int)hdr.length;
+  int rc =   (int)hdr.size;
 
   // close()
   NEED_0( skt_close(&handle) );
@@ -899,20 +1184,20 @@ int  skt_rename (const char* service_path, const char* new_fname) {
 
   // send command pseudo-packet
   PathSpec* spec = &handle.path_spec;
-  NEED_0( write_pseudo_packet(handle.fd, CMD_RENAME, strlen(spec->fname)+1, spec->fname) );
+  NEED_0( write_pseudo_packet(handle.peer_fd, CMD_RENAME, strlen(spec->fname)+1, spec->fname) );
 
   // send new-fname
-  //  NEED_0( write_pseudo_packet(handle.fd, CMD_RENAME_VAL, strlen(new_fname)+1, new_fname) );
+  //  NEED_0( write_pseudo_packet(handle.peer_fd, CMD_RENAME_VAL, strlen(new_fname)+1, new_fname) );
   size_t len     = strlen(new_fname) +1;
   size_t len_buf = hton64(len);
-  NEED_0( write_raw(handle.fd, (char*)&len_buf,   sizeof(len_buf)) );
-  NEED_0( write_raw(handle.fd, (char*)&new_fname, len) );
+  NEED_0( write_raw(handle.peer_fd, (char*)&len_buf,   sizeof(len_buf)) );
+  NEED_0( write_raw(handle.peer_fd, (char*)&new_fname, len) );
 
 
   // read ACK, including return-code from the remote rename().
-  NEED_0( read_pseudo_packet_header(handle.fd, &hdr) );
+  NEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr) );
   NEED(   (hdr.command == CMD_ACK_CMD) );
-  int rc =   (int)hdr.length;
+  int rc =   (int)hdr.size;
 
   // close()
   NEED_0( skt_close(&handle) );

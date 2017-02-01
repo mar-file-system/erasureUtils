@@ -83,22 +83,13 @@ static SocketHandle handle = {0};
 
 
 
+
 void
 shut_down() {
-
-#if UNIX_SOCKETS
-  if (handle.flags & HNDL_FNAME) {
-    fprintf(stderr, "shut_down: unlinking '%s'\n", handle.fname);
-    (void)unlink(handle.fname);
-  }
-#endif
-
-  if (handle.flags & HNDL_SERVER_FD) {
-    fprintf(stderr, "shut_down: closing socket_fd %d\n", handle.fd);
-    SHUTDOWN(handle.fd, SHUT_RDWR);
-    CLOSE(handle.fd);
-  }
+  DBG("shut_down: closing socket_fd %d\n", handle.peer_fd);
+  shut_down_handle(&handle);
 }
+
 
 
 static void
@@ -113,69 +104,18 @@ sig_handler(int sig) {
 // ---------------------------------------------------------------------------
 // PUT
 // ---------------------------------------------------------------------------
+
+// read from file and copy to socket
 // return number of bytes moved, or -1 for error.
+
 ssize_t client_put(const char* path) {
 
-  char read_buf[CLIENT_BUF_SIZE] __attribute__ (( aligned(64) )); /* copy stdin to socket */
+  char buf[CLIENT_BUF_SIZE] __attribute__ (( aligned(64) )); /* copy stdin to socket */
 
   // --- TBD: authentication handshake
   REQUIRE_0( skt_open(&handle, path, (O_WRONLY|O_CREAT), 0660) );
 
-  
-#ifdef SKIP_FILE_READS
-  // This allows cutting out the performance cost of doing reads on
-  // the client side.
-
-  size_t iters = SKIP_FILE_READS; // we will write (<this> * CLIENT_BUF_SIZE) bytes
-
-  static int needs_init = 1;
-  if (unlikely(needs_init)) {
-    memset(read_buf, 1, CLIENT_BUF_SIZE);
-    needs_init = 0;
-  }
-#endif
-
-
-  size_t bytes_moved = 0;	/* total */
-  int    eof         = 0;
-  int    err         = 0;
-  while (!eof && !err) {
-
-
-#ifdef SKIP_FILE_READS
-    // --- don't waste time reading.  Just send a raw buffer.
-    ssize_t read_count  = CLIENT_BUF_SIZE;
-
-    if (unlikely(iters-- <= 0)) {
-      DBG("fake EOF\n");
-      eof = 1;
-      read_count  = 0;
-      break;
-    }
-    DBG("%d: fake read: %lld\n", iters, read_count);
-
-#else
-    // --- read data up to CLIENT_BUF_SIZE or EOF
-    ssize_t read_count = read_buffer(STDIN_FILENO, read_buf, CLIENT_BUF_SIZE, 0);
-    if (read_count < 0) {
-      fprintf(stderr, "read error: %s\n", strerror(errno));
-      abort();
-    }
-    else if (read_count == 0) {
-      DBG("read EOF\n");
-      eof = 1;
-      break;
-    }
-    DBG("read_count: %llu\n", read_count);
-#endif
-
-
-    // --- write buffer to socket
-    REQUIRE_GT0( skt_write(&handle, read_buf, read_count) );
-    bytes_moved += read_count;
-  }
-  DBG("copy-loop done  (%llu bytes).\n", bytes_moved);
-
+  ssize_t bytes_moved = copy_file_to_socket(STDIN_FILENO, &handle, buf, CLIENT_BUF_SIZE);
 
   // --- close
   REQUIRE_0( skt_close(&handle) );
@@ -184,58 +124,51 @@ ssize_t client_put(const char* path) {
 }
 
 
+// Problem opening 2 sockets?
+int client_test(const char* path) {
+
+  SocketHandle handle2;
+  char* path2 = malloc(strlen(path) + 5);
+  REQUIRE(path2);
+  strcpy(path2, path);
+  strcat(path2, ".2");
+
+  // buffer to write
+  const char* buf = "This is a test\n";
+  size_t      buf_len = strlen(buf);
+
+  // open
+  REQUIRE_0( skt_open(&handle,  path,  (O_WRONLY|O_CREAT), 0660) );
+  REQUIRE_0( skt_open(&handle2, path2, (O_WRONLY|O_CREAT), 0660) );
+
+  // write
+  ssize_t bytes_moved  = skt_write(&handle,  buf, buf_len);
+  ssize_t bytes_moved2 = skt_write(&handle2, buf, buf_len);
+
+
+  // close
+  REQUIRE_0( skt_close(&handle) );
+  REQUIRE_0( skt_close(&handle) );
+
+  return 0;
+}
+
 
 // ---------------------------------------------------------------------------
 // GET
 // ---------------------------------------------------------------------------
 
+// read from socket and copy to stdout
 // return number of bytes moved, or -1 for error.
+
 ssize_t client_get(const char* path) {
 
-  char read_buf[CLIENT_BUF_SIZE] __attribute__ (( aligned(64) )); /* copy socket to stdout */
+  char buf[CLIENT_BUF_SIZE] __attribute__ (( aligned(64) )); /* copy socket to stdout */
 
   // --- TBD: authentication handshake
   REQUIRE_0( skt_open(&handle, path, (O_RDONLY)) );
 
-  
-  size_t bytes_moved = 0;	/* total */
-  int    eof         = 0;
-  int    err         = 0;
-  while (!eof && !err) {
-
-    // --- read from socket, up to CLIENT_BUF_SIZE or EOF
-    ssize_t read_count = skt_read(&handle, read_buf, CLIENT_BUF_SIZE);
-    if (read_count < 0) {
-      fprintf(stderr, "read error: %s\n", strerror(errno));
-      abort();
-    }
-    else if (read_count == 0) {
-      DBG("read EOF\n");
-      eof = 1;
-      break;
-    }
-    DBG("read_count: %llu\n", read_count);
-
-
-#ifdef SKIP_FILE_WRITES
-    // --- don't waste time writing to stdout
-    DBG("%d: fake write: %lld\n", iters, read_count);
-
-#else
-    // --- write buffer to stdout
-    ssize_t write_count = write_buffer(STDOUT_FILENO, read_buf, read_count, 0, 0);
-    if (write_count < 0) {
-      fprintf(stderr, "read error: %s\n", strerror(errno));
-      abort();
-    }
-    DBG("write_count: %llu\n", write_count);
-#endif
-
-
-    bytes_moved += read_count;
-  }
-  DBG("copy-loop done  (%llu bytes).\n", bytes_moved);
-
+  ssize_t bytes_moved = copy_socket_to_file(&handle, STDOUT_FILENO, buf, CLIENT_BUF_SIZE);
 
   // --- close
   REQUIRE_0( skt_close(&handle) );
@@ -296,21 +229,15 @@ main(int argc, char* argv[]) {
     return -1;
   }
 
-  // --- start timer
-  struct timespec start;
-  if (clock_gettime(CLOCK_REALTIME, &start)) {
-    fprintf(stderr, "failed to get START timer '%s'\n", strerror(errno));
-    return -1;                // errno is set
-  }
-
   // --- parse args
-  SocketCommand cmd       = CMD_NULL;
-  char*         file_spec = NULL;
+  char    cmd;
+  char*   file_spec = NULL;
   int     c;
-  while ( (c = getopt(argc, argv, "g:p:h")) != -1) {
+  while ( (c = getopt(argc, argv, "g:p:t:h")) != -1) {
     switch (c) {
-    case 'p':      cmd = CMD_PUT;  file_spec=optarg;    break;
-    case 'g':      cmd = CMD_GET;  file_spec=optarg;    break;
+    case 'p':      cmd = 'p';  file_spec=optarg;    break;
+    case 'g':      cmd = 'g';  file_spec=optarg;    break;
+    case 't':      cmd = 't';  file_spec=optarg;    break;
 
     case 'h':
     default:
@@ -319,11 +246,19 @@ main(int argc, char* argv[]) {
     }
   }
 
+  // --- start timer
+  struct timespec start;
+  if (clock_gettime(CLOCK_REALTIME, &start)) {
+    fprintf(stderr, "failed to get START timer '%s'\n", strerror(errno));
+    return -1;                // errno is set
+  }
+
   // --- perform op
   ssize_t bytes_moved = 0;
   switch (cmd) {
-  case CMD_PUT:   bytes_moved = client_put(file_spec); break;
-  case CMD_GET:   bytes_moved = client_get(file_spec); break;
+  case 'p':   bytes_moved = client_put(file_spec); break;
+  case 'g':   bytes_moved = client_get(file_spec); break;
+  case 't':   bytes_moved = client_test(file_spec); break;
   default:
     fprintf(stderr, "unsupported command: %s\n", command_str(cmd));
     return -1;
