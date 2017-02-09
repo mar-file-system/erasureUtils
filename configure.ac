@@ -90,8 +90,16 @@ AC_TYPE_UINT64_T
 AC_TYPE_UINT8_T
 
 # Checks for library functions.
-AC_FUNC_MALLOC
 AC_CHECK_FUNCS([bzero ftruncate memset strerror strtol strtoul])
+
+# AC_FUNC_MALLOC runs into "undefined reference to 'rpl_malloc'"
+### AC_FUNC_MALLOC
+AC_CHECK_FUNCS([malloc])
+
+AXATTR_GET_FUNC_CHECK
+AXATTR_SET_FUNC_CHECK
+
+
 
 # optional build uses RDMA-sockets
 # The server must be running on remote hosts to support this mode.
@@ -125,10 +133,6 @@ AM_CONDITIONAL([DEBUG_NE],      [test "$enable_debug" = ne      || test "$enable
 AM_CONDITIONAL([DEBUG_SOCKETS], [test "$enable_debug" = sockets || test "$enable_debug" = all ])
 
 
-
-
-AXATTR_GET_FUNC_CHECK
-AXATTR_SET_FUNC_CHECK
 
 AC_CONFIG_FILES([Makefile
                  sockets/Makefile
