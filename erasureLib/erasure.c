@@ -1069,7 +1069,7 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
 
    // If the errors exceed the minimum protection threshold number of
    // errrors then fail the write.
-   if( handle->nerr > handle->E-MIN_PROTECTION ) {
+   if( UNSAFE(handle) ) {
      DBG_FPRINTF(stderr,
                  "ne_write: errors exceed minimum protection level (%d)\n",
                  MIN_PROTECTION);
@@ -1189,7 +1189,10 @@ int ne_close( ne_handle handle )
 
          if ( tmp != 0 ) {
             DBG_FPRINTF( stderr, "ne_close: failed to set xattr for file %d\n", counter );
-            ret = -1;
+            if(tmp == -1 && ! handle->src_in_err[counter] ) {
+              handle->nerr++;
+              handle->src_in_err[counter] = 1;
+            }
          }
 
       }
@@ -1205,6 +1208,7 @@ int ne_close( ne_handle handle )
             chown(file, handle->owner, handle->group);
             if ( rename( file, nfile ) != 0 ) {
                DBG_FPRINTF( stderr, "ne_close: failed to rename rebuilt file\n" );
+               // rebuild should fail even if only one file can't be renamed
                ret = -1;
             }
 
@@ -1213,6 +1217,7 @@ int ne_close( ne_handle handle )
             strncat( nfile, META_SFX, strlen(META_SFX)+1 );
             if ( rename( file, nfile ) != 0 ) {
                DBG_FPRINTF( stderr, "ne_close: failed to rename rebuilt meta file\n" );
+               // rebuild should fail even if only one file can't be renamed
                ret = -1;
             }
 #endif
@@ -1237,7 +1242,10 @@ int ne_close( ne_handle handle )
 
          if ( rename( file, nfile ) != 0 ) {
             DBG_FPRINTF( stderr, "ne_close: failed to rename written file %s\n", file );
-            ret = -1;
+            if(! handle->src_in_err[counter] ) {
+                 handle->nerr++;
+                 handle->src_in_err[counter] = 1;
+            }
          }
 
 #ifdef META_FILES
@@ -1245,7 +1253,10 @@ int ne_close( ne_handle handle )
          strncat( nfile, META_SFX, strlen(META_SFX)+1 );
          if ( rename( file, nfile ) != 0 ) {
             DBG_FPRINTF( stderr, "ne_close: failed to rename written meta file %s\n", file );
-            ret = -1;
+            if(! handle->src_in_err[counter] ) {
+                 handle->nerr++;
+                 handle->src_in_err[counter] = 1;
+            }
          }
 #endif
 
@@ -1254,7 +1265,11 @@ int ne_close( ne_handle handle )
       counter++;
    }
    free(handle->buffer);
-  
+
+   if( UNSAFE(handle) ) {
+     ret = -1;
+   }
+
    if ( ret == 0 ) {
       DBG_FPRINTF( stdout, "ne_close: encoding error pattern in return value...\n" );
       /* Encode any file errors into the return status */
@@ -2051,7 +2066,7 @@ int ne_rebuild( ne_handle handle ) {
    int rebuild_result = do_rebuild(handle);
    umask(mask);
 
-   return (handle->nerr < handle->E) && (rebuild_result == 0) ?
+   return (handle->nerr <= handle->E) && (rebuild_result == 0) ?
      handle->nerr : -1;
 }
 

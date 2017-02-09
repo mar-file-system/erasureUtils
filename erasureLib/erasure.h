@@ -104,6 +104,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
 #endif
 
+#define UNSAFE(HANDLE) ((HANDLE)->nerr > (HANDLE)->E - MIN_PROTECTION)
+
 typedef uint32_t u32;
 typedef uint64_t u64;
 typedef enum {NE_RDONLY=0,NE_WRONLY,NE_REBUILD,NE_STAT,NE_NOINFO=4,NE_SETBSZ=8} ne_mode;
