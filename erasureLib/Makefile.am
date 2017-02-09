@@ -74,7 +74,7 @@ endif
 # before 'make install' will have put ../sockets/skt_common.h into the
 # install directory.  So the following allows these executables to be
 # built.
-AM_CPPFLAGS = $(SOCKET_CPPFLAGS) $(SOCKET_DEFS)
+AM_CPPFLAGS = $(SOCKET_CPPFLAGS) $(SOCKET_DEFS) -fstack-protector-all
 
 
 lib_LIBRARIES = libne.a

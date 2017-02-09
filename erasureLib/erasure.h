@@ -73,7 +73,14 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <stdint.h>
 #include <sys/types.h>
 
-#include "skt_common.h"
+#ifdef SOCKETS
+#  include "skt_common.h"
+   typedef SocketHandle  FileDesc;
+#else
+   typedef int           FileDesc;
+#endif
+
+
 
 /* MIN_PROTECTION sets the threshold for when writes will fail.  If
    fewer than n+MIN_PROTECTION blocks were written successfully, then

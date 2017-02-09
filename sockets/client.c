@@ -101,8 +101,9 @@ sig_handler(int sig) {
 
 
 
+
 // ---------------------------------------------------------------------------
-// PUT
+// operations dispatched from main
 // ---------------------------------------------------------------------------
 
 // read from file and copy to socket
@@ -113,7 +114,7 @@ ssize_t client_put(const char* path) {
   char buf[CLIENT_BUF_SIZE] __attribute__ (( aligned(64) )); /* copy stdin to socket */
 
   // --- TBD: authentication handshake
-  REQUIRE_0( skt_open(&handle, path, (O_WRONLY|O_CREAT), 0660) );
+  REQUIRE_GT0( skt_open(&handle, path, (O_WRONLY|O_CREAT), 0660) );
 
   ssize_t bytes_moved = copy_file_to_socket(STDIN_FILENO, &handle, buf, CLIENT_BUF_SIZE);
 
@@ -124,8 +125,69 @@ ssize_t client_put(const char* path) {
 }
 
 
+int client_rename(const char* path) {
+
+  char  new_fname[FNAME_SIZE];
+  snprintf(new_fname, FNAME_SIZE, path);
+  strncat(new_fname, ".renamed", FNAME_SIZE - strlen(path));
+
+  REQUIRE_0( skt_rename(path, new_fname) );
+
+  return 0;
+}
+
+
+
+// read from socket and copy to stdout
+// return number of bytes moved, or -1 for error.
+
+ssize_t client_get(const char* path) {
+
+  char buf[CLIENT_BUF_SIZE] __attribute__ (( aligned(64) )); /* copy socket to stdout */
+
+  // --- TBD: authentication handshake
+  REQUIRE_GT0( skt_open(&handle, path, (O_RDONLY)) );
+
+  ssize_t bytes_moved = copy_socket_to_file(&handle, STDOUT_FILENO, buf, CLIENT_BUF_SIZE);
+
+  // --- close
+  REQUIRE_0( skt_close(&handle) );
+
+  return bytes_moved;
+}
+
+
+ssize_t client_stat(const char* path) {
+
+  struct stat st;
+
+  int rc = skt_stat(path, &st);
+  if (rc < 0) {
+    perror("stat failed");
+    return 0;                   /* "bytes-moved" */
+  }
+
+  printf("st.st_dev:     %llu\n", st.st_dev);     /* ID of device containing file */
+  printf("st.st_ino:     %llu\n", st.st_ino);     /* inode number */
+  printf("st.st_mode:    %llu\n", st.st_mode);    /* protection */
+  printf("st.st_nlink:   %llu\n", st.st_nlink);   /* number of hard links */
+  printf("st.st_uid:     %llu\n", st.st_uid);     /* user ID of owner */
+  printf("st.st_gid:     %llu\n", st.st_gid);     /* group ID of owner */
+  printf("st.st_rdev:    %llu\n", st.st_rdev);    /* device ID (if special file) */
+  printf("st.st_size:    %llu\n", st.st_size);    /* total size, in bytes */
+  printf("st.st_blksize: %llu\n", st.st_blksize); /* blocksize for file system I/O */
+  printf("st.st_blocks:  %llu\n", st.st_blocks);  /* number of 512B blocks allocated */
+  printf("st.st_atime:   %llu\n", st.st_atime);   /* time of last access */
+  printf("st.st_mtime:   %llu\n", st.st_mtime);   /* time of last modification */
+  printf("st.st_ctime:   %llu\n", st.st_ctime);   /* time of last status change */
+
+  return STAT_DATA_SIZE;
+}
+
+
+
 // Problem opening 2 sockets?
-int client_test(const char* path) {
+int client_test1(const char* path) {
 
   SocketHandle handle2;
   char* path2 = malloc(strlen(path) + 5);
@@ -138,8 +200,8 @@ int client_test(const char* path) {
   size_t      buf_len = strlen(buf);
 
   // open
-  REQUIRE_0( skt_open(&handle,  path,  (O_WRONLY|O_CREAT), 0660) );
-  REQUIRE_0( skt_open(&handle2, path2, (O_WRONLY|O_CREAT), 0660) );
+  REQUIRE_GT0( skt_open(&handle,  path,  (O_WRONLY|O_CREAT), 0660) );
+  REQUIRE_GT0( skt_open(&handle2, path2, (O_WRONLY|O_CREAT), 0660) );
 
   // write
   ssize_t bytes_moved  = skt_write(&handle,  buf, buf_len);
@@ -148,33 +210,250 @@ int client_test(const char* path) {
 
   // close
   REQUIRE_0( skt_close(&handle) );
-  REQUIRE_0( skt_close(&handle) );
+  REQUIRE_0( skt_close(&handle2) );
 
   return 0;
 }
 
 
-// ---------------------------------------------------------------------------
-// GET
-// ---------------------------------------------------------------------------
+// Problem opening >2 sockets?
+//
+// This is looking a lot like what is going on in libne, but libne
+// fails to open the second round of files.  (The rconnect() in
+// skt_open() fails.)  But here it works.
 
-// read from socket and copy to stdout
-// return number of bytes moved, or -1 for error.
+int client_test1b(const char* path) {
 
-ssize_t client_get(const char* path) {
+  typedef struct {
+    SocketHandle  handle;
+    char*         path;
+  } State;
 
-  char buf[CLIENT_BUF_SIZE] __attribute__ (( aligned(64) )); /* copy socket to stdout */
+# define N  12
+  State state[N];
+  int   i;
+  for (i=0; i<N; ++i) {
+    memset(&state[i], 0, sizeof(State));
+    state[i].path = malloc(strlen(path) + 32); // extra room for suffix
+    REQUIRE(state[i].path);
+    sprintf(state[i].path, "%s.%d", path, i);
+    printf("path[%d] : %s\n", i, state[i].path);
 
-  // --- TBD: authentication handshake
-  REQUIRE_0( skt_open(&handle, path, (O_RDONLY)) );
+    REQUIRE_GT0( skt_open(&state[i].handle, state[i].path, (O_WRONLY|O_CREAT), 0660) );
+    printf("           opened\n");
+  }
+  printf("\n");
 
-  ssize_t bytes_moved = copy_socket_to_file(&handle, STDOUT_FILENO, buf, CLIENT_BUF_SIZE);
+  // buffer to write
+  const char* buf = "This is a test\n";
+  size_t      buf_len = strlen(buf);
 
-  // --- close
-  REQUIRE_0( skt_close(&handle) );
+  ssize_t bytes_moved = 0;
+  ssize_t write_count;
+  for (i=0; i<N; ++i) {
+    printf("path[%d] : writing\n", i);
+    write_count = skt_write(&state[i].handle,  buf, buf_len);
+    REQUIRE( write_count == buf_len );
+    bytes_moved += write_count;
+  }
+  printf("\n");
 
+
+  // close
+  for (i=0; i<N; ++i) {
+    printf("path[%d] : closing\n", i);
+    REQUIRE_0( skt_close(&state[i].handle) );
+  }
+
+
+
+  // -- TWO: open again, with new names
+  typedef  SocketHandle  FileDesc;
+#   define OPEN(      FDESC, ...)                 skt_open(&(FDESC), ## __VA_ARGS__)
+#   define MAXNAME 1024 
+
+  for (i=0; i<N; ++i) {
+    FileDesc  fd;
+    char file[MAXNAME];
+
+    memset(&fd, 0, sizeof(FileDesc));
+    snprintf(file, MAXNAME-1, "%s.TWO%d", path, i);
+    printf("file [%d] : %s\n", i, file);
+
+    REQUIRE_GT0( OPEN(fd, file, (O_WRONLY|O_CREAT), 0660) );
+    printf("           opened\n");
+
+    printf("file [%d] : writing\n", i);
+    write_count = skt_write(&fd, buf, buf_len);
+    REQUIRE( write_count == buf_len );
+    bytes_moved += write_count;
+
+    printf("file [%d] : closing\n", i);
+    REQUIRE_0( skt_close(&fd) );
+  }
+
+#undef MAXNAME
+#undef OPEN
+
+
+# undef N
   return bytes_moved;
 }
+
+
+
+// This is just like test1b(), but instead of opening all paths
+// against a single server, we're opening them against a series of
+// servers.
+//
+// <path> should be something like "192.168.0.%d:xxx/some/zfs/path/block%d/sockets/fname"
+
+int client_test1c(const char* path) {
+
+  typedef struct {
+    SocketHandle  handle;
+    char*         path;
+  } State;
+
+# define N  12
+  State state[N];
+  int   i;
+  for (i=0; i<N; ++i) {
+    memset(&state[i], 0, sizeof(State));
+    state[i].path = malloc(strlen(path) + 32); // extra room for suffix
+    REQUIRE(state[i].path);
+
+    //    sprintf(state[i].path, "%s.%d", path, i);
+    int octet = 1 + (i / 2); // 1,1,2,2,3,3 ...
+    int block = 1 + i;
+    sprintf(state[i].path, path, octet, block);
+
+    printf("path[%d] : %s\n", i, state[i].path);
+    fflush(stdout);
+    REQUIRE_GT0( skt_open(&state[i].handle, state[i].path, (O_WRONLY|O_CREAT), 0660) );
+    printf("           opened\n");
+  }
+  printf("\n");
+
+  // buffer to write
+  const char* buf = "This is a test\n";
+  size_t      buf_len = strlen(buf);
+
+  ssize_t bytes_moved = 0;
+  ssize_t write_count;
+  for (i=0; i<N; ++i) {
+    printf("path[%d] : writing\n", i);
+    write_count = skt_write(&state[i].handle,  buf, buf_len);
+    REQUIRE( write_count == buf_len );
+    bytes_moved += write_count;
+  }
+  printf("\n");
+
+
+  // close
+  for (i=0; i<N; ++i) {
+    printf("path[%d] : closing\n", i);
+    REQUIRE_0( skt_close(&state[i].handle) );
+  }
+
+
+
+  // -- TWO: open again, with new names
+    typedef  SocketHandle  FileDesc;
+#   define OPEN(      FDESC, ...)                 skt_open(&(FDESC), ## __VA_ARGS__)
+#   define MAXNAME 1024 
+
+  for (i=0; i<N; ++i) {
+    FileDesc  fd;
+    char file[MAXNAME];
+
+    memset(&fd, 0, sizeof(FileDesc));
+
+    // snprintf(file, MAXNAME-1, "%s.TWO%d", path, i);
+    int octet = 1 + (i / 2); // 1,1,2,2,3,3 ...
+    int block = 1 + i;
+    sprintf(file, path, octet, block);
+    strcat(file, ".TWO");
+
+    printf("file [%d] : %s\n", i, file);
+    fflush(stdout);
+    REQUIRE_GT0( OPEN(fd, file, (O_WRONLY|O_CREAT), 0660) );
+    printf("           opened\n");
+
+    printf("file [%d] : writing\n", i);
+    write_count = skt_write(&fd, buf, buf_len);
+    REQUIRE( write_count == buf_len );
+    bytes_moved += write_count;
+
+    printf("file [%d] : closing\n", i);
+    REQUIRE_0( skt_close(&fd) );
+  }
+
+#undef MAXNAME
+#undef OPEN
+
+
+# undef N
+  return bytes_moved;
+}
+
+
+
+
+// Attempting to recreate a problem encounterd by libne when writing
+// to MC_SOCKETS via fuse.  write 1 file of size 1MB, then another
+// with a small amount of text, then rename the second one.  The
+// "connect" inside the skt_open(), in skt_rename() fails, in that
+// case.  Works fine here.  Jamming a bunch of calls to this test in a
+// tight loop also succeeds.
+
+int client_test2(const char* path) {
+
+  // buffer to write
+# define MiB  (1024 * 1024)
+  char     buf[MiB] __attribute__ (( aligned(64) )); /* copy stdin to socket */
+  memset(buf, 1, MiB);
+  size_t   buf_len = strlen(buf);
+
+  // open, put, close
+  ssize_t bytes_moved;
+  REQUIRE_GT0( skt_open(&handle,  path,  (O_WRONLY|O_CREAT), 0660) );
+  bytes_moved = skt_write(&handle, buf, buf_len);
+  REQUIRE( bytes_moved == buf_len );
+  REQUIRE_0( skt_close(&handle) );
+
+
+
+  // create the second file. (name is "<orig>.meta2")
+  SocketHandle handle2 = {0};
+  char* path2 = malloc(strlen(path) + 32);
+  REQUIRE(path2);
+  strcpy(path2, path);
+  strcat(path2, ".2.meta");
+
+  // write a small amount
+  const char* buf2 = "This is a lot less than a MB\n";
+  size_t      buf2_len = strlen(buf2);
+
+  REQUIRE_GT0( skt_open(&handle2,  path2,  (O_WRONLY|O_CREAT), 0660) );
+  ssize_t bytes_moved2 = skt_write(&handle2, buf2, buf2_len);
+  REQUIRE( bytes_moved2 == buf2_len );
+  REQUIRE_0( skt_close(&handle2) );
+
+  // rename to "<orig>.2"
+  char* path2b = malloc(strlen(path2) + 32);
+  REQUIRE(path2b);
+  strcpy(path2b, path);
+  strcat(path2b, ".2");
+
+  REQUIRE_0( skt_rename(path2, path2b) );
+
+  return bytes_moved + bytes_moved2;
+}
+
+
+
+
 
 
 
@@ -215,29 +494,40 @@ typedef enum {
 
 
 int usage(const char* prog) {
-  fprintf(stderr, "Usage: %s  <operation>  <host>:<port>/<fname>\n", prog);
-  fprintf(stderr, "where <operation> is one of:\n");
-  fprintf(stderr, "  -p     (PUT) read from stdin, write to remote file\n");
-  fprintf(stderr, "  -g     (GET) read from remote file, write to stdout\n");
+  fprintf(stderr, "Usage: %s  <operation>  <file_spec>\n", prog);
+  fprintf(stderr, "where:\n");
+  fprintf(stderr, "\n");
+  fprintf(stderr, "<operation> is one of:\n");
+  fprintf(stderr, "  -p             PUT -- read from stdin, write to remote file\n");
+  fprintf(stderr, "  -g             GET -- read from remote file, write to stdout\n");
+  fprintf(stderr, "  -s             stat the remote file\n");
+  fprintf(stderr, "  -r             rename to original + '.renamed'\n");
+  fprintf(stderr, "  -t <test_no>   perform various unit-tests {1,1b,1c,2}\n");
+  fprintf(stderr, "\n");
+  fprintf(stderr, "<flie_spec> is <host>:<port>/<fname>\n");
 }
 
 int
 main(int argc, char* argv[]) {
 
-  if (argc != 3) {
+  if (argc < 3) {
     usage(argv[0]);
     return -1;
   }
 
   // --- parse args
   char    cmd;
+  char*   test_no = NULL;
   char*   file_spec = NULL;
   int     c;
-  while ( (c = getopt(argc, argv, "g:p:t:h")) != -1) {
+  while ( (c = getopt(argc, argv, "t:gpsrh")) != -1) {
     switch (c) {
-    case 'p':      cmd = 'p';  file_spec=optarg;    break;
-    case 'g':      cmd = 'g';  file_spec=optarg;    break;
-    case 't':      cmd = 't';  file_spec=optarg;    break;
+    case 't':      cmd = 't';  test_no=optarg;    break;
+
+    case 'p':      cmd = 'p';  break;
+    case 'g':      cmd = 'g';  break;
+    case 's':      cmd = 's';  break;
+    case 'r':      cmd = 'r';  break;
 
     case 'h':
     default:
@@ -245,6 +535,12 @@ main(int argc, char* argv[]) {
       return -1;
     }
   }
+
+  // I thought getopt() was supposed to strip out the argv elements
+  // that it pulled out.  Apparently not.
+  if (cmd == 't')
+    file_spec=argv[3];
+
 
   // --- start timer
   struct timespec start;
@@ -258,7 +554,28 @@ main(int argc, char* argv[]) {
   switch (cmd) {
   case 'p':   bytes_moved = client_put(file_spec); break;
   case 'g':   bytes_moved = client_get(file_spec); break;
-  case 't':   bytes_moved = client_test(file_spec); break;
+  case 's':   bytes_moved = client_stat(file_spec); break;
+  case 'r':   bytes_moved = client_rename(file_spec); break;
+
+  case 't': {
+    size_t  test_no_len = strlen(test_no);
+#   define MATCH(TEST_NO,STR)  ((test_no_len == strlen(STR)) && !strcmp((TEST_NO), (STR)))
+    if (     MATCH(test_no, "1"))
+      bytes_moved = client_test1(file_spec);
+    else if (MATCH(test_no, "1b"))
+      bytes_moved = client_test1b(file_spec);
+    else if (MATCH(test_no, "1c"))
+      bytes_moved = client_test1c(file_spec);
+    else if (MATCH(test_no, "2"))
+      bytes_moved = client_test2(file_spec);
+    else {
+      fprintf(stderr, "unknown test: %s\n", test_no);
+      return -1;
+    }
+#   undef MATCH
+  }
+    break;
+      
   default:
     fprintf(stderr, "unsupported command: %s\n", command_str(cmd));
     return -1;

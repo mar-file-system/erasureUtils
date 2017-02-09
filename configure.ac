@@ -97,7 +97,7 @@ AC_CHECK_FUNCS([bzero ftruncate memset strerror strtol strtoul])
 # The server must be running on remote hosts to support this mode.
 AC_ARG_ENABLE([sockets],
                AS_HELP_STRING([--enable-sockets],
-                              [File operations go thorugh a remote server via sockets.  One of {rdma,ip,unix}]),
+                              [One of {rdma,ip,unix}.  File operations go to a server, via sockets.]),
               [case "${enableval}" in
                  rdma) enable_sockets=rdma ;;
                  no)   enable_sockets=no ;;

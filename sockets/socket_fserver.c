@@ -138,7 +138,7 @@ typedef struct {
 //
 // NOTE: We avoid the need for locking by taking some care: main only
 //    sets ctx.flags when they are zero.  Threads set a different flag
-//    on exit.
+//    on exit.  When main sees this flag set, it can join and reset.
 typedef struct ServerConnection {
   pthread_t      thr;
   ThreadContext  ctx;
@@ -247,12 +247,8 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
   }
 
   // read fname from the peer
-  ssize_t read_count = read_raw(peer_fd, fname, fname_size);
-  if (read_count != fname_size) {
-    fprintf(stderr, "failed to read fname (%lld)\n", read_count);
-    return -1;
-  }
-  else if (!fname[0] || fname[fname_size -1]) {
+  NEED_0( read_raw(peer_fd, fname, fname_size) );
+  if (!fname[0] || fname[fname_size -1]) {
     fprintf(stderr, "bad fname\n");
     return -1;
   }
@@ -335,17 +331,24 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
 // SocketHandle, so that e.g. skt_read()/skt_write() can be used
 // normally.
 //
-// The HNDL_SERVER_SIDE flag prevent read_init()/write_init(),
-// from senging GET/PUT.
+// The CMD_NULL command causes read_init()/write_init(),
+// to suppress sending GET/PUT to the peer.
 //
 // NOTE: We assume this is the SocketHandle inside a ThreadContext,
 //     which gets zero'ed before a thread is spun up, so we don't
 //     bother wiping it clean.
 //
+// NOTE: This shouldn't be called "fake".  It's a real "open", on the
+//     server side, that initializes protocol with the other end to
+//     allow skt_read()/skt_write(), and setting up so that
+//     skt_close() will do the shut-down hand-shake, as well.
+//
+//     If all you want to do is read_raw() or write_raw(), you don't
+//     need this.  Instead, (I think) you can just call basic_init()
+//     on your handle, and shut_down_handle() at "close" time.
+//
 int fake_open(SocketHandle* handle, int flags, char* buf, size_t size) {
-
-  handle->flags    |= HNDL_CONNECTED;
-  handle->flags    |= HNDL_SERVER_SIDE;
+  DBG("fake_open(0x%llx, 0x%x, 0x%llx, %lld)\n", (size_t)handle, flags, (size_t)buf, size);
 
   // RD/WR with RDMA would require riomaps on both ends, or else
   // two different channels, each with a single riomap.
@@ -353,9 +356,11 @@ int fake_open(SocketHandle* handle, int flags, char* buf, size_t size) {
     errno = ENOTSUP;		// TBD?
     return -1;
   }
-  else if (flags & O_WRONLY) {
+
+  handle->flags |= HNDL_CONNECTED;
+  if (flags & O_WRONLY) {
     handle->flags |= HNDL_PUT;
-    write_init(handle, buf, size); // don't send PUT
+    NEED_0( write_init(handle, CMD_NULL) ); // don't send PUT
 
 #if 0
     // Early experiments seemed to show that the server-side can't set
@@ -372,7 +377,7 @@ int fake_open(SocketHandle* handle, int flags, char* buf, size_t size) {
   }
   else {
     handle->flags |= HNDL_GET;
-    read_init(handle, buf, size); // don't send GET
+    NEED_0( read_init(handle, CMD_NULL, buf, size) ); // don't send GET
   }
 
   return 0;
@@ -403,7 +408,7 @@ int server_put(ThreadContext* ctx) {
 
   // open local file for writing (unless file-writes are suppressed)
 #ifndef SKIP_FILE_WRITES
-  ctx->file_fd = open(fname, (O_WRONLY | O_CREAT | O_TRUNC));
+  ctx->file_fd = open(fname, (O_WRONLY | O_CREAT | O_TRUNC), 0660);
   if (ctx->file_fd < 0) {
     fprintf(stderr, "couldn't open '%s' for writing: %s\n",
             fname, strerror(errno));
@@ -441,11 +446,6 @@ int server_put(ThreadContext* ctx) {
 
 
 
-
-// UNDER CONSTRUCTION ...
-// Assimilating GET-specific boilerplate from the generic get_or_put verson, below.
-
-
 // GET (server-side) -- WRITE to the socket
 //
 // Basically a mirror image of PUT, and similar to
@@ -459,7 +459,6 @@ int server_get(ThreadContext* ctx) {
 
   SocketHandle*        handle    = &ctx->handle;
   char*                fname     = ctx->fname;
-  int                  o_flags   = O_RDONLY;
 
   char                 buf[SERVER_BUF_SIZE]  __attribute__ (( aligned(64) ));
 
@@ -516,6 +515,7 @@ int server_del(ThreadContext* ctx) {
 int server_chown(ThreadContext* ctx) {
 
   SocketHandle*      handle    = &ctx->handle;
+  char*              fname     = ctx->fname;
   int                client_fd = handle->peer_fd;
   PseudoPacketHeader header = {0};
 
@@ -530,7 +530,7 @@ int server_chown(ThreadContext* ctx) {
   gid_t gid = ntoh64(gid_buf);
 
   // perform op
-  int rc = lchown(ctx->fname, uid, gid);
+  int rc = lchown(fname, uid, gid);
 
   // send ACK with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_ACK_CMD, rc, NULL) );
@@ -539,40 +539,160 @@ int server_chown(ThreadContext* ctx) {
 }
 
 
+// NOTE: We skip the establishing of an "open" socket betw client and
+// server, which would allow RDMA, etc, because (a) we're just
+// exchanging a couple of tokens, writing directly on the socket, so
+// (b) we don't need the overhead of the extra open/close protocol.
+
 int server_rename(ThreadContext* ctx) {
 
   SocketHandle*      handle    = &ctx->handle;
+  char*              fname     = ctx->fname;
   int                client_fd = handle->peer_fd;
   PseudoPacketHeader header = {0};
 
-  // read destination-fname length (incl terminal NULL)
+
+#if 0
+  // open socket for reading (client writes, we read)
+  fake_open(handle, O_RDONLY, buf, SERVER_BUF_SIZE);
+#endif
+
+
+  // read new-fname length (incl terminal NULL)
   uint64_t len;
   NEED_0( read_raw(client_fd, (char*)&len, sizeof(len)) );
   len = ntoh64(len);
   NEED( len <= FNAME_SIZE );
 
-  // read fname
-  char fname[FNAME_SIZE];
-  NEED_0( read_raw(client_fd, (char*)&fname, len) );
-  NEED( fname[len-1] == 0 );    // caller sent terminal-NULL?
+  // read new-fname
+  char new_fname[FNAME_SIZE];
+  NEED_0( read_fname(client_fd, new_fname, len, FNAME_SIZE) );
+
 
   // perform op
-  int rc = rename(ctx->fname, fname);
+  int rc = rename(fname, new_fname);
 
   // send ACK with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_ACK_CMD, rc, NULL) );
+
+#if 0
+  // close socket
+  EXPECT_0( skt_close(handle) );
+#endif
 
   return rc;
 }
 
 
 
-// TBD: do the stat, translate fields to net-byte-order, ship to client.
-//      We will want write_stat()/read_stat() functions in skt_common.
+// Do the stat, translate fields to net-byte-order, ship to client.
+// We're actually doing this over RDMA to try to keep the CPU load down.
+//
+// client reads (read_raw) results from the stream.  The first value
+// is returned as a pseudo-packet with the key CMD_ACK_CMD, and the
+// value an ssize_t, to be interpreted differently in the following
+// two cases:
+//
+// (1) if lstat fails
+//    (a) the ssize_t is the negative errno (as an ssize_t)
+//    (b) there ain't no (b).
+//
+// (2) if lstat succeeds
+//    (a) the ssize_t is positive sizeof(struct stat) on the server
+//    (b) 13 values as contiguous network-byte-order binary values,
+//        each the same size as the actual value in the stat struct.
+//
+// Return:
+//   We return 0 unless one of the NEED macros failed.
+//   Failure of the call to stat() is not a failure for this function.
+//
+// TBD: We're using the same approach and rationale for not "opening"
+//     RDMA as was used for server_rename().  However, it might make
+//     more sense, here, to go ahead and open a channel to allow
+//     sending teh stat info via RDMA.  Question, when there are a ton
+//     of stats going on, will it be better to avoid the overhead of
+//     spinning up RDMA channels, or better to avoid burdening the CPU
+//     with all these sends.
+//
+//     Another option is to just RDMA our local stat struct, along
+//     with a key that indicates our endian-ness.  If the client
+//     happens to have the same endian-ness, we can both avoid the
+//     cost of the network-byte-order computations, and local
+//     data-movement.
+
 int server_stat(ThreadContext* ctx) {
-  fprintf(stderr, "server_stat('%s' not implemented\n", ctx->fname);
-  ctx->flags |= CTX_THREAD_ERR;
-  return -1;
+
+  SocketHandle*      handle    = &ctx->handle;
+  char*              fname     = ctx->fname;
+  struct stat        st;
+
+  DBG("stat %s\n", fname);
+
+
+#if 0
+  // open socket for writing (we write, client reads)
+  fake_open(handle, O_WRONLY, buf, STAT_DATA_SIZE);
+
+  // jNEED() failures run this before exiting
+  jHANDLER(jskt_close, handle);
+
+#else
+  // jNEED() failures run this before exiting
+  jHANDLER(jshut_down_handle, handle);
+#endif
+
+  // stat local file
+  // Failure doesn't mean the server-routine failed
+  if (lstat(fname, &st)) {
+    // case (1), stat failed
+
+    // (a) send ACK with return-code == negative errno
+    NEED_0( write_pseudo_packet(handle->peer_fd, CMD_ACK_CMD, -errno, NULL) );
+  }
+  else {
+    // case (2), stat succeeded
+
+    // (a) send ACK with return-code == sizeof(struct stat), for crude validation
+    jNEED_0( write_pseudo_packet(handle->peer_fd, CMD_ACK_CMD, sizeof(struct stat), NULL) );
+
+
+    // (b) "send" individual field values into the buffer
+    char   buffer[STAT_DATA_SIZE];
+    char*  buf = buffer;
+  
+    jSEND_VALUE(buf, st.st_dev);     /* ID of device containing file */
+    jSEND_VALUE(buf, st.st_ino);     /* inode number */
+    jSEND_VALUE(buf, st.st_mode);    /* protection */
+    jSEND_VALUE(buf, st.st_nlink);   /* number of hard links */
+    jSEND_VALUE(buf, st.st_uid);     /* user ID of owner */
+    jSEND_VALUE(buf, st.st_gid);     /* group ID of owner */
+    jSEND_VALUE(buf, st.st_rdev);    /* device ID (if special file) */
+    jSEND_VALUE(buf, st.st_size);    /* total size, in bytes */
+    jSEND_VALUE(buf, st.st_blksize); /* blocksize for file system I/O */
+    jSEND_VALUE(buf, st.st_blocks);  /* number of 512B blocks allocated */
+    jSEND_VALUE(buf, st.st_atime);   /* time of last access */
+    jSEND_VALUE(buf, st.st_mtime);   /* time of last modification */
+    jSEND_VALUE(buf, st.st_ctime);   /* time of last status change */
+    
+    // send the whole buffer, so client can just read it all
+#if 0
+    ssize_t write_count = skt_write_all(handle, buffer, STAT_DATA_SIZE);
+    jNEED( write_count == STAT_DATA_SIZE );
+#else
+    jNEED_0( write_raw(handle->peer_fd, buffer, STAT_DATA_SIZE) );
+#endif
+
+  }  
+
+#if 0
+  // close
+  EXPECT_0( skt_close(handle) );
+#else
+  // close
+  shut_down_handle(handle);
+#endif
+
+  return 0;
 }
 
 
@@ -618,6 +738,8 @@ void* server_thread(void* arg) {
     DBG("failed to read pseudo-packet header\n");
     pthread_exit(ctx);
   }
+  DBG("\n");
+  DBG("server thread: %s\n", command_str(hdr->command));
 
   // maybe read fname, if command implies one
   switch (hdr->command) {
@@ -768,12 +890,12 @@ main(int argc, char* argv[]) {
   struct rdma_addrinfo* res;
 
   memset(&hints, 0, sizeof(hints));
-  //  hints.ai_port_space = RDMA_PS_TCP;
-  hints.ai_port_space = RDMA_PS_IB;
+  hints.ai_port_space = RDMA_PS_TCP;
+  //  hints.ai_port_space = RDMA_PS_IB;
   hints.ai_flags      = RAI_PASSIVE;
 
   // testing:
-  hints.ai_flags |= RAI_FAMILY;
+  //  hints.ai_flags |= RAI_FAMILY;
   //  hints.ai_family = AF_IB;
 
   int rc = rdma_getaddrinfo(NULL, (char*)port_str, &hints, &res);
@@ -819,7 +941,8 @@ main(int argc, char* argv[]) {
 
   // you'd think we should do this on client_fd after the accept(), but that fails, and this succeeds
   // [see fake_open()]
-  unsigned mapsize = MAX_SOCKET_CONNS; // max number of riomap'ed buffers
+  //   unsigned mapsize = MAX_SOCKET_CONNS; // max number of riomap'ed buffers
+  unsigned mapsize = 1; // max number of riomap'ed buffers (for this fd?)
   REQUIRE_0( RSETSOCKOPT(socket_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
 
 

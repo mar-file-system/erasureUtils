@@ -128,18 +128,22 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 
 // This allows more-ledgible support for sockets versus file semantics
 #ifdef SOCKETS
-#  define OPEN(      FDESC, ...)   ((FDESC).fd = skt_open(&(FDESC).handle, ## __VA_ARGS__)) /* 'fd' gets return-code */
-#  define HNDLOP(OP, FDESC, ...)                 skt_##OP(&(FDESC).handle, ## __VA_ARGS__)
-#  define PATHOP(OP, PATH, ...)                  skt_##OP((PATH), ## __VA_ARGS__)
-#  define UMASK(FDESC, MASK)                     FPRINTF(stderr, "sockets: umask() not yet supported\n");
+#  define FD(FDESC)                           (FDESC).peer_fd
+#  define OPEN(      FDESC, ...)              skt_open(&(FDESC), ## __VA_ARGS__)
+#  define HNDLOP(OP, FDESC, ...)              skt_##OP(&(FDESC), ## __VA_ARGS__)
+#  define pHNDLOP(OP, FDESC_PTR, ...)         skt_##OP((FDESC_PTR), ## __VA_ARGS__)
+#  define PATHOP(OP, PATH, ...)               skt_##OP((PATH), ## __VA_ARGS__)
+#  define UMASK(FDESC, MASK)                  /* TBD */
+
 #else
-#  define OPEN(      FDESC, ...)   ((FDESC).fd = open(__VA_ARGS__))
-#  define HNDLOP(OP, FDESC, ...)                 OP((FDESC).fd, ## __VA_ARGS__)
-#  define PATHOP(OP, PATH, ...)                  OP((PATH), ## __VA_ARGS__)
-#  define UMASK(FDESC, MASK)                     umask(mask)
+#  define FD(FDESC)                           (FDESC)
+#  define OPEN(      FDESC, ...)   ((FDESC) = open(__VA_ARGS__))
+#  define HNDLOP(OP, FDESC, ...)              OP((FDESC), ## __VA_ARGS__)
+#  define pHNDLOP(OP, FDESC_PTR, ...)         OP(*(FDESC_PTR), ## __VA_ARGS__)
+#  define PATHOP(OP, PATH, ...)               OP((PATH), ## __VA_ARGS__)
+#  define UMASK(FDESC, MASK)                  umask(mask)
 #endif
 
-#define FD(FDESC)  (FDESC).fd
 
 
 // default: ignore <state>
@@ -393,16 +397,20 @@ ssize_t read_all(FileDesc* fd, void* buffer, size_t nbytes) {
   char*       buf = buffer;
   while (remain) {
     errno = 0;
-    ssize_t count = HNDLOP(read, *fd, buf+result, remain);
+
+    ssize_t count = pHNDLOP(read, fd, buf+result, remain);
+
     if (count < 0)
       return count;
+
     else if (count == 0)
       return result;            /* EOF */
-    else if (errno)
-      return -1;
+
+    //    // COMMENTED OUT: see write_all()
+    //    else if (errno)
+    //      return -1;
 
     remain -= count;
-    buf    += count;
     result += count;
   }
 
@@ -986,14 +994,17 @@ ssize_t write_all(FileDesc* fd, const void* buffer, size_t nbytes) {
   const char* buf = buffer;
   while (remain) {
     errno = 0;
-    ssize_t count = HNDLOP(write, *fd, (const uint8_t*)buf+result, remain);
+
+    ssize_t count = pHNDLOP(write, fd, (const uint8_t*)buf+result, remain);
+
     if (count < 0)
       return count;
-    else if (errno)
-      return -1;
+
+    //    // this is EAGAIN, even after successful writes
+    //    else if (errno)
+    //      return -1;
 
     remain -= count;
-    buf    += count;
     result += count;
   }
 
@@ -1245,6 +1256,20 @@ int ne_close( ne_handle handle )
       free( zero_buff );
    }
 
+#ifdef META_FILES
+   // DEBUGGING.  close all connections before opening new ones?
+   counter = 0;
+   while (counter < N+E) {
+     if ( FD(handle->FDArray[counter]) != -1 ) {
+       HNDLOP(close, handle->FDArray[counter]);
+     }
+     ++ counter;
+   }
+   FPRINTF(stderr, "sleeping 5 seconds ... ");
+   sleep(5);
+   FPRINTF(stderr, "done.\n");
+#endif
+
    /* Close file descriptors and free bufs and set xattrs for written files */
    counter = 0;
    while (counter < N+E) {
@@ -1276,6 +1301,7 @@ int ne_close( ne_handle handle )
          strncat( file, META_SFX, strlen(META_SFX) + 1 );
 
          mode_t mask = umask(0000);
+         memset(&fd, 0, sizeof(FileDesc));
          OPEN(fd, file, (O_WRONLY | O_CREAT), 0666);
          UMASK(fd, mask);
          if ( FD(fd) < 0 ){ 
@@ -1284,7 +1310,7 @@ int ne_close( ne_handle handle )
          }
          else {
             // val = HNDLOP( write, fd, xattrval, strlen(xattrval) + 1 );
-           val = write_all(&fd, xattrval, strlen(xattrval) +1);
+            val = write_all(&fd, xattrval, strlen(xattrval) +1);
             if ( val != strlen(xattrval) + 1 ) {
                FPRINTF(stderr,"ne_close: failed to write to file %s\n",file);
                tmp = -1;
@@ -1313,9 +1339,10 @@ int ne_close( ne_handle handle )
          }
 
       }
-      if ( FD(handle->FDArray[counter]) != -1 ) {
-        HNDLOP(close, handle->FDArray[counter]);
-      }
+      //      if ( FD(handle->FDArray[counter]) != -1 ) {
+      //        HNDLOP(close, handle->FDArray[counter]);
+      //      }
+
 
       if (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1 ) {
          handle->snprintf( file, MAXNAME-1, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
@@ -1506,10 +1533,15 @@ int xattr_check( ne_handle handle, char *path )
 
       handle->snprintf( nfile, MAXNAME-1, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
       strncat( nfile, META_SFX, strlen(META_SFX)+1 );
-      FPRINTF(stdout,"xattr_check: opening file %s\n",nfile);
-      FileDesc meta_fd;
-      OPEN( meta_fd, nfile, O_RDONLY );
-      if ( FD(meta_fd) >= 0 ) {
+      FPRINTF(stdout,"xattr_check: opening file %s\n", nfile);
+
+      FileDesc meta_fd = {0};
+      OPEN(meta_fd, nfile, O_RDONLY);
+      if ( FD(meta_fd) < 0 ) {
+         ret = -1;
+         FPRINTF(stderr,"xattr_check: failed to open file %s\n", nfile);
+      }
+      else {
          // tmp = HNDLOP(read, meta_fd, &xattrval[0], sizeof(xattrval));
          tmp = read_all(&meta_fd, &xattrval[0], sizeof(xattrval));
          if ( tmp < 0 ) {
@@ -1526,10 +1558,7 @@ int xattr_check( ne_handle handle, char *path )
             ret = tmp;
          }
       }
-      else {
-         ret = -1;
-         FPRINTF(stderr,"xattr_check: failed to open file %s\n", nfile);
-      }
+
 
 #else
 

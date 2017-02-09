@@ -112,6 +112,19 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define NEED_0(EXPR)        _TEST(EXPR, ==0, DBG,    return -1)
 #define NEED_GT0(EXPR)      _TEST(EXPR,  >0, DBG,    return -1)
 
+// // jump to cleanup-handler, if expr doesn't have expected value
+// #define jNEED(EXPR)         _TEST(EXPR,    , DBG,    goto jCLEANUP)
+// #define jNEED_0(EXPR)       _TEST(EXPR, ==0, DBG,    goto jCLEANUP)
+// #define jNEED_GT0(EXPR)     _TEST(EXPR,  >0, DBG,    goto jCLEANUP)
+
+// call cleanup function before exiting, if expr doesn't return expected value
+// [put a "jHANDLER" invocation at the top of a function that uses jNEED() macros.]
+typedef void(*jHandlerType)(void* arg);
+#define jHANDLER(FN, ARG)   jHandlerType j_handler = &(FN); void* j_handler_arg = (ARG)
+#define jNEED(EXPR)         _TEST(EXPR,    , DBG,    j_handler(j_handler_arg); return -1)
+#define jNEED_0(EXPR)       _TEST(EXPR, ==0, DBG,    j_handler(j_handler_arg); return -1)
+#define jNEED_GT0(EXPR)     _TEST(EXPR,  >0, DBG,    j_handler(j_handler_arg); return -1)
+
 // abort(), if expr doesn't have expected value
 #define REQUIRE(EXPR)       _TEST(EXPR,    , DBG,    abort()  )
 #define REQUIRE_0(EXPR)     _TEST(EXPR, ==0, DBG,    abort()  )
@@ -137,6 +150,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #define XATTR_NAME_SIZE         128
 #define XATTR_VALUE_SIZE        128
+
+#define STAT_DATA_SIZE          (13 * sizeof(size_t)) /* room enough for all 13 members */
+
 
 
 /* -----------------------------------
@@ -248,7 +264,7 @@ typedef struct {
 typedef enum {
   HNDL_FNAME       = 0x01,
   HNDL_CONNECTED   = 0x02,
-  HNDL_SERVER_SIDE = 0x04,       // e.g. read_/write_init don't send GET/PUT
+  //  HNDL_SERVER_SIDE = 0x04,       // e.g. read_/write_init don't send GET/PUT
   HNDL_RIOMAPPED   = 0x08,
 
   HNDL_IS_SOCKET   = 0x10,       // read/write-buffer also work on files
@@ -278,12 +294,6 @@ typedef struct {
 } SocketHandle;
 
 
-typedef union {
-  int           fd;
-  SocketHandle  handle;
-} FileDesc;
-
-
 
 
 // "commands" for pseudo-packet
@@ -294,10 +304,7 @@ typedef enum {
   CMD_GET   = 1,                // ignore <size>
   CMD_PUT,
   CMD_DEL,
-  CMD_DATA,                     // amount of data sent (via riowrite)
-  CMD_ACK,                      // got data (ready for riowrite), <size> has read-size
   CMD_STAT,
-  CMD_RIO_OFFSET,               // reader sends riomapped offset (for riowrite)
   CMD_SEEK_ABS,                 // <size> has position to seek to
   CMD_SEEK_FWD,
   CMD_SEEK_BACK,
@@ -305,6 +312,10 @@ typedef enum {
   CMD_GET_XATTR,                // ditto
   CMD_CHOWN,
   CMD_RENAME,
+
+  CMD_RIO_OFFSET,               // reader sends riomapped offset (for riowrite)
+  CMD_DATA,                     // amount of data sent (via riowrite)
+  CMD_ACK,                      // got data (ready for riowrite), <size> has read-size
   CMD_ACK_CMD,                  // command received (<size> has ack'ed cmd)
 
   CMD_NULL,                     // THIS IS ALWAYS LAST
@@ -341,12 +352,35 @@ typedef struct {
 
 
 
-// --- low-level tools
+
+// --- network-byte-order conversions
+
+#define jSEND_VALUE(BUF, VAR)                                    \
+  do {                                                          \
+    jNEED_0( hton_generic((BUF), (char*)&(VAR), sizeof(VAR)) ); \
+    (BUF)+=sizeof(VAR);                                         \
+  } while (0)
+
+#define jRECV_VALUE(VAR, BUF)                                    \
+  do {                                                          \
+    jNEED_0( ntoh_generic((char*)&(VAR), (BUF), sizeof(VAR)) ); \
+    (BUF)+=sizeof(VAR);                                         \
+  } while (0)
+
 uint64_t hton64(uint64_t ll);
 uint64_t ntoh64(uint64_t ll);
 
+int hton_generic(char* dst, char* src, size_t src_size);
+int ntoh_generic(char* dst, char* src, size_t src_size);
+
+
+
+// --- low-level tools
 int      write_pseudo_packet(int fd, SocketCommand command, size_t size, void* buff);
 int      read_pseudo_packet_header(int fd, PseudoPacketHeader* pkt);
+
+int      read_init (SocketHandle* handle, SocketCommand cmd, char* buf, size_t size);
+int      write_init(SocketHandle* handle, SocketCommand cmd);
 
 ssize_t  read_buffer (int fd, char*       buf, size_t size, int is_socket);
 int      write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset);
@@ -355,14 +389,20 @@ ssize_t  copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t siz
 ssize_t  copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size);
 
 void     shut_down_handle(SocketHandle* handle);
+void     jshut_down_handle(void* handle);
 
 
 // --- For now, we'll use a open/read/write/close model, because that
 //     will fit most easily into libne.
 
 int           skt_open     (SocketHandle* handle, const char* fname, int flags, ...);
+
 ssize_t       skt_write    (SocketHandle* handle, const void* buf, size_t count);
+ssize_t       skt_write_all(SocketHandle* handle, const void* buf, size_t count);
+
 ssize_t       skt_read     (SocketHandle* handle,       void* buf, size_t count);
+ssize_t       skt_read_all (SocketHandle* handle,       void* buf, size_t count);
+
 off_t         skt_lseek    (SocketHandle* handle, off_t offset, int whence);
 int           skt_fsetxattr(SocketHandle* handle, const char* name, const void* value, size_t size, int flags);
 int           skt_close    (SocketHandle* handle);

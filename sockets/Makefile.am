@@ -87,12 +87,12 @@ librdma_sockets_a_CPPFLAGS = $(SOCKET_DEFS)
 bin_PROGRAMS = client socket_fserver
 
 socket_fserver_SOURCES = socket_fserver.c
-socket_fserver_CPPFLAGS = $(SOCKET_DEFS)
+socket_fserver_CPPFLAGS = $(SOCKET_DEFS) -fstack-protector-all
 socket_fserver_LDADD = librdma_sockets.a
 socket_fserver_LDFLAGS = -lrt -lpthread $(SOCKET_LIBS)
 
 client_SOURCES = client.c
-client_CPPFLAGS = $(SOCKET_DEFS)
+client_CPPFLAGS = $(SOCKET_DEFS) -fstack-protector-all
 client_LDADD = librdma_sockets.a
 client_LDFLAGS = -lrt $(SOCKET_LIBS)
 
