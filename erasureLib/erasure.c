@@ -121,7 +121,6 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 				int nerrs, int nsrcerrs, int k, int m);
 //void dump(unsigned char *buf, int len);
 
-
 /**
  * Opens a new handle for a specific erasure striping
  * @param char* path : Name structure for the files of the desired striping.  This should contain a single "%d" field.
@@ -231,6 +230,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
       handle->csum[counter] = 0;
       handle->nsz[counter] = 0;
       handle->ncompsz[counter] = 0;
+      handle->written[counter] = 0;
       handle->src_in_err[counter] = 0;
       handle->src_err_list[counter] = 0;
    }
@@ -906,10 +906,43 @@ read:
    return llcounter; 
 }
 
+void sync_file(ne_handle handle, int block_index) {
+#if 0
+  char path[1024];
+  int block_number = (handle->erasure_offset + block_index)
+    % (handle->N + handle->E);
+  sprintf(path, handle->path, block_number);
+  strcat(path, WRITE_SFX);
+  close(handle->FDArray[block_index]);
+  handle->FDArray[block_index] = open(path, O_WRONLY);
+  if(handle->FDArray[block_index] == -1) {
+    DBG_FPRINTF(stderr, "failed to reopen file\n");
+    handle->src_in_err[block_index] = 1;
+    handle->src_err_list[handle->nerr] = block_index;
+    handle->nerr++;
+    return;
+  }
+
+  off_t seek = lseek(handle->FDArray[block_index],
+                     handle->written[block_index],
+                     SEEK_SET);
+  if(seek < handle->written[block_index]) {
+    DBG_FPRINTF(stderr, "failed to seek reopened file\n");
+    handle->src_in_err[block_index] = 1;
+    handle->src_err_list[handle->nerr] = block_index;
+    handle->nerr++;
+    close(handle->FDArray[block_index]);
+    return;
+  }
+#else
+  fsync(handle->FDArray[block_index]);
+#endif
+}
+
 
 /**
  * Writes nbytes from buffer into the erasure stiping specified by the provided handle
- * @param ne_handle handle : Handle for the erasure striping to be written to
+  * @param ne_handle handle : Handle for the erasure striping to be written to
  * @param void* buffer : Buffer containing the data to be written
  * @param int nbytes : Number of data bytes to be written from buffer
  * @return int : Number of bytes written or -1 on error
@@ -994,7 +1027,7 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
                handle->src_err_list[handle->nerr] = counter;
                handle->nerr++;
             }
-
+            handle->written[counter] += writesize;
 #ifdef INT_CRC
             writesize -= sizeof(crc);
 #endif
@@ -1002,6 +1035,11 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
             handle->csum[counter] += crc; 
             handle->nsz[counter] += writesize;
             handle->ncompsz[counter] += writesize;
+
+            if(handle->written[counter] % SYNC_SIZE == 0) {
+              DBG_FPRINTF(stdout, "syncing file\n");
+              sync_file(handle, counter);
+            }
          }
 
          counter++;
@@ -1057,6 +1095,11 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
              handle->src_err_list[handle->nerr] = counter + ecounter;
              handle->nerr++;
            }
+         }
+         handle->written[counter+ecounter] += writesize;
+         if(handle->written[counter+ecounter] % SYNC_SIZE == 0) {
+           DBG_FPRINTF(stdout, "syncing file\n");
+           sync_file(handle, counter+ecounter);
          }
 
          ecounter++;
@@ -1148,7 +1191,6 @@ int ne_close( ne_handle handle )
          DBG_FPRINTF( stdout, "ne_close: setting file %d xattr = \"%s\"\n", counter, xattrval );
 
 #ifdef META_FILES
-
          sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
          if ( handle->mode == NE_REBUILD ) {
             strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 );
@@ -1176,7 +1218,6 @@ int ne_close( ne_handle handle )
             }
          }
          chown(file, handle->owner, handle->group);
-
 #else
 
 #if (AXATTR_SET_FUNC == 5)
@@ -1239,7 +1280,6 @@ int ne_close( ne_handle handle )
          sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
          strncpy( nfile, file, strlen(file) + 1);
          strncat( file, WRITE_SFX, strlen(WRITE_SFX) + 1 );
-
          if ( rename( file, nfile ) != 0 ) {
             DBG_FPRINTF( stderr, "ne_close: failed to rename written file %s\n", file );
             if(! handle->src_in_err[counter] ) {
@@ -1247,7 +1287,6 @@ int ne_close( ne_handle handle )
                  handle->src_in_err[counter] = 1;
             }
          }
-
 #ifdef META_FILES
          strncat( file, META_SFX, strlen(META_SFX)+1 );
          strncat( nfile, META_SFX, strlen(META_SFX)+1 );
