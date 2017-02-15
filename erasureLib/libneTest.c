@@ -72,6 +72,33 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 int crc_status();
 
+
+#ifdef SOCKETS
+// see marfs/fuse/src/dal.c
+//
+// <dest> is the buffer to receive the snprintf'ed path
+// <size> is the size of that buffer
+// <format> is a path template.  For sockets, on the VLE,
+//           it might look like 192.168.0.%d:/zfs/exports/repo10+2/pod1/block%d/my_file
+// <block> is the current block-number (from libne)
+// <state> is whatever state was passed into ne_open1()
+//
+int snprintf_for_vle(char*       dest,
+                     size_t      size,
+                     const char* format,
+                     uint32_t    block,
+                     void*       state) {
+
+  int pod_offset = 0;
+  int host_offset = 1 + (block / 2);
+  int block_offset = 1 + block;
+  return snprintf(dest, size, format,
+                  pod_offset + host_offset,  // "192.168.0.%d"
+                  block_offset);             // "block%d"
+}
+#endif
+
+
 int main( int argc, const char* argv[] ) 
 {
    unsigned long long nread;
@@ -170,7 +197,11 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
+#ifdef SOCKETS
+      handle = ne_open1( snprintf_for_vle, NULL, (char *)argv[3], NE_WRONLY, start, N, E );
+#else
       handle = ne_open( (char *)argv[3], NE_WRONLY, start, N, E );
+#endif
       if ( handle == NULL ) {
          fprintf( stderr, "libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
          return -1;

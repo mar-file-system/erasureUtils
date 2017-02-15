@@ -531,6 +531,7 @@ int server_chown(ThreadContext* ctx) {
 
   // perform op
   int rc = lchown(fname, uid, gid);
+  DBG("result: %d %s\n", rc, (rc ? strerror(errno) : ""));
 
   // send ACK with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_ACK_CMD, rc, NULL) );
@@ -571,6 +572,7 @@ int server_rename(ThreadContext* ctx) {
 
   // perform op
   int rc = rename(fname, new_fname);
+  DBG("result: %d %s\n", rc, (rc ? strerror(errno) : ""));
 
   // send ACK with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_ACK_CMD, rc, NULL) );
@@ -645,12 +647,14 @@ int server_stat(ThreadContext* ctx) {
   // Failure doesn't mean the server-routine failed
   if (lstat(fname, &st)) {
     // case (1), stat failed
+    DBG("stat failed: %s\n", strerror(errno));
 
     // (a) send ACK with return-code == negative errno
     NEED_0( write_pseudo_packet(handle->peer_fd, CMD_ACK_CMD, -errno, NULL) );
   }
   else {
     // case (2), stat succeeded
+    DBG("stat OK\n");
 
     // (a) send ACK with return-code == sizeof(struct stat), for crude validation
     jNEED_0( write_pseudo_packet(handle->peer_fd, CMD_ACK_CMD, sizeof(struct stat), NULL) );

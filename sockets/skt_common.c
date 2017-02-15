@@ -408,9 +408,7 @@ const char* _command_str[] = {
   "PUT",
   "DEL",
   "STAT",
-  "SEEK_ABS",
-  "SEEK_FWD",
-  "SEEK_BACK",
+  "SEEK_SET",
   "SET_XATTR",
   "GET_XATTR",
   "CHOWN",
@@ -574,6 +572,10 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
 // <handle> should already be opened for writing (e.g. with skt_open() in client,
 //      or fake_open() on server.
 //
+// To accomodate libne() calling skt_lseek(), we implement support for
+// seeks as an optional CMD_SEEK_SET pseudo-header, sent by the reader
+// before the ACK.
+
 ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size) {
 
 #ifdef SKIP_FILE_READS
@@ -592,7 +594,7 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
 
     // --- read from file (unless file-reads are suppressed)
 #ifdef SKIP_FILE_READS
-    // don't waste time reading.  Just send a raw buffer.
+    // File-reads suppressed.  Don't bother reading.  Just send a raw buffer.
     ssize_t read_count  = size;
 
     if (unlikely(iters-- <= 0)) {
@@ -617,12 +619,38 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
 #endif
 
     // --- copy all of buffer to socket
-    //    Do not use write_buffer(handle->peer_fd, ... )
+    //
+    // NOTE: Do not use write_buffer(handle->peer_fd, ... )
+    //
+    // NOTE: Our riowrite protocol only discovers seeks from the
+    //    client at the time it goes to write and waits for an ACK,
+    //    and gets a SEEK, instead.  skt_write() then returns an
+    //    "error" to us, with the file-handle marked HNDL_SEEK.  We
+    //    must then drop the write of this buffer read (ahead) in the
+    //    file, do our seek in the fd associated witht the file, and
+    //    start the new stream from there.
+
     size_t remain = read_count;
     size_t copied = 0;
     while (remain) {
       ssize_t write_count = skt_write(handle, buf+copied, remain);
-      NEED( write_count >= 0 ); // spin forever if server's FS is wedged?
+
+      // NEED( write_count >= 0 ); // spin forever if server's FS is wedged?
+      if (unlikely(write_count < 0)) {
+
+        if (handle->flags & HNDL_SEEK_SET) {
+          DBG("write failed due to SEEK.  offset = %lld\n", handle->seek_pos);
+          handle->flags &= ~(HNDL_SEEK_SET);
+          NEED_GT0( lseek(fd, handle->seek_pos, SEEK_SET) );
+          continue;
+        }
+
+        fprintf(stderr, "write failed: moved: %llu, read_ct: %lld, remain: %llu\n",
+                bytes_moved, read_count, remain);
+        return -1;
+      }
+
+
       remain -= write_count;
       copied += write_count;
     }
@@ -999,12 +1027,20 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
   NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
 
   if (header.command != CMD_ACK) {
+
+    if (header.command == CMD_SEEK_SET) {
+      handle->flags |= HNDL_SEEK_SET;
+      handle->seek_pos = header.size;
+      DBG("got SEEK %lld\n", header.size);
+      return -1;
+    }
+    
     fprintf(stderr, "expected an ACK, but got %s\n", command_str(header.command));
     return -1;
   }
 
-  // Reader's ACK now also includes the size of the reader's
-  // read-buffer.  For RDMA, don't write more than this amount.
+  // Reader's ACK includes the size of the reader's read-buffer.
+  // For RDMA, don't write more than this amount.
   if (size > header.size) {
     size = header.size;
   }
@@ -1124,6 +1160,15 @@ ssize_t skt_read(SocketHandle* handle, void* buf, size_t size) {
   NEED_0( read_init(handle, CMD_GET, buf, size) );
 
 
+  // If there has been a previous call to skt_lseek(), transmit that
+  // to the server now.
+  if (handle->flags & HNDL_SEEK_SET) {
+    DBG("sending SEEK to %lld\n", handle->seek_pos);
+    handle->flags &= ~(HNDL_SEEK_SET);
+    NEED_0( write_pseudo_packet(handle->peer_fd, CMD_SEEK_SET, handle->seek_pos, NULL) );
+  }
+
+
 #ifdef USE_RIOWRITE
   // tell peer we are done with buffer, so she can begin overwriting
   // with her next riowrite().  We also indicate the maximum amount we
@@ -1195,7 +1240,7 @@ ssize_t skt_read_all(SocketHandle* handle, void* buffer, size_t size) {
 // ...........................................................................
 
 off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
-  DBG("skt_read(%d(flags: 0x%x), %llx, %d)\n", handle->peer_fd, handle->flags, offset, whence);
+  DBG("skt_read(%d (flags: 0x%x), %llx, %d)\n", handle->peer_fd, handle->flags, offset, whence);
 
   if ((whence == SEEK_SET) && (offset == handle->stream_pos)) {
     return handle->stream_pos;
@@ -1203,11 +1248,41 @@ off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
   if ((whence == SEEK_CUR) && (offset == 0)) {
     return handle->stream_pos;
   }
+  else if (handle->flags & HNDL_PUT) {
+    fprintf(stderr, "lseek(%llu, %d) from %llu -- non-zero head motion on a PUT is not supported\n",
+            offset, handle->stream_pos, whence);
+    errno = EINVAL;
+    return (off_t)-1;
+  }
 
-  fprintf(stderr, "lseek(%llu, %d) from %llu -- non-zero head motion not yet supported\n",
-          offset, handle->stream_pos, whence);
-  errno = EINVAL;
-  return (off_t)-1;
+
+  // We translate SEEK_CUR into SEEK_SET, using the current stream-pos.
+  // Adjust the stream-pos now, so that multiple seeks will work.
+  //
+  // NOTE: We'll give you a return-value now, though the seek doesn't
+  //     actually get sent to the server until the next skt_read().
+
+  if (whence == SEEK_END) {
+    // we don't keep track of file-size, so we can't easily do this, for now.
+    // leave stream_pos where it is; this is just a failed seek.
+    // leave seek_pos where it is; this is just a failed seek.
+
+    // handle->seek_pos = <file_size> + offset;
+    fprintf(stderr, "lseek(... SEEK_END) not supported\n");
+    errno = EINVAL;
+    return (off_t)-1;
+  }    
+  else if (whence == SEEK_SET) {
+    handle->seek_pos   = offset;
+    handle->stream_pos = offset;
+  }
+  else if (whence == SEEK_CUR) {
+    handle->seek_pos   = handle->stream_pos + offset;
+    handle->stream_pos = handle->seek_pos;
+  }
+
+  handle->flags |= HNDL_SEEK_SET;
+  return handle->seek_pos;
 }
 
 

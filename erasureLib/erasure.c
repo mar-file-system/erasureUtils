@@ -154,6 +154,8 @@ int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, 
 /**
  * Opens a new handle for a specific erasure striping
  *
+ * ne_open(path, mode, ...)  calls this with fn=ne_default_snprintf, and state=NULL
+ *
  * @param SnprintfFunc : function takes block-number and <state> and produces per-block path from template.
  * @param state : optional state to be used by SnprintfFunc (e.g. configuration details)
  * @param char* path : sprintf format-template for individual files of in each stripe.
@@ -394,7 +396,8 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
 ssize_t read_all(FileDesc* fd, void* buffer, size_t nbytes) {
   ssize_t     result = 0;
   size_t      remain = nbytes;
-  char*       buf = buffer;
+  char*       buf    = buffer;  /* assure ourselves pointer arithmetic is by onezies  */
+
   while (remain) {
     errno = 0;
 
@@ -991,11 +994,12 @@ read:
 ssize_t write_all(FileDesc* fd, const void* buffer, size_t nbytes) {
   ssize_t     result = 0;
   size_t      remain = nbytes;
-  const char* buf = buffer;
+  const char* buf    = buffer;  /* assure ourselves pointer arithmetic is by onezies  */
+
   while (remain) {
     errno = 0;
 
-    ssize_t count = pHNDLOP(write, fd, (const uint8_t*)buf+result, remain);
+    ssize_t count = pHNDLOP(write, fd, buf+result, remain);
 
     if (count < 0)
       return count;
@@ -1265,9 +1269,9 @@ int ne_close( ne_handle handle )
      }
      ++ counter;
    }
-   FPRINTF(stderr, "sleeping 5 seconds ... ");
-   sleep(5);
-   FPRINTF(stderr, "done.\n");
+   ///   FPRINTF(stderr, "sleeping 5 seconds ... ");
+   ///   sleep(5);
+   ///   FPRINTF(stderr, "done.\n");
 #endif
 
    /* Close file descriptors and free bufs and set xattrs for written files */
@@ -1429,6 +1433,9 @@ int ne_close( ne_handle handle )
 
 /**
  * Deletes the erasure striping of the specified width with the specified path format
+ *
+ * ne_delete(path, width)  calls this with fn=ne_default_snprintf, and state=NULL
+ *
  * @param char* path : Name structure for the files of the desired striping.  This should contain a single "%d" field.
  * @param int width : Total width of the erasure striping (i.e. N+E)
  * @return int : 0 on success and -1 on failure
@@ -2476,6 +2483,8 @@ int ne_noxattr_rebuild(ne_handle handle) {
 /**
  * Retrieves the health and parameters for the erasure striping
  * indicated by the provided path and offset
+ *
+ * ne_status(path) calls this with fn=ne_default_snprintf, and state=NULL
  *
  * @param SnprintfFunc : function takes block-number and <state> and produces per-block path from template.
  * @param state : optional state to be used by SnprintfFunc (e.g. configuration details)

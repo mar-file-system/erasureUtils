@@ -336,8 +336,16 @@ int client_test1c(const char* path) {
   printf("\n");
 
   // buffer to write
+#if 0
   const char* buf = "This is a test\n";
   size_t      buf_len = strlen(buf);
+#else
+# define M 1024*1024
+  char    storage[M] __attribute__ (( aligned(64) ));;
+  char*   buf = storage;
+  size_t  buf_len = M;
+  memset(buf, 1, M);
+#endif
 
   ssize_t bytes_moved = 0;
   ssize_t write_count;
@@ -538,6 +546,7 @@ main(int argc, char* argv[]) {
 
   // I thought getopt() was supposed to strip out the argv elements
   // that it pulled out.  Apparently not.
+  file_spec=argv[2];
   if (cmd == 't')
     file_spec=argv[3];
 

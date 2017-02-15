@@ -103,9 +103,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 // print warning, if expression doesn't have expected value
-#define EXPECT(EXPR)        _TEST(EXPR,    , printf,          )
-#define EXPECT_0(EXPR)      _TEST(EXPR, ==0, printf,          )
-#define EXPECT_GT0(EXPR)    _TEST(EXPR,  >0, printf,          )
+#define EXPECT(EXPR)        _TEST(EXPR,    , DBG,          )
+#define EXPECT_0(EXPR)      _TEST(EXPR, ==0, DBG,          )
+#define EXPECT_GT0(EXPR)    _TEST(EXPR,  >0, DBG,          )
 
 // return -1, if expr doesn't have expected value
 #define NEED(EXPR)          _TEST(EXPR,    , DBG,    return -1)
@@ -262,19 +262,21 @@ typedef struct {
 
 
 typedef enum {
-  HNDL_FNAME       = 0x01,
-  HNDL_CONNECTED   = 0x02,
-  //  HNDL_SERVER_SIDE = 0x04,       // e.g. read_/write_init don't send GET/PUT
-  HNDL_RIOMAPPED   = 0x08,
+  HNDL_FNAME       = 0x0001,
+  HNDL_CONNECTED   = 0x0002,
+//  HNDL_SERVER_SIDE = 0x0004,    // e.g. read_/write_init don't send GET/PUT
+  HNDL_RIOMAPPED   = 0x0008,
 
-  HNDL_IS_SOCKET   = 0x10,       // read/write-buffer also work on files
-  HNDL_RIOWRITE    = 0x20,
-  HNDL_DOUBLE      = 0x40,       // double-buffering (currently unused)
+  HNDL_IS_SOCKET   = 0x0010,    // read/write-buffer also work on files
+  HNDL_RIOWRITE    = 0x0020,
+  HNDL_DOUBLE      = 0x0040,    // double-buffering (currently unused)
 
   HNDL_GET         = 0x0100,
   HNDL_PUT         = 0x0200,
   HNDL_OP_INIT     = 0x0400,
   HNDL_CLOSED      = 0x0800,
+
+  HNDL_SEEK_SET    = 0x1000,    // reader called skt_lseek()
 } SHFlags;
 
 
@@ -290,6 +292,7 @@ typedef struct {
   char*        rio_buf;         // reader saves riomapp'ed address, for riounmap()
   size_t       rio_size;        // reader saves riomapp'ed size, for riounmap()
   size_t       stream_pos;      // TBD: stream-position, to ignore redundant skt_seek()
+  ssize_t      seek_pos;        // ignore, unless HNDL_SEEK_ABS
   uint16_t     flags;           // SHFlags
 } SocketHandle;
 
@@ -305,9 +308,7 @@ typedef enum {
   CMD_PUT,
   CMD_DEL,
   CMD_STAT,
-  CMD_SEEK_ABS,                 // <size> has position to seek to
-  CMD_SEEK_FWD,
-  CMD_SEEK_BACK,
+  CMD_SEEK_SET,                 // <size> has position to seek to
   CMD_SET_XATTR,                // <size> is split into <name_len>, <value_len>
   CMD_GET_XATTR,                // ditto
   CMD_CHOWN,
