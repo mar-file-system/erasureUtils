@@ -57,6 +57,8 @@
 lib_LIBRARIES = libne.a
 libne_a_SOURCES = erasure.c erasure.h
 
+include_HEADERS = erasure.h
+
 bin_PROGRAMS = libneTest
 libneTest_SOURCES = libneTest.c
 libneTest_LDADD = libne.a

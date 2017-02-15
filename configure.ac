@@ -90,8 +90,12 @@ AC_TYPE_UINT64_T
 AC_TYPE_UINT8_T
 
 # Checks for library functions.
-AC_FUNC_MALLOC
 AC_CHECK_FUNCS([bzero ftruncate memset strerror strtol strtoul])
+
+# AC_FUNC_MALLOC runs into "undefined reference to 'rpl_malloc'"
+### AC_FUNC_MALLOC
+AC_CHECK_FUNCS([malloc])
+
 
 AXATTR_GET_FUNC_CHECK
 AXATTR_SET_FUNC_CHECK
