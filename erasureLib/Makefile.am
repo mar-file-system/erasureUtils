@@ -54,15 +54,22 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-
 # Allow automake to figure out what "+=" means
 SOCKET_DEFS =
 
-if BUILD_SOCKETS
+# This is the pitiful approach required to avoid "already defined"
+# warnings, if you were to try to re-assign SOCKET_DEFS to the thing
+# you wanted based on two different conditions
+if RDMA_SOCKETS
   SOCKET_DEFS += -DSOCKETS=RDMA
   SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
   SOCKET_LIBS = ../sockets/librdma_sockets.a
   SOCKET_LD = -lrdmacm
+else
+  if ANY_SOCKETS
+    SOCKET_DEFS += -DSOCKETS
+    SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
+  endif
 endif
 
 if DEBUG_NE

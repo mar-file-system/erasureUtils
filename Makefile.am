@@ -58,7 +58,7 @@
 AUTOMAKE_OPTIONS = foreign
 
 
-if BUILD_SOCKETS
+if ANY_SOCKETS
   MAYBE_SOCKETS = sockets
 endif
 

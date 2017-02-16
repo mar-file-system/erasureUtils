@@ -406,7 +406,8 @@ ssize_t       skt_read_all (SocketHandle* handle,       void* buf, size_t count)
 
 off_t         skt_lseek    (SocketHandle* handle, off_t offset, int whence);
 int           skt_fsetxattr(SocketHandle* handle, const char* name, const void* value, size_t size, int flags);
-int           skt_close    (SocketHandle* handle);
+int           skt_fsync    (SocketHandle* handle);  // no-op, for now
+int           skt_close    (SocketHandle* handle);  // also does fsync()
 
 int           skt_unlink(const char* service_path);
 int           skt_chown (const char* service_path, uid_t uid, gid_t gid);

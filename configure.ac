@@ -113,7 +113,7 @@ AC_ARG_ENABLE([sockets],
                 esac],
                [enable_sockets=no])
 
-AM_CONDITIONAL([BUILD_SOCKETS], [test "$enable_sockets" != no ])
+AM_CONDITIONAL([ANY_SOCKETS],   [test "$enable_sockets" != no ])
 AM_CONDITIONAL([RDMA_SOCKETS],  [test "$enable_sockets"  == rdma])
 
        

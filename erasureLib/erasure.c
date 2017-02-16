@@ -981,33 +981,36 @@ read:
 void sync_file(ne_handle handle, int block_index) {
 #if 0
   char path[1024];
-  int block_number = (handle->erasure_offset + block_index)
-    % (handle->N + handle->E);
-  sprintf(path, handle->path, block_number);
+  int block_number = ((handle->erasure_offset + block_index)
+                      % (handle->N + handle->E));
+  handle->snprintf(path, MAXNAME, handle->path, block_number, handle->state);
+
   strcat(path, WRITE_SFX);
-  close(handle->FDArray[block_index]);
-  handle->FDArray[block_index] = open(path, O_WRONLY);
-  if(handle->FDArray[block_index] == -1) {
-    DBG_FPRINTF(stderr, "failed to reopen file\n");
+  HNDLOP(close, handle->FDArray[block_index]);
+  OPEN(handle->FDArray[block_index], path, O_WRONLY);
+  if(FD(handle->FDArray[block_index]) == -1) {
+    FPRINTF(stderr, "failed to reopen file\n");
     handle->src_in_err[block_index] = 1;
     handle->src_err_list[handle->nerr] = block_index;
     handle->nerr++;
     return;
   }
 
-  off_t seek = lseek(handle->FDArray[block_index],
-                     handle->written[block_index],
-                     SEEK_SET);
+  off_t seek = HNDLOP(lseek, handle->FDArray[block_index],
+                      handle->written[block_index],
+                      SEEK_SET);
   if(seek < handle->written[block_index]) {
-    DBG_FPRINTF(stderr, "failed to seek reopened file\n");
+    FPRINTF(stderr, "failed to seek reopened file\n");
     handle->src_in_err[block_index] = 1;
     handle->src_err_list[handle->nerr] = block_index;
     handle->nerr++;
-    close(handle->FDArray[block_index]);
+    HNDLOP(close, handle->FDArray[block_index]);
     return;
   }
+
 #else
-  fsync(handle->FDArray[block_index]);
+  HNDLOP(fsync, handle->FDArray[block_index]);
+
 #endif
 }
 
@@ -1155,7 +1158,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
             handle->ncompsz[counter] += writesize;
 
             if(handle->written[counter] % SYNC_SIZE == 0) {
-              DBG_FPRINTF(stdout, "syncing file\n");
+              FPRINTF(stdout, "syncing file\n");
               sync_file(handle, counter);
             }
          }
@@ -1218,7 +1221,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
          }
          handle->written[counter+ecounter] += writesize;
          if(handle->written[counter+ecounter] % SYNC_SIZE == 0) {
-           DBG_FPRINTF(stdout, "syncing file\n");
+           FPRINTF(stdout, "syncing file\n");
            sync_file(handle, counter+ecounter);
          }
 

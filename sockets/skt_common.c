@@ -1298,6 +1298,17 @@ int skt_fsetxattr(SocketHandle* handle, const char* service_path, const void* va
 }
 
 
+// ...........................................................................
+// FSYNC
+//
+// libne now periodically performs an fsync().  We can eventually
+// shoe-horn that into PUT, in the same we we shoe-horned lseek() into
+// GET.  For now, we'll just ignore it.
+// ...........................................................................
+
+int skt_fsync(SocketHandle* handle) {
+  return 0;
+}
 
 
 // ...........................................................................
