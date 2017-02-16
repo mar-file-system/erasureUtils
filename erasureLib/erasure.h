@@ -85,7 +85,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define BLKSZ 1048576
 #define HEADSZ 70
 #define TEST_SEED 57
-#define SYNC_SIZE (40 * 1024 * 1024) /* number of MB between close/reopen */
+#define SYNC_SIZE (34 * 1024 * 1024) /* number of MB between close/reopen */
 
 #define XATTRKEY "user.n.e.offset.bsz.nsz.ncompsz.ncrcsum.totsz"
 #define WRITE_SFX ".partial"
