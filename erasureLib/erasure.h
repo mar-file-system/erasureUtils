@@ -94,6 +94,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define BLKSZ 1048576
 #define HEADSZ 70
 #define TEST_SEED 57
+#define SYNC_SIZE (34 * 1024 * 1024) /* number of MB between close/reopen */
 
 #define XATTRKEY "user.n.e.offset.bsz.nsz.ncompsz.ncrcsum.totsz"
 #define WRITE_SFX ".partial"
@@ -112,6 +113,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define crc32_ieee(...)     crc32_ieee_base(__VA_ARGS__)
 #define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
 #endif
+
+#define UNSAFE(HANDLE) ((HANDLE)->nerr > (HANDLE)->E - MIN_PROTECTION)
 
 typedef uint32_t u32;
 typedef uint64_t u64;
@@ -168,6 +171,7 @@ typedef struct handle {
    u64 csum[ MAXPARTS ];
    unsigned long nsz[ MAXPARTS ];
    unsigned long ncompsz[ MAXPARTS ];
+   off_t written[ MAXPARTS ];
 
    /* Error Pattern Info */
    int nerr;
