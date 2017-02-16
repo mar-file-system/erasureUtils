@@ -12,6 +12,8 @@
 #else
 #include <sys/xattr.h>
 #endif
+#include <assert.h>
+#include <pthread.h>
 
 #ifndef __MARFS_COPYRIGHT_H__
 #define __MARFS_COPYRIGHT_H__
@@ -120,6 +122,343 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 				unsigned char *src_in_err,
 				int nerrs, int nsrcerrs, int k, int m);
 //void dump(unsigned char *buf, int len);
+
+void bq_destroy(BufferQueue *bq) {
+  // XXX: Should technically check these for errors (ie. still locked)
+  pthread_mutex_destroy(&bq->qlock);
+  pthread_cond_destroy(&bq->full);
+  pthread_cond_destroy(&bq->empty);
+}
+
+int bq_init(BufferQueue *bq, int block_number, void **buffers, ne_handle handle) {
+  int i;
+  for(i = 0; i < MAX_QDEPTH; i++) {
+    bq->buffers[i] = buffers[i];
+  }
+
+  bq->block_number = block_number;
+  bq->qdepth       = 0;
+  bq->head         = 0;
+  bq->tail         = 0;
+  bq->flags        = 0;
+  bq->csum         = 0;
+  bq->file         = -1;
+  bq->buffer_size  = handle->bsz;
+  bq->handle       = handle;
+  bq->offset       = 0;
+
+  if(pthread_mutex_init(&bq->qlock, NULL)) {
+    DBG_FPRINTF(stderr, "failed to initialize mutex for qlock\n");
+    return -1;
+  }
+  if(pthread_cond_init(&bq->full, NULL)) {
+    DBG_FPRINTF(stderr, "failed to initialize cv for full\n");
+    // should also destroy the mutex
+    pthread_mutex_destroy(&bq->qlock);
+    return -1;
+  }
+  if(pthread_cond_init(&bq->empty, NULL)) {
+    DBG_FPRINTF(stderr, "failed to initialize cv for empty\n");
+    pthread_mutex_destroy(&bq->qlock);
+    pthread_cond_destroy(&bq->full);
+    return -1;
+  }
+
+  return 0;
+}
+
+void bq_signal(BufferQueue*bq, BufferQueue_Flags sig) {
+  pthread_mutex_lock(&bq->qlock);
+  bq->flags |= sig;
+  pthread_cond_signal(&bq->full);
+  pthread_mutex_unlock(&bq->qlock);  
+}
+
+void bq_close(BufferQueue *bq) {
+  bq_signal(bq, BQ_FINISHED);
+}
+
+void bq_abort(BufferQueue *bq) {
+  bq_signal(bq, BQ_ABORT);
+}
+
+static int set_block_xattr(ne_handle handle, int block) {
+  int tmp = 0;
+  char xattrval[1024];
+  sprintf(xattrval,"%d %d %d %d %lu %lu %llu %llu",
+          handle->N, handle->E, handle->erasure_offset,
+          handle->bsz, handle->nsz[block],
+          handle->ncompsz[block], (unsigned long long)handle->csum[block],
+          (unsigned long long)handle->totsz);
+  DBG_FPRINTF( stdout, "ne_close: setting file %d xattr = \"%s\"\n",
+               block, xattrval );
+
+#ifdef META_FILES
+  char meta_file[2048];
+  sprintf( meta_file, handle->path,
+           (block+handle->erasure_offset)%(handle->N+handle->E) );
+  if ( handle->mode == NE_REBUILD ) {
+    strncat( meta_file, REBUILD_SFX, strlen(REBUILD_SFX)+1 );
+  }
+  else if ( handle->mode == NE_WRONLY ) {
+    strncat( meta_file, WRITE_SFX, strlen(WRITE_SFX)+1 );
+  }
+  strncat( meta_file, META_SFX, strlen(META_SFX) + 1 );
+  mode_t mask = umask(0000);
+  int fd = open( meta_file, O_WRONLY | O_CREAT, 0666 );
+  umask(mask);
+  if ( fd < 0 ) { 
+    DBG_FPRINTF(stderr, "ne_close: failed to open file %s\n", meta_file);
+    tmp = -1;
+  }
+  else {
+    int val = write( fd, xattrval, strlen(xattrval) + 1 );
+    if ( val != strlen(xattrval) + 1 ) {
+      DBG_FPRINTF(stderr, "ne_close: failed to write to file %s\n",
+                  meta_file);
+      tmp = -1;
+      close( fd );
+    }
+    else {
+      tmp = close( fd );
+    }
+  }
+  chown(meta_file, handle->owner, handle->group);
+#else
+
+#warn "xattr metadata is not functional with new thread model"
+#if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
+  tmp = fsetxattr(handle->FDArray[counter], XATTRKEY, xattrval,
+                  strlen(xattrval), 0);
+#else
+  tmp = fsetxattr(handle->FDArray[counter], XATTRKEY, xattrval,
+                  strlen(xattrval), 0, 0);
+#endif
+
+#endif //META_FILES
+  return tmp;
+}
+
+void *bq_writer(void *arg) {
+  BufferQueue *bq     = (BufferQueue *)arg;
+  ne_handle    handle = bq->handle;
+  int          error;
+#ifdef INT_CRC
+  const int write_size = bq->buffer_size + sizeof(u32);
+#else
+  const int write_size = bq->buffer_size;
+#endif
+
+  // open the file.
+  bq->file = open(bq->path, O_WRONLY|O_CREAT, 0666);
+
+  if(pthread_mutex_lock(&bq->qlock) != 0) {
+    exit(-1); // XXX: is this the appropriate response??
+  }
+  if(bq->file == -1) {
+    bq->flags |= BQ_ERROR;
+  }
+  else {
+    bq->flags |= BQ_OPEN;
+  }
+  pthread_cond_signal(&bq->empty);
+  pthread_mutex_unlock(&bq->qlock);
+
+  DBG_FPRINTF(stdout, "opened file %d\n", bq->block_number);
+  
+  while(1) {
+    if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
+      DBG_FPRINTF(stderr, "failed to lock queue lock: %s\n", strerror(error));
+      // XXX: This is a FATAL error
+      return (void *)-1;
+    }
+
+    while(bq->qdepth == 0 && !(bq->flags & BQ_FINISHED) || bq->flags & BQ_ABORT) {
+      DBG_FPRINTF(stdout, "bq_writer[%d]: waiting for signal from ne_write\n", bq->block_number);
+      pthread_cond_wait(&bq->full, &bq->qlock);
+    }
+
+    if(bq->flags & BQ_ABORT) {
+      DBG_FPRINTF(stderr, "aborting buffer queue\n");
+      if(close(bq->file) == 0) {
+        unlink(bq->path); // try to clean up after ourselves.
+      }
+      pthread_mutex_unlock(&bq->qlock);
+      return NULL;
+    }
+    if(bq->qdepth == 0 && bq->flags & BQ_FINISHED) {       // then we are done.
+      break;
+    }
+    
+    if(!(bq->flags & BQ_ERROR)) {
+      pthread_mutex_unlock(&bq->qlock);
+      DBG_FPRINTF(stdout, "Writing block %d\n", bq->block_number);
+      u32 crc   = crc32_ieee(TEST_SEED, bq->buffers[bq->head], bq->buffer_size);
+      error     = write(bq->file, bq->buffers[bq->head], bq->buffer_size);
+      error    += write(bq->file, &crc, sizeof(u32)); // XXX: super small write... could degrade performance
+      bq->csum += crc;
+      pthread_mutex_lock(&bq->qlock);
+    }
+    else { // there were previous errors. skipping the write
+      error = write_size;
+    }
+
+    if(error < write_size) {
+      bq->flags |= BQ_ERROR;
+    }
+    DBG_FPRINTF(stdout, "write done for block %d\n", bq->block_number);
+    // even if there was an error, say we wrote the block and move on.
+    // the producer thread is responsible for checking the error flag
+    // and killing us if needed.
+    bq->head = (bq->head + 1) % MAX_QDEPTH;
+    bq->qdepth--;
+
+    pthread_cond_signal(&bq->empty);
+    pthread_mutex_unlock(&bq->qlock);
+  }
+
+  pthread_mutex_unlock(&bq->qlock);
+  if(close(bq->file)) {
+    bq->flags |= BQ_ERROR;
+    return NULL; // don't bother trying to rename
+  }
+  handle->csum[bq->block_number] = bq->csum;
+  if(set_block_xattr(bq->handle, bq->block_number) != 0) {
+    bq->flags |= BQ_ERROR;
+    // if we failed to set the xattr, don't bother with the rename.
+    return NULL;
+  }
+  char block_file_path[2048];
+  sprintf( block_file_path, handle->path,
+           (bq->block_number+handle->erasure_offset)%(handle->N+handle->E) );
+  if( rename( bq->path, block_file_path ) != 0 ) {
+    DBG_FPRINTF( stderr, "ne_close: failed to rename written file %s\n", bq->path );
+    bq->flags |= BQ_ERROR;
+  }
+#ifdef META_FILES
+  strncat( bq->path, META_SFX, strlen(META_SFX)+1 );
+  strncat( block_file_path, META_SFX, strlen(META_SFX)+1 );
+  if ( rename( bq->path, block_file_path ) != 0 ) {
+    DBG_FPRINTF( stderr, "ne_close: failed to rename written meta file %s\n", bq->path );
+    bq->flags |= BQ_ERROR;
+  }
+#endif
+  return NULL;
+}
+
+/**
+ * Initialize the buffer queues for the handle and start the threads.
+ *
+ * @return -1 on failure, 0 on success.
+ */
+static int initialize_queues(ne_handle handle) {
+  int i;
+  int num_blocks = handle->N + handle->E;
+
+  /* allocate buffers */
+  for(i = 0; i < MAX_QDEPTH; i++) {
+    int error = posix_memalign(&handle->buffer_list[i], 64,
+                               num_blocks * handle->bsz);
+    if(error == -1) {
+      int j;
+      // clean up previously allocated buffers and fail.
+      // we can't recover from this error.
+      for(j = i-1; j >= 0; j--) { free(handle->buffer_list[j]); }
+      return -1;
+    }
+  }
+
+  /* open files and initialize BufferQueues */
+  for(i = 0; i < num_blocks; i++) {
+    int error, file_descriptor;
+    char path[2048];
+    BufferQueue *bq = &handle->blocks[i];
+    // generate the path
+    sprintf(bq->path, handle->path, (i + handle->erasure_offset) % num_blocks);
+    strcat(bq->path, WRITE_SFX);
+
+    // assign pointers into the memaligned buffers.
+    void *buffers[MAX_QDEPTH];
+    int j;
+    for(j = 0; j < MAX_QDEPTH; j++) {
+      buffers[j] = handle->buffer_list[j] + i * handle->bsz;
+    }
+    
+    if(bq_init(bq, i, buffers, handle) < 0) {
+      // TODO: handle error.
+      return -1;
+    }
+
+    // start the threads
+    error = pthread_create(&handle->threads[i], NULL, bq_writer, (void *)bq);
+    if(error != 0) {
+      DBG_FPRINTF(stderr, "failed to start thread\n");
+      return -1;
+      // TODO: clean up!!
+    }
+  }
+
+  /* create the buff_list in the handle. */
+  for(i = 0; i < MAX_QDEPTH; i++) {
+    int j;
+    for(j = 0; j < num_blocks; j++) {
+      handle->block_buffs[i][j] = handle->buffer_list[i] + j * handle->bsz;
+    }
+  }
+
+  // check for errors on open...
+  for(i = 0; i < num_blocks; i++) {
+    DBG_FPRINTF(stdout, "Checking for error opening block %d\n", i);
+    BufferQueue *bq = &handle->blocks[i];
+    pthread_mutex_lock(&bq->qlock);
+    // wait for the queue to be ready.
+    while(!(bq->flags & BQ_OPEN) && !(bq->flags & BQ_ERROR))
+      pthread_cond_wait(&bq->empty, &bq->qlock);
+    if(bq->flags & BQ_ERROR) {
+      DBG_FPRINTF(stderr, "open failed for block %d", i);
+      handle->src_in_err[i] = 1;
+      handle->src_err_list[handle->nerr] = i;
+      handle->nerr++;
+    }
+    pthread_mutex_unlock(&bq->qlock);
+  }
+
+  return 0;
+}
+
+int bq_enqueue(BufferQueue *bq, void *buf, size_t size) {
+  if(pthread_mutex_lock(&bq->qlock) != 0) {
+    DBG_FPRINTF(stderr, "Failed to lock queue for write\n");
+    return -1;
+  }
+
+  while(bq->qdepth == MAX_QDEPTH)
+    pthread_cond_wait(&bq->empty, &bq->qlock);
+
+  // NOTE: _Might_ be able to get away with not locking here, since
+  // access is controled by the qdepth var, which will not allow a
+  // read until we say there is stuff here to be read.
+  // 
+  // bq->buffers[bq->tail] is a pointer to the beginning of the
+  // buffer. bq->buffers[bq->tail] + bq->offset should be a pointer to
+  // the inside of the buffer.
+  memcpy(bq->buffers[bq->tail]+bq->offset, buf, size);
+
+  if(size+bq->offset < bq->buffer_size) {
+    // then this is not a complete block.
+    DBG_FPRINTF(stdout, "saved incomplete buffer for block %d\n", bq->block_number);
+    bq->offset += size;
+  }
+  else {
+    bq->offset = 0;
+    bq->qdepth++;
+    bq->tail = (bq->tail + 1) % MAX_QDEPTH;
+    DBG_FPRINTF(stdout, "queued complete buffer for block %d\n", bq->block_number);
+    pthread_cond_signal(&bq->full);
+  }
+  
+  pthread_mutex_unlock(&bq->qlock);
+}
 
 /**
  * Opens a new handle for a specific erasure striping
@@ -275,81 +614,96 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
    erasure_offset = handle->erasure_offset;
    DBG_FPRINTF( stdout, "ne_open: using stripe values (N=%d,E=%d,bsz=%d,offset=%d)\n", N,E,bsz,erasure_offset);
 
+   if(handle->mode == NE_WRONLY) { // first cut: mutlti-threading only for writes.
+     if(initialize_queues(handle) < 0) {
+       // all destroction/cleanup should be handled in initialize_queues()
+       free(handle);
+       return NULL;
+     }
+     if( UNSAFE(handle) ) {
+       int i;
+       for(i = 0; i < handle->N + handle->E; i++) {
+         bq_abort(&handle->blocks[i]);
+         // just detach and let the OS clean up. We don't care about the return any more.
+         pthread_detach(handle->threads[i]);
+       }
+     }
+   }
+   else { // for non-writes, initialize the buffers in the old way.
    /* allocate a big buffer for all the N chunks plus a bit extra for reading in crcs */
 #ifdef INT_CRC
-   crccount = 1;
-   if ( E > 0 ) { crccount = E; }
+     crccount = 1;
+     if ( E > 0 ) { crccount = E; }
 
-   ret = posix_memalign( &(handle->buffer), 64, ((N+E)*bsz) + (sizeof(u32)*crccount) ); //add space for intermediate checksum
+     ret = posix_memalign( &(handle->buffer), 64, ((N+E)*bsz) + (sizeof(u32)*crccount) ); //add space for intermediate checksum
 #else
-   ret = posix_memalign( &(handle->buffer), 64, ((N+E)*bsz) );
+     ret = posix_memalign( &(handle->buffer), 64, ((N+E)*bsz) );
 #endif
-   if ( ret != 0 ) {
-      DBG_FPRINTF( stderr, "ne_open: failed to allocate handle buffer\n" );
-      errno = ret;
-      return NULL;
+     if ( ret != 0 ) {
+       DBG_FPRINTF( stderr, "ne_open: failed to allocate handle buffer\n" );
+       errno = ret;
+       return NULL;
+     }
+
+     DBG_FPRINTF(stdout,"ne_open: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n", ret, bsz, N, E);
+        /* loop through and open up all the output files and initilize per part info and allocate buffers */
+     counter = 0;
+     DBG_FPRINTF( stdout, "opening file descriptors...\n" );
+     mode_t mask = umask(0000);
+     while ( counter < N+E ) {
+       bzero( file, MAXNAME );
+       sprintf( file, path, (counter+erasure_offset)%(N+E) );
+       
+#ifdef INT_CRC
+       if ( counter > N ) {
+         crccount = counter - N;
+         handle->buffs[counter] = handle->buffer + ( counter*bsz ) + ( crccount * sizeof(u32) ); //make space for block and erasure crc
+       }
+       else {
+         handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
+       }
+#else
+       handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
+#endif
+       
+       if( mode == NE_WRONLY ) {
+         DBG_FPRINTF( stdout, "   opening %s%s for write\n", file, WRITE_SFX );
+         handle->FDArray[counter] = open( strncat( file, WRITE_SFX, strlen(WRITE_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
+       }
+       else if ( mode == NE_REBUILD  &&  handle->src_in_err[counter] == 1 ) {
+         DBG_FPRINTF( stdout, "   opening %s%s for write\n", file, REBUILD_SFX );
+         handle->FDArray[counter] = open( strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
+         
+       }
+       else {
+         DBG_FPRINTF( stdout, "   opening %s for read\n", file );
+         handle->FDArray[counter] = open( file, O_RDONLY );
+       }
+       
+       if ( handle->FDArray[counter] == -1  &&  handle->src_in_err[counter] == 0 ) {
+         DBG_FPRINTF( stderr, "   failed to open file %s (%s)!!!!\n", file,
+                      strerror(errno));
+         handle->src_err_list[handle->nerr] = counter;
+         handle->nerr++;
+         handle->src_in_err[counter] = 1;
+         if ( handle->nerr > E ) { //if errors are unrecoverable, terminate
+           return NULL;
+         }
+         if ( mode != NE_REBUILD ) { counter++; }
+         
+         continue;
+       }
+      
+       counter++;
+     }
+     umask(mask);
    }
-
-   DBG_FPRINTF(stdout,"ne_open: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n", ret, bsz, N, E);
-
+   
    /* allocate matrices */
    handle->encode_matrix = malloc(MAXPARTS * MAXPARTS);
    handle->decode_matrix = malloc(MAXPARTS * MAXPARTS);
    handle->invert_matrix = malloc(MAXPARTS * MAXPARTS);
    handle->g_tbls = malloc(MAXPARTS * MAXPARTS * 32);
-
-
-   /* loop through and open up all the output files and initilize per part info and allocate buffers */
-   counter = 0;
-   DBG_FPRINTF( stdout, "opening file descriptors...\n" );
-   mode_t mask = umask(0000);
-   while ( counter < N+E ) {
-      bzero( file, MAXNAME );
-      sprintf( file, path, (counter+erasure_offset)%(N+E) );
-
-#ifdef INT_CRC
-      if ( counter > N ) {
-         crccount = counter - N;
-         handle->buffs[counter] = handle->buffer + ( counter*bsz ) + ( crccount * sizeof(u32) ); //make space for block and erasure crc
-      }
-      else {
-         handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
-      }
-#else
-      handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
-#endif
-
-      if( mode == NE_WRONLY ) {
-         DBG_FPRINTF( stdout, "   opening %s%s for write\n", file, WRITE_SFX );
-         handle->FDArray[counter] = open( strncat( file, WRITE_SFX, strlen(WRITE_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
-      }
-      else if ( mode == NE_REBUILD  &&  handle->src_in_err[counter] == 1 ) {
-         DBG_FPRINTF( stdout, "   opening %s%s for write\n", file, REBUILD_SFX );
-         handle->FDArray[counter] = open( strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
-
-      }
-      else {
-         DBG_FPRINTF( stdout, "   opening %s for read\n", file );
-         handle->FDArray[counter] = open( file, O_RDONLY );
-      }
-
-      if ( handle->FDArray[counter] == -1  &&  handle->src_in_err[counter] == 0 ) {
-        DBG_FPRINTF( stderr, "   failed to open file %s (%s)!!!!\n", file,
-                     strerror(errno));
-         handle->src_err_list[handle->nerr] = counter;
-         handle->nerr++;
-         handle->src_in_err[counter] = 1;
-         if ( handle->nerr > E ) { //if errors are unrecoverable, terminate
-            return NULL;
-         }
-         if ( mode != NE_REBUILD ) { counter++; }
-
-         continue;
-      }
-
-      counter++;
-   }
-   umask(mask);
 
    return handle;
 
@@ -983,8 +1337,8 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
       /* loop over the parts and write the parts, sum and count bytes per part etc. */
       while (counter < N) {
 
-         writesize = ( handle->buff_rem % bsz );
-         readsize = bsz - writesize;
+        writesize = ( handle->buff_rem % bsz ); // ? The amount of data being written to the block (block size - whatever has already been written).
+         readsize = bsz - writesize; // readsize is the amount of data being read for block[block_index] from the source buffer
 
          //avoid reading beyond end of buffer
          if ( totsize + readsize > nbytes ) { readsize = nbytes-totsize; }
@@ -995,8 +1349,12 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
          }
 
          DBG_FPRINTF( stdout, "ne_write: reading input for %lu bytes with offset of %llu\n          and writing to offset of %lu in handle buffer\n", (unsigned long)readsize, totsize, handle->buff_rem );
-         memcpy ( handle->buffer + handle->buff_rem, buffer+totsize, readsize);
+         
+         //memcpy ( handle->buffer + handle->buff_rem, buffer+totsize, readsize);
+         bq_enqueue(&handle->blocks[counter], buffer+totsize, readsize);
+         
          DBG_FPRINTF(stdout, "ne_write:   ...copy complete.\n");
+         
          totsize += readsize;
          writesize = readsize + ( handle->buff_rem % bsz );
          handle->buff_rem += readsize;
@@ -1006,42 +1364,16 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
             break;
          }
 
-
-         if ( handle->src_in_err[counter] == 0 ) {
-            /* this is the crcsum for each part */
-            crc = crc32_ieee(TEST_SEED, handle->buffs[counter], bsz);
-
 #ifdef INT_CRC
-            // write out per-block-crc
-            memcpy( handle->buffs[counter]+writesize, &crc, sizeof(crc) );
-            writesize += sizeof(crc);
+         writesize += sizeof(crc);
 #endif
-
-            /* if we were compressing we would compress here */
-            DBG_FPRINTF(stdout,"ne_write: wr %d to file %d\n",writesize,counter);
-            ret_out = write(handle->FDArray[counter],handle->buffs[counter],writesize); 
-
-            if ( ret_out != writesize ) {
-               DBG_FPRINTF( stderr, "ne_write: write to file %d returned %zd instead of expected %lu\n" , counter, ret_out, (unsigned long)writesize );
-               handle->src_in_err[counter] = 1;
-               handle->src_err_list[handle->nerr] = counter;
-               handle->nerr++;
-            }
-            handle->written[counter] += writesize;
+         handle->written[counter] += writesize;
 #ifdef INT_CRC
-            writesize -= sizeof(crc);
+         writesize -= sizeof(crc);
 #endif
-
-            handle->csum[counter] += crc; 
-            handle->nsz[counter] += writesize;
-            handle->ncompsz[counter] += writesize;
-
-            if(handle->written[counter] % SYNC_SIZE == 0) {
-              DBG_FPRINTF(stdout, "syncing file\n");
-              sync_file(handle, counter);
-            }
-         }
-
+         handle->nsz[counter] += writesize;
+         handle->ncompsz[counter] += writesize;
+         
          counter++;
       } //end of writes for N
 
@@ -1068,41 +1400,36 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
       DBG_FPRINTF(stdout, "ne_write: caculating %d recovery stripes from %d data stripes\n",E,N);
       // Perform matrix dot_prod for EC encoding
       // using g_tbls from encode matrix encode_matrix
-      ec_encode_data( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
+      // Need to lock the two buffers here.
+      int i;
+      int buffer_index;
+      for(i = N; i < handle->N + handle->E; i++) {
+        BufferQueue *bq = &handle->blocks[i];
+        if(pthread_mutex_lock(&bq->qlock) != 0) {
+          DBG_FPRINTF(stderr, "Failed to acquire lock for erasure blocks\n");
+          return -1;
+        }
+        while(bq->qdepth == MAX_QDEPTH) {
+          pthread_cond_wait(&bq->empty, &bq->qlock);
+        }
+        if(i == N) {
+          buffer_index = bq->tail;
+        }
+        else {
+          assert(buffer_index == bq->tail);
+        }
+      }
+      //      ec_encode_data( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
+      ec_encode_data(bsz, N, E, handle->g_tbls, (unsigned char **)handle->block_buffs[buffer_index], (unsigned char **)&(handle->block_buffs[buffer_index][N]));
 
-      ecounter = 0;
-      while (ecounter < E) {
-         crc = crc32_ieee(TEST_SEED, handle->buffs[counter+ecounter], bsz); 
-
-         writesize = bsz;
-#ifdef INT_CRC
-         // write out per-block-crc
-         memcpy( handle->buffs[counter+ecounter]+writesize, &crc, sizeof(crc) );
-         writesize += sizeof(crc);
-#endif
-
-         handle->csum[counter+ecounter] += crc; 
-         handle->nsz[counter+ecounter] += bsz;
-         handle->ncompsz[counter+ecounter] += bsz;
-
-         DBG_FPRINTF( stdout, "ne_write: writing out erasure stripe %d\n", ecounter );
-         if( handle->src_in_err[counter+ecounter] == 0) {
-           ret_out = write(handle->FDArray[counter+ecounter],handle->buffs[counter+ecounter],writesize);
-
-           if ( ret_out != writesize ) {
-             DBG_FPRINTF( stderr, "ne_write: write to erasure file %d, returned %zd instead of expected %d\n" , ecounter, ret_out, writesize );
-             handle->src_in_err[counter + ecounter] = 1;
-             handle->src_err_list[handle->nerr] = counter + ecounter;
-             handle->nerr++;
-           }
-         }
-         handle->written[counter+ecounter] += writesize;
-         if(handle->written[counter+ecounter] % SYNC_SIZE == 0) {
-           DBG_FPRINTF(stdout, "syncing file\n");
-           sync_file(handle, counter+ecounter);
-         }
-
-         ecounter++;
+      for(i = N; i < handle->N + handle->E; i++) {
+        BufferQueue *bq = &handle->blocks[i];
+        bq->qdepth++;
+        bq->tail = (bq->tail + 1) % MAX_QDEPTH;
+        pthread_cond_signal(&bq->full);
+        pthread_mutex_unlock(&bq->qlock);
+        handle->nsz[i] += bsz;
+        handle->ncompsz[i] += bsz;
       }
 
       //now that we have written out all data, reset buffer
@@ -1112,6 +1439,8 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
 
    // If the errors exceed the minimum protection threshold number of
    // errrors then fail the write.
+   // XXX: How do I handle this with the threads? need a loop to check the bq->flags for error in each BQ, or have a return code from bq_enqueue?
+   //      Ignoring it for now.
    if( UNSAFE(handle) ) {
      DBG_FPRINTF(stderr,
                  "ne_write: errors exceed minimum protection level (%d)\n",
@@ -1123,7 +1452,6 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
      return totsize;
    }
 }
-
 
 /**
  * Closes the erasure striping indicated by the provided handle and flushes the handle buffer, if necessary.
@@ -1185,61 +1513,16 @@ int ne_close( ne_handle handle )
    /* Close file descriptors and free bufs and set xattrs for written files */
    counter = 0;
    while (counter < N+E) {
-      if ( handle->mode == NE_WRONLY  ||  (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1) ) { 
-         bzero(xattrval,sizeof(xattrval));
-         sprintf(xattrval,"%d %d %d %d %lu %lu %llu %llu",N,E,handle->erasure_offset,bsz,handle->nsz[counter],handle->ncompsz[counter],(unsigned long long)handle->csum[counter],(unsigned long long)handle->totsz);
-         DBG_FPRINTF( stdout, "ne_close: setting file %d xattr = \"%s\"\n", counter, xattrval );
 
-#ifdef META_FILES
-         sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
-         if ( handle->mode == NE_REBUILD ) {
-            strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 );
+     if (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1 ) {
+         // if mode is NE_WRONLY this will be handled by the BQ thread.
+         if(set_block_xattr(handle, counter) != 0) {
+           if(handle->src_in_err[counter] == 0) {
+             handle->src_in_err[counter] = 1;
+             handle->src_err_list[handle->nerr] = counter;
+             handle->nerr++;
+           }
          }
-         else if ( handle->mode == NE_WRONLY ) {
-            strncat( file, WRITE_SFX, strlen(WRITE_SFX)+1 );
-         }
-         strncat( file, META_SFX, strlen(META_SFX) + 1 );
-         mode_t mask = umask(0000);
-         fd = open( file, O_WRONLY | O_CREAT, 0666 );
-         umask(mask);
-         if ( fd < 0 ){ 
-            DBG_FPRINTF(stderr,"ne_close: failed to open file %s\n",file);
-            tmp = -1;
-         }
-         else {
-            val = write( fd, xattrval, strlen(xattrval) + 1 );
-            if ( val != strlen(xattrval) + 1 ) {
-               DBG_FPRINTF(stderr,"ne_close: failed to write to file %s\n",file);
-               tmp = -1;
-               close( fd );
-            }
-            else {
-               tmp = close( fd );
-            }
-         }
-         chown(file, handle->owner, handle->group);
-#else
-
-#if (AXATTR_SET_FUNC == 5)
-         tmp = fsetxattr(handle->FDArray[counter],XATTRKEY, xattrval,strlen(xattrval),0); 
-#else
-         tmp = fsetxattr(handle->FDArray[counter],XATTRKEY, xattrval,strlen(xattrval),0,0); 
-#endif
-
-#endif //META_FILES
-
-         if ( tmp != 0 ) {
-            DBG_FPRINTF( stderr, "ne_close: failed to set xattr for file %d\n", counter );
-            if(tmp == -1 && ! handle->src_in_err[counter] ) {
-              handle->nerr++;
-              handle->src_in_err[counter] = 1;
-            }
-         }
-
-      }
-      if ( handle->FDArray[counter] != -1 ) { close(handle->FDArray[counter]); }
-
-      if (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1 ) {
          sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
          strncpy( nfile, file, strlen(file) + 1);
          strncat( file, REBUILD_SFX, strlen(REBUILD_SFX) + 1 );
@@ -1277,33 +1560,34 @@ int ne_close( ne_handle handle )
          }
       }
       else if (handle->mode == NE_WRONLY ) {
-         sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
-         strncpy( nfile, file, strlen(file) + 1);
-         strncat( file, WRITE_SFX, strlen(WRITE_SFX) + 1 );
-         if ( rename( file, nfile ) != 0 ) {
-            DBG_FPRINTF( stderr, "ne_close: failed to rename written file %s\n", file );
-            if(! handle->src_in_err[counter] ) {
-                 handle->nerr++;
-                 handle->src_in_err[counter] = 1;
-            }
-         }
-#ifdef META_FILES
-         strncat( file, META_SFX, strlen(META_SFX)+1 );
-         strncat( nfile, META_SFX, strlen(META_SFX)+1 );
-         if ( rename( file, nfile ) != 0 ) {
-            DBG_FPRINTF( stderr, "ne_close: failed to rename written meta file %s\n", file );
-            if(! handle->src_in_err[counter] ) {
-                 handle->nerr++;
-                 handle->src_in_err[counter] = 1;
-            }
-         }
-#endif
-
+        bq_close(&handle->blocks[counter]);
       }
 
       counter++;
    }
-   free(handle->buffer);
+
+   if(handle->mode == NE_WRONLY) {
+     int i;
+     /* wait for the threads */
+     for(i = 0; i < handle->N + handle->E; i++) {
+       pthread_join(handle->threads[i], NULL);
+       /* add up the errors */
+       if((handle->blocks[i].flags & BQ_ERROR) && !handle->src_in_err[i]) {
+         handle->src_in_err[i] = 1;
+         handle->src_err_list[handle->nerr] = i;
+         handle->nerr++;
+       }
+       bq_destroy(&handle->blocks[i]);
+     }
+
+     /* free the buffers */
+     for(i = 0; i < MAX_QDEPTH; i++) {
+       free(handle->buffer_list[i]);
+     }
+   }
+   else { // still need to do it the old way for non-writes
+     free(handle->buffer);
+   }
 
    if( UNSAFE(handle) ) {
      ret = -1;
