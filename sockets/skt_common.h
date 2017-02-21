@@ -277,6 +277,7 @@ typedef enum {
   HNDL_CLOSED      = 0x0800,
 
   HNDL_SEEK_SET    = 0x1000,    // reader called skt_lseek()
+  HNDL_FSYNC       = 0x2000,    // writer called skt_fsync()
 } SHFlags;
 
 
@@ -308,6 +309,7 @@ typedef enum {
   CMD_PUT,
   CMD_DEL,
   CMD_STAT,
+  CMD_FSYNC,
   CMD_SEEK_SET,                 // <size> has position to seek to
   CMD_SET_XATTR,                // <size> is split into <name_len>, <value_len>
   CMD_GET_XATTR,                // ditto
@@ -384,7 +386,7 @@ int      read_init (SocketHandle* handle, SocketCommand cmd, char* buf, size_t s
 int      write_init(SocketHandle* handle, SocketCommand cmd);
 
 ssize_t  read_buffer (int fd, char*       buf, size_t size, int is_socket);
-int      write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset);
+int      write_buffer(int fd, const char* buf, size_t size, int is_socket, int do_fsync, off_t offset);
 
 ssize_t  copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size);
 ssize_t  copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size);

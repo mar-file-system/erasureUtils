@@ -202,8 +202,13 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 //
 // NOTE: If <size>==0, the server will treat it as EOF.
 //
-int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset) {
-  DBG("write_buffer(%d, 0x%llx, %lld, %d, 0x%llx)\n", fd, buf, size, is_socket, offset);
+// NOTE: In order to reliably weave remote-fsync into the protocol,
+//    skt_fsync() just set s a flag in the handle.  The next call to skt_write()
+//    
+//    copy_file_to_socket()
+
+int write_buffer(int fd, const char* buf, size_t size, int is_socket, int do_fsync, off_t offset) {
+  DBG("write_buffer(%d, 0x%llx, %lld, skt:%d, sync:%d, off:0x%llx)\n", fd, buf, size, is_socket, do_fsync, offset);
 
   const char*  write_ptr     = buf;
   size_t       write_remain  = size;
@@ -247,6 +252,15 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 #endif
   }
   DBG("write_total: %lld\n", write_total);
+
+
+
+  if (do_fsync) {
+    if (is_socket)
+      NEED_0( write_pseudo_packet(fd, CMD_FSYNC, 1, NULL) );
+    else
+      NEED_0( fsync(fd) );
+  }
 
 
 #ifdef USE_RIOWRITE
@@ -408,6 +422,7 @@ const char* _command_str[] = {
   "PUT",
   "DEL",
   "STAT",
+  "FSYNC",
   "SEEK_SET",
   "SET_XATTR",
   "GET_XATTR",
@@ -625,7 +640,7 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
     // NOTE: Our riowrite protocol only discovers seeks from the
     //    client at the time it goes to write and waits for an ACK,
     //    and gets a SEEK, instead.  skt_write() then returns an
-    //    "error" to us, with the file-handle marked HNDL_SEEK.  We
+    //    "error" to us, with the socket-handle marked HNDL_SEEK.  We
     //    must then drop the write of this buffer read (ahead) in the
     //    file, do our seek in the fd associated witht the file, and
     //    start the new stream from there.
@@ -642,7 +657,8 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
           DBG("write failed due to SEEK.  offset = %lld\n", handle->seek_pos);
           handle->flags &= ~(HNDL_SEEK_SET);
           NEED_GT0( lseek(fd, handle->seek_pos, SEEK_SET) );
-          continue;
+          read_count = 0;       // don't add read_count to bytes_moved
+          break;
         }
 
         fprintf(stderr, "write failed: moved: %llu, read_ct: %lld, remain: %llu\n",
@@ -650,10 +666,10 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
         return -1;
       }
 
-
       remain -= write_count;
       copied += write_count;
     }
+
 
     // entire read-buffer was moved
     bytes_moved += read_count;
@@ -684,11 +700,33 @@ ssize_t copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size
   while (!eof && !err) {
 
     // --- read from socket, up to <size>, or EOF
+    //
+    // NOTE: Our protocol supporting riowrite only discovers requests
+    //    from the client to fsync the destination file at the time
+    //    skt_read() goes to read from the socket and waits for the
+    //    DATA token, but gets an FSYNC, instead.  skt_read() then
+    //    returns an "error" to us, with the socket-handle marked
+    //    FSYNC.  We then do the fsync, and call skt_read() again,
+    //    which will this time find the DATA and return success.
+    //    
     ssize_t read_count = skt_read(handle, buf, size);
     DBG("read_count: %lld\n", read_count);
-    NEED( read_count >= 0 );
 
-    if (read_count == 0) {
+    // NEED( read_count >= 0 );
+    if (unlikely(read_count < 0)) {
+
+      if (handle->flags & HNDL_FSYNC) {
+        DBG("read faile due to FSYNC\n");
+        handle->flags &= ~(HNDL_FSYNC);
+        NEED_0( fsync(fd) );
+        continue;
+      }
+
+      fprintf(stderr, "read failed: moved: %llu\n", bytes_moved);
+      return -1;
+    }
+
+    if (unlikely(read_count == 0)) {
       DBG("read EOF\n");
       eof = 1;
       break;
@@ -701,7 +739,7 @@ ssize_t copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size
     DBG("fake write: %lld\n", read_count);
 #else
     // copy all of buffer to file
-    NEED_0( write_buffer(fd, buf, read_count, 0, 0) );
+    NEED_0( write_buffer(fd, buf, read_count, 0, 0, 0) );
     DBG("copied out\n");
 #endif
 
@@ -1047,8 +1085,18 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
 
 #endif
 
+  // if the writer previously called skt_fsync(), we didn't do it
+  // immediately, because we wanted to make sure the protocol is
+  // rigorously correct, when we later go to double-buffering.  Here
+  // we we are at the next command-interaction with the server, so we
+  // can do it now.  Weave an FSYNC into the protocol, so that the
+  // reader receives it before the DATA token.  (This lets the reader
+  // be sure that the transaction always ends with the DATA token.)
+  int do_fsync = ((handle->flags & HNDL_FSYNC) != 0);
+  handle->flags &= ~(HNDL_FSYNC);
+
   // write_buffer() is okay here, because we know how much the peer can handle
-  NEED_0( write_buffer(handle->peer_fd, buf, size, 1, handle->rio_offset) );
+  NEED_0( write_buffer(handle->peer_fd, buf, size, 1, do_fsync, handle->rio_offset) );
   handle->stream_pos += size;  /* tracking for skt_lseek() */
 
   return size;
@@ -1177,10 +1225,18 @@ ssize_t skt_read(SocketHandle* handle, void* buf, size_t size) {
 
 
   // wait for peer to finish riowrite()
+  // NOTE: we may optionally receive an FSYNC, before the DATA
   PseudoPacketHeader header;
   NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
 
-  if (header.command != CMD_DATA) {
+  if (unlikely(header.command != CMD_DATA)) {
+
+    if (header.command == CMD_FSYNC) {
+      handle->flags |= HNDL_FSYNC;
+      DBG("got FSYNC\n");
+      return -1;
+    }
+
     fprintf(stderr, "expected an DATA, but got %s\n", command_str(header.command));
     return -1;
   }
@@ -1307,6 +1363,16 @@ int skt_fsetxattr(SocketHandle* handle, const char* service_path, const void* va
 // ...........................................................................
 
 int skt_fsync(SocketHandle* handle) {
+  //  return 0;
+
+  if (! (handle->flags & HNDL_PUT)) {
+    fprintf(stderr, "skt_fsync: handle not open for writing\n");
+    errno = EBADF;
+    return -1;
+  }
+
+  // performed at the next skt_write().
+  handle->flags |= HNDL_FSYNC;
   return 0;
 }
 
