@@ -321,6 +321,7 @@ int main( int argc, const char* argv[] )
    }
 
    tmp = ne_close( handle );
+   fflush(stdout);
    printf("%d\n",tmp);
 
    return tmp;
