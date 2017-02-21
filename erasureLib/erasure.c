@@ -1305,7 +1305,7 @@ int ne_close( ne_handle handle )
    }
    free(handle->buffer);
 
-   if( UNSAFE(handle) ) {
+   if( (UNSAFE(handle) && handle->mode == NE_WRONLY) || (handle->nerr > handle->E) /* for non-writes */) {
      ret = -1;
    }
 
