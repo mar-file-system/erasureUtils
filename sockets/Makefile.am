@@ -75,6 +75,15 @@ if DEBUG_SOCKETS
   SOCKET_DEFS += -DDEBUG_SOCKETS
 endif
 
+if HAVE_S_BUFSIZE
+  SOCKET_DEFS += -DSERVER_BUF_SIZE=$(S_BUFSIZE)
+endif
+
+if HAVE_C_BUFSIZE
+  SOCKET_DEFS += -CLIENT_BUF_SIZE=$(C_BUFSIZE)
+endif
+
+
 include_HEADERS = skt_common.h
 
 lib_LIBRARIES = librdma_sockets.a

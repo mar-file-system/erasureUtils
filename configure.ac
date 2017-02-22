@@ -102,7 +102,7 @@ AXATTR_SET_FUNC_CHECK
 
 
 # optional build uses RDMA-sockets
-# The server must be running on remote hosts to support this mode.
+# The server must be deployed on remote hosts (after building) to support this mode.
 AC_ARG_ENABLE([sockets],
                AS_HELP_STRING([--enable-sockets],
                               [One of {rdma,ip,unix}.  File operations go to a server, via sockets.]),
@@ -114,9 +114,10 @@ AC_ARG_ENABLE([sockets],
                [enable_sockets=no])
 
 AM_CONDITIONAL([ANY_SOCKETS],   [test "$enable_sockets" != no ])
-AM_CONDITIONAL([RDMA_SOCKETS],  [test "$enable_sockets"  == rdma])
+AM_CONDITIONAL([RDMA_SOCKETS],  [test "$enable_sockets"  = rdma])
 
        
+
 # Allow turning on debugging flags
 AC_ARG_ENABLE([debug],
                AS_HELP_STRING([--enable-debug],
@@ -131,6 +132,22 @@ AC_ARG_ENABLE([debug],
 
 AM_CONDITIONAL([DEBUG_NE],      [test "$enable_debug" = ne      || test "$enable_debug" = all ])
 AM_CONDITIONAL([DEBUG_SOCKETS], [test "$enable_debug" = sockets || test "$enable_debug" = all ])
+
+
+
+# Customization of server-side buffer-size
+AC_ARG_VAR([S_BUFSIZE],
+           [If RDMA sockets are enabled, this is the size of buffers used for server-side
+            transfers between sockets and files (default is 1MB)])
+AM_CONDITIONAL([HAVE_S_BUFSIZE], [test x"$S_BUFSIZE" != x])
+
+
+# Customization of client-side buffer-size for get/put.
+AC_ARG_VAR([C_BUFSIZE],
+           [size of client-side buffer, used for client_get()/client_put() only.
+            All other functions take client-side buffer and buffer-size as arguments.  (default is 1MB)])
+AM_CONDITIONAL([HAVE_C_BUFSIZE], [test x"$C_BUFSIZE" != x])
+
 
 
 

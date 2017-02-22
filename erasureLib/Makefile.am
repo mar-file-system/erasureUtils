@@ -66,10 +66,10 @@ if RDMA_SOCKETS
   SOCKET_LIBS = ../sockets/librdma_sockets.a
   SOCKET_LD = -lrdmacm
 else
-  if ANY_SOCKETS
-    SOCKET_DEFS += -DSOCKETS
-    SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
-  endif
+if ANY_SOCKETS
+  SOCKET_DEFS += -DSOCKETS
+  SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
+endif
 endif
 
 if DEBUG_NE

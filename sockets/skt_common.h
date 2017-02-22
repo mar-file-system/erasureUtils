@@ -145,8 +145,14 @@ typedef void(*jHandlerType)(void* arg);
 #define PORT_STR_SIZE            16 /* incl final null */
 
 // now that we are using riomap(), these must be the same?  [for rsocket builds]
-#define CLIENT_BUF_SIZE         (1024 * 1024)
-#define SERVER_BUF_SIZE         (1024 * 1024)
+#ifndef SERVER_BUF_SIZE
+# define SERVER_BUF_SIZE         (1024 * 1024)
+#endif
+
+#ifndef CLIENT_BUF_SIZE
+# define CLIENT_BUF_SIZE         (1024 * 1024)
+#endif
+
 
 #define XATTR_NAME_SIZE         128
 #define XATTR_VALUE_SIZE        128
