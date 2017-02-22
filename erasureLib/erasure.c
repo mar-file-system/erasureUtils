@@ -240,8 +240,9 @@ static int set_block_xattr(ne_handle handle, int block) {
 }
 
 void *bq_writer(void *arg) {
-  BufferQueue *bq     = (BufferQueue *)arg;
-  ne_handle    handle = bq->handle;
+  BufferQueue *bq      = (BufferQueue *)arg;
+  ne_handle    handle  = bq->handle;
+  size_t       written = 0;
   int          error;
 #ifdef INT_CRC
   const int write_size = bq->buffer_size + sizeof(u32);
@@ -292,6 +293,10 @@ void *bq_writer(void *arg) {
     
     if(!(bq->flags & BQ_ERROR)) {
       pthread_mutex_unlock(&bq->qlock);
+      if(written >= SYNC_SIZE) {
+        fsync(bq->file);
+        written = 0;
+      }
       DBG_FPRINTF(stdout, "Writing block %d\n", bq->block_number);
       u32 crc   = crc32_ieee(TEST_SEED, bq->buffers[bq->head], bq->buffer_size);
       error     = write(bq->file, bq->buffers[bq->head], bq->buffer_size);
@@ -305,6 +310,9 @@ void *bq_writer(void *arg) {
 
     if(error < write_size) {
       bq->flags |= BQ_ERROR;
+    }
+    else {
+      written += error;
     }
     DBG_FPRINTF(stdout, "write done for block %d\n", bq->block_number);
     // even if there was an error, say we wrote the block and move on.
@@ -1419,7 +1427,6 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
           assert(buffer_index == bq->tail);
         }
       }
-      //      ec_encode_data( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
       ec_encode_data(bsz, N, E, handle->g_tbls, (unsigned char **)handle->block_buffs[buffer_index], (unsigned char **)&(handle->block_buffs[buffer_index][N]));
 
       for(i = N; i < handle->N + handle->E; i++) {

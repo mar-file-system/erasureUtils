@@ -69,6 +69,7 @@ AC_PROG_RANLIB
 AC_PROG_CC
 
 # Checks for libraries.
+AC_CHECK_LIB([pthread], [pthread_create])
 AC_CHECK_LIB([isal], [crc32_ieee], [],
    [AC_CHECK_LIB([isal], [crc32_ieee_base],
       [echo
