@@ -1036,9 +1036,10 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
             handle->nsz[counter] += writesize;
             handle->ncompsz[counter] += writesize;
 
-            if(handle->written[counter] % SYNC_SIZE == 0) {
+            if(handle->written[counter] >= SYNC_SIZE) {
               DBG_FPRINTF(stdout, "syncing file\n");
               sync_file(handle, counter);
+              handle->written[counter] = 0;
             }
          }
 
@@ -1097,9 +1098,10 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
            }
          }
          handle->written[counter+ecounter] += writesize;
-         if(handle->written[counter+ecounter] % SYNC_SIZE == 0) {
+         if(handle->written[counter+ecounter] >= SYNC_SIZE) {
            DBG_FPRINTF(stdout, "syncing file\n");
            sync_file(handle, counter+ecounter);
+           handle->written[counter+ecounter] = 0;
          }
 
          ecounter++;
