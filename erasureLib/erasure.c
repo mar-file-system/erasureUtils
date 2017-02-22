@@ -653,7 +653,7 @@ read:
                   //if this is the first encountered error for the stripe, we must start over
                   if ( error_in_stripe == 0 ) {
                      for( tmp = counter; tmp >=0; tmp-- ) {
-                        llcounter -= datasz[counter];
+                        llcounter -= datasz[tmp];
                      }
                      DBG_FPRINTF( stdout, "ne_read: restarting stripe read, reset total read to %lu\n", (unsigned long)llcounter);
                      goto read;
