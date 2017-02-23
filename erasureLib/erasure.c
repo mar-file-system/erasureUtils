@@ -265,7 +265,7 @@ void *bq_writer(void *arg) {
   pthread_cond_signal(&bq->empty);
   pthread_mutex_unlock(&bq->qlock);
 
-  DBG_FPRINTF(stdout, "opened file %d\n", bq->block_number);
+  DBG_FPRINTF(stdout, "bq_writer: opened file %d in thread %x\n", bq->block_number, pthread_self());
   
   while(1) {
     if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
@@ -300,7 +300,9 @@ void *bq_writer(void *arg) {
       DBG_FPRINTF(stdout, "Writing block %d\n", bq->block_number);
       u32 crc   = crc32_ieee(TEST_SEED, bq->buffers[bq->head], bq->buffer_size);
       error     = write(bq->file, bq->buffers[bq->head], bq->buffer_size);
+#ifdef INT_CRC
       error    += write(bq->file, &crc, sizeof(u32)); // XXX: super small write... could degrade performance
+#endif
       bq->csum += crc;
       pthread_mutex_lock(&bq->qlock);
     }
@@ -435,8 +437,11 @@ static int initialize_queues(ne_handle handle) {
 }
 
 int bq_enqueue(BufferQueue *bq, void *buf, size_t size) {
-  if(pthread_mutex_lock(&bq->qlock) != 0) {
+  int ret = 0;
+
+  if((ret = pthread_mutex_lock(&bq->qlock)) != 0) {
     DBG_FPRINTF(stderr, "Failed to lock queue for write\n");
+    errno = ret;
     return -1;
   }
 
@@ -461,11 +466,15 @@ int bq_enqueue(BufferQueue *bq, void *buf, size_t size) {
     bq->offset = 0;
     bq->qdepth++;
     bq->tail = (bq->tail + 1) % MAX_QDEPTH;
+    if(bq->flags & BQ_ERROR) {
+      ret = 1;
+    }
     DBG_FPRINTF(stdout, "queued complete buffer for block %d\n", bq->block_number);
     pthread_cond_signal(&bq->full);
   }
-  
   pthread_mutex_unlock(&bq->qlock);
+
+  return ret;
 }
 
 /**
@@ -1359,7 +1368,16 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
          DBG_FPRINTF( stdout, "ne_write: reading input for %lu bytes with offset of %llu\n          and writing to offset of %lu in handle buffer\n", (unsigned long)readsize, totsize, handle->buff_rem );
          
          //memcpy ( handle->buffer + handle->buff_rem, buffer+totsize, readsize);
-         bq_enqueue(&handle->blocks[counter], buffer+totsize, readsize);
+         int queue_result = bq_enqueue(&handle->blocks[counter], buffer+totsize, readsize);
+         if(queue_result == -1) {
+           // bq_enqueue will set errno.
+           return -1;
+         }
+         else if(queue_result != 0 && !handle->src_in_err[counter]) {
+           handle->src_in_err[counter] = 1;
+           handle->src_err_list[handle->nerr] = counter;
+           handle->nerr++;
+         }
          
          DBG_FPRINTF(stdout, "ne_write:   ...copy complete.\n");
          
