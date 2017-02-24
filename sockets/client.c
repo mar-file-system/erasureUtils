@@ -125,19 +125,6 @@ ssize_t client_put(const char* path) {
 }
 
 
-int client_rename(const char* path) {
-
-  char  new_fname[FNAME_SIZE];
-  snprintf(new_fname, FNAME_SIZE, path);
-  strncat(new_fname, ".renamed", FNAME_SIZE - strlen(path));
-
-  REQUIRE_0( skt_rename(path, new_fname) );
-
-  return 0;
-}
-
-
-
 // read from socket and copy to stdout
 // return number of bytes moved, or -1 for error.
 
@@ -155,6 +142,57 @@ ssize_t client_get(const char* path) {
 
   return bytes_moved;
 }
+
+
+
+int client_rename(const char* path) {
+
+  char  new_fname[FNAME_SIZE];
+  snprintf(new_fname, FNAME_SIZE, path);
+  strncat(new_fname, ".renamed", FNAME_SIZE - strlen(path));
+
+  REQUIRE_0( skt_rename(path, new_fname) );
+
+  return 0;
+}
+
+
+int client_chown(const char* path) {
+
+  REQUIRE_0( skt_chown(path, 99, 99) );
+
+  return 0;
+}
+
+
+// open a handle for reading, but don't read anything.  Server-side
+// reaper thread should terminate the connection.  Does that leak a
+// file-descriptor on the server?  This will test that.  do 'lsof |
+// grep socket_fs | wc -l' before and after.
+int client_reap_read(const char* path) {
+
+  char buf[CLIENT_BUF_SIZE] __attribute__ (( aligned(64) )); /* copy socket to stdout */
+
+  // --- TBD: authentication handshake
+  REQUIRE_GT0( skt_open(&handle, path, (O_RDONLY)) );
+
+  printf("sleeping for 20 sec ...\n");
+  sleep(20);
+
+  printf("reading\n");
+  ssize_t bytes_moved = skt_read(&handle, buf, 1);
+
+  // --- close
+  REQUIRE_0( skt_close(&handle) );
+
+  return bytes_moved;
+}
+
+
+
+
+
+
 
 
 ssize_t client_stat(const char* path) {
@@ -510,6 +548,8 @@ int usage(const char* prog) {
   fprintf(stderr, "  -g             GET -- read from remote file, write to stdout\n");
   fprintf(stderr, "  -s             stat the remote file\n");
   fprintf(stderr, "  -r             rename to original + '.renamed'\n");
+  fprintf(stderr, "  -o             chown to 99:99\n");
+  fprintf(stderr, "  -R             hold read-handle open, so reaper-thread will kill connection\n");
   fprintf(stderr, "  -t <test_no>   perform various unit-tests {1,1b,1c,2}\n");
   fprintf(stderr, "\n");
   fprintf(stderr, "<flie_spec> is <host>:<port>/<fname>\n");
@@ -528,7 +568,7 @@ main(int argc, char* argv[]) {
   char*   test_no = NULL;
   char*   file_spec = NULL;
   int     c;
-  while ( (c = getopt(argc, argv, "t:gpsrh")) != -1) {
+  while ( (c = getopt(argc, argv, "t:gpsroRh")) != -1) {
     switch (c) {
     case 't':      cmd = 't';  test_no=optarg;    break;
 
@@ -536,6 +576,8 @@ main(int argc, char* argv[]) {
     case 'g':      cmd = 'g';  break;
     case 's':      cmd = 's';  break;
     case 'r':      cmd = 'r';  break;
+    case 'o':      cmd = 'o';  break;
+    case 'R':      cmd = 'R';  break;
 
     case 'h':
     default:
@@ -565,6 +607,8 @@ main(int argc, char* argv[]) {
   case 'g':   bytes_moved = client_get(file_spec); break;
   case 's':   bytes_moved = client_stat(file_spec); break;
   case 'r':   bytes_moved = client_rename(file_spec); break;
+  case 'o':   bytes_moved = client_chown(file_spec); break;
+  case 'R':   bytes_moved = client_reap_read(file_spec); break;
 
   case 't': {
     size_t  test_no_len = strlen(test_no);

@@ -250,6 +250,8 @@ typedef struct sockaddr_in                   SockAddr;
 #endif
 
 
+
+
 // Unused, for now
 typedef enum {
   PROT_UNIX = 1,
@@ -291,16 +293,16 @@ typedef enum {
 // SocketHandle is only used on the client-side.
 // Server maintains per-connection state in its own ThreadContext.
 typedef struct {
-  PathSpec     path_spec;       // host,port,path parsed from URL
-  int          open_flags;      // skt_open()
-  mode_t       open_mode;       // skt_open()
-  int          peer_fd;         // fd for comms with socket-peer
-  off_t        rio_offset;      // reader sends mapping to writer, for riowrite()
-  char*        rio_buf;         // reader saves riomapp'ed address, for riounmap()
-  size_t       rio_size;        // reader saves riomapp'ed size, for riounmap()
-  size_t       stream_pos;      // TBD: stream-position, to ignore redundant skt_seek()
-  ssize_t      seek_pos;        // ignore, unless HNDL_SEEK_ABS
-  uint16_t     flags;           // SHFlags
+  PathSpec         path_spec;   // host,port,path parsed from URL
+  int              open_flags;  // skt_open()
+  mode_t           open_mode;   // skt_open()
+  int              peer_fd;     // fd for comms with socket-peer
+  off_t            rio_offset;  // reader sends mapping to writer, for riowrite()
+  char*            rio_buf;     // reader saves riomapp'ed address, for riounmap()
+  size_t           rio_size;    // reader saves riomapp'ed size, for riounmap()
+  volatile size_t  stream_pos;  // ignore redundant skt_seek(), support reaper
+  ssize_t          seek_pos;    // ignore, unless HNDL_SEEK_ABS
+  uint16_t         flags;       // SHFlags
 } SocketHandle;
 
 

@@ -132,9 +132,11 @@ typedef struct {
   char                fname[FNAME_SIZE];
 } ThreadContext;
 
+#define IS_ACTIVE(CTX)  (  ((CTX)->flags & (CTX_PRE_THREAD | CTX_THREAD_EXIT))  == CTX_PRE_THREAD  )
 
 
-// our record of an existing connection
+
+// --- our record of existing connections
 //
 // NOTE: We avoid the need for locking by taking some care: main only
 //    sets ctx.flags when they are zero.  Threads set a different flag
@@ -144,12 +146,24 @@ typedef struct ServerConnection {
   ThreadContext  ctx;
 } SConn;
 
-SConn conn_list[MAX_SOCKET_CONNS];
+SConn  conn_list[MAX_SOCKET_CONNS];
 
 // // lock for access to conn_list[] elements (not needed)
 // pthread_mutex_t conn_lock;
 
 
+// --- The reaper-thread tracks handle->stream_pos for all connections
+//     in conn_list[].  If the thread doesn't move within the given
+//     timeout-period, the reaper will cancel it.
+
+ssize_t         reap_list[MAX_SOCKET_CONNS]; // stream_pos, or -1
+
+const size_t    reap_timeout_sec = 10;
+
+// lock for access to reap_list[] elements
+pthread_mutex_t reap_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+pthread_t       reap_thr;
 
 
 
@@ -191,7 +205,14 @@ shut_down_thread(void* arg) {
 void
 shut_down() {
 
-  // shutdown all threads
+  // shutdown reaper
+  DBG("stopping reaper\n");
+  pthread_cancel(reap_thr);
+  pthread_join(reap_thr, NULL);
+  pthread_mutex_destroy(&reap_mtx);
+  DBG("done.\n");
+
+  // shutdown all connection-handling threads
   int i;
   for (i=0; i<MAX_SOCKET_CONNS; ++i) {
     if ((conn_list[i].ctx.flags & (CTX_PRE_THREAD | CTX_THREAD_EXIT))
@@ -784,6 +805,63 @@ void* server_thread(void* arg) {
 
 
 
+// periodically sweep the existing threads, and terminate any of them
+// that haven't moved data within the timeout-period.  We only do the
+// pthread_cancel, not the join.  That's because we run periodically,
+// but find_available_conn() runs as needed.  If we were to do the
+// join, we'd have to add more locking around accesses to the
+// context-flags, in find_available_conn().  As is, the thread
+// clean-up handlers will set the CTX_THREAD_EXIT flag, and
+// find_available_conn() will see that.
+
+void* reap_thread(void* arg) {
+
+  while (1) {
+
+    sleep(reap_timeout_sec);
+    // fprintf(stderr, "reaper: awake\n");
+
+    pthread_mutex_lock(&reap_mtx);
+
+    // compare current handle.stream_pos with last-seen value, for all connections
+    int i;
+    for (i=0; i<MAX_SOCKET_CONNS; ++i) {
+
+      if (IS_ACTIVE(&conn_list[i].ctx)) {
+        size_t current_pos = conn_list[i].ctx.handle.stream_pos;
+
+        // --- already reaped.  Hasn't exited yet?  find_available_conn() hasn't used it?
+        if (reap_list[i] == -2)
+          continue;
+
+        // --- first sighting of this connection?  Note current pos
+        else if (reap_list[i] < 0) {
+          // fprintf(stderr, "reaper [%3d]: first sighting\n", i);
+          reap_list[i] = current_pos;
+        }
+
+        // --- if nothing has moved, kill the thread (and the connection)
+        else if (reap_list[i] == current_pos) {
+          fprintf(stderr, "reaper [%3d]: reaping\n", i);
+          reap_list[i] = -2;
+          pthread_cancel(conn_list[i].thr); // cleanup sets CTX_THREAD_EXIT
+        }
+
+        // --- if data has moved, track the current position
+        else
+          reap_list[i] = current_pos;
+      }
+
+      else
+        reap_list[i] = -1;
+    }
+
+    pthread_mutex_unlock(&reap_mtx);
+  }
+
+  return NULL;
+}
+
 
 // TBD: There should be a separate reaper-thread that periodically
 //      cleans up terminated threads (e.g. take over our branch that
@@ -802,8 +880,7 @@ int find_available_conn() {
     else if (conn_list[i].ctx.flags & CTX_THREAD_EXIT) {
       // TBD: handle threads that return failure?
       pthread_join(conn_list[i].thr, NULL);
-      conn_list[i].ctx.flags = 0;
-      memset(&conn_list[i].ctx, 0, sizeof(conn_list[i].ctx));
+      memset(&conn_list[i].ctx, 0, sizeof(ThreadContext));
       return i;
     }
   }
@@ -827,6 +904,10 @@ int push_thread(int client_fd) {
   conn_list[i].ctx.handle.peer_fd  = client_fd;
   conn_list[i].ctx.handle.flags   |= HNDL_CONNECTED;
   conn_list[i].ctx.flags          |= CTX_PRE_THREAD;
+
+  pthread_mutex_lock(&reap_mtx);
+  reap_list[i] = -1;
+  pthread_mutex_unlock(&reap_mtx);
 
   DBG("connection[%d] <- fd=%d\n", i, client_fd);
   NEED_0( pthread_create(&conn_list[i].thr, NULL, server_thread, &conn_list[i].ctx) );
@@ -959,14 +1040,27 @@ main(int argc, char* argv[]) {
   printf("%s listening\n", server_name);
 
 
+  // spin up reaper-thread to clean-up dead-beat connections
+  int i;
+  for (i=0; i<MAX_SOCKET_CONNS; ++i) {
+    reap_list[i] = -1;
+  }
+  REQUIRE_0( pthread_mutex_init(&reap_mtx, NULL) );
+  REQUIRE_0( pthread_create(&reap_thr, NULL, reap_thread, NULL) );
+
+  
+
   // receive connections and spin off threads to handle them
   while (1) {
 
-    int client_fd;
-    ///  REQUIRE_GT0( client_fd = ACCEPT(socket_fd, (struct sockaddr*)&c_addr, &c_addr_size) );
-    REQUIRE_GT0( client_fd = ACCEPT(socket_fd, NULL, 0) );
-    DBG("main: connected fd=%d\n", client_fd);
+    ///  int client_fd = ACCEPT(socket_fd, (struct sockaddr*)&c_addr, &c_addr_size);
+    int client_fd = ACCEPT(socket_fd, NULL, 0);
+    if (client_fd < 0) {
+      perror("failed accept()");
+      continue;
+    }
 
+    DBG("main: connected fd=%d\n", client_fd);
     if (push_thread(client_fd)) {
       fprintf(stderr, "main: couldn't allocate thread, dropping fd=%d\n", client_fd);
       SHUTDOWN(client_fd, SHUT_RDWR);
