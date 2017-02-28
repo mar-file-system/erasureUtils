@@ -176,9 +176,16 @@ int client_reap_read(const char* path) {
   // --- TBD: authentication handshake
   REQUIRE_GT0( skt_open(&handle, path, (O_RDONLY)) );
 
-  printf("sleeping for 20 sec ...\n");
-  sleep(20);
+  // some server-side work is deferred until we actually read.
+  printf("reading\n");
+  REQUIRE_GT0( skt_read(&handle, buf, 1) );
 
+  // server-side reaper runs every 10 sec
+  // needs to run twice with out seeing us move data.
+  printf("sleeping for 25 sec ...\n");
+  sleep(25);
+
+  // this should fail, because reaper killed the connection
   printf("reading\n");
   ssize_t bytes_moved = skt_read(&handle, buf, 1);
 

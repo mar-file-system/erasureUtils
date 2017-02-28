@@ -75,11 +75,11 @@ shut_down_handle(SocketHandle* handle) {
 
 #if UNIX_SOCKETS
   if (handle->flags & HNDL_FNAME) {
-    DBG("shut_down_handle: unlinking '%s'\n", handle->fname);
+    DBG("unlinking '%s'\n", handle->fname);
     unlink(handle->fname);
+    handle->flags &= ~HNDL_FNAME;
   }
 #endif
-
 
   if (handle->flags & HNDL_CONNECTED) {
     int dbg;                    // check return values
@@ -91,24 +91,42 @@ shut_down_handle(SocketHandle* handle) {
     // we're just unmapping the address here, not using it.
     //
     if (handle->flags & HNDL_RIOMAPPED) {
-      DBG("shut_down_handle(%d): riounmap'ing\n", handle->peer_fd);
+      DBG("peer_fd %3d: riounmap'ing\n", handle->peer_fd);
       dbg = RIOUNMAP(handle->peer_fd, handle->rio_buf, handle->rio_size);
-      DBG("shut_down_handle(%d): unmap = %d\n", handle->peer_fd, dbg);
+      DBG("peer_fd %3d: unmap = %d\n", handle->peer_fd, dbg);
       handle->flags &= ~HNDL_RIOMAPPED;
     }
 
-    DBG("shut_down_handle(%d): shutdown\n", handle->peer_fd);
-    dbg = SHUTDOWN(handle->peer_fd, SHUT_RDWR);
-    DBG("shut_down_handle(%d): shutdown = %d\n", handle->peer_fd, dbg);
+#if 0
+    // Commented out because rshutdown() sometimes deadlocks.
+    // The stacktrace isn't identical to the one reported here:
+    //    https://github.com/ofiwg/librdmacm/issues/1
+    //
+    // But I'm currently using the latest version of librdmacm.
+    // Instead, we have:
+    //    sem_wait () at ../nptl/sysdeps/unix/sysv/linux/x86_64/sem_wait.S:86
+    //    0x00002b9eb5674847 in fastlock_acquire (rs=0x25db730, nonblock=0, test=0x2b9eb5670870 <rs_conn_all_sends_done>) at src/cma.h:131
+    //    rs_process_cq (rs=0x25db730, nonblock=0, test=0x2b9eb5670870 <rs_conn_all_sends_done>) at src/rsocket.c:2022
+    //    0x00002b9eb5674acc in rshutdown (socket=<value optimized out>, how=<value optimized out>) at src/rsocket.c:3242
+    //    0x00000000004078f8 in shut_down_handle (handle=0x60f608) at skt_common.c:101
+    //    0x000000000040422e in shut_down_thread (arg=0x60f5e8) at socket_fserver.c:207
+    //    0x00000000004046da in server_thread (arg=0x60f5e8) at socket_fserver.c:748
+    //    0x00002b9eb5452aa1 in start_thread (arg=0x2b9eb718a700) at pthread_create.c:301
+    //    0x00002b9eb596593d in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:115
 
-    DBG("shut_down_handle(%d): close\n", handle->peer_fd);
+    DBG("peer_fd %3d: shutdown\n", handle->peer_fd);
+    dbg = SHUTDOWN(handle->peer_fd, SHUT_RDWR);
+    DBG("peer_fd %3d: shutdown = %d\n", handle->peer_fd, dbg);
+#endif
+
+    DBG("peer_fd %3d: close\n", handle->peer_fd);
     dbg = CLOSE(handle->peer_fd);
-    DBG("shut_down_handle(%d): close = %d\n", handle->peer_fd, dbg);
+    DBG("peer_fd %3d: close = %d\n", handle->peer_fd, dbg);
 
     handle->flags &= ~HNDL_CONNECTED;
   }
 
-  DBG("shut_down_handle(%d): done\n", handle->peer_fd);
+  DBG("peer_fd %3d: done\n", handle->peer_fd);
 }
 
 void jshut_down_handle(void* handle) {
@@ -203,7 +221,7 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 // NOTE: If <size>==0, the server will treat it as EOF.
 //
 // NOTE: In order to reliably weave remote-fsync into the protocol,
-//    skt_fsync() just set s a flag in the handle.  The next call to skt_write()
+//    skt_fsync() just sets a flag in the handle.  The next call to skt_write()
 //    
 //    copy_file_to_socket()
 
@@ -975,12 +993,13 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 // up for RDMA (riowrite).  For exmaple, skt_rename() needs a handle,
 // but only needs it to exchange a couple of tokens.
 //
-// In other words, if you want to use skt_read/skt_write, instead of
-// read_raw/write_raw, but for some reason you don't want to use RDMA.
-// You could initialize with this.
+// In other words, if you (writer of internals) want to use
+// skt_read/skt_write, instead of read_raw/write_raw, but for some
+// reason you don't want to initialize for RDMA.  You could initialize
+// with this.
 //
 // NOTE: You don't need this, just to allow shut_down_handle() to do
-//     all its necessary cleanup, For example, if you just want to
+//     all its necessary cleanup.  For example, if you just want to
 //     send some tokens with read_raw/write_raw, you don't need this.
 //     However, it's a convenient way to send the initial command to
 //     the server, and won't hurt you, unless you really did want to
@@ -1083,6 +1102,12 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
     size = header.size;
   }
 
+  // if reader shut-down nicely, and closed before reading everything,
+  // their last message to us will be an ACK 0.  If we are serviing
+  // write_buffer(), it could pay attention to this.  But no.
+  if (! size)
+    return 0;
+
 #endif
 
   // if the writer previously called skt_fsync(), we didn't do it
@@ -1174,16 +1199,21 @@ int read_init(SocketHandle* handle, SocketCommand cmd, char* buf, size_t size) {
     //  unsigned mapsize = 1; // max number of riomap'ed buffers
     //  NEED_0( RSETSOCKOPT(handle->peer_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
 
+    THREAD_CANCEL(DISABLE);
+
     DBG("riomap(%d, 0x%llu, ...)\n", handle->peer_fd, (size_t)buf);
     handle->rio_offset = RIOMAP(handle->peer_fd, buf, size, PROT_WRITE, 0, -1);
     if (handle->rio_offset == (off_t)-1) {
       fprintf(stderr, "riomap failed: %s\n", strerror(errno));
+      THREAD_CANCEL(ENABLE);
       return -1;
     }
+
     DBG("riomap offset: %llu\n", handle->rio_offset);
     handle->rio_buf  = buf;     // to allow the riounmap in shut_down_thread()
     handle->rio_size = size;    // to allow the riounmap in shut_down_thread()
     handle->flags |= HNDL_RIOMAPPED;
+    THREAD_CANCEL(ENABLE);
 
     NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RIO_OFFSET, handle->rio_offset, NULL) );
 #endif
@@ -1389,6 +1419,8 @@ int skt_close(SocketHandle* handle) {
   jHANDLER( jshut_down_handle, handle );
 
   if (handle->flags & HNDL_OP_INIT) {
+
+    // set this now.  If we only get part-way through, don't try again.
     handle->flags &= ~HNDL_OP_INIT;
 
     if (handle->flags & HNDL_PUT) {
@@ -1425,10 +1457,10 @@ int skt_close(SocketHandle* handle) {
   }
 
 
-  // This is redundant with what would be done by the thread-cleanup
-  // handlers (in the server), or in the shut_down() call (in the
-  // client app), but regular applications (e.g. libne) won't have a
-  // shut-down handler.
+  // This is (harmlessly) redundant with what would be done by the
+  // thread-cleanup handlers (in the server), or in the shut_down()
+  // call (in the client app), but regular applications (e.g. libne)
+  // won't have a shut-down handler.
   shut_down_handle(handle);
 
   return 0;

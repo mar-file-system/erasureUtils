@@ -77,11 +77,12 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  define DBG(FMT,...)                                                  \
   do {                                                                  \
     const int file_blob_size=24;                                        \
+    const int file_pad_size = IMAX(1, file_blob_size - strlen(__FILE__)); \
     const int fn_blob_size=20;                                          \
-    int  file_pad_size = IMAX(1, file_blob_size - strlen(__FILE__));    \
-    fprintf(stderr, "%s:%-6d%.*s %-*.*s |  " FMT,                       \
+    fprintf(stderr, "%s:%-6d%.*s  %08x  %-*.*s |  " FMT,                \
             __FILE__, __LINE__,                                         \
             file_pad_size, "                                ",          \
+            (unsigned int)pthread_self(),                               \
             fn_blob_size, fn_blob_size, __FUNCTION__, ##__VA_ARGS__);   \
   } while(0)
 #else
@@ -91,14 +92,14 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 
-#define _TEST(EXPR, TEST, PRINT, RETURN)                         \
-  do {                                                           \
-    PRINT(#EXPR " " #TEST "\n");                                 \
-    if (! ((EXPR) TEST)) {                                       \
-      fprintf(stderr, "%s:%d test failed: '%s': %s\n",           \
-              __FILE__, __LINE__, #EXPR, strerror(errno));       \
-      RETURN;                                                    \
-    }                                                            \
+#define _TEST(EXPR, TEST, PRINT, RETURN)                                \
+  do {                                                                  \
+    PRINT(#EXPR " " #TEST "\n");                                        \
+    if (! ((EXPR) TEST)) {                                              \
+      fprintf(stderr, "%s:%d  %08x  test failed: '%s': %s\n",           \
+              __FILE__, __LINE__, (unsigned int)pthread_self(), #EXPR, strerror(errno)); \
+      RETURN;                                                           \
+    }                                                                   \
   } while(0)
 
 
@@ -249,6 +250,13 @@ typedef struct sockaddr_in                   SockAddr;
 #  define unlikely(x)    (x)
 #endif
 
+
+// shorthand, to turn thread-cancelability off/on
+// argument must be ENABLE or DISABLE
+#define THREAD_CANCEL(ENABLE)                                           \
+  do { int prev_cancel_state;                                           \
+    pthread_setcancelstate(PTHREAD_CANCEL_##ENABLE, &prev_cancel_state); \
+  } while (0)
 
 
 

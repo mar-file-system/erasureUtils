@@ -96,7 +96,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define  CTX_THREAD_ERR   0x0040
 
 // #define  CTX_RIOMAPPED    0x0100 /* now done in ThreadContext.handle.flags */
-#define  CTX_FILE_OPEN    0x0200
+// #define  CTX_FILE_OPEN    0x0200 /* now we just look at ctx->file_fd */
 #define  CTX_EOF          0x0400
 
 
@@ -106,9 +106,14 @@ static char server_name[MAX_SOCKET_NAME_SIZE +1];
 
 static int  socket_fd;               // main listens to this
 
-// command-line arg provide restricted dir-tree where files may be affected
-const char*   dir_root;
+
+// command-line '-d' provides restricted dir-tree where files may be affected
+const char*   dir_root = NULL;
 size_t        dir_root_len;
+
+// command-line '-r' [option] says whether to run a reaper-thread
+int           reap = 0;
+
 
 
 // all the state needed to make server-threads thread-safe.
@@ -125,6 +130,7 @@ typedef struct {
   volatile int        flags;     // lockless: see ServerConnection 
   int                 err_no;    // TBD
   PseudoPacketHeader  hdr;       // read/write "pseudo-packets" to/from socket
+  int                 pos;       // index in conn_list[], for diagnostics
 
   SocketHandle        handle;    // socket to peer
 
@@ -168,18 +174,27 @@ pthread_t       reap_thr;
 
 
 // clean-up for a given thread.
-// Threads only handle the client_fd, and file_fd.
+// Only ever called from the cleanup handler of an active thread.
+//
+// We only deal with the client_fd, and file_fd.
 // The listening socket is shut-down by main.
+//
+// Printing <pos> allows easy correlation of reaper-activity with
+// corresponding thread-shutdowns.
+
 void
 shut_down_thread(void* arg) {
   ThreadContext* ctx = (ThreadContext*)arg;
+  DBG("pos: %d, peer_fd: %d, file_fd: %d\n", ctx->pos, ctx->handle.peer_fd, ctx->file_fd);
 
   // maybe close the local file
-  if (ctx->flags & CTX_FILE_OPEN) {
+  if (ctx->file_fd > 0) {
 
 #ifndef SKIP_FILE_WRITES
-    if (ctx->hdr.command == CMD_PUT)
+    if (ctx->hdr.command == CMD_PUT) {
+      EXPECT_0( fsync(ctx->file_fd) );	// for consistent sustained ZFS throughput
       EXPECT_0( close(ctx->file_fd) );
+    }
 #endif
 
 #ifndef SKIP_FILE_READS
@@ -187,12 +202,13 @@ shut_down_thread(void* arg) {
       EXPECT_0( close(ctx->file_fd) );
 #endif
 
+    ctx->file_fd = 0;
   }
 
   if (ctx->flags & CTX_PRE_THREAD) {
     SocketHandle*  handle = &ctx->handle; // shorthand
 
-    DBG("shut_down_thread: closing client_fd %d\n", handle->peer_fd);
+    DBG("closing client_fd %d\n", handle->peer_fd);
     shut_down_handle(handle);
   }
 
@@ -203,7 +219,7 @@ shut_down_thread(void* arg) {
 
 // main uses this for surprise exits
 void
-shut_down() {
+shut_down_server() {
 
   // shutdown reaper
   DBG("stopping reaper\n");
@@ -215,9 +231,8 @@ shut_down() {
   // shutdown all connection-handling threads
   int i;
   for (i=0; i<MAX_SOCKET_CONNS; ++i) {
-    if ((conn_list[i].ctx.flags & (CTX_PRE_THREAD | CTX_THREAD_EXIT))
-        == CTX_PRE_THREAD) {
-      DBG("shut_down: cancelling conn %d ...", i);
+    if (IS_ACTIVE(&conn_list[i].ctx)) {
+      DBG("cancelling conn %d ...", i);
       pthread_cancel(conn_list[i].thr);
       pthread_join(conn_list[i].thr, NULL);
       DBG("done.\n");
@@ -226,11 +241,11 @@ shut_down() {
 
   // close up shop
   if (main_flags & MAIN_BIND) {
-    DBG("shut_down: unlinking '%s'\n", server_name);
+    DBG("unlinking '%s'\n", server_name);
     (void)unlink(server_name);
   }
   if (main_flags & MAIN_SOCKET_FD) {
-    DBG("shut_down: closing socket_fd %d\n", socket_fd);
+    DBG("closing socket_fd %d\n", socket_fd);
     CLOSE(socket_fd);
   }
 }
@@ -240,7 +255,7 @@ shut_down() {
 static void
 sig_handler(int sig) {
   fprintf(stderr, "sig_handler exiting on signal %d\n", sig);
-  shut_down();
+  shut_down_server();
   exit(0);
 }
 
@@ -435,7 +450,6 @@ int server_put(ThreadContext* ctx) {
             fname, strerror(errno));
     return -1;
   }
-  ctx->flags |= CTX_FILE_OPEN;
   DBG("opened file '%s'\n", fname);
 #endif
 
@@ -449,14 +463,6 @@ int server_put(ThreadContext* ctx) {
 
   // close socket
   EXPECT_0( skt_close(handle) );
-
-  // close the local file (if it was opened)
-  if (ctx->flags & CTX_FILE_OPEN) {
-    EXPECT_0( fsync(ctx->file_fd) );	// for consistent sustained ZFS throughput
-    EXPECT_0( close(ctx->file_fd) );
-    ctx->flags &= ~CTX_FILE_OPEN;
-  }
-
   return 0;
 }
 
@@ -495,7 +501,6 @@ int server_get(ThreadContext* ctx) {
             fname, strerror(errno));
     return -1;
   }
-  ctx->flags |= CTX_FILE_OPEN;
   DBG("opened file '%s'\n", fname);
 #endif
 
@@ -508,13 +513,6 @@ int server_get(ThreadContext* ctx) {
 
   // close socket
   EXPECT_0( skt_close(handle) );
-
-  // close the local file (if it was opened)
-  if (ctx->flags & CTX_FILE_OPEN) {
-    EXPECT_0( close(ctx->file_fd) );
-    ctx->flags &= ~CTX_FILE_OPEN;
-  }
-
   return 0;
 }
 
@@ -642,6 +640,10 @@ int server_rename(ThreadContext* ctx) {
 //     happens to have the same endian-ness, we can both avoid the
 //     cost of the network-byte-order computations, and local
 //     data-movement.
+//
+// TBD: The jHANDLER/jNEED/jSEND_VALUE stuff is now overkill.  Threads
+//     now always clean-up their handles via shut_down_thread() ->
+//     shut_down_handle().
 
 int server_stat(ThreadContext* ctx) {
 
@@ -842,7 +844,8 @@ void* reap_thread(void* arg) {
 
         // --- if nothing has moved, kill the thread (and the connection)
         else if (reap_list[i] == current_pos) {
-          fprintf(stderr, "reaper [%3d]: reaping\n", i);
+          fprintf(stderr, "reaper [%3d]: reaping  (peer_fd: %d, file_fd: %d)\n",
+                  i, conn_list[i].ctx.handle.peer_fd, conn_list[i].ctx.file_fd);
           reap_list[i] = -2;
           pthread_cancel(conn_list[i].thr); // cleanup sets CTX_THREAD_EXIT
         }
@@ -863,29 +866,60 @@ void* reap_thread(void* arg) {
 }
 
 
-// TBD: There should be a separate reaper-thread that periodically
-//      cleans up terminated threads (e.g. take over our branch that
-//      looks for CTX_THREAD_EXIT), instead of us doing it inline
-//      while someone is waiting for service.
+// Return an index in conn_list[], which push_thread() can use to hold
+// a new thread.  Or, return -1 for failure.
 //
-int find_available_conn() {
-  int i;
+// We use <pos> to pick up the search from wherever we left off after
+// the previous call.
+//
+// NOTE: There is a separate reaper-thread that periodically cleans up
+//      terminated threads.  When it calls pthread_cancel(), thread
+//      cleanup-handlers should eventually set CTX_THREAD_EXIT in the
+//      corresponding ThreadContext flags.  At that point, we can
+//      reuse that context.
+//
+int find_available_conn(int client_fd) {
+  static int pos=MAX_SOCKET_CONNS;
+  int        result = -1;
+  int        i;
+
+  pthread_mutex_lock(&reap_mtx);
   for (i=0; i<MAX_SOCKET_CONNS; ++i) {
 
-    if (! conn_list[i].ctx.flags) {
-      memset(&conn_list[i].ctx, 0, sizeof(conn_list[i].ctx));
-      return i;
+    ++ pos;
+    if (pos >= MAX_SOCKET_CONNS)
+      pos = 0;
+
+    if (! conn_list[pos].ctx.flags) {
+      // unused slot
+      result = pos;
+      break;
     }
 
-    else if (conn_list[i].ctx.flags & CTX_THREAD_EXIT) {
+    else if (conn_list[pos].ctx.flags & CTX_THREAD_EXIT) {
+      // thread exited, or was cancelled
       // TBD: handle threads that return failure?
-      pthread_join(conn_list[i].thr, NULL);
-      memset(&conn_list[i].ctx, 0, sizeof(ThreadContext));
-      return i;
+      pthread_join(conn_list[pos].thr, NULL);
+      result = pos;
+      break;
     }
   }
 
-  return -1;
+
+  if (result >= 0) {
+    DBG("connection[%d] <- fd=%d\n", i, client_fd);
+    memset(&conn_list[pos].ctx, 0, sizeof(conn_list[pos].ctx));
+
+    conn_list[pos].ctx.pos             = pos;   // for diagnostics
+    conn_list[pos].ctx.handle.peer_fd  = client_fd;
+    conn_list[pos].ctx.handle.flags   |= HNDL_CONNECTED;
+    conn_list[pos].ctx.flags          |= CTX_PRE_THREAD;
+
+    reap_list[pos] = -1;
+  }
+
+  pthread_mutex_unlock(&reap_mtx);
+  return result;
 }
 
 
@@ -897,49 +931,67 @@ int find_available_conn() {
 //
 // TBD: re-use threads from a pool.
 int push_thread(int client_fd) {
-  int  i = find_available_conn(); // does cleanup, and wipe to zeros
+  int  i = find_available_conn(client_fd); // does cleanup, and wipe to zeros
   if (i < 0)
     return -1;
 
-  conn_list[i].ctx.handle.peer_fd  = client_fd;
-  conn_list[i].ctx.handle.flags   |= HNDL_CONNECTED;
-  conn_list[i].ctx.flags          |= CTX_PRE_THREAD;
-
-  pthread_mutex_lock(&reap_mtx);
-  reap_list[i] = -1;
-  pthread_mutex_unlock(&reap_mtx);
-
-  DBG("connection[%d] <- fd=%d\n", i, client_fd);
   NEED_0( pthread_create(&conn_list[i].thr, NULL, server_thread, &conn_list[i].ctx) );
-
   return 0;
 }
 
 
 
+void usage(const char* progname) {
+    fprintf(stderr, "Usage: %s -p <port> -d <dir> [ -r ]\n", progname);
+    fprintf(stderr, "  -p <port>   port on which the server should listen\n");
+    fprintf(stderr, "  -d <dir>    server will allow clients to write arbitrary files under <dir>\n");
+    fprintf(stderr, "                (but nowhere else)\n");
+    fprintf(stderr, "  -r          use a 'reap' thread, to clean up stuck threads\n");
+    exit(1);
+}
+
 int
 main(int argc, char* argv[]) {
 
-  // cmd-line gives us our server-number, which determines our socket-name
-  if (argc != 3) {
-    fprintf(stderr, "Usage: %s <port> <dir>\n", argv[0]);
-    fprintf(stderr, "  The server will currently allow clients to write arbitrary files under <dir>\n");
-    fprintf(stderr, "  (but nowhere else)\n");
-    exit(1);
+  const char* port_str = NULL;
+  int         port = 0;
+
+  int         reap = 0;
+
+  int         c;
+  while ( (c = getopt(argc, argv, "p:d:rh")) != -1) {
+    switch (c) {
+    case 'p':      port_str = optarg;    break;
+    case 'd':      dir_root = optarg;    break;
+    case 'r':      reap     = 1;         break;
+
+    case 'h':
+    default:
+      usage(argv[0]);
+      return -1;
+    }
   }
 
-  char*  port_str = argv[1];
+
+  // validation of args
+  if (! port_str)
+    usage(argv[0]);
+  if (! dir_root)
+    usage(argv[0]);
+
+  dir_root_len = strlen(dir_root);
+
+  // parse <port>
   errno = 0;
-  int    port     = strtol(argv[1], NULL, 10);
+  port = strtol(port_str, NULL, 10);
   if (errno) {
     char errmsg[128];
-    sprintf("couldn't read integer from '%s'", argv[1]);
+    sprintf("couldn't read integer from '%s'", port_str);
     perror(errmsg);
     abort();
   }
 
-  dir_root     = argv[2];
-  dir_root_len = strlen(dir_root);
+
 
 
   // for UNIX sockets, this is an fname.  for INET this is just for diagnostics
@@ -1068,6 +1120,6 @@ main(int argc, char* argv[]) {
     }
   }
 
-  shut_down();
+  shut_down_server();
   return 0;
 }
