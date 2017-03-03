@@ -72,7 +72,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <signal.h>
 #include <stdlib.h>             // strtol()
 #include <limits.h>             // PATH_MAX
-#include <unistd.h>             // usleep()
+#include <unistd.h>             // usleep(), fork()
 #include <string.h>             // strcpy()
 #include <errno.h>
 
@@ -80,7 +80,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#include <pthread.h>
+#ifndef USE_PROCS
+#  include <pthread.h>
+#endif
 
 #include "skt_common.h"
 
@@ -148,7 +150,11 @@ typedef struct {
 //    sets ctx.flags when they are zero.  Threads set a different flag
 //    on exit.  When main sees this flag set, it can join and reset.
 typedef struct ServerConnection {
+#ifdef USE_PROCS
+  int            pid;
+#else
   pthread_t      thr;
+#endif
   ThreadContext  ctx;
 } SConn;
 
@@ -225,7 +231,7 @@ shut_down_server() {
   DBG("stopping reaper\n");
   pthread_cancel(reap_thr);
   pthread_join(reap_thr, NULL);
-  pthread_mutex_destroy(&reap_mtx);
+  // pthread_mutex_destroy(&reap_mtx);
   DBG("done.\n");
 
   // shutdown all connection-handling threads
@@ -420,6 +426,40 @@ int fake_open(SocketHandle* handle, int flags, char* buf, size_t size) {
 }
 
 
+// This is like fake_open(), but we know that we are ONLY going to be
+// exchanging pseudo-packet-headers with the client, and are NEVER
+// going to call skt_read() or skt_write() to exchange data.
+// Therefore, we can bypass the cost of doing a riomap on either end,
+// while still assuring that the protocol is cleaned up by skt_close()
+// on both ends.
+
+// NOTE: To implement API operations that are synchronous (from the
+//    client's perspective), the client-side should skt_open(WR), and
+//    server-side fake_open_basic(RD).  For async operations,
+//    skt_open(RD)/fake_open_basic(WR).
+
+int fake_open_basic(SocketHandle* handle, int flags) {
+  DBG("fake_open_basic(0x%llx, 0x%x, 0x%llx, %lld)\n", (size_t)handle, flags);
+
+  // this isn't even meaningful for the tokens-only exchanges we will
+  // be doing.  It would apply to data.  We can always exchange
+  // control-info in both directions.
+  if (flags & (O_RDWR)) {
+    errno = ENOTSUP;
+    return -1;
+  }
+
+  handle->flags |= HNDL_CONNECTED;
+  if (flags & O_WRONLY)
+    handle->flags |= HNDL_PUT;
+  else
+    handle->flags |= HNDL_GET;
+
+  NEED_0( basic_init(handle, CMD_NULL) ); // don't send GET/PUT
+
+  return 0;
+}
+
 
 
 
@@ -538,6 +578,9 @@ int server_chown(ThreadContext* ctx) {
   int                client_fd = handle->peer_fd;
   PseudoPacketHeader header = {0};
 
+  // we only use the control-channel
+  NEED_0( fake_open_basic(handle, O_RDONLY) );
+
   // read UID
   uint64_t uid_buf;
   NEED_0( read_raw(client_fd, (char*)&uid_buf, sizeof(uid_buf)) );
@@ -553,16 +596,18 @@ int server_chown(ThreadContext* ctx) {
   DBG("result: %d %s\n", rc, (rc ? strerror(errno) : ""));
 
   // send ACK with return-code
-  NEED_0( write_pseudo_packet(client_fd, CMD_ACK_CMD, rc, NULL) );
+  NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
 
+  // skt_chown() will call skt_close(), so send an ACK 0, like
+  // we were closing a normal handle.
+  NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
+
+  // close transaction with client
+  NEED_0( skt_close(handle) );
+ 
   return rc;
 }
 
-
-// NOTE: We skip the establishing of an "open" socket betw client and
-// server, which would allow RDMA, etc, because (a) we're just
-// exchanging a couple of tokens, writing directly on the socket, so
-// (b) we don't need the overhead of the extra open/close protocol.
 
 int server_rename(ThreadContext* ctx) {
 
@@ -572,11 +617,8 @@ int server_rename(ThreadContext* ctx) {
   PseudoPacketHeader header = {0};
 
 
-#if 0
-  // open socket for reading (client writes, we read)
-  fake_open(handle, O_RDONLY, buf, SERVER_BUF_SIZE);
-#endif
-
+  // we only use the control-channel
+  NEED_0( fake_open_basic(handle, O_RDONLY) );
 
   // read new-fname length (incl terminal NULL)
   uint64_t len;
@@ -594,12 +636,14 @@ int server_rename(ThreadContext* ctx) {
   DBG("result: %d %s\n", rc, (rc ? strerror(errno) : ""));
 
   // send ACK with return-code
-  NEED_0( write_pseudo_packet(client_fd, CMD_ACK_CMD, rc, NULL) );
+  NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
 
-#if 0
-  // close socket
-  EXPECT_0( skt_close(handle) );
-#endif
+  // skt_chown() will call skt_close(), so send an ACK 0, like
+  // we were closing a normal handle.
+  NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
+
+  // finish transaction with client
+  NEED_0( skt_close(handle) );
 
   return rc;
 }
@@ -610,7 +654,7 @@ int server_rename(ThreadContext* ctx) {
 // We're actually doing this over RDMA to try to keep the CPU load down.
 //
 // client reads (read_raw) results from the stream.  The first value
-// is returned as a pseudo-packet with the key CMD_ACK_CMD, and the
+// is returned as a pseudo-packet with the key CMD_RETURN, and the
 // value an ssize_t, to be interpreted differently in the following
 // two cases:
 //
@@ -654,9 +698,10 @@ int server_stat(ThreadContext* ctx) {
   DBG("stat %s\n", fname);
 
 
-#if 0
+#if 1
   // open socket for writing (we write, client reads)
-  fake_open(handle, O_WRONLY, buf, STAT_DATA_SIZE);
+  //  fake_open(handle, O_WRONLY, buf, STAT_DATA_SIZE);
+  fake_open_basic(handle, O_RDONLY);
 
   // jNEED() failures run this before exiting
   jHANDLER(jskt_close, handle);
@@ -673,14 +718,14 @@ int server_stat(ThreadContext* ctx) {
     DBG("stat failed: %s\n", strerror(errno));
 
     // (a) send ACK with return-code == negative errno
-    NEED_0( write_pseudo_packet(handle->peer_fd, CMD_ACK_CMD, -errno, NULL) );
+    NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, -errno, NULL) );
   }
   else {
     // case (2), stat succeeded
     DBG("stat OK\n");
 
     // (a) send ACK with return-code == sizeof(struct stat), for crude validation
-    jNEED_0( write_pseudo_packet(handle->peer_fd, CMD_ACK_CMD, sizeof(struct stat), NULL) );
+    jNEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, sizeof(struct stat), NULL) );
 
 
     // (b) "send" individual field values into the buffer
@@ -700,8 +745,8 @@ int server_stat(ThreadContext* ctx) {
     jSEND_VALUE(buf, st.st_atime);   /* time of last access */
     jSEND_VALUE(buf, st.st_mtime);   /* time of last modification */
     jSEND_VALUE(buf, st.st_ctime);   /* time of last status change */
-    
-    // send the whole buffer, so client can just read it all
+
+    // send the whole buffer in one shot, so client can just read it all
 #if 0
     ssize_t write_count = skt_write_all(handle, buffer, STAT_DATA_SIZE);
     jNEED( write_count == STAT_DATA_SIZE );
@@ -711,7 +756,7 @@ int server_stat(ThreadContext* ctx) {
 
   }  
 
-#if 0
+#if 1
   // close
   EXPECT_0( skt_close(handle) );
 #else
@@ -746,10 +791,11 @@ int server_stat(ThreadContext* ctx) {
 void* server_thread(void* arg) {
   ThreadContext* ctx = (ThreadContext*)arg;
 
-  // cleanup fd's etc, if we pthread_exit(), or get cancelled NOTE:
-  // This isn't actually a function, but rather a butt-ugly macro
-  // ending in '{', where the corresponding pthread_cleanup_pop()
-  // macro (below) supplies the closing '}'
+  // cleanup fd's etc, if we pthread_exit(), or get cancelled.
+  // NOTE: This isn't actually a function, but rather a butt-ugly
+  //     macro ending in '{', where the corresponding
+  //     pthread_cleanup_pop() macro (below) supplies the closing '}'.
+
   pthread_cleanup_push(shut_down_thread, arg);
 
   // shorthand
@@ -1097,7 +1143,7 @@ main(int argc, char* argv[]) {
   for (i=0; i<MAX_SOCKET_CONNS; ++i) {
     reap_list[i] = -1;
   }
-  REQUIRE_0( pthread_mutex_init(&reap_mtx, NULL) );
+  // REQUIRE_0( pthread_mutex_init(&reap_mtx, NULL) );
   REQUIRE_0( pthread_create(&reap_thr, NULL, reap_thread, NULL) );
 
   

@@ -69,12 +69,10 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <unistd.h>
 
 
-
-
-#ifdef DEBUG_SOCKETS
-// #  define DBG(FMT,...)   fprintf(stderr, "%-20.20s | " FMT, __FILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__)
 #  define IMAX(A, B) (((A) > (B)) ? (A) : (B))
-#  define DBG(FMT,...)                                                  \
+
+// LOG() is always defined
+#  define LOG(FMT,...)                                                  \
   do {                                                                  \
     const int file_blob_size=24;                                        \
     const int file_pad_size = IMAX(1, file_blob_size - strlen(__FILE__)); \
@@ -85,6 +83,11 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
             (unsigned int)pthread_self(),                               \
             fn_blob_size, fn_blob_size, __FUNCTION__, ##__VA_ARGS__);   \
   } while(0)
+
+
+
+#ifdef DEBUG_SOCKETS
+#  define DBG(FMT,...)  LOG(FMT, ##__VA_ARGS__)
 #else
 #  define DBG(...)
 #endif
@@ -92,12 +95,16 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 
+// Callers can suppress printing of successful tests, by choice of <PRINT>
+// All failures go to stderr.
 #define _TEST(EXPR, TEST, PRINT, RETURN)                                \
   do {                                                                  \
-    PRINT(#EXPR " " #TEST "\n");                                        \
-    if (! ((EXPR) TEST)) {                                              \
-      fprintf(stderr, "%s:%d  %08x  test failed: '%s': %s\n",           \
-              __FILE__, __LINE__, (unsigned int)pthread_self(), #EXPR, strerror(errno)); \
+    PRINT(#EXPR " " #TEST "  ?\n");                                     \
+    if ((EXPR) TEST) {                                                  \
+      PRINT(#EXPR " " #TEST "\n");                                      \
+    }                                                                   \
+    else {                                                              \
+      LOG("* fail: " #EXPR " " #TEST ": %s\n", strerror(errno));        \
       RETURN;                                                           \
     }                                                                   \
   } while(0)
@@ -122,6 +129,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 // [put a "jHANDLER" invocation at the top of a function that uses jNEED() macros.]
 typedef void(*jHandlerType)(void* arg);
 #define jHANDLER(FN, ARG)   jHandlerType j_handler = &(FN); void* j_handler_arg = (ARG)
+
 #define jNEED(EXPR)         _TEST(EXPR,    , DBG,    j_handler(j_handler_arg); return -1)
 #define jNEED_0(EXPR)       _TEST(EXPR, ==0, DBG,    j_handler(j_handler_arg); return -1)
 #define jNEED_GT0(EXPR)     _TEST(EXPR,  >0, DBG,    j_handler(j_handler_arg); return -1)
@@ -293,7 +301,7 @@ typedef enum {
   HNDL_CLOSED      = 0x0800,
 
   HNDL_SEEK_SET    = 0x1000,    // reader called skt_lseek()
-  HNDL_FSYNC       = 0x2000,    // writer called skt_fsync()
+  HNDL_FSYNC       = 0x2000,    // skt_read() found FSYNC
 } SHFlags;
 
 
@@ -335,7 +343,7 @@ typedef enum {
   CMD_RIO_OFFSET,               // reader sends riomapped offset (for riowrite)
   CMD_DATA,                     // amount of data sent (via riowrite)
   CMD_ACK,                      // got data (ready for riowrite), <size> has read-size
-  CMD_ACK_CMD,                  // command received (<size> has ack'ed cmd)
+  CMD_RETURN,                   // command received (<size> has ack'ed cmd)
 
   CMD_NULL,                     // THIS IS ALWAYS LAST
 } SocketCommand;
@@ -402,13 +410,14 @@ int      read_init (SocketHandle* handle, SocketCommand cmd, char* buf, size_t s
 int      write_init(SocketHandle* handle, SocketCommand cmd);
 
 ssize_t  read_buffer (int fd, char*       buf, size_t size, int is_socket);
-int      write_buffer(int fd, const char* buf, size_t size, int is_socket, int do_fsync, off_t offset);
+int      write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset);
 
 ssize_t  copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size);
 ssize_t  copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size);
 
 void     shut_down_handle(SocketHandle* handle);
 void     jshut_down_handle(void* handle);
+void     jskt_close(void* handle);
 
 
 // --- For now, we'll use a open/read/write/close model, because that

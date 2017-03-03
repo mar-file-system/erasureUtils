@@ -225,8 +225,8 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 //    
 //    copy_file_to_socket()
 
-int write_buffer(int fd, const char* buf, size_t size, int is_socket, int do_fsync, off_t offset) {
-  DBG("write_buffer(%d, 0x%llx, %lld, skt:%d, sync:%d, off:0x%llx)\n", fd, buf, size, is_socket, do_fsync, offset);
+int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset) {
+  DBG("write_buffer(%d, 0x%llx, %lld, skt:%d, off:0x%llx)\n", fd, buf, size, is_socket, offset);
 
   const char*  write_ptr     = buf;
   size_t       write_remain  = size;
@@ -270,15 +270,6 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, int do_fsy
 #endif
   }
   DBG("write_total: %lld\n", write_total);
-
-
-
-  if (do_fsync) {
-    if (is_socket)
-      NEED_0( write_pseudo_packet(fd, CMD_FSYNC, 1, NULL) );
-    else
-      NEED_0( fsync(fd) );
-  }
 
 
 #ifdef USE_RIOWRITE
@@ -450,7 +441,7 @@ const char* _command_str[] = {
   "RIO_OFFSET",
   "DATA",
   "ACK",
-  "ACK_CMD",
+  "RETURN",
 
   "NULL"
 };
@@ -719,13 +710,12 @@ ssize_t copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size
 
     // --- read from socket, up to <size>, or EOF
     //
-    // NOTE: Our protocol supporting riowrite only discovers requests
-    //    from the client to fsync the destination file at the time
-    //    skt_read() goes to read from the socket and waits for the
-    //    DATA token, but gets an FSYNC, instead.  skt_read() then
-    //    returns an "error" to us, with the socket-handle marked
-    //    FSYNC.  We then do the fsync, and call skt_read() again,
-    //    which will this time find the DATA and return success.
+    // NOTE: We are processing a continuous incoming stream.  We only
+    //    discover requests from the client to fsync the destination file
+    //    when skt_read() goes to read from the socket and waits for the
+    //    DATA token, but gets an FSYNC, instead.  skt_read() then returns
+    //    an "error" to us, with the socket-handle marked FSYNC.  We then
+    //    do the fsync, pick up where we left off.
     //    
     ssize_t read_count = skt_read(handle, buf, size);
     DBG("read_count: %lld\n", read_count);
@@ -734,9 +724,12 @@ ssize_t copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size
     if (unlikely(read_count < 0)) {
 
       if (handle->flags & HNDL_FSYNC) {
-        DBG("read faile due to FSYNC\n");
+        DBG("read failed due to FSYNC\n");
         handle->flags &= ~(HNDL_FSYNC);
         NEED_0( fsync(fd) );
+
+        // peer is waiting for the fsync to "complete"
+        NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, CMD_FSYNC, NULL) );
         continue;
       }
 
@@ -757,7 +750,7 @@ ssize_t copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size
     DBG("fake write: %lld\n", read_count);
 #else
     // copy all of buffer to file
-    NEED_0( write_buffer(fd, buf, read_count, 0, 0, 0) );
+    NEED_0( write_buffer(fd, buf, read_count, 0, 0) );
     DBG("copied out\n");
 #endif
 
@@ -1110,18 +1103,8 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
 
 #endif
 
-  // if the writer previously called skt_fsync(), we didn't do it
-  // immediately, because we wanted to make sure the protocol is
-  // rigorously correct, when we later go to double-buffering.  Here
-  // we we are at the next command-interaction with the server, so we
-  // can do it now.  Weave an FSYNC into the protocol, so that the
-  // reader receives it before the DATA token.  (This lets the reader
-  // be sure that the transaction always ends with the DATA token.)
-  int do_fsync = ((handle->flags & HNDL_FSYNC) != 0);
-  handle->flags &= ~(HNDL_FSYNC);
-
   // write_buffer() is okay here, because we know how much the peer can handle
-  NEED_0( write_buffer(handle->peer_fd, buf, size, 1, do_fsync, handle->rio_offset) );
+  NEED_0( write_buffer(handle->peer_fd, buf, size, 1, handle->rio_offset) );
   handle->stream_pos += size;  /* tracking for skt_lseek() */
 
   return size;
@@ -1387,23 +1370,55 @@ int skt_fsetxattr(SocketHandle* handle, const char* service_path, const void* va
 // ...........................................................................
 // FSYNC
 //
-// libne now periodically performs an fsync().  We can eventually
-// shoe-horn that into PUT, in the same we we shoe-horned lseek() into
-// GET.  For now, we'll just ignore it.
+// libne now periodically performs an fsync().  We are interacting with the
+// skt_read() calls, in a server that is looping in copy_socket_to_file().
+// Therefore, we must join in the protocol in the way that skt_write()
+// write would do.  After skt_read() gets our FSYNC, it will perform the op
+// and send us a CMD_ACK, so we can be synchronous.
+//
+// NOTE: Maybe the libne calls to fsync() are really only useful to MC over
+//     NFS, and we should just ignore them?  Seems to improve performance
+//     by ~15%, to suppress the fsyncs.
+//
 // ...........................................................................
 
 int skt_fsync(SocketHandle* handle) {
-  //  return 0;
 
+#if 1
+  // ignore fsync()
+  return 0;
+
+#else
   if (! (handle->flags & HNDL_PUT)) {
     fprintf(stderr, "skt_fsync: handle not open for writing\n");
     errno = EBADF;
     return -1;
   }
 
-  // performed at the next skt_write().
-  handle->flags |= HNDL_FSYNC;
+  PseudoPacketHeader header;
+  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
+
+  // this ACK was intended for skt_write()
+  if (unlikely(header.command != CMD_ACK)) {
+    fprintf(stderr, "expected an ACK, but got %s\n", command_str(header.command));
+    return -1;
+  }
+
+  NEED_0( write_pseudo_packet(handle->peer_fd, CMD_FSYNC, 1, NULL) );
+
+  // wait for peer to finish the fsync
+  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
+  if (unlikely(header.command != CMD_RETURN)) {
+    fprintf(stderr, "expected an RETURN, but got %s\n", command_str(header.command));
+    return -1;
+  }
+  else if (unlikely(header.size != CMD_FSYNC)) {
+    fprintf(stderr, "RETURN was for %s, instead of FSYNC\n", command_str(header.command));
+    return -1;
+  }
+
   return 0;
+#endif
 }
 
 
@@ -1498,7 +1513,14 @@ int skt_close(SocketHandle* handle) {
 // ...........................................................................
 
 int skt_unlink(const char* service_path) {
-  NO_IMPL();
+  //  NO_IMPL();
+
+  SocketHandle       handle = {0};
+  PseudoPacketHeader hdr = {0};
+
+  // This does NOT actually open() the server-side file
+  NEED_GT0( skt_open(&handle, service_path, O_WRONLY) );
+
 }
 
 
@@ -1517,9 +1539,8 @@ int  skt_chown (const char* service_path, uid_t uid, gid_t gid) {
   // jNEED() macros will run this before exiting
   jHANDLER( jshut_down_handle, &handle );
 
-  // command pseudo-packet header
-  PathSpec* spec = &handle.path_spec;
-  jNEED_0( write_pseudo_packet(handle.peer_fd, CMD_CHOWN, strlen(spec->fname)+1, spec->fname) );
+  // send CHOWN with pathname
+  jNEED_0( basic_init(&handle, CMD_CHOWN) );
 
   // write UID
   uint64_t uid_buf = hton64(uid);
@@ -1532,7 +1553,7 @@ int  skt_chown (const char* service_path, uid_t uid, gid_t gid) {
 
   // read ACK, including return-code from the remote lchown().
   jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr) );
-  jNEED(   (hdr.command == CMD_ACK_CMD) );
+  jNEED(   (hdr.command == CMD_RETURN) );
   int rc =   (int)hdr.size;
 
   // close()
@@ -1597,7 +1618,7 @@ int skt_rename (const char* service_path, const char* new_path) {
 
   // read ACK, including return-code from the remote rename().
   jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr) );
-  jNEED(   (hdr.command == CMD_ACK_CMD) );
+  jNEED(   (hdr.command == CMD_RETURN) );
   int rc =   (int)hdr.size;
 
 #if 0
@@ -1665,7 +1686,7 @@ int skt_stat(const char* service_path, struct stat* st) {
   // rc is sent as a pseudo-packet
   PseudoPacketHeader hdr;
   jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr) );
-  jNEED(   (hdr.command == CMD_ACK_CMD) );
+  jNEED(   (hdr.command == CMD_RETURN) );
   rc = hdr.size;
   if (rc < 0) {
 
