@@ -332,8 +332,10 @@ int read_raw(int fd, char* buf, size_t size) {
   ssize_t read_count = RECV(fd, buf, size, MSG_WAITALL);
 
 
-  if (! read_count)
-    DBG("EOF\n");
+  if (! read_count) {
+    LOG("fail: EOF\n");
+    return -1;
+  }
   else if (read_count != size) {
     LOG("fail: read %lld instead of %lld bytes\n", read_count, size);
     return -1;
@@ -715,7 +717,7 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
         if (handle->flags & HNDL_SEEK_SET) {
           DBG("write failed due to SEEK.  offset = %lld\n", handle->seek_pos);
           handle->flags &= ~(HNDL_SEEK_SET);
-          NEED_GT0( lseek(fd, handle->seek_pos, SEEK_SET) );
+          NEED( lseek(fd, handle->seek_pos, SEEK_SET) == handle->seek_pos);
           read_count = 0;       // don't add read_count to bytes_moved
           break;
         }
