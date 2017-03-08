@@ -168,6 +168,10 @@ typedef void(*jHandlerType)(void* arg);
 
 #define STAT_DATA_SIZE          (13 * sizeof(size_t)) /* room enough for all 13 members */
 
+// max delay (in sec), waiting for tokens to/from client/server
+// TBD: Make these configurable
+#define WR_TIMEOUT              30
+#define RD_TIMEOUT              30
 
 
 /* -----------------------------------
@@ -189,6 +193,7 @@ typedef struct sockaddr_un                   SockAddr;
 #  define SEND(...)             send(__VA_ARGS__)
 #  define RECV(...)             recv(__VA_ARGS__)
 #  define SHUTDOWN(...)         shutdown(__VA_ARGS__)
+#  define SELECT(...)           select(__VA_ARGS__)
 
 #  define RIOMAP(...)
 #  define RIOUNMAP(...)
@@ -215,6 +220,7 @@ typedef struct rdma_addrinfo           SockAddr;
 #  define SEND(...)             rsend(__VA_ARGS__)
 #  define RECV(...)             rrecv(__VA_ARGS__)
 #  define SHUTDOWN(...)         rshutdown(__VA_ARGS__)
+#  define SELECT(...)           rselect(__VA_ARGS__)
 
 #  define RIOMAP(...)           riomap(__VA_ARGS__)
 #  define RIOUNMAP(...)         riounmap(__VA_ARGS__)
@@ -241,6 +247,7 @@ typedef struct sockaddr_in                   SockAddr;
 #  define SEND(...)             send(__VA_ARGS__)
 #  define RECV(...)             recv(__VA_ARGS__)
 #  define SHUTDOWN(...)         shutdown(__VA_ARGS__)
+#  define SELECT(...)           select(__VA_ARGS__)
 
 #  define RIOMAP(...)
 #  define RIOUNMAP(...)

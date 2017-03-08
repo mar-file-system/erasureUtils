@@ -60,6 +60,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <stdarg.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/select.h>
 
 #include "skt_common.h"
 
@@ -289,17 +290,52 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 
 // for small socket-reads that don't use RDMA
 //
-// TBD: As load grow on the server, this might want to do something
-//     like write_buffer() does.
+// We now use non-blocking I/O. When a client is killed,
+// server-threads will eventually time-out (currently 30 sec), at
+// which point the thread will shutdown its own handle.  This seems to
+// work smoothly, without deadlocks.  And has no noticable performance
+// cost, compared with blocking I/O.
+//
+// NOTE: We previously used blocking requests, but they continue to
+// hang, after a client is killed.  The reaper-task was added to come
+// along and cancel threads in that situation, but rsockets seems
+// vulnerable to deadlocking in shutdown/close, when we use a
+// reaper-thread to clean-up stalled blocking I/O.  Presumably, the
+// issue has to do with state that is left in the rsocket handles when
+// the reaper-task kills a task that is blocked on I/O.  The result is
+// that file-descriptors are lost, even when the reaper is cleaning up
+// stalled/cancelled descriptors.
+//
+// TBD: As loads grow on the server, this might want to do something
+//     like write_buffer() does, to handle incomplete writes.
 
 int read_raw(int fd, char* buf, size_t size) {
   DBG("read_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
 
+  fd_set         rd_fds;
+  ///  fd_set         ex_fds;
+  struct timeval tv;
+
+  // wait until <fd> has input
+  FD_ZERO(&rd_fds);
+  FD_SET(fd, &rd_fds);
+
+  ///  // if we ever use OOB data, e.g. on an IP socket
+  ///  FD_ZERO(&ex_fds);
+  ///  FD_SET(fd, &ex_fds);
+
+  tv.tv_sec = RD_TIMEOUT;
+  tv.tv_usec = 0;
+
+  NEED_GT0( SELECT(fd +1, &rd_fds, NULL, NULL, &tv) ); // side-effect on <tv>
+
   ssize_t read_count = RECV(fd, buf, size, MSG_WAITALL);
+
+
   if (! read_count)
     DBG("EOF\n");
-  if (read_count != size) {
-    fprintf(stderr, "failed to read %lld bytes\n", size);
+  else if (read_count != size) {
+    LOG("fail: read %lld instead of %lld bytes\n", read_count, size);
     return -1;
   }
   return 0;
@@ -313,10 +349,24 @@ int read_raw(int fd, char* buf, size_t size) {
 int write_raw(int fd, char* buf, size_t size) {
   DBG("write_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
 
+  fd_set         wr_fds;
+  struct timeval tv;
+
+  // wait until <fd> has input
+  FD_ZERO(&wr_fds);
+  FD_SET(fd, &wr_fds);
+
+  tv.tv_sec = WR_TIMEOUT;
+  tv.tv_usec = 0;
+
+  NEED_GT0( SELECT(fd +1, NULL, &wr_fds, NULL, &tv) ); // side-effect on <tv>
+
   // ssize_t write_count = WRITE(fd, buf, size);
-  ssize_t write_count = SEND(fd, buf, size, 0); // TBD: flags?
+  // ssize_t write_count = SEND(fd, buf, size, 0); // TBD: flags?
+  ssize_t write_count = SEND(fd, buf, size, MSG_WAITALL);
+
   if (write_count != size) {
-    fprintf(stderr, "failed to write %lld bytes\n", size);
+    LOG("fail: wrote %lld instead of %lld bytes\n", write_count, size);
     return -1;
   }
   return 0;

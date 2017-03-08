@@ -1144,7 +1144,9 @@ main(int argc, char* argv[]) {
     reap_list[i] = -1;
   }
   // REQUIRE_0( pthread_mutex_init(&reap_mtx, NULL) );
-  REQUIRE_0( pthread_create(&reap_thr, NULL, reap_thread, NULL) );
+
+  if (reap)
+    REQUIRE_0( pthread_create(&reap_thr, NULL, reap_thread, NULL) );
 
   
 
