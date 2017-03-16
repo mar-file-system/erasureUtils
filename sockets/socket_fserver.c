@@ -260,7 +260,7 @@ shut_down_server() {
 // for main()
 static void
 sig_handler(int sig) {
-  fprintf(stderr, "sig_handler exiting on signal %d\n", sig);
+  ERR("sig_handler exiting on signal %d\n", sig);
   shut_down_server();
   exit(0);
 }
@@ -284,14 +284,14 @@ sig_handler(int sig) {
 int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
 
   if (fname_size > max_size) {
-    fprintf(stderr, "fname-length %llu exceeds maximum %u\n", fname_size, max_size);
+    ERR("fname-length %llu exceeds maximum %u\n", fname_size, max_size);
     return -1;
   }
 
   // read fname from the peer
   NEED_0( read_raw(peer_fd, fname, fname_size) );
   if (!fname[0] || fname[fname_size -1]) {
-    fprintf(stderr, "bad fname\n");
+    ERR("bad fname\n");
     return -1;
   }
   DBG("fname: %s\n", fname);
@@ -315,8 +315,8 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
     *last_slash = 0;
     char* path = realpath(fname, canon); // canonicalize the parent-dir?
     if (!path)
-      fprintf(stderr, "realpath(%s) failed (parent-directory): %s\n", fname, strerror(errno));
-
+      ERR("realpath(%s) failed (parent-directory): %s\n", fname, strerror(errno));
+    
     *last_slash = '/';               // restore original fname
     if (!path)
       return -1;
@@ -326,20 +326,20 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
     canon_len = strlen(canon);
     size_t last_slash_len = strlen(last_slash);
     if ((canon_len + last_slash_len +1) > PATH_MAX) {
-      fprintf(stderr, "hand-built realpath (%s%s) would be too big\n", canon, last_slash);
+      ERR("hand-built realpath (%s%s) would be too big\n", canon, last_slash);
       return -1;
     }
     strcat(canon, last_slash);
     canon_len += last_slash_len;
   }
   else if (strrchr(dir_root, '/')) {
-    fprintf(stderr, "path %s has no '/', so obvisouly it can't be under '%s'\n", fname, dir_root);
+    ERR("path %s has no '/', so obvisouly it can't be under '%s'\n", fname, dir_root);
     return -1;
   }
   else {
-    fprintf(stderr, "Neither path '%s' nor dir_root '%s' have slashes.  "
-            "Let's hope you know what you're doing\n",
-            fname, dir_root);
+    ERR("Neither path '%s' nor dir_root '%s' have slashes.  "
+        "Let's hope you know what you're doing\n",
+        fname, dir_root);
     strncpy(canon, fname, PATH_MAX);
     canon[PATH_MAX] = 0;
     canon_len = strlen(canon);
@@ -350,8 +350,8 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
   if (strncmp(canon, dir_root, dir_root_len)
       || (canon[dir_root_len] != '/')) {
 
-    fprintf(stderr, "illegal path: '%s'  (canonicalized path: '%s' does not begin with '%s')\n",
-            fname, canon, dir_root);
+    ERR("illegal path: '%s'  (canonicalized path: '%s' does not begin with '%s')\n",
+        fname, canon, dir_root);
     return -1;
   }
 
@@ -486,8 +486,8 @@ int server_put(ThreadContext* ctx) {
 #ifndef SKIP_FILE_WRITES
   ctx->file_fd = open(fname, (O_WRONLY | O_CREAT | O_TRUNC), 0660);
   if (ctx->file_fd < 0) {
-    fprintf(stderr, "couldn't open '%s' for writing: %s\n",
-            fname, strerror(errno));
+    ERR("couldn't open '%s' for writing: %s\n",
+        fname, strerror(errno));
     return -1;
   }
   DBG("opened file '%s'\n", fname);
@@ -537,8 +537,8 @@ int server_get(ThreadContext* ctx) {
 #ifndef SKIP_FILE_WRITES
   ctx->file_fd = open(fname, (O_RDONLY));
   if (ctx->file_fd < 0) {
-    fprintf(stderr, "couldn't open '%s' for reading: %s\n",
-            fname, strerror(errno));
+    ERR("couldn't open '%s' for reading: %s\n",
+        fname, strerror(errno));
     return -1;
   }
   DBG("opened file '%s'\n", fname);
@@ -562,7 +562,7 @@ int server_get(ThreadContext* ctx) {
 
 int server_del(ThreadContext* ctx) {
   if (unlink(ctx->fname)) {
-    fprintf(stderr, "couldn't unlink '%s'\n", ctx->fname);
+    ERR("couldn't unlink '%s'\n", ctx->fname);
     ctx->flags |= CTX_THREAD_ERR;
     return -1;
   }
@@ -839,7 +839,7 @@ void* server_thread(void* arg) {
     case CMD_RENAME: rc = server_rename(ctx);  break;
 
     default:
-      fprintf(stderr, "unsupported op: '%s'\n", command_str(hdr->command));
+      ERR("unsupported op: '%s'\n", command_str(hdr->command));
       rc = -1;
     }
   }
@@ -867,7 +867,7 @@ void* reap_thread(void* arg) {
   while (1) {
 
     sleep(reap_timeout_sec);
-    // fprintf(stderr, "reaper: awake\n");
+    // ERR("reaper: awake\n");
 
     pthread_mutex_lock(&reap_mtx);
 
@@ -884,14 +884,14 @@ void* reap_thread(void* arg) {
 
         // --- first sighting of this connection?  Note current pos
         else if (reap_list[i] < 0) {
-          // fprintf(stderr, "reaper [%3d]: first sighting\n", i);
+          // ERR("reaper [%3d]: first sighting\n", i);
           reap_list[i] = current_pos;
         }
 
         // --- if nothing has moved, kill the thread (and the connection)
         else if (reap_list[i] == current_pos) {
-          fprintf(stderr, "reaper [%3d]: reaping  (peer_fd: %d, file_fd: %d)\n",
-                  i, conn_list[i].ctx.handle.peer_fd, conn_list[i].ctx.file_fd);
+          ERR("reaper [%3d]: reaping  (peer_fd: %d, file_fd: %d)\n",
+              i, conn_list[i].ctx.handle.peer_fd, conn_list[i].ctx.file_fd);
           reap_list[i] = -2;
           pthread_cancel(conn_list[i].thr); // cleanup sets CTX_THREAD_EXIT
         }
@@ -988,12 +988,12 @@ int push_thread(int client_fd) {
 
 
 void usage(const char* progname) {
-    fprintf(stderr, "Usage: %s -p <port> -d <dir> [ -r ]\n", progname);
-    fprintf(stderr, "  -p <port>   port on which the server should listen\n");
-    fprintf(stderr, "  -d <dir>    server will allow clients to write arbitrary files under <dir>\n");
-    fprintf(stderr, "                (but nowhere else)\n");
-    fprintf(stderr, "  -r          use a 'reap' thread, to clean up stuck threads\n");
-    exit(1);
+  ERR("Usage: %s -p <port> -d <dir> [ -r ]\n", progname);
+  ERR("  -p <port>   port on which the server should listen\n");
+  ERR("  -d <dir>    server will allow clients to write arbitrary files under <dir>\n");
+  ERR("                (but nowhere else)\n");
+  ERR("  -r          use a 'reap' thread, to clean up stuck threads\n");
+  exit(1);
 }
 
 int
@@ -1083,7 +1083,7 @@ main(int argc, char* argv[]) {
 
   int rc = rdma_getaddrinfo(NULL, (char*)port_str, &hints, &res);
   if (rc) {
-    fprintf(stderr, "rdma_getaddrinfo() failed: %s\n", strerror(errno));
+    ERR("rdma_getaddrinfo() failed: %s\n", strerror(errno));
     exit(1);
   }
 
@@ -1162,7 +1162,7 @@ main(int argc, char* argv[]) {
 
     DBG("main: connected fd=%d\n", client_fd);
     if (push_thread(client_fd)) {
-      fprintf(stderr, "main: couldn't allocate thread, dropping fd=%d\n", client_fd);
+      ERR("main: couldn't allocate thread, dropping fd=%d\n", client_fd);
       SHUTDOWN(client_fd, SHUT_RDWR);
       CLOSE(client_fd);
     }

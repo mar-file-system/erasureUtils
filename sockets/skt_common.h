@@ -85,6 +85,12 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
   } while(0)
 
 
+// currently ERR() always goes to the log.
+// We could add conditionalization, like with DEBUG_SOCKETS,
+// to control whether errors should be logged.
+#define ERR(FMT,...)  LOG("fail: " FMT, ##__VA_ARGS__)
+
+
 
 #ifdef DEBUG_SOCKETS
 #  define DBG(FMT,...)  LOG(FMT, ##__VA_ARGS__)
@@ -295,8 +301,7 @@ typedef struct {
 typedef enum {
   HNDL_FNAME       = 0x0001,
   HNDL_CONNECTED   = 0x0002,
-//  HNDL_SERVER_SIDE = 0x0004,    // e.g. read_/write_init don't send GET/PUT
-  HNDL_RIOMAPPED   = 0x0008,
+  HNDL_RIOMAPPED   = 0x0004,
 
   HNDL_IS_SOCKET   = 0x0010,    // read/write-buffer also work on files
   HNDL_RIOWRITE    = 0x0020,
@@ -307,8 +312,10 @@ typedef enum {
   HNDL_OP_INIT     = 0x0400,
   HNDL_CLOSED      = 0x0800,
 
-  HNDL_SEEK_SET    = 0x1000,    // reader called skt_lseek()
-  HNDL_FSYNC       = 0x2000,    // skt_read() found FSYNC
+  HNDL_SEEK_SET    = 0x1000,    // skt_write() found SEEK (see SocketHandle.seek_pos)
+  HNDL_PEER_EOF    = 0x2000,    // skt_write() found ACK 0
+  HNDL_SENT_DATA0  = 0x4000,    // skt_write() sent DATA0 (see copy_file_to_socket())
+  HNDL_FSYNC       = 0x8000,    // skt_read() found FSYNC
 } SHFlags;
 
 
@@ -374,8 +381,7 @@ typedef struct {
   //    uint64_t  big;
   //    uint32_t  small[2];
   //  } size;
-  uint64_t           size;
-  // void*              buff;
+  int64_t            size;      /* sometimes holds signed return-code, etc */
 } PseudoPacketHeader;
 
 typedef struct {
