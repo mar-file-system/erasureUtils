@@ -754,8 +754,6 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
       // on our input-file.  We'll do that in the write section, below.
       eof = 1;
       
-#  endif
-
     }
 
 #endif
