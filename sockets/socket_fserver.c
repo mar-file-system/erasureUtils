@@ -598,9 +598,9 @@ int server_chown(ThreadContext* ctx) {
   // send ACK with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
 
-  // skt_chown() will call skt_close(), so send an ACK 0, like
-  // we were closing a normal handle.
-  NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
+  //  // skt_chown() will call skt_close(), so send an ACK 0, like
+  //  // we were closing a normal handle.
+  //  NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
 
   // close transaction with client
   NEED_0( skt_close(handle) );
@@ -633,14 +633,14 @@ int server_rename(ThreadContext* ctx) {
 
   // perform op
   int rc = rename(fname, new_fname);
-  DBG("result: %d %s\n", rc, (rc ? strerror(errno) : ""));
+  DBG("rc: %d %s\n", rc, (rc ? strerror(errno) : ""));
 
   // send ACK with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
 
-  // skt_chown() will call skt_close(), so send an ACK 0, like
-  // we were closing a normal handle.
-  NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
+  //  // skt_rename() will call skt_close(), so send an ACK 0, like
+  //  // we were closing a normal handle.
+  //  NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
 
   // finish transaction with client
   NEED_0( skt_close(handle) );

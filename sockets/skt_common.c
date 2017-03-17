@@ -693,9 +693,36 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
 
 #else
     // read data up to <size>, or EOF
+    size_t  read_pos   = handle->stream_pos;
     ssize_t read_count = read_buffer(fd, buf, size, 0);
     DBG("read_count: %lld\n", read_count);
     NEED( read_count >= 0 );
+
+#ifdef DEBUG_SOCKETS
+    // DEBUGGING: chasing readback problems.
+    if (read_count > 0) {
+       char  dbg_buf[128];
+       char* dbg_bufp = dbg_buf;
+       int   i;
+       for (i=0; i<32; ++i) {
+
+          if (i && !(i%4))
+             *(dbg_bufp++) = ' ';
+
+          int j;
+          for (j=0; j<2; ++j) {
+             uint8_t nybble = (buf[i] >> ((1-j)*4)) & 0x0f;
+             if (nybble < 10)
+                *(dbg_bufp++) = nybble | '0';
+             else
+                *(dbg_bufp++) = ((nybble - 10) | ((uint8_t)'a' -1)) +1; /* 'a' = 0x61 */
+          }
+          *(dbg_bufp++) = ',';
+       }
+       *(dbg_bufp++) = 0;
+       DBG("pos: %llu, dbg_buf=%s\n", read_pos, dbg_buf);
+    }
+#endif
 
     if (read_count == 0) {
       DBG("read EOF\n");
@@ -753,7 +780,6 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
       // ACK 0 that might be sent from the peer, after we have reached EOF
       // on our input-file.  We'll do that in the write section, below.
       eof = 1;
-      
     }
 
 #endif
@@ -780,26 +806,40 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
     while (remain || eof) {
       ssize_t write_count = skt_write(handle, buf+copied, remain);
 
-      // NEED( write_count >= 0 ); // spin forever if server's FS is wedged?
       if (unlikely(write_count < 0)) {
 
         if (handle->flags & HNDL_SEEK_SET) {
            DBG("write failed due to SEEK.  from %lld to %lld\n",
                handle->stream_pos, handle->seek_pos);
-          off_t rc = lseek(fd, handle->seek_pos, SEEK_SET);
-          if (eof && (rc != (off_t)-1) && (rc != handle->stream_pos)) {
-             DBG("SEEK after EOF, positioned for more reading at offset = %lld\n",
-                 handle->seek_pos);
-             eof = 0;           // more file-reading to do
-          }
-          handle->stream_pos = handle->seek_pos;
-          handle->flags &= ~(HNDL_SEEK_SET);
+           handle->flags &= ~(HNDL_SEEK_SET);
 
-          // peer gets the return-code from lseek()
-          NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, rc, NULL) );
-          NEED( rc != (off_t)-1 );
-          read_count = 0;       // don't add read_count to bytes_moved
-          continue;
+           // maybe the seek is within the buffer we just read?
+           if ((handle->seek_pos >= read_pos)
+               && (handle->seek_pos < handle->stream_pos)) {
+
+              copied = handle->seek_pos - read_pos;
+              remain = read_count - handle->seek_pos;
+
+              handle->stream_pos = handle->seek_pos;
+              DBG("seek_pos is in existing buffer, at local offset %lld (length %lld)\n",
+                  copied, remain);
+              continue;
+           }
+
+           off_t rc = lseek(fd, handle->seek_pos, SEEK_SET);
+           DBG("rc: %lld\n", (ssize_t)rc);
+           if (eof && (rc != (off_t)-1) && (rc != handle->stream_pos)) {
+              DBG("SEEK after EOF, ready for more reading at %lld\n",
+                  handle->seek_pos);
+              eof = 0;           // more file-reading to do
+           }
+           handle->stream_pos = handle->seek_pos;
+
+           // peer gets the return-code from lseek()
+           NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, rc, NULL) );
+           NEED( rc != (off_t)-1 );
+           read_count = 0;       // don't add read_count to bytes_moved
+           break;
         }
         else if (handle->flags & HNDL_PEER_EOF) {
            DBG("write failed due to peer EOF\n");
@@ -1533,12 +1573,14 @@ ssize_t skt_read_all(SocketHandle* handle, void* buffer, size_t size) {
 // ...........................................................................
 
 off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
-  DBG("skt_read(%d (flags: 0x%x), %llx, %d)\n", handle->peer_fd, handle->flags, offset, whence);
+  DBG("skt_lseek(%d (flags: 0x%x), 0x%llx, %d)\n", handle->peer_fd, handle->flags, offset, whence);
 
   if ((whence == SEEK_SET) && (offset == handle->stream_pos)) {
+     DBG("seek to 0x%llx is a no-op\n", offset);
     return handle->stream_pos;
   }
   else if ((whence == SEEK_CUR) && (offset == 0)) {
+     DBG("seek to 0x%llx is a no-op\n", offset);
     return handle->stream_pos;
   }
   else if (unlikely ((whence != SEEK_SET)
@@ -1579,6 +1621,7 @@ off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
     seek_pos           = handle->stream_pos + offset;
     handle->stream_pos = seek_pos; // after the seek
   }
+  DBG("resolved seek pos: 0x%llx\n", seek_pos);
 
 
   // fit the SEEK into the GET protocol.
@@ -1906,7 +1949,7 @@ int skt_rename (const char* service_path, const char* new_path) {
   jNEED(   (hdr.command == CMD_RETURN) );
   int rc =   (int)hdr.size;
 
-#if 0
+#if 1
   // close()
   NEED_0( skt_close(&handle) );
 #else
