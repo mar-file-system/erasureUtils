@@ -489,6 +489,7 @@ const char* _command_str[] = {
   "GET_XATTR",
   "CHOWN",
   "RENAME",
+  "UNLINK",
 
   "RIO_OFFSET",
   "DATA",
@@ -1849,6 +1850,21 @@ int skt_unlink(const char* service_path) {
   // This does NOT actually open() the server-side file
   NEED_GT0( skt_open(&handle, service_path, O_WRONLY) );
 
+  // jNEED() macros will run this before exiting
+  jHANDLER( jshut_down_handle, &handle );
+
+  // send UNLINK with pathname
+  jNEED_0( basic_init(&handle, CMD_UNLINK) );
+
+  // read RETURN, providing return-code from the remote rename().
+  jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr) );
+  jNEED(   (hdr.command == CMD_RETURN) );
+  int rc =   (int)hdr.size;
+
+  // close()
+  NEED_0( skt_close(&handle) );
+
+  return rc;
 }
 
 
@@ -1879,7 +1895,7 @@ int  skt_chown (const char* service_path, uid_t uid, gid_t gid) {
   jNEED_0( write_raw(handle.peer_fd, (char*)&gid_buf, sizeof(gid_buf)) );
 
 
-  // read ACK, including return-code from the remote lchown().
+  // read RETURN, providing return-code from the remote lchown().
   jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr) );
   jNEED(   (hdr.command == CMD_RETURN) );
   int rc =   (int)hdr.size;
@@ -1944,7 +1960,7 @@ int skt_rename (const char* service_path, const char* new_path) {
   jNEED_0( write_raw(handle.peer_fd, (char*)&len_buf,   sizeof(len_buf)) );
   jNEED_0( write_raw(handle.peer_fd, (char*)new_fname, len) );
 
-  // read ACK, including return-code from the remote rename().
+  // read RETURN, providing return-code from the remote rename().
   jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr) );
   jNEED(   (hdr.command == CMD_RETURN) );
   int rc =   (int)hdr.size;

@@ -353,6 +353,7 @@ typedef enum {
   CMD_GET_XATTR,                // ditto
   CMD_CHOWN,
   CMD_RENAME,
+  CMD_UNLINK,
 
   CMD_RIO_OFFSET,               // reader sends riomapped offset (for riowrite)
   CMD_DATA,                     // amount of data sent (via riowrite)

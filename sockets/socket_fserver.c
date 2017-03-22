@@ -595,7 +595,7 @@ int server_chown(ThreadContext* ctx) {
   int rc = lchown(fname, uid, gid);
   DBG("result: %d %s\n", rc, (rc ? strerror(errno) : ""));
 
-  // send ACK with return-code
+  // send RETURN with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
 
   //  // skt_chown() will call skt_close(), so send an ACK 0, like
@@ -635,7 +635,7 @@ int server_rename(ThreadContext* ctx) {
   int rc = rename(fname, new_fname);
   DBG("rc: %d %s\n", rc, (rc ? strerror(errno) : ""));
 
-  // send ACK with return-code
+  // send RETURN with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
 
   //  // skt_rename() will call skt_close(), so send an ACK 0, like
@@ -648,6 +648,34 @@ int server_rename(ThreadContext* ctx) {
   return rc;
 }
 
+
+int server_unlink(ThreadContext* ctx) {
+
+  SocketHandle*      handle    = &ctx->handle;
+  char*              fname     = ctx->fname;
+  int                client_fd = handle->peer_fd;
+  PseudoPacketHeader header = {0};
+
+
+  // we only use the control-channel
+  NEED_0( fake_open_basic(handle, O_RDONLY) );
+
+  // perform op
+  int rc = unlink(fname);
+  DBG("rc: %d %s\n", rc, (rc ? strerror(errno) : ""));
+
+  // send RETURN with return-code
+  NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
+
+  //  // skt_unlink() will call skt_close(), so send an ACK 0, like
+  //  // we were closing a normal handle.
+  //  NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
+
+  // finish transaction with client
+  NEED_0( skt_close(handle) );
+
+  return rc;
+}
 
 
 // Do the stat, translate fields to net-byte-order, ship to client.
@@ -717,14 +745,14 @@ int server_stat(ThreadContext* ctx) {
     // case (1), stat failed
     DBG("stat failed: %s\n", strerror(errno));
 
-    // (a) send ACK with return-code == negative errno
+    // (a) send RETURN with return-code == negative errno
     NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, -errno, NULL) );
   }
   else {
     // case (2), stat succeeded
     DBG("stat OK\n");
 
-    // (a) send ACK with return-code == sizeof(struct stat), for crude validation
+    // (a) send RETURN with return-code == sizeof(struct stat), for crude validation
     jNEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, sizeof(struct stat), NULL) );
 
 
@@ -822,6 +850,7 @@ void* server_thread(void* arg) {
   case CMD_STAT:
   case CMD_CHOWN:
   case CMD_RENAME:
+  case CMD_UNLINK:
     rc = read_fname(client_fd, fname, hdr->size, FNAME_SIZE);
   };
 
@@ -837,6 +866,7 @@ void* server_thread(void* arg) {
     case CMD_STAT:   rc = server_stat(ctx);    break;
     case CMD_CHOWN:  rc = server_chown(ctx);   break;
     case CMD_RENAME: rc = server_rename(ctx);  break;
+    case CMD_UNLINK: rc = server_unlink(ctx);  break;
 
     default:
       ERR("unsupported op: '%s'\n", command_str(hdr->command));
