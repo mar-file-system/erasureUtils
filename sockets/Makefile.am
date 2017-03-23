@@ -75,6 +75,15 @@ if DEBUG_SOCKETS
   SOCKET_DEFS += -DDEBUG_SOCKETS
 endif
 
+
+AUTH_DEFS=
+AUTH_LIBS=
+if AUTH_SOCKETS
+   AUTH_DEFS += -DS3_AUTH
+#    AUTH_LIBS += -laws4c -laws4c_extra -lcrypto -lcurl
+endif
+
+
 if HAVE_S_BUFSIZE
   SOCKET_DEFS += -DSERVER_BUF_SIZE=$(S_BUFSIZE)
 endif
@@ -88,7 +97,7 @@ include_HEADERS = skt_common.h
 
 lib_LIBRARIES = librdma_sockets.a
 librdma_sockets_a_SOURCES = skt_common.c
-librdma_sockets_a_CPPFLAGS = $(SOCKET_DEFS)
+librdma_sockets_a_CPPFLAGS = $(SOCKET_DEFS) $(AUTH_DEFS)
 
 
 
@@ -96,14 +105,15 @@ librdma_sockets_a_CPPFLAGS = $(SOCKET_DEFS)
 bin_PROGRAMS = client socket_fserver
 
 socket_fserver_SOURCES = socket_fserver.c
-socket_fserver_CPPFLAGS = $(SOCKET_DEFS) -fstack-protector-all
+socket_fserver_CPPFLAGS = $(SOCKET_DEFS) $(AUTH_DEFS) -fstack-protector-all
 socket_fserver_LDADD = librdma_sockets.a
-socket_fserver_LDFLAGS = -lrt -lpthread $(SOCKET_LIBS)
+socket_fserver_LDFLAGS = -lrt -lpthread $(SOCKET_LIBS) $(AUTH_LIBS)
+
 
 client_SOURCES = client.c
-client_CPPFLAGS = $(SOCKET_DEFS) -fstack-protector-all
+client_CPPFLAGS = $(SOCKET_DEFS) $(AUTH_DEFS) -fstack-protector-all
 client_LDADD = librdma_sockets.a
-client_LDFLAGS = -lrt $(SOCKET_LIBS)
+client_LDFLAGS = -lrt $(SOCKET_LIBS) $(AUTH_LIBS)
 
 
 

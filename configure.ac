@@ -116,7 +116,23 @@ AC_ARG_ENABLE([sockets],
 AM_CONDITIONAL([ANY_SOCKETS],   [test "$enable_sockets" != no ])
 AM_CONDITIONAL([RDMA_SOCKETS],  [test "$enable_sockets"  = rdma])
 
-       
+
+
+AC_ARG_ENABLE([auth],
+               AS_HELP_STRING([--disable-auth],
+                              [Don't require Interactions with RDMA servers to use authentication]),
+               ,
+               [enable_auth=yes])
+
+AM_CONDITIONAL([AUTH_SOCKETS],  [test x"$enable_auth" != xno])
+AM_COND_IF([AUTH_SOCKETS],
+           [# libaws4c is used to generate authentication-headers for RDMA socket server
+            AC_CHECK_LIB([aws4c], [s3_enable_Scality_extensions])
+            AC_CHECK_LIB([aws4c_extra], [s3_create_bucket])
+            AC_CHECK_LIB([crypto], [MD5_Init])
+            AC_CHECK_LIB([curl], [curl_easy_cleanup])])
+
+
 
 # Allow turning on debugging flags
 AC_ARG_ENABLE([debug],
