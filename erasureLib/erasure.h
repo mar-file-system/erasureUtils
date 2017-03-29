@@ -72,6 +72,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <stdlib.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <pthread.h>
 
 /* MIN_PROTECTION sets the threshold for when writes will fail.  If
    fewer than n+MIN_PROTECTION blocks were written successfully, then
@@ -111,6 +112,36 @@ typedef uint32_t u32;
 typedef uint64_t u64;
 typedef enum {NE_RDONLY=0,NE_WRONLY,NE_REBUILD,NE_STAT,NE_NOINFO=4,NE_SETBSZ=8} ne_mode;
 
+#define MAX_QDEPTH 5
+
+typedef enum {
+  BQ_ERROR    = 0x01 << 0,
+  BQ_FINISHED = 0x01 << 1,
+  BQ_ABORT    = 0x01 << 2,
+  BQ_OPEN     = 0x01 << 3,
+} BufferQueue_Flags;
+
+struct handle; // forward decl.
+
+typedef struct buffer_queue {
+  pthread_mutex_t    qlock;
+  void              *buffers[MAX_QDEPTH];
+  size_t             offset;             /* amount of partial block that has
+                                            been stored in the buffer[tail] */
+  u64                csum;               /* checksum for all data written */
+  pthread_cond_t     full;               /* cv signals there is a full slot */
+  pthread_cond_t     empty;              /* cv signals there is an empty slot */
+  int                qdepth;             /* number of elements in the queue */
+  int                head;               /* next full position */  
+  int                tail;               /* next empty position */
+  int                file;               /* file descriptor */
+  char               path[2048];         /* path to the file */
+  int                block_number;
+  struct handle     *handle;
+  BufferQueue_Flags  flags;
+  size_t             buffer_size;
+} BufferQueue;
+
 typedef struct ne_stat_struct {
    char xattr_status[ MAXPARTS ];
    char data_status[ MAXPARTS ];
@@ -136,6 +167,12 @@ typedef struct handle {
    unsigned long buff_rem;
    off_t buff_offset;
    int FDArray[ MAXPARTS ];
+
+   /* Threading fields */
+   void *buffer_list[MAX_QDEPTH];
+   void *block_buffs[MAX_QDEPTH][MAXPARTS];
+   pthread_t threads[MAXPARTS];
+   BufferQueue blocks[MAXPARTS];
 
    /* Per-part Info */
    u64 csum[ MAXPARTS ];
