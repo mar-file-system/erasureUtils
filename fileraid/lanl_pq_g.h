@@ -108,6 +108,9 @@ extern int gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const
 
 typedef uint32_t u32;
 
+#if 0
+// This replicates the function defined in libisal.  If we define it here,
+// and do static linking, the linker will complain
 void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls)
 {
         int i, j;
@@ -119,6 +122,7 @@ void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls)
                 }
         }
 }
+#endif
 
 void dump(unsigned char *buf, int len)
 {

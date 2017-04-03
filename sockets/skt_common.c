@@ -556,9 +556,6 @@ int read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr) {
 }
 
 
-
-
-
 // paths to the server can be specified as  host:port/path/to/file
 // eventually, we'll allow   prot://host:port/path/to/file
 //

@@ -55,65 +55,73 @@
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
+AM_CPPFLAGS =
+#AM_LDFLAGS = -lrt
+AM_LDFLAGS =
+
 # Undo the effect of AC_CHECK_LIB() in configure.ac
 # Otherwise we get linker complaints running socket_fserver,
 # unless it can find libisal  (but why?)
-LIBS =
+# LIBS =
 
 
-# Allow automake to figure out what "+=" means
-SOCKET_DEFS=
-# number says how many buffers to fake reading from file, to send to server for PUT
+# number says how many buffers to fake reading from file, to send to server
+# for PUT (or to client for GET)
 # SOCKET_DEFS=-DSKIP_FILE_READS=1
 
+
 if RDMA_SOCKETS
-  SOCKET_DEFS += -DRDMA_SOCKETS -DUSE_RIOWRITE
-  SOCKET_LIBS  = -lrdmacm
+  DEFS        += -DRDMA_SOCKETS -DUSE_RIOWRITE
+  LIBS        += -lrdmacm
 endif
 
 if DEBUG_SOCKETS
-  SOCKET_DEFS += -DDEBUG_SOCKETS
+  DEFS        += -DDEBUG_SOCKETS
+  AM_CPPFLAGS += -fstack-protector-all
 endif
 
 
-AUTH_DEFS=
-AUTH_LIBS=
+
 if AUTH_SOCKETS
-   AUTH_DEFS += -DS3_AUTH
-#    AUTH_LIBS += -laws4c -laws4c_extra -lcrypto -lcurl
+   DEFS        += -DS3_AUTH
+   AM_CPPFLAGS += -I$(AWS4C)
 endif
 
 
 if HAVE_S_BUFSIZE
-  SOCKET_DEFS += -DSERVER_BUF_SIZE=$(S_BUFSIZE)
+   DEFS        += -DSERVER_BUF_SIZE=$(S_BUFSIZE)
 endif
 
 if HAVE_C_BUFSIZE
-  SOCKET_DEFS += -CLIENT_BUF_SIZE=$(C_BUFSIZE)
+   DEFS        += -CLIENT_BUF_SIZE=$(C_BUFSIZE)
 endif
+
+
+
 
 
 include_HEADERS = skt_common.h
 
 lib_LIBRARIES = librdma_sockets.a
 librdma_sockets_a_SOURCES = skt_common.c
-librdma_sockets_a_CPPFLAGS = $(SOCKET_DEFS) $(AUTH_DEFS)
+if AUTH_SOCKETS
+   librdma_sockets_a_SOURCES += auth.c
+endif
+
 
 
 
 
 bin_PROGRAMS = client socket_fserver
 
+
 socket_fserver_SOURCES = socket_fserver.c
-socket_fserver_CPPFLAGS = $(SOCKET_DEFS) $(AUTH_DEFS) -fstack-protector-all
 socket_fserver_LDADD = librdma_sockets.a
-socket_fserver_LDFLAGS = -lrt -lpthread $(SOCKET_LIBS) $(AUTH_LIBS)
+#socket_fserver_LDFLAGS = -lpthread $(AM_LDFLAGS)
 
 
 client_SOURCES = client.c
-client_CPPFLAGS = $(SOCKET_DEFS) $(AUTH_DEFS) -fstack-protector-all
 client_LDADD = librdma_sockets.a
-client_LDFLAGS = -lrt $(SOCKET_LIBS) $(AUTH_LIBS)
 
 
 

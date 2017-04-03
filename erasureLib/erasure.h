@@ -103,10 +103,16 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define MAXPARTS (MAXN + MAXE)
 #define NO_INVERT_MATRIX -2
 
+/* It's useful to distinguish diagnostics intended for stderr vs stdout
+   running 'fuse -f ... > log 2>&1' allows stderr to go to the log, but
+   stdout doesn't get there.  So, one could tweak the defns here, to
+   temporarily send stdout output to stderr, as well. */
 #ifdef DEBUG_NE
-#  define FPRINTF(...)   fprintf(__VA_ARGS__)
+#  define PRINTerr(...)   fprintf(stderr, __VA_ARGS__)
+#  define PRINTout(...)   fprintf(stdout, __VA_ARGS__)
 #else
-#  define FPRINTF(...)
+#  define PRINTerr(...)
+#  define PRINTout(...)
 #endif
 
 #ifndef HAVE_LIBISAL
