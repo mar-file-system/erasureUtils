@@ -71,16 +71,16 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #  define IMAX(A, B) (((A) > (B)) ? (A) : (B))
 
-// LOG() is always defined
-#  define LOG(FMT,...)                                                  \
+// PRINT() is always defined
+#  define PRINT(FMT,...)                                                \
   do {                                                                  \
     const int file_blob_size=24;                                        \
     const int file_pad_size = IMAX(1, file_blob_size - strlen(__FILE__)); \
     const int fn_blob_size=20;                                          \
-    fprintf(stderr, "%s:%-6d%.*s  %08x  %-*.*s |  " FMT,                \
+    fprintf(stderr, "sockets  %08x  %s:%-6d%.*s  %-*.*s |  " FMT,       \
+            (unsigned int)pthread_self(),                               \
             __FILE__, __LINE__,                                         \
             file_pad_size, "                                ",          \
-            (unsigned int)pthread_self(),                               \
             fn_blob_size, fn_blob_size, __FUNCTION__, ##__VA_ARGS__);   \
   } while(0)
 
@@ -88,12 +88,14 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 // currently ERR() always goes to the log.
 // We could add conditionalization, like with DEBUG_SOCKETS,
 // to control whether errors should be logged.
-#define ERR(FMT,...)  LOG("fail: " FMT, ##__VA_ARGS__)
+#define ERR(FMT,...)  PRINT("fail: " FMT, ##__VA_ARGS__)
+
+#define LOG(FMT,...)  PRINT(FMT, ##__VA_ARGS__)
 
 
 
 #ifdef DEBUG_SOCKETS
-#  define DBG(FMT,...)  LOG(FMT, ##__VA_ARGS__)
+#  define DBG(FMT,...)  PRINT(FMT, ##__VA_ARGS__)
 #else
 #  define DBG(...)
 #endif
@@ -176,9 +178,13 @@ typedef void(*jHandlerType)(void* arg);
 
 // max delay (in sec), waiting for tokens to/from client/server
 // TBD: Make these configurable
-#define WR_TIMEOUT              30
-#define RD_TIMEOUT              30
-
+#ifdef DEBUG_SOCKETS
+#  define WR_TIMEOUT          10000
+#  define RD_TIMEOUT          10000
+#else
+#  define WR_TIMEOUT             30
+#  define RD_TIMEOUT             30
+#endif
 
 /* -----------------------------------
  * UNIX sockets

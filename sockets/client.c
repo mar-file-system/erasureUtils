@@ -75,6 +75,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <time.h>
 #include <string.h>             // strcpy()
 #include <errno.h>
+#include <sys/syscall.h>        // syscalls in test3_thr
 
 #include "skt_common.h"
 
@@ -82,6 +83,15 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 static SocketHandle handle = {0};
 
 
+
+// makes it easy to find test output in the cluttered output of a debugging build.
+// Also makes it easy to disable all local logging, e.g. when running strace.
+//
+#ifdef DEBUG_SOCKETS
+#  define cLOG(FMT,...)  LOG("--- " FMT, ##__VA_ARGS__)
+#else
+#  define cLOG(FMT,...)
+#endif
 
 
 void
@@ -94,7 +104,7 @@ shut_down() {
 
 static void
 sig_handler(int sig) {
-  fprintf(stderr, "sig_handler exiting on signal %d\n", sig);
+  cLOG("sig_handler exiting on signal %d\n", sig);
   shut_down();
   exit(0);
 }
@@ -114,12 +124,12 @@ ssize_t client_put(const char* path) {
   char buf[CLIENT_BUF_SIZE] __attribute__ (( aligned(64) )); /* copy stdin to socket */
 
   // --- TBD: authentication handshake
-  REQUIRE_GT0( skt_open(&handle, path, (O_WRONLY|O_CREAT), 0660) );
+  NEED_GT0( skt_open(&handle, path, (O_WRONLY|O_CREAT), 0660) );
 
   ssize_t bytes_moved = copy_file_to_socket(STDIN_FILENO, &handle, buf, CLIENT_BUF_SIZE);
 
   // --- close
-  REQUIRE_0( skt_close(&handle) );
+  NEED_0( skt_close(&handle) );
 
   return bytes_moved;
 }
@@ -133,12 +143,12 @@ ssize_t client_get(const char* path) {
   char buf[CLIENT_BUF_SIZE] __attribute__ (( aligned(64) )); /* copy socket to stdout */
 
   // --- TBD: authentication handshake
-  REQUIRE_GT0( skt_open(&handle, path, (O_RDONLY)) );
+  NEED_GT0( skt_open(&handle, path, (O_RDONLY)) );
 
   ssize_t bytes_moved = copy_socket_to_file(&handle, STDOUT_FILENO, buf, CLIENT_BUF_SIZE);
 
   // --- close
-  REQUIRE_0( skt_close(&handle) );
+  NEED_0( skt_close(&handle) );
 
   return bytes_moved;
 }
@@ -151,7 +161,7 @@ int client_rename(const char* path) {
   snprintf(new_fname, FNAME_SIZE, path);
   strncat(new_fname, ".renamed", FNAME_SIZE - strlen(path));
 
-  REQUIRE_0( skt_rename(path, new_fname) );
+  NEED_0( skt_rename(path, new_fname) );
 
   return 0;
 }
@@ -159,7 +169,7 @@ int client_rename(const char* path) {
 
 int client_chown(const char* path) {
 
-  REQUIRE_0( skt_chown(path, 99, 99) );
+  NEED_0( skt_chown(path, 99, 99) );
 
   return 0;
 }
@@ -174,11 +184,11 @@ int client_reap_read(const char* path) {
   char buf[CLIENT_BUF_SIZE] __attribute__ (( aligned(64) )); /* copy socket to stdout */
 
   // --- TBD: authentication handshake
-  REQUIRE_GT0( skt_open(&handle, path, (O_RDONLY)) );
+  NEED_GT0( skt_open(&handle, path, (O_RDONLY)) );
 
   // some server-side work is deferred until we actually read.
   printf("reading\n");
-  REQUIRE_GT0( skt_read(&handle, buf, 1) );
+  NEED_GT0( skt_read(&handle, buf, 1) );
 
   // server-side reaper runs every 10 sec
   // needs to run twice with out seeing us move data.
@@ -190,7 +200,7 @@ int client_reap_read(const char* path) {
   ssize_t bytes_moved = skt_read(&handle, buf, 1);
 
   // --- close
-  REQUIRE_0( skt_close(&handle) );
+  NEED_0( skt_close(&handle) );
 
   return bytes_moved;
 }
@@ -236,7 +246,7 @@ int client_test1(const char* path) {
 
   SocketHandle handle2;
   char* path2 = malloc(strlen(path) + 5);
-  REQUIRE(path2);
+  NEED(path2);
   strcpy(path2, path);
   strcat(path2, ".2");
 
@@ -245,8 +255,8 @@ int client_test1(const char* path) {
   size_t      buf_len = strlen(buf);
 
   // open
-  REQUIRE_GT0( skt_open(&handle,  path,  (O_WRONLY|O_CREAT), 0660) );
-  REQUIRE_GT0( skt_open(&handle2, path2, (O_WRONLY|O_CREAT), 0660) );
+  NEED_GT0( skt_open(&handle,  path,  (O_WRONLY|O_CREAT), 0660) );
+  NEED_GT0( skt_open(&handle2, path2, (O_WRONLY|O_CREAT), 0660) );
 
   // write
   ssize_t bytes_moved  = skt_write(&handle,  buf, buf_len);
@@ -254,8 +264,8 @@ int client_test1(const char* path) {
 
 
   // close
-  REQUIRE_0( skt_close(&handle) );
-  REQUIRE_0( skt_close(&handle2) );
+  NEED_0( skt_close(&handle) );
+  NEED_0( skt_close(&handle2) );
 
   return 0;
 }
@@ -280,11 +290,11 @@ int client_test1b(const char* path) {
   for (i=0; i<N; ++i) {
     memset(&state[i], 0, sizeof(State));
     state[i].path = malloc(strlen(path) + 32); // extra room for suffix
-    REQUIRE(state[i].path);
+    NEED(state[i].path);
     sprintf(state[i].path, "%s.%d", path, i);
     printf("path[%d] : %s\n", i, state[i].path);
 
-    REQUIRE_GT0( skt_open(&state[i].handle, state[i].path, (O_WRONLY|O_CREAT), 0660) );
+    NEED_GT0( skt_open(&state[i].handle, state[i].path, (O_WRONLY|O_CREAT), 0660) );
     printf("           opened\n");
   }
   printf("\n");
@@ -298,7 +308,7 @@ int client_test1b(const char* path) {
   for (i=0; i<N; ++i) {
     printf("path[%d] : writing\n", i);
     write_count = skt_write(&state[i].handle,  buf, buf_len);
-    REQUIRE( write_count == buf_len );
+    NEED( write_count == buf_len );
     bytes_moved += write_count;
   }
   printf("\n");
@@ -307,7 +317,7 @@ int client_test1b(const char* path) {
   // close
   for (i=0; i<N; ++i) {
     printf("path[%d] : closing\n", i);
-    REQUIRE_0( skt_close(&state[i].handle) );
+    NEED_0( skt_close(&state[i].handle) );
   }
 
 
@@ -325,16 +335,16 @@ int client_test1b(const char* path) {
     snprintf(file, MAXNAME-1, "%s.TWO%d", path, i);
     printf("file [%d] : %s\n", i, file);
 
-    REQUIRE_GT0( OPEN(fd, file, (O_WRONLY|O_CREAT), 0660) );
+    NEED_GT0( OPEN(fd, file, (O_WRONLY|O_CREAT), 0660) );
     printf("           opened\n");
 
     printf("file [%d] : writing\n", i);
     write_count = skt_write(&fd, buf, buf_len);
-    REQUIRE( write_count == buf_len );
+    NEED( write_count == buf_len );
     bytes_moved += write_count;
 
     printf("file [%d] : closing\n", i);
-    REQUIRE_0( skt_close(&fd) );
+    NEED_0( skt_close(&fd) );
   }
 
 #undef MAXNAME
@@ -366,7 +376,7 @@ int client_test1c(const char* path) {
   for (i=0; i<N; ++i) {
     memset(&state[i], 0, sizeof(State));
     state[i].path = malloc(strlen(path) + 32); // extra room for suffix
-    REQUIRE(state[i].path);
+    NEED(state[i].path);
 
     //    sprintf(state[i].path, "%s.%d", path, i);
     int octet = 1 + (i / 2); // 1,1,2,2,3,3 ...
@@ -375,7 +385,7 @@ int client_test1c(const char* path) {
 
     printf("path[%d] : %s\n", i, state[i].path);
     fflush(stdout);
-    REQUIRE_GT0( skt_open(&state[i].handle, state[i].path, (O_WRONLY|O_CREAT), 0660) );
+    NEED_GT0( skt_open(&state[i].handle, state[i].path, (O_WRONLY|O_CREAT), 0660) );
     printf("           opened\n");
   }
   printf("\n");
@@ -397,7 +407,7 @@ int client_test1c(const char* path) {
   for (i=0; i<N; ++i) {
     printf("path[%d] : writing\n", i);
     write_count = skt_write(&state[i].handle,  buf, buf_len);
-    REQUIRE( write_count == buf_len );
+    NEED( write_count == buf_len );
     bytes_moved += write_count;
   }
   printf("\n");
@@ -406,7 +416,7 @@ int client_test1c(const char* path) {
   // close
   for (i=0; i<N; ++i) {
     printf("path[%d] : closing\n", i);
-    REQUIRE_0( skt_close(&state[i].handle) );
+    NEED_0( skt_close(&state[i].handle) );
   }
 
 
@@ -430,16 +440,16 @@ int client_test1c(const char* path) {
 
     printf("file [%d] : %s\n", i, file);
     fflush(stdout);
-    REQUIRE_GT0( OPEN(fd, file, (O_WRONLY|O_CREAT), 0660) );
+    NEED_GT0( OPEN(fd, file, (O_WRONLY|O_CREAT), 0660) );
     printf("           opened\n");
 
     printf("file [%d] : writing\n", i);
     write_count = skt_write(&fd, buf, buf_len);
-    REQUIRE( write_count == buf_len );
+    NEED( write_count == buf_len );
     bytes_moved += write_count;
 
     printf("file [%d] : closing\n", i);
-    REQUIRE_0( skt_close(&fd) );
+    NEED_0( skt_close(&fd) );
   }
 
 #undef MAXNAME
@@ -459,28 +469,36 @@ int client_test1c(const char* path) {
 // "connect" inside the skt_open(), in skt_rename() fails, in that
 // case.  Works fine here.  Jamming a bunch of calls to this test in a
 // tight loop also succeeds.
+//
+// UPDATE: client_test2b is just client_test2 with do_seteuid non-zero.
+//
+// RESULT: test2    works
+//         test2b   fails
+//
 
-int client_test2(const char* path) {
+int client_test2(const char* path, int do_seteuid) {
 
   // buffer to write
 # define MiB  (1024 * 1024)
   char     buf[MiB] __attribute__ (( aligned(64) )); /* copy stdin to socket */
   memset(buf, 1, MiB);
-  size_t   buf_len = strlen(buf);
+  size_t   buf_len = MiB;
 
   // open, put, close
   ssize_t bytes_moved;
-  REQUIRE_GT0( skt_open(&handle,  path,  (O_WRONLY|O_CREAT), 0660) );
+  NEED_GT0( skt_open(&handle,  path,  (O_WRONLY|O_CREAT), 0660) );
   bytes_moved = skt_write(&handle, buf, buf_len);
-  REQUIRE( bytes_moved == buf_len );
-  REQUIRE_0( skt_close(&handle) );
+  NEED( bytes_moved == buf_len );
+  NEED_0( skt_close(&handle) );
 
-
+  // seteuid() causes failure in IB device
+  if (do_seteuid)
+     NEED_0( seteuid(geteuid()) );
 
   // create the second file. (name is "<orig>.meta2")
   SocketHandle handle2 = {0};
   char* path2 = malloc(strlen(path) + 32);
-  REQUIRE(path2);
+  NEED(path2);
   strcpy(path2, path);
   strcat(path2, ".2.meta");
 
@@ -488,21 +506,450 @@ int client_test2(const char* path) {
   const char* buf2 = "This is a lot less than a MB\n";
   size_t      buf2_len = strlen(buf2);
 
-  REQUIRE_GT0( skt_open(&handle2,  path2,  (O_WRONLY|O_CREAT), 0660) );
+  NEED_GT0( skt_open(&handle2,  path2,  (O_WRONLY|O_CREAT), 0660) );
   ssize_t bytes_moved2 = skt_write(&handle2, buf2, buf2_len);
-  REQUIRE( bytes_moved2 == buf2_len );
-  REQUIRE_0( skt_close(&handle2) );
+  NEED( bytes_moved2 == buf2_len );
+  NEED_0( skt_close(&handle2) );
 
   // rename to "<orig>.2"
   char* path2b = malloc(strlen(path2) + 32);
-  REQUIRE(path2b);
+  NEED(path2b);
   strcpy(path2b, path);
   strcat(path2b, ".2");
 
-  REQUIRE_0( skt_rename(path2, path2b) );
+  NEED_0( skt_rename(path2, path2b) );
 
   return bytes_moved + bytes_moved2;
 }
+
+
+
+
+
+// ...........................................................................
+// client_test3
+//
+// Q: what about open/write/close for two different files, from different threads?
+// A: works fine.
+// ...........................................................................
+
+#include <pthread.h>
+
+enum {
+   TC_OPEN         = 0x01,
+   TC_OPEN2        = 0x02,
+   TC_WRITE        = 0x04,
+   TC_CLOSE        = 0x08,
+   TC_SETEUID      = 0x10,
+   TC_SETEUID_SYS  = 0x20,
+   TC_DONE         = 0x40,
+};
+
+const char* flag_name(int flag) {
+   switch (flag) {
+   case TC_OPEN:        return "OPEN";
+   case TC_OPEN2:       return "OPEN2";
+   case TC_WRITE:       return "WRITE";
+   case TC_CLOSE:       return "CLOSE";
+   case TC_SETEUID:     return "SETEUID";
+   case TC_SETEUID_SYS: return "SETEUID_SYS";
+   case TC_DONE:        return "DONE";
+   default:             return "UNKNOWN";
+   }
+}
+
+#define MAX_SEQ   16
+
+typedef struct {
+   int                 flags;
+   int                 thr_no;
+   const char*         path;
+   SocketHandle        handle;
+   pthread_barrier_t*  barrier;
+   int                 sequence[MAX_SEQ]; // only used >= test3c
+} ThreadContext;
+
+
+#define thrNEED(EXPR)          _TEST(EXPR,    , DBG,    return (void*)-1)
+#define thrNEED_0(EXPR)        _TEST(EXPR, ==0, DBG,    return (void*)-1)
+#define thrNEED_GT0(EXPR)      _TEST(EXPR,  >0, DBG,    return (void*)-1)
+
+// this is the thread-function spawned by client_test3.
+void* client_test3_thr(void* arg) {
+   ThreadContext* ctx    = (ThreadContext*)arg;
+
+   ssize_t        bytes_moved;
+
+   // SocketHandle   handle_impl = {0};
+   // SocketHandle*  handle = &handle_impl;
+   SocketHandle*  handle = &ctx->handle;
+
+   char           thr_path[1024];
+
+# define          BUFSIZE  (64)
+  char            buf[BUFSIZE] __attribute__ (( aligned(64) )); /* copy stdin to socket */
+  memset(buf, ctx->thr_no +1, BUFSIZE);
+
+  // --- open
+  //     NOTE: write-mode differs from libne
+  //     changing to 0666 doesn't seem to affect success
+  if (ctx->flags & TC_OPEN) {
+     sprintf(thr_path, "%s.%d", ctx->path, ctx->thr_no);
+     cLOG("thr%d: opening %s\n", ctx->thr_no, thr_path);
+     // thrNEED_GT0( skt_open(handle,  thr_path,  (O_WRONLY|O_CREAT), 0660) );
+     thrNEED_GT0( skt_open(handle,  thr_path,  (O_WRONLY|O_CREAT), 0666) );
+  }
+
+  // --- wait for other thread(s) to open their handle, as well.
+  cLOG("thr%d: waiting on barrier 0\n", ctx->thr_no);
+  pthread_barrier_wait(ctx->barrier);
+
+  // -- pop/push EUID
+  //    NOTE: calling seteuid() affects all threads,
+  //          but the syscall does not.
+  if (ctx->flags & TC_SETEUID) {
+     uid_t old_euid;
+     int rc;
+
+     cLOG("thr%d: GETTING euid\n", ctx->thr_no);
+     old_euid = geteuid();
+     cLOG("thr%d: euid = %d\n", ctx->thr_no, old_euid);
+
+     cLOG("thr%d: SETTING euid\n", ctx->thr_no);
+     rc = seteuid(old_euid);
+     cLOG("thr%d: euid = %d (rc=%d)\n", ctx->thr_no, old_euid, rc);
+  }
+  else if (ctx->flags & TC_SETEUID_SYS) {
+     uid_t old_ruid;
+     uid_t old_euid;
+     uid_t old_suid;
+     int   rc;
+
+     cLOG("thr%d: GETTING euid\n", ctx->thr_no);
+     rc = syscall(SYS_getresuid, &old_ruid, &old_euid, &old_suid);
+     cLOG("thr%d: euid = %d (rc=%d)\n", ctx->thr_no, old_euid, rc);
+
+
+     cLOG("thr%d: SETTING euid\n", ctx->thr_no);
+     rc = syscall(SYS_setresuid, -1, old_euid, -1);
+     cLOG("thr%d: euid = %d (rc=%d)\n", ctx->thr_no, old_euid, rc);
+  }
+
+  // --- wait for other thread(s) to open their handle, as well.
+  cLOG("thr%d: waiting on barrier 1\n", ctx->thr_no);
+  pthread_barrier_wait(ctx->barrier);
+
+  // --- open a different file
+  if (ctx->flags & TC_OPEN2) {
+     static int  vers = 0;
+     sprintf(thr_path, "%s.%d.meta.v%d", ctx->path, ctx->thr_no, vers++);
+     cLOG("thr%d: opening %s\n", ctx->thr_no, thr_path);
+     SocketHandle fd = {0};
+     // thrNEED_GT0( skt_open(&fd,  thr_path,  (O_WRONLY|O_CREAT), 0660) );
+     thrNEED_GT0( skt_open(&fd,  thr_path,  (O_WRONLY|O_CREAT), 0666) );
+  }
+
+  // --- put
+  if (ctx->flags & TC_WRITE) {
+     cLOG("thr%d: writing %llu bytes\n", ctx->thr_no, BUFSIZE);
+     bytes_moved = skt_write(handle, buf, BUFSIZE);
+     cLOG("thr%d: wrote   %lld bytes\n", ctx->thr_no, bytes_moved);
+     thrNEED( bytes_moved == BUFSIZE );
+  }
+
+  // --- close
+  if (ctx->flags & TC_CLOSE) {
+     cLOG("thr%d: closing\n", ctx->thr_no);
+     thrNEED_0( skt_close(handle) );
+  }
+
+  cLOG("thr%d: done\n", ctx->thr_no);
+  return NULL;
+}
+
+// Still chasing the fuse bug.  Try two opens from different threads.
+// This does open, write, close all in the same thread-invocation.
+int client_test3(const char* path) {
+
+   pthread_barrier_t barrier;
+   pthread_t         thr[2];
+
+   ThreadContext     ctx0 = { .flags   = (TC_OPEN|TC_WRITE|TC_CLOSE),
+                              .thr_no  = 0,
+                              .path    = path,
+                              .handle  = {0},
+                              .barrier = &barrier };
+
+   ThreadContext     ctx1 = { .flags   = (TC_OPEN|TC_WRITE|TC_CLOSE),
+                              .thr_no  = 1,
+                              .path    = path,
+                              .handle  = {0},
+                              .barrier = &barrier };
+
+   pthread_barrier_init(&barrier, NULL, 2);
+
+   // launch two threads to do everything
+   cLOG("launching thr0\n");
+   pthread_create(&thr[0], NULL, client_test3_thr, &ctx0);
+   cLOG("launching thr1\n");
+   pthread_create(&thr[1], NULL, client_test3_thr, &ctx1);
+
+   // wait for threads to complete
+   cLOG("waiting for thr0\n");
+   void* rc0;
+   pthread_join(thr[0], &rc0);
+
+   cLOG("waiting for thr1\n");
+   void* rc1;
+   pthread_join(thr[1], &rc1);
+}
+
+
+
+// Still chasing the fuse bug.  Try two opens from different threads.  This
+// does open and open2 all in the same thread-invocation.  One of the
+// threads does a seteuid(geteuid()) before either thread tries the second
+// open.
+//
+// FOUND IT.  Thanks to Garrett for his own bug-reproducer, using seteuid in
+//     an RDMA + MPI application.  Turns out that we can work around this in
+//     fuse, using the following observation:
+//
+//     The syscall version of setresuid() only affects the local thread.
+//     Other threads continue to be able to open new rsocket connections,
+//     etc.  Thus, if fuse will launch threads from inside fuse-open (after
+//     the setresuid syscall) which survive for the lifetime of the
+//     connection, and are responsible for any new opens and closes related
+//     to the file-handle, then it should work.
+//
+//     The new threads support in libne that Will wrote, does exactly that
+//     (for writes).  We'll need a similar thing for fuse reads.
+//
+int client_test3b(const char* path) {
+
+   pthread_barrier_t barrier;
+   pthread_t         thr[2];
+
+   ThreadContext     ctx0 = { // .flags   = (TC_OPEN|TC_SETEUID|TC_OPEN2),
+                              .flags   = (TC_OPEN|TC_SETEUID_SYS|TC_OPEN2),
+                              .thr_no  = 0,
+                              .path    = path,
+                              .handle  = {0},
+                              .barrier = &barrier };
+
+   ThreadContext     ctx1 = { .flags   = (TC_OPEN|TC_OPEN2),
+                              .thr_no  = 1,
+                              .path    = path,
+                              .handle  = {0},
+                              .barrier = &barrier };
+
+   pthread_barrier_init(&barrier, NULL, 2);
+
+   // launch two threads to do everything
+   cLOG("launching thr0\n");
+   pthread_create(&thr[0], NULL, client_test3_thr, &ctx0);
+   cLOG("launching thr1\n");
+   pthread_create(&thr[1], NULL, client_test3_thr, &ctx1);
+
+   // wait for threads to complete
+   cLOG("waiting for thr0\n");
+   void* rc0;
+   pthread_join(thr[0], &rc0);
+
+   cLOG("waiting for thr1\n");
+   void* rc1;
+   pthread_join(thr[1], &rc1);
+}
+
+
+// ...........................................................................
+// client_test3c
+//
+// like client_test3, with two threads each writing to different remote
+// files, but now we do the individual open, write, close operations in
+// different threads.
+//
+// RESULT: This works fine.  Multiple threads calling skt_open() works,
+//          even when they already have another per-thread socket-handle
+//          opened.  It works whether they have done some writing to the
+//          previously-opened handle, or not.  Works as root or a regular
+//          user.
+// ...........................................................................
+
+int client_test3c(const char* path) {
+
+   static const int  N_THR = 2;
+
+   int               i;
+   pthread_barrier_t barrier;
+
+   pthread_t         thr[N_THR];
+   ThreadContext     ctx[N_THR];
+
+   pthread_barrier_init(&barrier, NULL, N_THR);
+
+   for (i=0; i<N_THR; ++i) {
+      ThreadContext ctx1 = { .flags   = 0,
+                             .thr_no  = i,
+                             .path    = path,
+                             .handle  = {0},
+                             .barrier = &barrier };
+      ctx[i] = ctx1;
+   }
+
+
+#if 1
+   // *** WORKS FINE
+
+   int sequence[] = {
+      TC_OPEN,
+      TC_WRITE,
+      TC_OPEN2,
+      TC_CLOSE,
+      TC_DONE
+   };
+#elif 0
+   // *** WORKS FINE
+
+   int sequence[] = {
+      TC_OPEN,
+      TC_WRITE,
+      TC_CLOSE,
+      TC_OPEN2, // do 2nd open after closing first handle
+      TC_DONE
+   };
+#elif 0
+   // *** THIS WORKS, after adding initializations ("fd = {0}") to the
+   //     OPEN2 case in client_test3_thr.
+
+   int sequence[] = {
+      TC_OPEN,
+      TC_WRITE,
+      TC_OPEN2,
+      TC_OPEN2, // do 3rd open, using same stack-alloc'ed fd
+      TC_OPEN2, // do 4th open
+      TC_DONE
+   };
+#endif
+
+   // Do open, write, close, in separate thread-invocations
+   int* flag_ptr = sequence;
+   while (*flag_ptr != TC_DONE) {
+
+      // cLOG("\n\nTHREAD-FLAGS = 0x%x\n", *flag_ptr);
+      cLOG("\n\nTHREAD-FLAGS = %s\n", flag_name(*flag_ptr));
+
+      for (i=0; i<N_THR; ++i) {
+         ctx[i].flags = *flag_ptr;
+      }
+
+      for (i=0; i<N_THR; ++i) {
+         cLOG("launching thr %d\n", i);
+         pthread_create(&thr[i], NULL, client_test3_thr, &ctx[i]);
+      }
+
+      // wait for threads to complete
+      for (i=0; i<N_THR; ++i) {
+         cLOG("waiting for thr %d\n", i);
+         void* rc;
+         pthread_join(thr[i], &rc);
+         if (rc) {
+            ERR("thr %d returned non-zero\n", i);
+            return -1;
+         }
+      }
+
+      // --- prepare to invoke the next operation in sequence[], when threads run again
+      ++ flag_ptr;
+   }
+
+   cLOG("\n\nDONE\n");
+}
+
+
+
+#if 0
+// UNDER CONSTRUCTION
+
+// ...........................................................................
+// client_test3d
+//
+// like client_test3c, but now we've discovered that calling seteuid()
+// is what causes the IB memory (presumably internal to the SocketHandle),
+// to become unpinned, causing rsocket interactions to fail.  [See test2b]
+//
+// Here we want to see whether having thread-local storage for the
+// handles allows one thread to maintain viable connections while another
+// one calls seteuid.
+//
+// RESULT: 
+//
+// ...........................................................................
+
+int client_test3d(const char* path) {
+
+   static const int  N_THR = 2;
+
+   int               i;
+   pthread_barrier_t barrier;
+
+   pthread_t         thr[N_THR];
+   ThreadContext     ctx[N_THR];
+
+   pthread_barrier_init(&barrier, NULL, N_THR);
+
+   for (i=0; i<N_THR; ++i) {
+      ThreadContext ctx1 = { .flags     = 0,
+                             .thr_no    = i,
+                             .path      = path,
+                             .handle    = {0},
+                             .barrier   = &barrier };
+
+      // different threads get a different sequence
+      if 
+
+      ctx[i] = ctx1;
+   }
+
+
+
+   // Do open, write, close, in separate thread-invocations
+   int* flag_ptr = sequence;
+   while (*flag_ptr != TC_DONE) {
+
+      // cLOG("\n\nTHREAD-FLAGS = 0x%x\n", *flag_ptr);
+      cLOG("\n\nTHREAD-FLAGS = %s\n", flag_name(*flag_ptr));
+
+      for (i=0; i<N_THR; ++i) {
+         ctx[i].flags = *flag_ptr;
+      }
+
+      for (i=0; i<N_THR; ++i) {
+         cLOG("launching thr %d\n", i);
+         pthread_create(&thr[i], NULL, client_test3_thr, &ctx[i]);
+      }
+
+      // wait for threads to complete
+      for (i=0; i<N_THR; ++i) {
+         cLOG("waiting for thr %d\n", i);
+         void* rc;
+         pthread_join(thr[i], &rc);
+         if (rc) {
+            ERR("thr %d returned non-zero\n", i);
+            return -1;
+         }
+      }
+
+      // --- prepare to invoke the next operation in sequence[], when threads run again
+      ++ flag_ptr;
+   }
+
+   cLOG("\n\nDONE\n");
+}
+#endif
+
+
+
 
 
 
@@ -557,7 +1004,7 @@ int usage(const char* prog) {
   fprintf(stderr, "  -r             rename to original + '.renamed'\n");
   fprintf(stderr, "  -o             chown to 99:99\n");
   fprintf(stderr, "  -R             hold read-handle open, so reaper-thread will kill connection\n");
-  fprintf(stderr, "  -t <test_no>   perform various unit-tests {1,1b,1c,2}\n");
+  fprintf(stderr, "  -t <test_no>   perform various unit-tests {1,1b,1c,2,3,3b}\n");
   fprintf(stderr, "\n");
   fprintf(stderr, "<flie_spec> is <host>:<port>/<fname>\n");
 }
@@ -603,7 +1050,7 @@ main(int argc, char* argv[]) {
   // --- start timer
   struct timespec start;
   if (clock_gettime(CLOCK_REALTIME, &start)) {
-    fprintf(stderr, "failed to get START timer '%s'\n", strerror(errno));
+    ERR("failed to get START timer '%s'\n", strerror(errno));
     return -1;                // errno is set
   }
 
@@ -627,9 +1074,17 @@ main(int argc, char* argv[]) {
     else if (MATCH(test_no, "1c"))
       bytes_moved = client_test1c(file_spec);
     else if (MATCH(test_no, "2"))
-      bytes_moved = client_test2(file_spec);
+       bytes_moved = client_test2(file_spec, 0);
+    else if (MATCH(test_no, "2b"))
+       bytes_moved = client_test2(file_spec, 1);
+    else if (MATCH(test_no, "3"))
+      bytes_moved = client_test3(file_spec);
+    else if (MATCH(test_no, "3b"))
+      bytes_moved = client_test3b(file_spec);
+    else if (MATCH(test_no, "3c"))
+      bytes_moved = client_test3c(file_spec);
     else {
-      fprintf(stderr, "unknown test: %s\n", test_no);
+      ERR("unknown test: %s\n", test_no);
       return -1;
     }
 #   undef MATCH
@@ -637,7 +1092,7 @@ main(int argc, char* argv[]) {
     break;
       
   default:
-    fprintf(stderr, "unsupported command: %s\n", command_str(cmd));
+    ERR("unsupported command: %s\n", command_str(cmd));
     return -1;
   }
 
@@ -649,7 +1104,7 @@ main(int argc, char* argv[]) {
   // --- compute bandwidth
   struct timespec end;
   if (clock_gettime(CLOCK_REALTIME, &end)) {
-    fprintf(stderr, "failed to get END timer '%s'\n", strerror(errno));
+    ERR("failed to get END timer '%s'\n", strerror(errno));
     return -1;                // errno is set
   }
   size_t nsec = (end.tv_sec - start.tv_sec) * 1000UL * 1000 * 1000;

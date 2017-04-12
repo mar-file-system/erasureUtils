@@ -314,28 +314,37 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
       errno = ret;
       return NULL;
    }
-
    PRINTout("ne_open: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n", ret, bsz, N, E);
+
 
    /* allocate matrices */
    handle->encode_matrix = malloc(MAXPARTS * MAXPARTS);
    handle->decode_matrix = malloc(MAXPARTS * MAXPARTS);
    handle->invert_matrix = malloc(MAXPARTS * MAXPARTS);
-   handle->g_tbls = malloc(MAXPARTS * MAXPARTS * 32);
+   handle->g_tbls        = malloc(MAXPARTS * MAXPARTS * 32);
+
+   if (! (handle->encode_matrix
+          && handle->decode_matrix
+          && handle->invert_matrix
+          && handle->g_tbls)) {
+      PRINTerr( "ne_open: failed to allocate one or more matrices\n" );
+      errno = ENOMEM;
+      return NULL;
+   }
+
 
 
    /* loop through and open up all the output files and initilize per part info and allocate buffers */
    counter = 0;
    PRINTout( "opening file descriptors...\n" );
 
-   // could umask() be causing socket-connection permission problems? [jti]
    mode_t mask = umask(0000);
 
    while ( counter < N+E ) {
       bzero( file, MAXNAME );
       u32 blk_i = (counter+erasure_offset)%(N+E); // absolute index of block to be written, within pod
 
-      handle->snprintf(file, MAXNAME-1, path, blk_i, handle->state);
+      handle->snprintf(file, MAXNAME, path, blk_i, handle->state);
 
 #ifdef INT_CRC
       if ( counter > N ) {
@@ -377,7 +386,6 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
 
       counter++;
    }
-   // could umask() be causing socket-connection permission problems? [jti]
    umask(mask);
 
    return handle;
@@ -984,7 +992,7 @@ read:
 
 void sync_file(ne_handle handle, int block_index) {
 #if 0
-  char path[1024];
+  char path[MAXNAME];
   int block_number = ((handle->erasure_offset + block_index)
                       % (handle->N + handle->E));
   handle->snprintf(path, MAXNAME, handle->path, block_number, handle->state);
@@ -1031,9 +1039,9 @@ void sync_file(ne_handle handle, int block_index) {
  */
 
 ssize_t write_all(FileDesc* fd, const void* buffer, size_t nbytes) {
-  ssize_t     result = 0;
-  size_t      remain = nbytes;
-  const char* buf    = buffer;  /* assure ourselves pointer arithmetic is by onezies  */
+  ssize_t      result = 0;
+  size_t       remain = nbytes;
+  const char*  buf    = buffer;  /* assure ourselves pointer arithmetic is by onezies  */
 
   while (remain) {
     errno = 0;
@@ -1115,11 +1123,16 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
             break;
          }
 
+         // I think we can understand this as follows: the "read offset" is an
+         // offset in the generated erasure data, not including the user's data,
+         // and the "write offset" is the logical position in the total output,
+         // not including the 4-bytes-per-block of CRC data.
          PRINTerr( "ne_write: reading input for %lu bytes with offset of %llu\n"
                   "\tand writing to offset of %lu in handle buffer\n",
                   (unsigned long)readsize, totsize, handle->buff_rem );
          memcpy ( handle->buffer + handle->buff_rem, buffer+totsize, readsize);
          PRINTout( "ne_write:   ...copy complete.\n");
+
          totsize += readsize;
          writesize = readsize + ( handle->buff_rem % bsz );
          handle->buff_rem += readsize;
@@ -1190,7 +1203,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
          handle->e_ready = 1;
       }
 
-      PRINTout( "ne_write: caculating %d recovery stripes from %d data stripes\n",E,N);
+      PRINTout( "ne_write: calculating %d recovery stripes from %d data stripes\n",E,N);
       // Perform matrix dot_prod for EC encoding
       // using g_tbls from encode matrix encode_matrix
       ec_encode_data( bsz, N, E, handle->g_tbls, handle->buffs, &(handle->buffs[N]) );
@@ -1212,8 +1225,8 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
 
          PRINTout( "ne_write: writing out erasure stripe %d\n", ecounter );
          if( handle->src_in_err[counter+ecounter] == 0) {
-           // ret_out = HNDLOP(write, handle->FDArray[counter+ecounter], handle->buffs[counter+ecounter], writesize);
-           ret_out = write_all(&handle->FDArray[counter+ecounter], handle->buffs[counter+ecounter], writesize);
+            // ret_out = HNDLOP(write, handle->FDArray[counter+ecounter], handle->buffs[counter+ecounter], writesize);
+            ret_out = write_all(&handle->FDArray[counter+ecounter], handle->buffs[counter+ecounter], writesize);
 
            if ( ret_out != writesize ) {
              PRINTerr( "ne_write: write to erasure file %d, returned %zd instead of expected %d\n",
@@ -1274,7 +1287,6 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
  */
 int ne_close( ne_handle handle ) 
 {
-
    int counter;
    char xattrval[strlen(XATTRKEY)+80];
    char file[MAXNAME];       /* array name of files */
@@ -1284,10 +1296,6 @@ int ne_close( ne_handle handle )
    unsigned int bsz;
    int ret = 0;
    int tmp;
-#ifdef META_FILES
-   int      val;
-   FileDesc fd = {0};
-#endif
    unsigned char *zero_buff;
 
 
@@ -1319,24 +1327,11 @@ int ne_close( ne_handle handle )
       free( zero_buff );
    }
 
-#ifdef META_FILES
-   // DEBUGGING.  close all connections before opening new ones?
-   counter = 0;
-   while (counter < N+E) {
-     if ( FD(handle->FDArray[counter]) != -1 ) {
-       HNDLOP(close, handle->FDArray[counter]);
-     }
-     ++ counter;
-   }
-   ///   PRINTerr( "sleeping 5 seconds ... ");
-   ///   sleep(5);
-   ///   PRINTerr( "done.\n");
-#endif
 
    /* Close file descriptors and free bufs and set xattrs for written files */
    counter = 0;
    while (counter < N+E) {
-      if ( handle->mode == NE_WRONLY  ||  (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1) ) { 
+      if ( handle->mode == NE_WRONLY  ||  (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1) ) {
          bzero(xattrval,sizeof(xattrval));
          sprintf(xattrval,
                  "%d %d %d %d %lu %lu %llu %llu",
@@ -1354,7 +1349,7 @@ int ne_close( ne_handle handle )
 #ifdef META_FILES
 
          /* create meta-file fname */
-         handle->snprintf( file, MAXNAME-1, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
+         handle->snprintf( file, MAXNAME, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
          if ( handle->mode == NE_REBUILD ) {
             strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 );
          }
@@ -1363,10 +1358,9 @@ int ne_close( ne_handle handle )
          }
          strncat( file, META_SFX, strlen(META_SFX) + 1 );
 
-         // could umask() be causing socket-connection permission problems? [jti]
-         mode_t mask = umask(0000);
+         mode_t   mask = umask(0000);
+         FileDesc fd   = {0};
 
-         memset(&fd, 0, sizeof(FileDesc));
          OPEN(fd, file, (O_WRONLY | O_CREAT), 0666);
 
          UMASK(fd, mask);
@@ -1376,8 +1370,8 @@ int ne_close( ne_handle handle )
             tmp = -1;
          }
          else {
-            // val = HNDLOP( write, fd, xattrval, strlen(xattrval) + 1 );
-            val = write_all(&fd, xattrval, strlen(xattrval) +1);
+            // ssize_t val = HNDLOP( write, fd, xattrval, strlen(xattrval) + 1 );
+            ssize_t val = write_all(&fd, xattrval, strlen(xattrval) +1);
             if ( val != strlen(xattrval) + 1 ) {
                PRINTerr("ne_close: failed to write to file %s\n",file);
                tmp = -1;
@@ -1408,14 +1402,13 @@ int ne_close( ne_handle handle )
          }
 
       }
-      //      // see "DEBUGGING" above.  These were already closed there.
-      //      if ( FD(handle->FDArray[counter]) != -1 ) {
-      //        HNDLOP(close, handle->FDArray[counter]);
-      //      }
+      if ( FD(handle->FDArray[counter]) != -1 ) {
+         HNDLOP(close, handle->FDArray[counter]);
+      }
 
 
       if (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1 ) {
-         handle->snprintf( file, MAXNAME-1, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
+         handle->snprintf( file, MAXNAME, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
          strncpy( nfile, file, strlen(file) + 1);
          strncat( file, REBUILD_SFX, strlen(REBUILD_SFX) + 1 );
 
@@ -1429,7 +1422,7 @@ int ne_close( ne_handle handle )
             }
 
 #ifdef META_FILES
-            strncat( file, META_SFX, strlen(META_SFX)+1 );
+            strncat( file,  META_SFX, strlen(META_SFX)+1 );
             strncat( nfile, META_SFX, strlen(META_SFX)+1 );
 
             if ( PATHOP( rename, file, nfile ) != 0 ) {
@@ -1453,7 +1446,7 @@ int ne_close( ne_handle handle )
          }
       }
       else if (handle->mode == NE_WRONLY ) {
-         handle->snprintf( file, MAXNAME-1, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
+         handle->snprintf( file, MAXNAME, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
          strncpy( nfile, file, strlen(file) + 1);
          strncat( file, WRITE_SFX, strlen(WRITE_SFX) + 1 );
 
@@ -1527,7 +1520,7 @@ int ne_delete1( SnprintfFunc fn, void* state, char* path, int width ) {
    
    for( counter=0; counter<width; counter++ ) {
       bzero( file, sizeof(file) );
-      fn( file, MAXNAME-1, path, counter, state );
+      fn( file, MAXNAME, path, counter, state );
       if ( PATHOP( unlink, file ) ) ret = 1;
 #ifdef META_FILES
       strncat( file, META_SFX, strlen(META_SFX)+1 );
@@ -1600,9 +1593,14 @@ int xattr_check( ne_handle handle, char *path )
    lN = N;
    lE = E;
 
+#ifdef META_FILES
+   FileDesc MetaFDArray[ MAXPARTS ];
+   memset(MetaFDArray, 0, sizeof(MetaFDArray));
+#endif
+
    for ( counter = 0; counter < lN+lE; counter++ ) {
       bzero(file,sizeof(file));
-      handle->snprintf( file, MAXNAME-1, path, (counter+handle->erasure_offset)%(lN+lE), handle->state );
+      handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_offset)%(lN+lE), handle->state );
       ret = PATHOP(stat, file, partstat);
       PRINTout( "xattr_check: stat of file %s returns %d\n", file, ret );
       if ( ret != 0 ) {
@@ -1618,11 +1616,12 @@ int xattr_check( ne_handle handle, char *path )
 
 #ifdef META_FILES
 
-      handle->snprintf( nfile, MAXNAME-1, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
+      handle->snprintf( nfile, MAXNAME, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
       strncat( nfile, META_SFX, strlen(META_SFX)+1 );
       PRINTout("xattr_check: opening file %s\n", nfile);
 
-      FileDesc meta_fd = {0};
+      FileDesc   meta_fd = {0};
+
       OPEN(meta_fd, nfile, O_RDONLY);
       if ( FD(meta_fd) < 0 ) {
          ret = -1;
@@ -1948,7 +1947,7 @@ static int reopen_for_rebuild(ne_handle handle, int block) {
 
   handle->src_in_err[block] = 1;
 
-  handle->snprintf(file, MAXNAME-1, handle->path,
+  handle->snprintf(file, MAXNAME, handle->path,
                    (block+handle->erasure_offset)%(handle->N+handle->E),
                    handle->state);
 
@@ -2068,8 +2067,8 @@ static int write_buffers(ne_handle handle, unsigned char *rebuild_buffs[]) {
       u32 *buf_crc = (u32*)(rebuild_buffs[handle->N+i] + (handle->bsz));
       *buf_crc = crc;
 #endif
-      //      written = HNDLOP(write, handle->FDArray[handle->src_err_list[i]],
-      //                       rebuild_buffs[handle->N+i], BUFFER_SIZE);
+      // written = HNDLOP(write, handle->FDArray[handle->src_err_list[i]],
+      //                  rebuild_buffs[handle->N+i], BUFFER_SIZE);
       written = write_all(&handle->FDArray[handle->src_err_list[i]],
                           rebuild_buffs[handle->N+i], BUFFER_SIZE);
       if(written < BUFFER_SIZE) {
@@ -2685,7 +2684,7 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, char *path )
    PRINTout( "ne_status: opening file descriptors...\n" );
    while ( counter < (handle->N+handle->E) ) {
       bzero( file, MAXNAME );
-      handle->snprintf( file, MAXNAME-1, path, (counter+handle->erasure_offset)%(handle->N+handle->E), handle->state );
+      handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_offset)%(handle->N+handle->E), handle->state );
 
 #ifdef INT_CRC
       if ( counter > handle->N ) {
