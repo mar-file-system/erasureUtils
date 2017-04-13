@@ -77,7 +77,7 @@ endif
 
 if DEBUG_SOCKETS
   DEFS        += -DDEBUG_SOCKETS
-  AM_CPPFLAGS += -fstack-protector-all -stack-check
+  AM_CPPFLAGS += -fstack-protector-all -fstack-check
 endif
 
 

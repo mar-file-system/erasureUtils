@@ -52,7 +52,9 @@ MarFS is released under the BSD license.
 MarFS was reviewed and released by LANL under Los Alamos Computer Code identifier:
 LA-CC-15-039.
 
-These erasure utilites make use of the Intel Intelligent Storage Acceleration Library (Intel ISA-L), which can be found at https://github.com/01org/isa-l and is under its own license.
+These erasure utilites make use of the Intel Intelligent Storage
+Acceleration Library (Intel ISA-L), which can be found at
+https://github.com/01org/isa-l and is under its own license.
 
 MarFS uses libaws4c for Amazon S3 object communication. The original version
 is at https://aws.amazon.com/code/Amazon-S3/2601 and under the LGPL license.
@@ -118,14 +120,17 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
   } while(0)
 
 
-/* It's useful to distinguish diagnostics intended for stderr vs stdout
-   running 'fuse -f ... > log 2>&1' allows stderr to go to the log, but
-   stdout doesn't get there.  So, one could tweak the defns here, to
-   temporarily send stdout output to stderr, as well. */
+/* It's useful to distinguish diagnostics intended for stderr vs stdout.
+   Running 'marfs_fuse -f ... > log 2>&1' allows stderr to go to the log,
+   but stdout doesn't get there.  So, one could tweak the PRINTout defn
+   here, to send stdout-diagnostics to stderr, then rebuild with
+   --enable-debug=all, then rebuild marfs_fuse with --enable-logging=stdout
+   --enable-debug, run fuse as suggested above, and see integrated
+   diagnostics for fuse and libne in the fuse output log. */
+
 #ifdef DEBUG_NE
 #  define PRINTerr(...)   FPRINTF(stderr, ##__VA_ARGS__)
-// #  define PRINTout(...)   FPRINTF(stdout, ##__VA_ARGS__)
-#  define PRINTout(...)   FPRINTF(stderr, ##__VA_ARGS__) /* don't commit me, bro! */
+#  define PRINTout(...)   FPRINTF(stdout, ##__VA_ARGS__)
 #else
 #  define PRINTerr(...)
 #  define PRINTout(...)
