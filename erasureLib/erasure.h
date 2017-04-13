@@ -79,6 +79,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  include "skt_common.h"
    typedef SocketHandle  FileDesc;
 #else
+#  define IMAX(A, B) (((A) > (B)) ? (A) : (B))
    typedef int           FileDesc;
 #endif
 
