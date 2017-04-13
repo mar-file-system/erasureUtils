@@ -556,9 +556,6 @@ int read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr) {
 }
 
 
-
-
-
 // paths to the server can be specified as  host:port/path/to/file
 // eventually, we'll allow   prot://host:port/path/to/file
 //
@@ -1421,7 +1418,7 @@ int riomap_reader(SocketHandle* handle, void* buf, size_t size) {
     return -1;
   }
   DBG("riomap offset: 0x%llx\n", handle->rio_offset);
-  DBG("riomap size:   0x%lld\n", size);
+  DBG("riomap size:   %llu\n", size);
 
   handle->rio_buf  = buf;     // to allow the riounmap in shut_down_thread()
   handle->rio_size = size;    // to allow the riounmap in shut_down_thread()
