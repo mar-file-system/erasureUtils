@@ -101,24 +101,24 @@ To fill in the trailing zeros, this program uses truncate - punching a hole in t
 
 /* The following are defined here, so as to hide them from users of the library */
 #ifdef HAVE_LIBISAL
-extern uint32_t crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
-extern void ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
+extern uint32_t      crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
+extern void          ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 #else
-extern uint32_t crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len);
-extern void ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
+extern uint32_t      crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len);
+extern void          ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 #endif
 
-extern void pq_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p and q */
-extern void xor_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern int pq_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern int xor_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern void gf_gen_rs_matrix(unsigned char *a, int m, int k);
-extern void gf_vect_mul_init(unsigned char c, unsigned char *tbl);
+extern void          pq_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p and q */
+extern void          xor_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p */
+extern int           pq_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
+extern int           xor_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
+extern void          gf_gen_rs_matrix(unsigned char *a, int m, int k);
+extern void          gf_vect_mul_init(unsigned char c, unsigned char *tbl);
 extern unsigned char gf_mul(unsigned char a, unsigned char b);
-extern int gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);
+extern int           gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);
 
-int xattr_check( ne_handle handle, char *path );
-void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls);
+int        xattr_check( ne_handle handle, char *path );
+void       ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls);
 static int gf_gen_decode_matrix(unsigned char *encode_matrix,
                                 unsigned char *decode_matrix,
                                 unsigned char *invert_matrix,
@@ -259,9 +259,7 @@ static int set_block_xattr(ne_handle handle, int block) {
 #ifdef META_FILES
   char meta_file[2048];
 
-  //  sprintf( meta_file, handle->path,
-  //           (block+handle->erasure_offset)%(handle->N+handle->E) );
-  handle->snprintf(meta_file, 2048-1, handle->path,
+  handle->snprintf(meta_file, 2048, handle->path,
                    (block+handle->erasure_offset)%(handle->N+handle->E), handle->state);
 
   if ( handle->mode == NE_REBUILD ) {
@@ -409,7 +407,7 @@ void *bq_writer(void *arg) {
   char block_file_path[2048];
   //  sprintf( block_file_path, handle->path,
   //           (bq->block_number+handle->erasure_offset)%(handle->N+handle->E) );
-  handle->snprintf( block_file_path, 2048-1, handle->path,
+  handle->snprintf( block_file_path, 2048, handle->path,
                     (bq->block_number+handle->erasure_offset)%(handle->N+handle->E), handle->state );
 
   if( PATHOP( rename, bq->path, block_file_path ) != 0 ) {
@@ -456,7 +454,7 @@ static int initialize_queues(ne_handle handle) {
     BufferQueue *bq = &handle->blocks[i];
     // generate the path
     // sprintf(bq->path, handle->path, (i + handle->erasure_offset) % num_blocks);
-    handle->snprintf(bq->path, MAXNAME-1, handle->path, (i + handle->erasure_offset) % num_blocks, handle->state);
+    handle->snprintf(bq->path, MAXNAME, handle->path, (i + handle->erasure_offset) % num_blocks, handle->state);
     strcat(bq->path, WRITE_SFX);
 
     // assign pointers into the memaligned buffers.
@@ -1721,7 +1719,7 @@ int ne_close( ne_handle handle )
            }
          }
          // sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
-         handle->snprintf( file, MAXNAME-1, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
+         handle->snprintf( file, MAXNAME, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
 
          strncpy( nfile, file, strlen(file) + 1);
          strncat( file, REBUILD_SFX, strlen(REBUILD_SFX) + 1 );
