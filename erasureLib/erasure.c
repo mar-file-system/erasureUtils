@@ -1584,8 +1584,14 @@ int ne_close( ne_handle handle )
 
          }
       }
-      else if (handle->mode == NE_WRONLY ) {
+
+      if (handle->mode == NE_WRONLY ) {
         bq_close(&handle->blocks[counter]);
+      }
+      else if(handle->FDArray[counter] != -1) {
+         if(close(handle->FDArray[counter]) != 0) {
+            ret = -1;
+         }
       }
 
       counter++;
