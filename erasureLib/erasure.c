@@ -987,7 +987,8 @@ read:
                datasz[counter] = llcounter - out_off;
                firstchunk = 0;
             }
-
+            // ensure that the stripe is flagged as having an error.
+            error_in_stripe = 1;
          }
          else {    //this data chunk is valid, store it
             if ( (nbytes-llcounter) < readsize  &&  error_in_stripe == 0 ) {
