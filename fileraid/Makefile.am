@@ -10,5 +10,5 @@ lanl_rebuild1n_from_e0_SOURCES = lanl_rebuild1n_from_e0.c
 lanl_health_SOURCES = lanl_health.c
 lanl_singleHealth_SOURCES = lanl_singleHealth.c
 
-TESTS=fraidTest
+#TESTS=fraidTest
 
