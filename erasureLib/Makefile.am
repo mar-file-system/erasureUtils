@@ -72,8 +72,15 @@ if ANY_SOCKETS
 endif
 endif
 
+
+if USE_SYSLOG
+   DEBUG_NE_VALUE=syslog
+else
+   DEBUG_NE_VALUE=1
+endif
+
 if DEBUG_NE
-  SOCKET_DEFS += -DDEBUG_NE
+  SOCKET_DEFS += -DDEBUG_NE=$(DEBUG_NE_VALUE)  -fstack-protector-all -fstack-check
 endif
 
 
@@ -81,14 +88,15 @@ endif
 # before 'make install' will have put ../sockets/skt_common.h into the
 # install directory.  So the following allows these executables to be
 # built.
-AM_CPPFLAGS = $(SOCKET_CPPFLAGS) $(SOCKET_DEFS) -fstack-protector-all
+AM_CPPFLAGS = $(SOCKET_CPPFLAGS) $(SOCKET_DEFS)
+
 
 
 lib_LIBRARIES = libne.a
 libne_a_SOURCES = erasure.c erasure.h
 libne_a_LIBADD = $(SOCKET_LIBS)
 
-include_HEADERS = erasure.h
+include_HEADERS = erasure.h ne_logging.h
 
 bin_PROGRAMS = libneTest
 libneTest_SOURCES = libneTest.c

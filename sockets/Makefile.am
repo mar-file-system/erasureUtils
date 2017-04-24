@@ -72,14 +72,25 @@ AM_LDFLAGS =
 # SOCKET_DEFS=-DSKIP_FILE_READS=1
 
 
+# ne_logging.h now lives over there
+AM_CPPFLAGS += -I${top_srcdir}/erasureLib
+
+
+
 if RDMA_SOCKETS
   DEFS        += -DRDMA_SOCKETS -DUSE_RIOWRITE
   LIBS        += -lrdmacm
 endif
 
+if USE_SYSLOG
+   DEBUG_SOCKETS_VALUE=syslog
+else
+   DEBUG_SOCKETS_VALUE=1
+endif
+
 if DEBUG_SOCKETS
-  DEFS        += -DDEBUG_SOCKETS
-  AM_CPPFLAGS += -fstack-protector-all -stack-check
+  DEFS        += -DDEBUG_SOCKETS=$(DEBUG_SOCKETS_VALUE)
+  AM_CPPFLAGS += -fstack-protector-all -fstack-check
 endif
 
 
@@ -114,7 +125,7 @@ endif
 
 
 
-bin_PROGRAMS = client socket_fserver
+bin_PROGRAMS = test_client socket_fserver
 
 
 socket_fserver_SOURCES = socket_fserver.c
@@ -122,8 +133,8 @@ socket_fserver_LDADD = librdma_sockets.a
 #socket_fserver_LDFLAGS = -lpthread $(AM_LDFLAGS)
 
 
-client_SOURCES = client.c
-client_LDADD = librdma_sockets.a
+test_client_SOURCES = test_client.c
+test_client_LDADD = librdma_sockets.a
 
 
 

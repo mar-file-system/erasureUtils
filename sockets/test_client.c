@@ -574,6 +574,8 @@ typedef struct {
 #define thrNEED_0(EXPR)        _TEST(EXPR, ==0, DBG,    return (void*)-1)
 #define thrNEED_GT0(EXPR)      _TEST(EXPR,  >0, DBG,    return (void*)-1)
 
+
+
 // this is the thread-function spawned by client_test3.
 void* client_test3_thr(void* arg) {
    ThreadContext* ctx    = (ThreadContext*)arg;
@@ -590,6 +592,7 @@ void* client_test3_thr(void* arg) {
   char            buf[BUFSIZE] __attribute__ (( aligned(64) )); /* copy stdin to socket */
   memset(buf, ctx->thr_no +1, BUFSIZE);
 
+
   // --- open
   //     NOTE: write-mode differs from libne
   //     changing to 0666 doesn't seem to affect success
@@ -600,9 +603,11 @@ void* client_test3_thr(void* arg) {
      thrNEED_GT0( skt_open(handle,  thr_path,  (O_WRONLY|O_CREAT), 0666) );
   }
 
+
   // --- wait for other thread(s) to open their handle, as well.
   cLOG("thr%d: waiting on barrier 0\n", ctx->thr_no);
   pthread_barrier_wait(ctx->barrier);
+
 
   // -- pop/push EUID
   //    NOTE: calling seteuid() affects all threads,
@@ -629,15 +634,16 @@ void* client_test3_thr(void* arg) {
      rc = syscall(SYS_getresuid, &old_ruid, &old_euid, &old_suid);
      cLOG("thr%d: euid = %d (rc=%d)\n", ctx->thr_no, old_euid, rc);
 
-
      cLOG("thr%d: SETTING euid\n", ctx->thr_no);
      rc = syscall(SYS_setresuid, -1, old_euid, -1);
      cLOG("thr%d: euid = %d (rc=%d)\n", ctx->thr_no, old_euid, rc);
   }
 
+
   // --- wait for other thread(s) to open their handle, as well.
   cLOG("thr%d: waiting on barrier 1\n", ctx->thr_no);
   pthread_barrier_wait(ctx->barrier);
+
 
   // --- open a different file
   if (ctx->flags & TC_OPEN2) {
@@ -651,7 +657,7 @@ void* client_test3_thr(void* arg) {
 
   // --- put
   if (ctx->flags & TC_WRITE) {
-     cLOG("thr%d: writing %llu bytes\n", ctx->thr_no, BUFSIZE);
+     cLOG("thr%d: writing %llu bytes\n", ctx->thr_no, (size_t)BUFSIZE);
      bytes_moved = skt_write(handle, buf, BUFSIZE);
      cLOG("thr%d: wrote   %lld bytes\n", ctx->thr_no, bytes_moved);
      thrNEED( bytes_moved == BUFSIZE );
@@ -868,25 +874,110 @@ int client_test3c(const char* path) {
 
 
 
-#if 0
-// UNDER CONSTRUCTION
 
-// ...........................................................................
-// client_test3d
+// Like test3b, but now we want to know whether just doing a seteuid in the
+// main program, taints all subsequent threads that use IB.
 //
-// like client_test3c, but now we've discovered that calling seteuid()
-// is what causes the IB memory (presumably internal to the SocketHandle),
-// to become unpinned, causing rsocket interactions to fail.  [See test2b]
-//
-// Here we want to see whether having thread-local storage for the
-// handles allows one thread to maintain viable connections while another
-// one calls seteuid.
-//
-// RESULT: 
-//
-// ...........................................................................
+// RESULT:  Sure enough, the first two threads succeed, and the third fails.
+//          Third fails even if master used system-call.
 
 int client_test3d(const char* path) {
+
+   pthread_barrier_t barrier;
+   pthread_t         thr0;
+   void*             rc0;
+
+   const size_t      MAX_PATH = 1024;
+   char              path0[MAX_PATH];
+   int               path_no = 0;
+
+   ThreadContext     ctx0 = { .flags   = (TC_OPEN|TC_WRITE|TC_CLOSE),
+                              .thr_no  = 0,
+                              .path    = path0,
+                              .handle  = {0},
+                              .barrier = &barrier };
+
+   pthread_barrier_init(&barrier, NULL, 1);
+
+
+   // --- (1) open/wr/close
+   snprintf(path0, MAX_PATH, "%s.%d", path, path_no++);
+   cLOG("launching thr0, path = %s\n", path0);
+   pthread_create(&thr0, NULL, client_test3_thr, &ctx0);
+
+   cLOG("waiting for thr0\n");
+   pthread_join(thr0, &rc0);
+
+
+
+   // --- (2) open/wr/close
+   memset(&ctx0.handle, 0, sizeof(ctx0.handle)); /* need to do this? */
+   snprintf(path0, MAX_PATH, "%s.%d", path, path_no++);
+   cLOG("launching thr0, path = %s\n", path0);
+   pthread_create(&thr0, NULL, client_test3_thr, &ctx0);
+
+   cLOG("waiting for thr0\n");
+   pthread_join(thr0, &rc0);
+
+
+
+   // --- screw up all future IB activity?
+#if 0
+   //    (a) straight fn-call
+   
+   cLOG("calling seteuid()\n");
+   seteuid(geteuid());
+
+#else
+   //    (b) system-call
+
+   uid_t old_ruid;
+   uid_t old_euid;
+   uid_t old_suid;
+   int   rc;
+
+   cLOG("GETTING euid\n");
+   rc = syscall(SYS_getresuid, &old_ruid, &old_euid, &old_suid);
+   cLOG("euid = %d (rc=%d)\n", old_euid, rc);
+
+   cLOG("SETTING euid\n");
+   rc = syscall(SYS_setresuid, -1, old_euid, -1);
+   cLOG("euid = %d (rc=%d)\n", old_euid, rc);
+#endif
+
+
+   // --- (3) open/wr/close
+   memset(&ctx0.handle, 0, sizeof(ctx0.handle)); /* need to do this? */
+   snprintf(path0, MAX_PATH, "%s.%d", path, path_no++);
+   cLOG("launching thr0, path = %s\n", path0);
+   pthread_create(&thr0, NULL, client_test3_thr, &ctx0);
+
+   cLOG("waiting for thr0\n");
+   pthread_join(thr0, &rc0);
+}
+
+
+
+
+// ...........................................................................
+// Similar to test3b, but see whether the seteuid taints a thread that was
+// spun up before seteuid is called.  Also, check whether the calling
+// process is affected.
+//
+// RESULT:
+//
+//   (a) using the seteuid SYSCALL limits the damage to the local thread.
+//       Other threads are not affected.
+//       Even the calling process is not affected.
+//
+//   (b) using seteuid() affects all threads in the process,
+//       including other threads that are running,
+//       as well as the calling process.
+//       skt_open() will fail in all of them, after the seteuid().
+//
+// ...........................................................................
+
+int client_test3e(const char* path) {
 
    static const int  N_THR = 2;
 
@@ -894,60 +985,56 @@ int client_test3d(const char* path) {
    pthread_barrier_t barrier;
 
    pthread_t         thr[N_THR];
-   ThreadContext     ctx[N_THR];
+   ThreadContext*    ctx[N_THR];
 
-   pthread_barrier_init(&barrier, NULL, N_THR);
+   ThreadContext     ctx0 = { .flags   = (TC_SETEUID_SYS|TC_OPEN2),  // (a)
+                              // .flags   = (TC_SETEUID|TC_OPEN2),   // (b)
+                              .thr_no  = 0,
+                              .path    = path,
+                              .handle  = {0},
+                              .barrier = &barrier };
 
+   ThreadContext     ctx1 = { .flags   = (TC_OPEN|TC_OPEN2),
+                              .thr_no  = 1,
+                              .path    = path,
+                              .handle  = {0},
+                              .barrier = &barrier };
+
+   ctx[0] = &ctx0;
+   ctx[1] = &ctx1;
+
+   pthread_barrier_init(&barrier, NULL, 2);
+
+
+   // --- launch threads
    for (i=0; i<N_THR; ++i) {
-      ThreadContext ctx1 = { .flags     = 0,
-                             .thr_no    = i,
-                             .path      = path,
-                             .handle    = {0},
-                             .barrier   = &barrier };
-
-      // different threads get a different sequence
-      if 
-
-      ctx[i] = ctx1;
+      cLOG("launching thr %d\n", i);
+      pthread_create(&thr[i], NULL, client_test3_thr, ctx[i]);
    }
 
 
-
-   // Do open, write, close, in separate thread-invocations
-   int* flag_ptr = sequence;
-   while (*flag_ptr != TC_DONE) {
-
-      // cLOG("\n\nTHREAD-FLAGS = 0x%x\n", *flag_ptr);
-      cLOG("\n\nTHREAD-FLAGS = %s\n", flag_name(*flag_ptr));
-
-      for (i=0; i<N_THR; ++i) {
-         ctx[i].flags = *flag_ptr;
-      }
-
-      for (i=0; i<N_THR; ++i) {
-         cLOG("launching thr %d\n", i);
-         pthread_create(&thr[i], NULL, client_test3_thr, &ctx[i]);
-      }
-
-      // wait for threads to complete
-      for (i=0; i<N_THR; ++i) {
-         cLOG("waiting for thr %d\n", i);
-         void* rc;
-         pthread_join(thr[i], &rc);
-         if (rc) {
-            ERR("thr %d returned non-zero\n", i);
-            return -1;
-         }
-      }
-
-      // --- prepare to invoke the next operation in sequence[], when threads run again
-      ++ flag_ptr;
+   // --- wait for threads to complete
+   for (i=0; i<N_THR; ++i) {
+      cLOG("waiting for thr %d\n", i);
+      void* rc0;
+      pthread_join(thr[i], &rc0);
+      cLOG("thr%d returned %lld\n", i, (ssize_t)rc0);
    }
 
-   cLOG("\n\nDONE\n");
+
+   // --- how about the parent process?
+   const size_t      MAX_PATH = 1024;
+   char              path0[MAX_PATH];
+   int               path_no = 0;
+   SocketHandle      handle = {0};
+
+   cLOG("opening %s\n", path);
+   NEED_GT0( skt_open(&handle, path, (O_WRONLY|O_CREAT), 0666) );
+
+
+
+   cLOG("done\n");
 }
-#endif
-
 
 
 
@@ -1017,6 +1104,14 @@ main(int argc, char* argv[]) {
     return -1;
   }
 
+#if (DEBUG_SOCKETS == syslog)
+  // POSIX basename() may alter arg
+  char* last_slash = strrchr(argv[0], '/');
+  char* progname = (last_slash ? last_slash+1 : argv[0]);
+  openlog(progname, LOG_CONS|LOG_PID, LOG_USER);
+#endif
+
+
   // --- parse args
   char    cmd;
   char*   test_no = NULL;
@@ -1083,6 +1178,10 @@ main(int argc, char* argv[]) {
       bytes_moved = client_test3b(file_spec);
     else if (MATCH(test_no, "3c"))
       bytes_moved = client_test3c(file_spec);
+    //    else if (MATCH(test_no, "3d"))
+    //       bytes_moved = client_test3d(file_spec);
+    else if (MATCH(test_no, "3e"))
+      bytes_moved = client_test3e(file_spec);
     else {
       ERR("unknown test: %s\n", test_no);
       return -1;
