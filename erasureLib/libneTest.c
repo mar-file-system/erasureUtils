@@ -56,7 +56,9 @@ MarFS is released under the BSD license.
 MarFS was reviewed and released by LANL under Los Alamos Computer Code identifier:
 LA-CC-15-039.
 
-These erasure utilites make use of the Intel Intelligent Storage Acceleration Library (Intel ISA-L), which can be found at https://github.com/01org/isa-l and is under its own license.
+These erasure utilites make use of the Intel Intelligent Storage
+Acceleration Library (Intel ISA-L), which can be found at
+https://github.com/01org/isa-l and is under its own license.
 
 MarFS uses libaws4c for Amazon S3 object communication. The original version
 is at https://aws.amazon.com/code/Amazon-S3/2601 and under the LGPL license.
@@ -120,35 +122,45 @@ int main( int argc, const char* argv[] )
 
    if ( strncmp( argv[1], "write", strlen(argv[1]) ) == 0 ) {
       if ( argc < 7 ) { 
-         fprintf(stderr,"libneTest: insufficient arguments for a write operation\nlibneTest:   expected \'%s %s input_file output_path N E start_file [input_size]\'\n", argv[0], argv[1] ); 
+         fprintf(stderr,"libneTest: insufficient arguments for a write operation\nlibneTest:   "
+                 "expected \'%s %s input_file output_path N E start_file [input_size]\'\n",
+                 argv[0], argv[1] ); 
          return -1;
       }
       wr = 1;
    }
    else if ( strncmp( argv[1], "read", strlen(argv[1]) ) == 0 ) {
       if ( argc < 8 ) { 
-         fprintf(stderr,"libneTest: insufficient arguments for a read operation\nlibneTest:   expected \'%s %s output_file erasure_path N E start_file total_bytes\'\n", argv[0], argv[1] ); 
+         fprintf(stderr,"libneTest: insufficient arguments for a read operation\nlibneTest:   "
+                 "expected \'%s %s output_file erasure_path N E start_file total_bytes\'\n",
+                 argv[0], argv[1] ); 
          return -1;
       }
       wr = 0;
    }
    else if ( strncmp( argv[1], "rebuild", strlen(argv[1]) ) == 0 ) {
       if ( argc != 6 ) { 
-         fprintf(stderr,"libneTest: inappropriate arguments for a rebuild operation\nlibneTest:   expected \'%s %s erasure_path N E start_file\'\n", argv[0], argv[1] ); 
+         fprintf(stderr,"libneTest: inappropriate arguments for a rebuild operation\nlibneTest:   "
+                 "expected \'%s %s erasure_path N E start_file\'\n",
+                 argv[0], argv[1] ); 
          return -1;
       }
       wr = 2;
    }
    else if ( strncmp( argv[1], "status", strlen(argv[1]) ) == 0 ) {
       if ( argc != 3 ) { 
-         fprintf(stderr,"libneTest: inappropriate arguments for a status operation\nlibneTest:   expected \'%s %s erasure_path\'\n", argv[0], argv[1] ); 
+         fprintf(stderr,"libneTest: inappropriate arguments for a status operation\nlibneTest:   "
+                 "expected \'%s %s erasure_path\'\n",
+                 argv[0], argv[1] ); 
          return -1;
       }
       wr = 3;
    }
    else if ( strncmp( argv[1], "delete", strlen(argv[1]) ) == 0 ) {
       if ( argc != 4 ) {
-         fprintf(stderr,"libneTest: inappropriate arguments for a delete operation\nlibneTest:   expected \'%s %s erasure_path stripe_width\'\n", argv[0], argv[1] ); 
+         fprintf(stderr,"libneTest: inappropriate arguments for a delete operation\nlibneTest:   "
+                 "expected \'%s %s erasure_path stripe_width\'\n",
+                 argv[0], argv[1] ); 
          return -1;
       }
       N = atoi(argv[3]);
@@ -189,7 +201,8 @@ int main( int argc, const char* argv[] )
 
       buff = malloc( sizeof(char) * totbytes );
 
-      fprintf( stdout, "libneTest: writing content of file %s to erasure striping (N=%d,E=%d,offset=%d)\n", argv[2], N, E, start );
+      fprintf( stdout, "libneTest: writing content of file %s to erasure striping (N=%d,E=%d,offset=%d)\n",
+               argv[2], N, E, start );
 
       filefd = open( argv[2], O_RDONLY );
       if ( filefd == -1 ) {
@@ -320,7 +333,8 @@ int main( int argc, const char* argv[] )
          fprintf( stderr, "libneTest: ne_status failed!\n" );
          return -1;
       }
-      printf( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\nExtended Attribute Errors : ", stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
+      printf( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\nExtended Attribute Errors : ",
+              stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
       for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
          printf( "%d ", stat->xattr_status[tmp] );
       }

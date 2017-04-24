@@ -69,29 +69,56 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 lanl_ftone - file to N E
 Syntx  lanl_ftonpq inputfile outputfileprefex numparts chunksize_in_k numerasure 
 
-This program reads the input file, stripes that file over numparts (N) in chunksize of chunksize_in_k and creats E erasure stripes.   
-It uses the Intel ISA-l calculate erasure code and crc routines (which are available in C, SSE, and AVX512.
-The input can be a file or can be a - which says read off of stdin.
+This program reads the input file, stripes that file over numparts (N) in
+chunksize of chunksize_in_k and creats E erasure stripes.  It uses the
+Intel ISA-l calculate erasure code and crc routines (which are available in
+C, SSE, and AVX512.  The input can be a file or can be a - which says read
+off of stdin.
+
 Typical syntax:
-./lanl_ftone inputfile outtest 10 64 2
-this reads inputfile and creates outtest.0 - outtest.9 and outtest.e0 and outtest.e1
-it stripes 10 wide and uses 64k as the chunksize and it creates two erasure stripes
-cat inputfile | ./lanl_ftonpq - outtest 10 64 1
-this reads from stdin and creates outtest.0 - outtest.9 and outtest.e0
-it stripes 10 wide and uses 64k as the chunksize and it only creates one erasure since the last parm is 1
 
-Additionally, each output file gets an xattr added to it  (yes all 11 or 12 files in the case of a 10+pq
-the xattr looks like this
-n.e.chunksize.nsz.ncompsz.ncrcsum.totsz: 10 2 64 196608 196608 3304199718723886772 1717171
-N is nparts, E is numerasure, chunksize is chunksize, nsz is the size of the part, ncompsz is the size of the part but might get used if we ever compress the parts, totsz is the total real data in the N part files.
-Since creating erasure requires full stripe writes, the last part of the file may all be zeros in the parts.  This totsz is the real size of the data, not counting the trailing zeros.
+    ./lanl_ftone inputfile outtest 10 64 2
+
+this reads inputfile and creates outtest.0 - outtest.9 and outtest.e0 and
+outtest.e1 it stripes 10 wide and uses 64k as the chunksize and it creates
+two erasure stripes
+
+    cat inputfile | ./lanl_ftonpq - outtest 10 64 1
+
+this reads from stdin and creates outtest.0 - outtest.9 and outtest.e0 it
+stripes 10 wide and uses 64k as the chunksize and it only creates one
+erasure since the last parm is 1
+
+Additionally, each output file gets an xattr added to it (yes all 11 or 12
+files in the case of a 10+pq the xattr looks like this
+
+    n.e.chunksize.nsz.ncompsz.ncrcsum.totsz: 10 2 64 196608 196608 3304199718723886772 1717171
+
+N is nparts, E is numerasure, chunksize is chunksize, nsz is the size of
+the part, ncompsz is the size of the part but might get used if we ever
+compress the parts, totsz is the total real data in the N part files.
+
+Since creating erasure requires full stripe writes, the last part of the
+file may all be zeros in the parts.  This totsz is the real size of the
+data, not counting the trailing zeros.
+
 All the parts and all the erasure stripes should be the same size.
-To fill in the trailing zeros, this program uses truncate - punching a hole in the N part files for the zeros.
-The ncrcsum field in the xattr is a 64 bit long sum of the crc32s done on each chunksize on the  parts and erasure parts individually, so this is like a checkcrcsum for each of the N parts plus the erasure stripes  awhich will be handy for finding issues in an embarrasingly parallel way.
-The nsum is calcluated by the summing crc32s of each chunksize routine which could be accelerated later or included in the erasure calculation someday to speed it up.
 
-to do
-fix it so that errors are fprintf stderr and make sure exits are non zero
+To fill in the trailing zeros, this program uses truncate - punching a hole
+in the N part files for the zeros.
+
+The ncrcsum field in the xattr is a 64 bit long sum of the crc32s done on
+each chunksize on the parts and erasure parts individually, so this is like
+a checkcrcsum for each of the N parts plus the erasure stripes awhich will
+be handy for finding issues in an embarrasingly parallel way.
+
+The nsum is calcluated by the summing crc32s of each chunksize routine
+which could be accelerated later or included in the erasure calculation
+someday to speed it up.
+
+TO DO:
+-- fix it so that errors are fprintf stderr and make sure exits are non zero
+
 
 */
 /*********************************************************/

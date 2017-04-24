@@ -52,7 +52,9 @@ MarFS is released under the BSD license.
 MarFS was reviewed and released by LANL under Los Alamos Computer Code identifier:
 LA-CC-15-039.
 
-These erasure utilites make use of the Intel Intelligent Storage Acceleration Library (Intel ISA-L), which can be found at https://github.com/01org/isa-l and is under its own license.
+These erasure utilites make use of the Intel Intelligent Storage
+Acceleration Library (Intel ISA-L), which can be found at
+https://github.com/01org/isa-l and is under its own license.
 
 MarFS uses libaws4c for Amazon S3 object communication. The original version
 is at https://aws.amazon.com/code/Amazon-S3/2601 and under the LGPL license.
@@ -74,12 +76,17 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/types.h>
 #include <pthread.h>
 
+
+#define NE_LOG_PREFIX "libne"
 #ifdef SOCKETS
 #  include "skt_common.h"
    typedef SocketHandle  FileDesc;
 #else
+#  include "ne_logging.h"
    typedef int           FileDesc;
 #endif
+
+
 
 
 
@@ -105,18 +112,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define NO_INVERT_MATRIX -2
 
 
-// [from LOG() in skt_common.h]
-#  define FPRINTF(FD, FMT,...)                                          \
-  do {                                                                  \
-    const int file_blob_size=15;                                        \
-    const int file_pad_size = IMAX(1, file_blob_size - strlen(__FILE__)); \
-    const int fn_blob_size=15;                                          \
-    fprintf((FD), "NE  %08x  %s:%-6d%.*s  %-*.*s |  " FMT,              \
-            (unsigned int)pthread_self(),                               \
-            __FILE__, __LINE__,                                         \
-            file_pad_size, "                                ",          \
-            fn_blob_size, fn_blob_size, __FUNCTION__, ##__VA_ARGS__);   \
-  } while(0)
 
 
 /* It's useful to distinguish diagnostics intended for stderr vs stdout.
@@ -127,13 +122,21 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
    --enable-debug, run fuse as suggested above, and see integrated
    diagnostics for fuse and libne in the fuse output log. */
 
-#ifdef DEBUG_NE
+#if (DEBUG_NE == syslog)
+#  include <syslog.h>
+#  define PRINTout(...)   SYSLOG(LOG_DEBUG, ##__VA_ARGS__)
+#  define PRINTerr(...)   SYSLOG(LOG_ERR,   ##__VA_ARGS__)
+
+#elif (defined DEBUG_NE)
+// #  define PRINTout(...)   FPRINTF(stdout, ##__VA_ARGS__)
+#  define PRINTout(...)   FPRINTF(stderr, ##__VA_ARGS__) /* don't commit me, bro! */
 #  define PRINTerr(...)   FPRINTF(stderr, ##__VA_ARGS__)
-#  define PRINTout(...)   FPRINTF(stdout, ##__VA_ARGS__)
+
 #else
-#  define PRINTerr(...)
 #  define PRINTout(...)
+#  define PRINTerr(...)
 #endif
+
 
 #ifndef HAVE_LIBISAL
 #define crc32_ieee(...)     crc32_ieee_base(__VA_ARGS__)

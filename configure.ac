@@ -161,6 +161,17 @@ AM_CONDITIONAL([DEBUG_SOCKETS], [test "$enable_debug" = sockets || test "$enable
 
 
 
+# debugging-output should go to syslog, instead of stdout/stderr?
+AC_ARG_ENABLE([syslog],
+               AS_HELP_STRING([--enable-syslog],
+                              [Send debugging output to syslog, instead of stdout/stderr]),
+              [enable_syslog=$enableval],
+              [enable_syslog=no])
+
+AM_CONDITIONAL([USE_SYSLOG], [test "x$enable_syslog" != xno])
+
+
+
 # We always need this
 AC_CHECK_LIB([isal], [crc32_ieee])
 
@@ -182,6 +193,7 @@ AC_ARG_VAR([C_BUFSIZE],
            [size of client-side buffer, used for client_get()/client_put() only.
             All other functions take client-side buffer and buffer-size as arguments.  (default is 1MB)])
 AM_CONDITIONAL([HAVE_C_BUFSIZE], [test x"$C_BUFSIZE" != x])
+
 
 
 

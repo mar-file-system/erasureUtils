@@ -275,7 +275,7 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 
 #ifdef USE_RIOWRITE
   if (is_socket) {
-    NEED_0( write_pseudo_packet(fd, CMD_DATA, size, NULL) );
+     NEED_0( write_pseudo_packet(fd, CMD_DATA, size, NULL) );
   }
 #endif
 
@@ -313,24 +313,26 @@ int read_raw(int fd, char* buf, size_t size) {
   DBG("read_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
 
   fd_set         rd_fds;
-  ///  fd_set         ex_fds;
   struct timeval tv;
+  int            rc;
 
-  // wait until <fd> has input
+  // wait until <fd> has input (or timeout)
   FD_ZERO(&rd_fds);
   FD_SET(fd, &rd_fds);
+  do {
+     tv.tv_sec  = RD_TIMEOUT;
+     tv.tv_usec = 0;
+     rc = SELECT(fd +1, &rd_fds, NULL, NULL, &tv); // side-effect on <tv>
+  } while ((rc < 0) && (errno == EINTR));
 
-  ///  // if we ever use OOB data, e.g. on an IP socket
-  ///  FD_ZERO(&ex_fds);
-  ///  FD_SET(fd, &ex_fds);
-
-  tv.tv_sec = RD_TIMEOUT;
-  tv.tv_usec = 0;
-
-  NEED_GT0( SELECT(fd +1, &rd_fds, NULL, NULL, &tv) ); // side-effect on <tv>
+  if (! rc) {
+     ERR("timeout after %d sec\n", RD_TIMEOUT);
+     errno = EIO;
+     return -1;
+  }
+  NEED_GT0( rc );
 
   ssize_t read_count = RECV(fd, buf, size, MSG_WAITALL);
-
 
   if (! read_count) {
     ERR("EOF\n");
@@ -345,23 +347,31 @@ int read_raw(int fd, char* buf, size_t size) {
   
 // for small socket-writes that don't use RDMA
 //
-// TBD: As load grow on the server, this might want to do something
+// TBD: As loads grow on the server, this might want to do something
 //     like write_buffer() does.
 
 int write_raw(int fd, char* buf, size_t size) {
-  DBG("write_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
+   DBG("write_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
 
   fd_set         wr_fds;
   struct timeval tv;
+  int            rc;
 
-  // wait until <fd> has input
+  // wait until <fd> has input (or timeout)
   FD_ZERO(&wr_fds);
   FD_SET(fd, &wr_fds);
+  do {
+     tv.tv_sec = WR_TIMEOUT;
+     tv.tv_usec = 0;
+     rc = SELECT(fd +1, NULL, &wr_fds, NULL, &tv); // side-effect on <tv>
+  } while ((rc < 0) && (errno == EINTR));
 
-  tv.tv_sec = WR_TIMEOUT;
-  tv.tv_usec = 0;
-
-  NEED_GT0( SELECT(fd +1, NULL, &wr_fds, NULL, &tv) ); // side-effect on <tv>
+  if (! rc) {
+     ERR("timeout after %d sec\n", WR_TIMEOUT);
+     errno = EIO;
+     return -1;
+  }
+  NEED_GT0(rc);
 
   // ssize_t write_count = WRITE(fd, buf, size);
   // ssize_t write_count = SEND(fd, buf, size, 0); // TBD: flags?
@@ -1224,7 +1234,7 @@ int write_init(SocketHandle* handle, SocketCommand cmd) {
   if (! (handle->flags & HNDL_OP_INIT)) {
 
     // inits common to read/write, allows simpler inits for non-RDMA tasks
-    NEED_0( basic_init(handle, cmd) );
+     NEED_0( basic_init(handle, cmd) );
 
 
 #if USE_RIOWRITE
@@ -1436,7 +1446,7 @@ int riomap_reader(SocketHandle* handle, void* buf, size_t size) {
 // On the first call to skt_read(), the reader exchanges some
 // initialization-info with the peer.  The peer is the one doing the
 // writing, so, for riowrite, we need to send her our riomap offset
-// (which also implies that she she has already called
+// (which also implies that she has already called
 // setsockopt(RDMA_IOMAPSIZE).)
 //
 // In the case of reading on behalf of a client-GET, this also
@@ -1954,7 +1964,7 @@ int skt_rename (const char* service_path, const char* new_path) {
   // send new-fname
   size_t len     = strlen(new_fname) +1;
   size_t len_buf = hton64(len);
-  jNEED_0( write_raw(handle.peer_fd, (char*)&len_buf,   sizeof(len_buf)) );
+  jNEED_0( write_raw(handle.peer_fd, (char*)&len_buf,  sizeof(len_buf)) );
   jNEED_0( write_raw(handle.peer_fd, (char*)new_fname, len) );
 
   // read RETURN, providing return-code from the remote rename().

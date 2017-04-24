@@ -818,6 +818,7 @@ int server_stat(ThreadContext* ctx) {
 
 void* server_thread(void* arg) {
   ThreadContext* ctx = (ThreadContext*)arg;
+  DBG("server_thread entry\n");
 
   // cleanup fd's etc, if we pthread_exit(), or get cancelled.
   // NOTE: This isn't actually a function, but rather a butt-ugly
@@ -856,7 +857,7 @@ void* server_thread(void* arg) {
 
   if (! rc) {
     // always print command and arg for log
-    printf("server_thread (fd=%d): %s %s\n", client_fd, command_str(hdr->command), fname);
+    LOG("server_thread (fd=%d): %s %s\n", client_fd, command_str(hdr->command), fname);
 
     // perform command
     switch (hdr->command) {
@@ -1061,9 +1062,7 @@ main(int argc, char* argv[]) {
   errno = 0;
   port = strtol(port_str, NULL, 10);
   if (errno) {
-    char errmsg[128];
-    sprintf("couldn't read integer from '%s'", port_str);
-    perror(errmsg);
+    ERR("couldn't read integer from '%s'", port_str);
     abort();
   }
 
@@ -1165,7 +1164,7 @@ main(int argc, char* argv[]) {
 
   REQUIRE_0( LISTEN(socket_fd, SOMAXCONN) );
   main_flags |= MAIN_SOCKET_FD;
-  printf("%s listening\n", server_name);
+  LOG("%s listening\n", server_name);
 
 
   // spin up reaper-thread to clean-up dead-beat connections
@@ -1186,7 +1185,7 @@ main(int argc, char* argv[]) {
     ///  int client_fd = ACCEPT(socket_fd, (struct sockaddr*)&c_addr, &c_addr_size);
     int client_fd = ACCEPT(socket_fd, NULL, 0);
     if (client_fd < 0) {
-      perror("failed accept()");
+      ERR("failed accept: %s", strerror(errno));
       continue;
     }
 

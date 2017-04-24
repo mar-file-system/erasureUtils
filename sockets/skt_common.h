@@ -66,37 +66,27 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <stdlib.h>             // exit()
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <unistd.h>
 
+// allow override from erasure.h for its local use
+#ifndef NE_LOG_PREFIX
+#  define  NE_LOG_PREFIX   "libne_sockets"
+#endif
+#include "ne_logging.h"
 
-#  define IMAX(A, B) (((A) > (B)) ? (A) : (B))
+#if (DEBUG_SOCKETS == syslog)
+#  include <syslog.h>
+#  define LOG(FMT,...)  SYSLOG(LOG_INFO,           FMT, ##__VA_ARGS__)
+#  define ERR(FMT,...)  SYSLOG(LOG_ERR,   "fail: " FMT, ##__VA_ARGS__)
+#  define DBG(FMT,...)  SYSLOG(LOG_DEBUG,          FMT, ##__VA_ARGS__)
 
-// PRINT() is always defined
-#  define PRINT(FMT,...)                                                \
-  do {                                                                  \
-    const int file_blob_size=24;                                        \
-    const int file_pad_size = IMAX(1, file_blob_size - strlen(__FILE__)); \
-    const int fn_blob_size=20;                                          \
-    fprintf(stderr, "sockets  %08x  %s:%-6d%.*s  %-*.*s |  " FMT,       \
-            (unsigned int)pthread_self(),                               \
-            __FILE__, __LINE__,                                         \
-            file_pad_size, "                                ",          \
-            fn_blob_size, fn_blob_size, __FUNCTION__, ##__VA_ARGS__);   \
-  } while(0)
+#elif (defined DEBUG_SOCKETS)
+#  define LOG(FMT,...)  FPRINTF(stderr,            FMT, ##__VA_ARGS__)
+#  define ERR(FMT,...)  FPRINTF(stderr,   "fail: " FMT, ##__VA_ARGS__)
+#  define DBG(FMT,...)  FPRINTF(stderr,            FMT, ##__VA_ARGS__)
 
-
-// currently ERR() always goes to the log.
-// We could add conditionalization, like with DEBUG_SOCKETS,
-// to control whether errors should be logged.
-#define ERR(FMT,...)  PRINT("fail: " FMT, ##__VA_ARGS__)
-
-#define LOG(FMT,...)  PRINT(FMT, ##__VA_ARGS__)
-
-
-
-#ifdef DEBUG_SOCKETS
-#  define DBG(FMT,...)  PRINT(FMT, ##__VA_ARGS__)
 #else
+#  define LOG(FMT,...)  FPRINTF(stderr,            FMT, ##__VA_ARGS__)
+#  define ERR(FMT,...)  FPRINTF(stderr,   "fail: " FMT, ##__VA_ARGS__)
 #  define DBG(...)
 #endif
 
@@ -176,11 +166,14 @@ typedef void(*jHandlerType)(void* arg);
 
 #define STAT_DATA_SIZE          (13 * sizeof(size_t)) /* room enough for all 13 members */
 
-// max delay (in sec), waiting for tokens to/from client/server
-// TBD: Make these configurable
+// These represent the max delay (in sec), waiting for tokens to/from
+// client/server.  When debugging, we may want to slowly step through an
+// exchange, without causing a timeout.
 #ifdef DEBUG_SOCKETS
-#  define WR_TIMEOUT          10000
-#  define RD_TIMEOUT          10000
+// #  define WR_TIMEOUT          10000
+// #  define RD_TIMEOUT          10000
+#  define WR_TIMEOUT          30  /* don't commit me, bro! */
+#  define RD_TIMEOUT          30  /* don't commit me, bro! */
 #else
 #  define WR_TIMEOUT             30
 #  define RD_TIMEOUT             30

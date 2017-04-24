@@ -101,24 +101,24 @@ To fill in the trailing zeros, this program uses truncate - punching a hole in t
 
 /* The following are defined here, so as to hide them from users of the library */
 #ifdef HAVE_LIBISAL
-extern uint32_t crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
-extern void ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
+extern uint32_t      crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
+extern void          ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 #else
-extern uint32_t crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len);
-extern void ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
+extern uint32_t      crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len);
+extern void          ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 #endif
 
-extern void pq_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p and q */
-extern void xor_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern int pq_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern int xor_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern void gf_gen_rs_matrix(unsigned char *a, int m, int k);
-extern void gf_vect_mul_init(unsigned char c, unsigned char *tbl);
+extern void          pq_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p and q */
+extern void          xor_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p */
+extern int           pq_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
+extern int           xor_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
+extern void          gf_gen_rs_matrix(unsigned char *a, int m, int k);
+extern void          gf_vect_mul_init(unsigned char c, unsigned char *tbl);
 extern unsigned char gf_mul(unsigned char a, unsigned char b);
-extern int gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);
+extern int           gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);
 
-int xattr_check( ne_handle handle, char *path );
-void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls);
+int        xattr_check( ne_handle handle, char *path );
+void       ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls);
 static int gf_gen_decode_matrix(unsigned char *encode_matrix,
                                 unsigned char *decode_matrix,
                                 unsigned char *invert_matrix,
@@ -232,6 +232,7 @@ int bq_init(BufferQueue *bq, int block_number, void **buffers, ne_handle handle)
 
 void bq_signal(BufferQueue*bq, BufferQueue_Flags sig) {
   pthread_mutex_lock(&bq->qlock);
+  PRINTout("signalling 0x%x to block %d\n", (uint32_t)sig, bq->block_number);
   bq->flags |= sig;
   pthread_cond_signal(&bq->full);
   pthread_mutex_unlock(&bq->qlock);  
@@ -246,22 +247,21 @@ void bq_abort(BufferQueue *bq) {
 }
 
 static int set_block_xattr(ne_handle handle, int block) {
-  int tmp = 0;
+  int  tmp = 0;
   char xattrval[1024];
   sprintf(xattrval,"%d %d %d %d %lu %lu %llu %llu",
           handle->N, handle->E, handle->erasure_offset,
           handle->bsz, handle->nsz[block],
           handle->ncompsz[block], (unsigned long long)handle->csum[block],
           (unsigned long long)handle->totsz);
-  PRINTout("ne_close: setting file %d xattr = \"%s\"\n",
+
+  PRINTout("set_block_attr: setting file %d xattr = \"%s\"\n",
            block, xattrval );
 
 #ifdef META_FILES
   char meta_file[2048];
 
-  //  sprintf( meta_file, handle->path,
-  //           (block+handle->erasure_offset)%(handle->N+handle->E) );
-  handle->snprintf(meta_file, 2048-1, handle->path,
+  handle->snprintf(meta_file, 2048, handle->path,
                    (block+handle->erasure_offset)%(handle->N+handle->E), handle->state);
 
   if ( handle->mode == NE_REBUILD ) {
@@ -277,15 +277,14 @@ static int set_block_xattr(ne_handle handle, int block) {
   OPEN(fd, meta_file, O_WRONLY | O_CREAT, 0666);
   umask(mask);
   if ( FD(fd) < 0 ) { 
-    PRINTerr("ne_close: failed to open file %s\n", meta_file);
+    PRINTerr("set_block_attr: failed to open file %s\n", meta_file);
     tmp = -1;
   }
   else {
     // int val = HNDLOP( write, fd, xattrval, strlen(xattrval) + 1 );
     int val = write_all(&fd, xattrval, strlen(xattrval) +1);
     if ( val != strlen(xattrval) + 1 ) {
-      PRINTerr("ne_close: failed to write to file %s\n",
-              meta_file);
+      PRINTerr("set_block_attr: failed to write to file %s\n", meta_file);
       tmp = -1;
       HNDLOP(close, fd);
     }
@@ -294,6 +293,7 @@ static int set_block_xattr(ne_handle handle, int block) {
     }
   }
   PATHOP(chown, meta_file, handle->owner, handle->group);
+
 #else
 
 #  warn "xattr metadata is not functional with new thread model"
@@ -304,19 +304,33 @@ static int set_block_xattr(ne_handle handle, int block) {
 #  endif
 
 #endif //META_FILES
+
   return tmp;
 }
+
+
+
+void bq_writer_finis(void* arg) {
+  BufferQueue *bq = (BufferQueue *)arg;
+  PRINTout("exiting thread for block %d, in %s\n", bq->block_number, bq->path);
+}
+
 
 void *bq_writer(void *arg) {
   BufferQueue *bq      = (BufferQueue *)arg;
   ne_handle    handle  = bq->handle;
   size_t       written = 0;
   int          error;
+
 #ifdef INT_CRC
   const int write_size = bq->buffer_size + sizeof(u32);
 #else
   const int write_size = bq->buffer_size;
 #endif
+
+  // debugging, assure we see thread entry/exit, even via cancellation
+  PRINTout("entering thread for block %d, in %s\n", bq->block_number, bq->path);
+  pthread_cleanup_push(bq_writer_finis, bq);
 
   // open the file.
   OPEN(bq->file, bq->path, O_WRONLY|O_CREAT, 0666);
@@ -336,17 +350,19 @@ void *bq_writer(void *arg) {
   PRINTout("opened file %d\n", bq->block_number);
   
   while(1) {
+
+    // wait for FULL condition
     if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
       PRINTerr("failed to lock queue lock: %s\n", strerror(error));
       // XXX: This is a FATAL error
       return (void *)-1;
     }
-
     while(bq->qdepth == 0 && !(bq->flags & BQ_FINISHED) || bq->flags & BQ_ABORT) {
       PRINTout("bq_writer[%d]: waiting for signal from ne_write\n", bq->block_number);
       pthread_cond_wait(&bq->full, &bq->qlock);
     }
 
+    // check for flags that might tell us to quit
     if(bq->flags & BQ_ABORT) {
       PRINTerr("aborting buffer queue\n");
       if(HNDLOP(close, bq->file) == 0) {
@@ -355,7 +371,13 @@ void *bq_writer(void *arg) {
       pthread_mutex_unlock(&bq->qlock);
       return NULL;
     }
-    if(bq->qdepth == 0 && bq->flags & BQ_FINISHED) {       // then we are done.
+    if((bq->qdepth == 0) && (bq->flags & BQ_FINISHED)) {       // then we are done.
+      // // TBD: ?
+      // PRINTerr("closing buffer queue\n");
+      // HNDLOP(close, bq->file);
+      // pthread_mutex_unlock(&bq->qlock);
+
+      PRINTout("BQ finished\n");
       break;
     }
     
@@ -394,36 +416,47 @@ void *bq_writer(void *arg) {
     pthread_cond_signal(&bq->empty);
     pthread_mutex_unlock(&bq->qlock);
   }
-
   pthread_mutex_unlock(&bq->qlock);
+
+  // close the file
   if(HNDLOP(close, bq->file)) {
     bq->flags |= BQ_ERROR;
+    PRINTerr("error closing block %d\n", bq->block_number);
     return NULL; // don't bother trying to rename
   }
+
   handle->csum[bq->block_number] = bq->csum;
   if(set_block_xattr(bq->handle, bq->block_number) != 0) {
     bq->flags |= BQ_ERROR;
     // if we failed to set the xattr, don't bother with the rename.
+    PRINTerr("error setting xattr for block %d\n", bq->block_number);
     return NULL;
   }
+
+  // rename
   char block_file_path[2048];
   //  sprintf( block_file_path, handle->path,
   //           (bq->block_number+handle->erasure_offset)%(handle->N+handle->E) );
-  handle->snprintf( block_file_path, 2048-1, handle->path,
+  handle->snprintf( block_file_path, 2048, handle->path,
                     (bq->block_number+handle->erasure_offset)%(handle->N+handle->E), handle->state );
 
   if( PATHOP( rename, bq->path, block_file_path ) != 0 ) {
-    PRINTerr("ne_close: failed to rename written file %s\n", bq->path );
+    PRINTerr("bq_writer: failed to rename written file %s\n", bq->path );
     bq->flags |= BQ_ERROR;
   }
+
 #ifdef META_FILES
+  // rename the META file too
   strncat( bq->path, META_SFX, strlen(META_SFX)+1 );
   strncat( block_file_path, META_SFX, strlen(META_SFX)+1 );
   if ( PATHOP( rename, bq->path, block_file_path ) != 0 ) {
-    PRINTerr("ne_close: failed to rename written meta file %s\n", bq->path );
+    PRINTerr("bq_writer: failed to rename written meta file %s\n", bq->path );
     bq->flags |= BQ_ERROR;
   }
 #endif
+
+
+  pthread_cleanup_pop(1);
   return NULL;
 }
 
@@ -444,7 +477,10 @@ static int initialize_queues(ne_handle handle) {
       int j;
       // clean up previously allocated buffers and fail.
       // we can't recover from this error.
-      for(j = i-1; j >= 0; j--) { free(handle->buffer_list[j]); }
+      for(j = i-1; j >= 0; j--) {
+         free(handle->buffer_list[j]);
+      }
+      PRINTerr("posix_memalign failed for queue %d\n", i);
       return -1;
     }
   }
@@ -456,7 +492,7 @@ static int initialize_queues(ne_handle handle) {
     BufferQueue *bq = &handle->blocks[i];
     // generate the path
     // sprintf(bq->path, handle->path, (i + handle->erasure_offset) % num_blocks);
-    handle->snprintf(bq->path, MAXNAME-1, handle->path, (i + handle->erasure_offset) % num_blocks, handle->state);
+    handle->snprintf(bq->path, MAXNAME, handle->path, (i + handle->erasure_offset) % num_blocks, handle->state);
     strcat(bq->path, WRITE_SFX);
 
     // assign pointers into the memaligned buffers.
@@ -468,13 +504,14 @@ static int initialize_queues(ne_handle handle) {
     
     if(bq_init(bq, i, buffers, handle) < 0) {
       // TODO: handle error.
+      PRINTerr("bq_init failed for block %d\n", i);
       return -1;
     }
 
     // start the threads
     error = pthread_create(&handle->threads[i], NULL, bq_writer, (void *)bq);
     if(error != 0) {
-      PRINTerr("failed to start thread\n");
+      PRINTerr("failed to start thread %d\n", i);
       return -1;
       // TODO: clean up!!
     }
@@ -491,13 +528,16 @@ static int initialize_queues(ne_handle handle) {
   // check for errors on open...
   for(i = 0; i < num_blocks; i++) {
     PRINTout("Checking for error opening block %d\n", i);
+
     BufferQueue *bq = &handle->blocks[i];
     pthread_mutex_lock(&bq->qlock);
+
     // wait for the queue to be ready.
     while(!(bq->flags & BQ_OPEN) && !(bq->flags & BQ_ERROR))
       pthread_cond_wait(&bq->empty, &bq->qlock);
+
     if(bq->flags & BQ_ERROR) {
-      PRINTerr("open failed for block %d", i);
+      PRINTerr("open failed for block %d\n", i);
       handle->src_in_err[i] = 1;
       handle->src_err_list[handle->nerr] = i;
       handle->nerr++;
@@ -508,7 +548,7 @@ static int initialize_queues(ne_handle handle) {
   return 0;
 }
 
-int bq_enqueue(BufferQueue *bq, void *buf, size_t size) {
+int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
   int ret = 0;
 
   if((ret = pthread_mutex_lock(&bq->qlock)) != 0) {
@@ -708,7 +748,7 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
 
    if(handle->mode == NE_WRONLY) { // first cut: mutlti-threading only for writes.
      if(initialize_queues(handle) < 0) {
-       // all destroction/cleanup should be handled in initialize_queues()
+       // all destruction/cleanup should be handled in initialize_queues()
        free(handle);
        return NULL;
      }
@@ -904,7 +944,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset )
 
    
    if (nbytes > UINT_MAX) {
-     PRINTerr( "ne_write: not yet validated for write-sizes above %lu\n", UINT_MAX);
+     PRINTerr( "ne_read: not yet validated for write-sizes above %lu\n", UINT_MAX);
      errno = EFBIG;             /* sort of */
      return -1;
    }
@@ -1508,7 +1548,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
       /* loop over the parts and write the parts, sum and count bytes per part etc. */
       while (counter < N) {
 
-        writesize = ( handle->buff_rem % bsz ); // ? amount being written to block (block size - already written).
+         writesize = ( handle->buff_rem % bsz ); // ? amount being written to block (block size - already written).
          readsize = bsz - writesize; // amount being read for block[block_index] from source buffer
 
          //avoid reading beyond end of buffer
@@ -1523,9 +1563,9 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
          // offset in the generated erasure data, not including the user's data,
          // and the "write offset" is the logical position in the total output,
          // not including the 4-bytes-per-block of CRC data.
-         PRINTerr( "ne_write: reading input for %lu bytes with offset of %llu\n"
-                  "\tand writing to offset of %lu in handle buffer\n",
-                  (unsigned long)readsize, totsize, handle->buff_rem );
+         PRINTerr( "ne_write: reading input for %lu bytes with offset of %llu "
+                   "and writing to offset of %lu in handle buffer\n",
+                   (unsigned long)readsize, totsize, handle->buff_rem );
          //memcpy ( handle->buffer + handle->buff_rem, buffer+totsize, readsize);
          int queue_result = bq_enqueue(&handle->blocks[counter], buffer+totsize, readsize);
          if(queue_result == -1) {
@@ -1585,7 +1625,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
          handle->e_ready = 1;
       }
 
-      PRINTout( "ne_write: calculating %d recovery stripes from %d data stripes\n",E,N);
+      PRINTout( "ne_write: calculating %d recovery blocks from %d data blocks\n",E,N);
       // Perform matrix dot_prod for EC encoding
       // using g_tbls from encode matrix encode_matrix
       // Need to lock the two buffers here.
@@ -1721,7 +1761,7 @@ int ne_close( ne_handle handle )
            }
          }
          // sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
-         handle->snprintf( file, MAXNAME-1, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
+         handle->snprintf( file, MAXNAME, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
 
          strncpy( nfile, file, strlen(file) + 1);
          strncat( file, REBUILD_SFX, strlen(REBUILD_SFX) + 1 );
@@ -1736,6 +1776,7 @@ int ne_close( ne_handle handle )
             }
 
 #ifdef META_FILES
+            // corresponding "meta" file ...
             strncat( file,  META_SFX, strlen(META_SFX)+1 );
             strncat( nfile, META_SFX, strlen(META_SFX)+1 );
 
@@ -1751,7 +1792,9 @@ int ne_close( ne_handle handle )
 
             PRINTerr( "ne_close: cleaning up file %s from failed rebuild\n", file );
             PATHOP( unlink, file );
+
 #ifdef META_FILES
+            // corresponding "meta" file ...
             strncat( file, META_SFX, strlen(META_SFX)+1 );
             PRINTerr( "ne_close: cleaning up file %s from failed rebuild\n", file );
             PATHOP( unlink, file );
@@ -1761,6 +1804,15 @@ int ne_close( ne_handle handle )
       }
       else if (handle->mode == NE_WRONLY ) {
         bq_close(&handle->blocks[counter]);
+      }
+      else if (handle->mode == NE_RDONLY ) {
+         // RDMA leaves FDs open on the server until timeout or we close.
+         // We don't currently have reader-threads (corresponding to
+         // bq_writer), so instead of signalling a reader thread to close
+         // its connection with the corresponding server, we'll just do it
+         // ourselves, right here.
+         PRINTout( "ne_close: closing read-only block %d\n", counter);
+         HNDLOP(close, handle->FDArray[counter]);
       }
 
       counter++;
@@ -2385,8 +2437,10 @@ static int write_buffers(ne_handle handle, unsigned char *rebuild_buffs[]) {
       written = write_all(&handle->FDArray[handle->src_err_list[i]],
                           rebuild_buffs[handle->N+i], BUFFER_SIZE);
       if(written < BUFFER_SIZE) {
+        PRINTerr("failed to write %llu bytes to fd %d\n", BUFFER_SIZE, FD(handle->FDArray[handle->src_err_list[i]]));
         return -1;
       }
+      PRINTout("wrote %llu bytes to fd %d\n", BUFFER_SIZE, FD(handle->FDArray[handle->src_err_list[i]]));
     }
     handle->csum[handle->src_err_list[i]]    += crc;
     handle->nsz[handle->src_err_list[i]]     += handle->bsz;
@@ -2425,8 +2479,7 @@ int do_rebuild(ne_handle handle) {
     tmp = posix_memalign((void **)&(rebuild_buffs[block_index]),
                          64, BUFFER_SIZE);
     if ( tmp != 0 ) {
-      PRINTerr(
-                   "ne_rebuild: failed to allocate temporary data buffer\n" );
+      PRINTerr("ne_rebuild: failed to allocate temporary data buffer\n" );
       errno = tmp;
       return -1;
     }
