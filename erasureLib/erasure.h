@@ -122,12 +122,12 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
    --enable-debug, run fuse as suggested above, and see integrated
    diagnostics for fuse and libne in the fuse output log. */
 
-#if (DEBUG_NE == syslog)
+#if (DEBUG_NE == 2)
 #  include <syslog.h>
 #  define PRINTout(...)   SYSLOG(LOG_DEBUG, ##__VA_ARGS__)
 #  define PRINTerr(...)   SYSLOG(LOG_ERR,   ##__VA_ARGS__)
 
-#elif (defined DEBUG_NE)
+#elif (DEBUG_NE)
 // #  define PRINTout(...)   FPRINTF(stdout, ##__VA_ARGS__)
 #  define PRINTout(...)   FPRINTF(stderr, ##__VA_ARGS__) /* don't commit me, bro! */
 #  define PRINTerr(...)   FPRINTF(stderr, ##__VA_ARGS__)

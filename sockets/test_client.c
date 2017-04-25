@@ -694,7 +694,7 @@ void* client_test3_thr(void* arg) {
 
 // Still chasing the fuse bug.  Try two opens from different threads.
 // This does open, write, close all in the same thread-invocation.
-int client_test3(const char* path) {
+ssize_t client_test3(const char* path) {
 
    pthread_barrier_t barrier;
    pthread_t         thr[2];
@@ -727,6 +727,9 @@ int client_test3(const char* path) {
    cLOG("waiting for thr1\n");
    void* rc1;
    pthread_join(thr[1], &rc1);
+
+
+   return ((ssize_t)rc0 | (ssize_t)rc1);
 }
 
 
@@ -750,7 +753,7 @@ int client_test3(const char* path) {
 //     The new threads support in libne that Will wrote, does exactly that
 //     (for writes).  We'll need a similar thing for fuse reads.
 //
-int client_test3b(const char* path) {
+ssize_t client_test3b(const char* path) {
 
    pthread_barrier_t barrier;
    pthread_t         thr[2];
@@ -784,6 +787,9 @@ int client_test3b(const char* path) {
    cLOG("waiting for thr1\n");
    void* rc1;
    pthread_join(thr[1], &rc1);
+
+
+   return ((ssize_t)rc0 | (ssize_t)rc1);
 }
 
 
@@ -806,6 +812,8 @@ int client_test3c(const char* path) {
    static const int  N_THR = 2;
 
    int               i;
+   ssize_t           retval = 0;
+
    pthread_barrier_t barrier;
 
    pthread_t         thr[N_THR];
@@ -878,9 +886,9 @@ int client_test3c(const char* path) {
          cLOG("waiting for thr %d\n", i);
          void* rc;
          pthread_join(thr[i], &rc);
+         retval |= (ssize_t)rc;
          if (rc) {
             ERR("thr %d returned non-zero\n", i);
-            return -1;
          }
       }
 
@@ -889,6 +897,7 @@ int client_test3c(const char* path) {
    }
 
    cLOG("\n\nDONE\n");
+   return retval;
 }
 
 
@@ -900,11 +909,12 @@ int client_test3c(const char* path) {
 // RESULT:  Sure enough, the first two threads succeed, and the third fails.
 //          Third fails even if master used system-call.
 
-int client_test3d(const char* path) {
+ssize_t client_test3d(const char* path) {
 
    pthread_barrier_t barrier;
    pthread_t         thr0;
    void*             rc0;
+   ssize_t           retval = 0;
 
    const size_t      MAX_PATH = 1024;
    char              path0[MAX_PATH];
@@ -926,6 +936,7 @@ int client_test3d(const char* path) {
 
    cLOG("waiting for thr0\n");
    pthread_join(thr0, &rc0);
+   retval |= (ssize_t)rc0;
 
 
 
@@ -937,6 +948,7 @@ int client_test3d(const char* path) {
 
    cLOG("waiting for thr0\n");
    pthread_join(thr0, &rc0);
+   retval |= (ssize_t)rc0;
 
 
 
@@ -958,10 +970,12 @@ int client_test3d(const char* path) {
    cLOG("GETTING euid\n");
    rc = syscall(SYS_getresuid, &old_ruid, &old_euid, &old_suid);
    cLOG("euid = %d (rc=%d)\n", old_euid, rc);
+   retval |= (ssize_t)rc;
 
    cLOG("SETTING euid\n");
    rc = syscall(SYS_setresuid, -1, old_euid, -1);
    cLOG("euid = %d (rc=%d)\n", old_euid, rc);
+   retval |= (ssize_t)rc;
 #endif
 
 
@@ -973,6 +987,9 @@ int client_test3d(const char* path) {
 
    cLOG("waiting for thr0\n");
    pthread_join(thr0, &rc0);
+   retval |= (ssize_t)rc0;
+
+   return retval;
 }
 
 
@@ -996,11 +1013,13 @@ int client_test3d(const char* path) {
 //
 // ...........................................................................
 
-int client_test3e(const char* path) {
+ssize_t client_test3e(const char* path) {
 
    static const int  N_THR = 2;
 
    int               i;
+   ssize_t           retval = 0;
+
    pthread_barrier_t barrier;
 
    pthread_t         thr[N_THR];
@@ -1038,6 +1057,7 @@ int client_test3e(const char* path) {
       void* rc0;
       pthread_join(thr[i], &rc0);
       cLOG("thr%d returned %lld\n", i, (ssize_t)rc0);
+      retval |= (ssize_t)rc0;
    }
 
 
@@ -1051,8 +1071,8 @@ int client_test3e(const char* path) {
    NEED_GT0( skt_open(&handle, path, (O_WRONLY|O_CREAT), 0666) );
 
 
-
    cLOG("done\n");
+   return retval;
 }
 
 
@@ -1123,7 +1143,7 @@ main(int argc, char* argv[]) {
     return -1;
   }
 
-#if (DEBUG_SOCKETS == syslog)
+#if (DEBUG_SOCKETS == 2)
   // POSIX basename() may alter arg
   char* last_slash = strrchr(argv[0], '/');
   char* progname = (last_slash ? last_slash+1 : argv[0]);
@@ -1214,29 +1234,35 @@ main(int argc, char* argv[]) {
     return -1;
   }
 
-  if (bytes_moved < 0) {
-    perror("error");
-    return -1;
-  }
-
-  // --- compute bandwidth
-  struct timespec end;
-  if (clock_gettime(CLOCK_REALTIME, &end)) {
-    ERR("failed to get END timer '%s'\n", strerror(errno));
-    return -1;                // errno is set
-  }
-  size_t nsec = (end.tv_sec - start.tv_sec) * 1000UL * 1000 * 1000;
-  nsec += (end.tv_nsec - start.tv_nsec);
-
-  printf("start: %lu.%llu\n", start.tv_sec, start.tv_nsec);
-  printf("end:   %lu.%llu\n", end.tv_sec,   end.tv_nsec);
-  printf("nsec:  %llu\n", nsec);
-  printf("bytes: %llu\n", bytes_moved);
-
-  printf("%5.2f MB/s\n", ((double)bytes_moved / nsec) * 1000.0);
-
 
   // --- clean up
   shut_down();
+
+
+  if (bytes_moved < 0) {
+     LOG("fail  %s\n", (errno ? strerror(errno) : ""));
+     return -1;
+  }
+  LOG("success\n");
+
+  // --- compute bandwidth
+  if (bytes_moved) {
+     struct timespec end;
+     if (clock_gettime(CLOCK_REALTIME, &end)) {
+        ERR("failed to get END timer '%s'\n", strerror(errno));
+        return -1;                // errno is set
+     }
+     size_t nsec = (end.tv_sec - start.tv_sec) * 1000UL * 1000 * 1000;
+     nsec += (end.tv_nsec - start.tv_nsec);
+
+     fprintf(stderr, "start: %lu.%llu\n", start.tv_sec, start.tv_nsec);
+     fprintf(stderr, "end:   %lu.%llu\n", end.tv_sec,   end.tv_nsec);
+     fprintf(stderr, "nsec:  %llu\n", nsec);
+     fprintf(stderr, "bytes: %llu\n", bytes_moved);
+     fprintf(stderr, "\n");
+     fprintf(stderr, "%5.2f MB/s\n", ((double)bytes_moved / nsec) * 1000.0);
+  }
+
+
   return 0;
 }

@@ -1369,7 +1369,7 @@ read:
       for( counter=startpart, tmp=0; counter <= endchunk; counter++ ) {
          readsize = datasz[counter];
 
-#ifdef DEBUG_NE
+#if DEBUG_NE
          if ( readsize+out_off > llcounter ) {
            fprintf(stderr,"ne_read: out_off + readsize(%lu) > llcounter at counter = %d!!!\n",(unsigned long)readsize,counter);
            return -1;
@@ -2354,9 +2354,8 @@ static int reset_blocks(ne_handle handle) {
   for(block_index = 0; block_index < handle->N + handle->E; block_index++) {
 
     if(handle->mode != NE_STAT || handle->src_in_err[block_index] == 0) {
-      PRINTout(
-              "ne_rebuild: performing seek to offset 0 for file %d\n",
-              block_index);
+      PRINTout( "ne_rebuild: performing seek to offset 0 for file %d\n",
+                block_index);
       if (HNDLOP(lseek, handle->FDArray[block_index], 0, SEEK_SET) == -1) {
         if(handle->src_in_err[block_index] == 1) {
           handle->e_ready = 0;

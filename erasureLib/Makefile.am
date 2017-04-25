@@ -74,13 +74,15 @@ endif
 
 
 if USE_SYSLOG
-   DEBUG_NE_VALUE=syslog
+   DEBUG_NE_VALUE=2
 else
    DEBUG_NE_VALUE=1
 endif
 
 if DEBUG_NE
   SOCKET_DEFS += -DDEBUG_NE=$(DEBUG_NE_VALUE)  -fstack-protector-all -fstack-check
+#else
+  SOCKET_DEFS += -DDEBUG_NE=0
 endif
 
 

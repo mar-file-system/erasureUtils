@@ -83,7 +83,7 @@ if RDMA_SOCKETS
 endif
 
 if USE_SYSLOG
-   DEBUG_SOCKETS_VALUE=syslog
+   DEBUG_SOCKETS_VALUE=2
 else
    DEBUG_SOCKETS_VALUE=1
 endif
@@ -91,6 +91,8 @@ endif
 if DEBUG_SOCKETS
   DEFS        += -DDEBUG_SOCKETS=$(DEBUG_SOCKETS_VALUE)
   AM_CPPFLAGS += -fstack-protector-all -fstack-check
+else
+  DEFS        += -DDEBUG_SOCKETS=0
 endif
 
 

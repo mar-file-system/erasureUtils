@@ -73,20 +73,20 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #endif
 #include "ne_logging.h"
 
-#if (DEBUG_SOCKETS == syslog)
+#if (DEBUG_SOCKETS == 2)
 #  include <syslog.h>
 #  define LOG(FMT,...)  SYSLOG(LOG_INFO,           FMT, ##__VA_ARGS__)
 #  define ERR(FMT,...)  SYSLOG(LOG_ERR,   "fail: " FMT, ##__VA_ARGS__)
 #  define DBG(FMT,...)  SYSLOG(LOG_DEBUG,          FMT, ##__VA_ARGS__)
 
-#elif (defined DEBUG_SOCKETS)
+#elif (DEBUG_SOCKETS)
 #  define LOG(FMT,...)  FPRINTF(stderr,            FMT, ##__VA_ARGS__)
 #  define ERR(FMT,...)  FPRINTF(stderr,   "fail: " FMT, ##__VA_ARGS__)
 #  define DBG(FMT,...)  FPRINTF(stderr,            FMT, ##__VA_ARGS__)
 
 #else
-#  define LOG(FMT,...)  FPRINTF(stderr,            FMT, ##__VA_ARGS__)
-#  define ERR(FMT,...)  FPRINTF(stderr,   "fail: " FMT, ##__VA_ARGS__)
+#  define LOG(FMT,...)  fprintf(stdout,            FMT, ##__VA_ARGS__)
+#  define ERR(FMT,...)  fprintf(stderr,   "fail: " FMT, ##__VA_ARGS__)
 #  define DBG(...)
 #endif
 
