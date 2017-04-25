@@ -54,17 +54,28 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 
-// This is like socket_server.c, but we now have multiple servers.
+// ---------------------------------------------------------------------------
+// To run these tests, you probably want to configure something like the
+// following, so you'll get detailed diagnostics from both the client and
+// the server:
 //
-// CLIENT: The goal for the client is to maintain connections with as many
-// servers as are in service at a time, reading from whichever ones produce
-// output, in a timely manner.  The client is currently in C++ only because
-// it uses some STL to manage info about which servers are connected, etc.
+//    ./configure --prefix=$MARFS_BUILD --enable-sockets=rdma --enable-debug=all  LDFLAGS="-L$MARFS_BUILD/lib"
 //
-// SERVER: The goal for the server is to produce continuous output at a
-// rate similar to that of our application, and to be robust if the client
-// fails to read, drops a connection, or lets the buffer fill up.  We want
-// the server to remain in C.
+// Then start a socket_fserver, maybe like this:
+//
+//    $MARFS_BUILD/bin/socket_fserver -p 400001 -d /dev/shm/rdma > foo 2>&1 &
+//    tail -f foo
+//
+// Then run the client:
+//
+//    echo foo | test_client -p 192.168.0.1:40001/dev/shm/rdma/foo
+//    test_client -g 192.168.0.1:40001/dev/shm/rdma/foo
+//
+//    test_client -t 3b 192.168.0.1:40001/dev/shm/rdma/test3b.1
+//
+//    etc.
+//
+// ---------------------------------------------------------------------------
 
 
 #include <stdio.h>              // sprintf()
@@ -527,10 +538,18 @@ int client_test2(const char* path, int do_seteuid) {
 
 
 // ...........................................................................
-// client_test3
+// client_test3x
 //
-// Q: what about open/write/close for two different files, from different threads?
-// A: works fine.
+// Chasing a bug seen in fuse, when using a multi-component repo based on
+// RDMA-sockets.  The initial skt_open() works, but the secondary skt_open()
+// of the meta-data file (inside skt_close()) fails in rconnect().
+//
+// Turns out the issue is provoked by changing euid in thread(s) that already
+// have opened IB connectioned.  This is captured in test3b, test3d, etc.
+// Garrett has a similar reproducer, using IB from MPI.  Also, the problem
+// seems to exist in the ancient 2.6.32-573.26.1.1chaos.ch5.4.x86_64 kernel,
+// of TOSS2, but to be fixed in RHEL7 (3.10.0-327.el7.x86_64).
+// 
 // ...........................................................................
 
 #include <pthread.h>
@@ -1178,8 +1197,8 @@ main(int argc, char* argv[]) {
       bytes_moved = client_test3b(file_spec);
     else if (MATCH(test_no, "3c"))
       bytes_moved = client_test3c(file_spec);
-    //    else if (MATCH(test_no, "3d"))
-    //       bytes_moved = client_test3d(file_spec);
+    else if (MATCH(test_no, "3d"))
+       bytes_moved = client_test3d(file_spec);
     else if (MATCH(test_no, "3e"))
       bytes_moved = client_test3e(file_spec);
     else {
