@@ -1652,6 +1652,35 @@ int ne_close( ne_handle handle )
 
 
 /**
+ * Determines whether the parent directory of the given file exists
+ * @param char* path : Character string to be searched
+ * @param int max_length : Maximum length of the character string to be scanned
+ * @return int : 0 if the parent directory does exist and -1 if not
+ */
+int parent_dir_missing( char* path, int max_length ) {
+   char* tmp = path;
+   int len = 0;
+   int index = -1;
+   struct stat status;
+   int res;
+
+   while ( len < max_length  &&  *tmp != '\0' ) {
+      if( *tmp == '/' ) index = len;
+      len++;
+      tmp++;
+   }
+   
+   tmp = path;
+   *(tmp + index) = '\0';
+   res = stat( tmp, &status );
+   DBG_FPRINTF( stdout, "parent_dir_missing: stat of \"%s\" returned %d\n", path, res );
+   *(tmp + index) = '/';
+
+   return res;
+}
+
+
+/**
  * Deletes the erasure striping of the specified width with the specified path format
  * @param char* path : Name structure for the files of the desired striping.  This should contain a single "%d" field.
  * @param int width : Total width of the erasure striping (i.e. N+E)
@@ -1661,14 +1690,21 @@ int ne_delete( char* path, int width ) {
    char file[MAXNAME];       /* array name of files */
    int counter;
    int ret = 0;
+   int parent_missing;
    
    for( counter=0; counter<width; counter++ ) {
+      parent_missing = -2;
       bzero( file, sizeof(file) );
       sprintf( file, path, counter );
-      if ( unlink( file ) ) ret = 1;
+      // unlink the file.  If the unlink fails, check if the parent directory exists.  If not, indicate an error.
+      if ( unlink( file )  &&  (parent_missing = parent_dir_missing(file, MAXNAME)) ) ret = -1;
 #ifdef META_FILES
       strncat( file, META_SFX, strlen(META_SFX)+1 );
-      if ( unlink( file ) ) ret = 1;
+      // same as the above, but only stat the parent dir if we haven't already verified that it exists
+      if ( unlink( file ) ) {
+         if( parent_missing == -2 ) parent_missing = parent_dir_missing(file, MAXNAME);
+         if( parent_missing ) ret = -1;
+      }
 #endif
    }
 
