@@ -2,9 +2,9 @@
 #include <aws4c.h>
 
 
-// @param user    the "user" as known to the server.  (2nd field in ~/.awsAuth)
+// @param user    the "user" as known to the object-server.  (2nd field in ~/.awsAuth)
 //
-// @param pass    the "password" as known to the server.  (3rd field in ~/.awsAuth)
+// @param pass    the "password" as known to the object-server.  (3rd field in ~/.awsAuth)
 //
 // @param method  CMD_PUT, etc, for the request
 //
@@ -13,20 +13,18 @@
 //                path down to the object) allows the same signature for
 //                all components of a stripe.
 
-char* create_auth_signature(char* const user,
-                            char* const pass,
-                            char* const method,
-                            char* const obj_id) {
+char* create_auth_signature(AWSContext* const ctx, // auth_info
+                            char* const       method,
+                            char* const       obj_id) {
   char  resource [1024];
   char* date = NULL;
 
-  AWSContext ctx;
-  memset(&ctx, 0, sizeof(ctx));
-  aws_set_key_r  (user, &ctx);
-  aws_set_keyid_r(pass, &ctx);
+  //  AWSContext ctx = {0};
+  //  aws_set_key_r  (auth_info->awsKeyID, &ctx); /* "user" */
+  //  aws_set_keyid_r(auth_info->awsKey, &ctx);   /* "pass" */
 
   char* sign = GetStringToSign(resource, sizeof(resource),
-                               &date, method, NULL, obj_id, &ctx);
+                               &date, method, NULL, obj_id, ctx);
 }
 
 

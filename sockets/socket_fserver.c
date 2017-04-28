@@ -88,6 +88,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 
+
+
 // These are now only used in main_flags
 #define  MAIN_BIND         0x0001
 #define  MAIN_SOCKET_FD    0x0002
@@ -96,10 +98,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define  CTX_PRE_THREAD   0x0010 /* client_fd has been opened */
 #define  CTX_THREAD_EXIT  0x0020
 #define  CTX_THREAD_ERR   0x0040
-
-// #define  CTX_RIOMAPPED    0x0100 /* now done in ThreadContext.handle.flags */
-// #define  CTX_FILE_OPEN    0x0200 /* now we just look at ctx->file_fd */
-#define  CTX_EOF          0x0400
+#define  CTX_EOF          0x0080
 
 
 static unsigned char  main_flags = 0;
@@ -269,6 +268,243 @@ sig_handler(int sig) {
 
 
 
+#ifdef S3_AUTH
+
+// --- perform S3 authentication
+//
+// We expect something like the header-fields in an S3 authentication header.
+// These currently include the following:
+//
+//     date_size       // sizeof(time_t) is not standardized
+//     date            // current time (within RD/WR_TIMEOUT of now)
+//     op              // the GET/PUT/STAT/etc op being secured
+//     filename        // (plus null) possibly a libne "path template"
+//     user_name       // (plus null) assoc w/ passwd for hash.  (~/.awsAuth token 2).
+//     signature       // (plus null) see GetStringToSign() in libaws4c.
+//
+// numerical values are expected to be in network-byte-order
+// string fields are expected to include the terminal null.
+//
+// The signature is an HMAC compound hash of the other fields, using a
+// password associated with the user-name (which is ultimately stored in
+// ~/.awsAuth, and loaded at startup time).  We use libaws4c to compute
+// this one-way hash on the server-side, and compare with the signature,
+// which is a similar one-way has computed on the client-side.  If they
+// match, the authentication succeeds.
+//
+// In order to allow libne to compute the authentication once for each of the
+// N+E different files, we allow the authentication to be performed on the
+// "path template" the libne uses.  This means that the user will also
+// have to send the actual
+//
+// The PseudoPacketHeader arg holds the result of the server's read, so the
+// size-argument includes the size of the header to-be-read.  When we
+// return (successfully), we've populated hdr->command with the validated
+// op, and associated true path (i.e. not the template).  This implies that
+// after the authentication step in the protocol, the client will
+// immediately also include the op+path.
+//
+// UPDATE: It's ugly to try to validate that a path-template matches the
+//     ensuing resolved-path that is needed for implementation of the
+//     actual op.  This validation would be needed to eliminate a
+//     possibility for spoofing.  Therefore, we're changing the
+//     requirements: libne will indeed have to compute the authentication
+//     hash for each of the individual N+E resolved paths.
+//
+//     On the plus size, we can return to the server the fully-parsed
+//     op+path, which it can go ahead and use directly.
+//
+// NOTE: We replace header->command with the parsed op.  In the case of
+//     successful authentication, this allows server_thread() to
+//     fall-through to the same command-processing it uses for the
+//     non-authenticating case.  In the case of a failure, it allows us to
+//     provide a log of what was attempted.
+
+int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char* fname, size_t fname_len, AWSContext* aws_ctx) {
+   char        s3_data[MAX_S3_DATA];
+   char*       ptr = s3_data;
+   char*       ptr_prev = ptr; // DEBUGGING
+
+   // size of authentication-info
+   ssize_t     size = hdr->size;
+   if (size > MAX_S3_DATA) {
+      ERR("size %lld exceeds max S3 header-size (%llu)\n", size, MAX_S3_DATA);
+      return -1;
+   }
+   DBG("data-size:  %lld\n", size);
+
+   // read authentication info
+   NEED_0( read_raw(client_fd, s3_data, size) );
+   s3_data[size -1] = 0;        // <size> includes terminal-null on signature
+
+   size_t      ptr_remain = size;
+   size_t      str_len;
+
+   // parse and convert individual fields
+   int32_t     date_size;
+   time_t      date;
+   uint32_t    op;
+   char*       user_name;
+   char*       signature;
+
+
+   // --- DATE  (no guarantee for cross-platform size of time_t)
+   RECV_VALUE_SAFE(date_size, ptr, ptr_remain);
+   DBG("date_size:  %d\n", date_size);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   if (date_size != sizeof(date)) {
+      ERR("date size %lld doesn't match sizeof(time_t)\n", date_size, sizeof(date));
+      return -1;
+   }
+
+   RECV_VALUE_SAFE(date, ptr, ptr_remain);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+#if DEBUG_SOCKETS
+   char time_in[32];           // max 26
+   NEED_GT0( ctime_r(&date, time_in) );
+   DBG("date [in]:  %s", time_in); // includes newline
+#endif
+
+   // validate DATE
+   struct timeval now;           // we're assuming client/server in the same timezone
+   if (gettimeofday(&now, NULL)) {
+      ERR("gettimeofday failed: %s\n", strerror(errno));
+      return -1;
+   }
+#if DEBUG_SOCKETS
+   char time_now[32];           // max 26
+   NEED_GT0( ctime_r(&now.tv_sec, time_now) );
+   DBG("date [now]: %s", time_now); // includes newline
+#endif
+   if ((MAX_S3_DATE_LAG < 0) && ((now.tv_sec - date) > MAX_S3_DATE_LAG)) {
+      ERR("caller's date is %llu seconds behind (limit: %llu)\n",
+          (now.tv_sec - date), MAX_S3_DATE_LAG);
+      return -1;
+   }
+
+   // --- OP
+   RECV_VALUE_SAFE(op, ptr, ptr_remain);
+   DBG("op:         %s\n", command_str(op));
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   hdr->command = op;
+   hdr->size = 0;
+
+
+   // --- PATH
+   RECV_VALUE_SAFE(str_len, ptr, ptr_remain);
+   DBG("fname_len:  %lld\n", str_len);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+   NEED( str_len < fname_len );
+   strncpy(fname, ptr, str_len);
+   fname[str_len] = 0;
+
+   NEED( str_len < ptr_remain );
+   NEED( ptr[str_len] == 0 );
+
+   ptr        += str_len  +1;
+   ptr_remain -= str_len +1;
+
+   DBG("fname:      %s\n", fname);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+
+   // --- USER-NAME
+   RECV_VALUE_SAFE(str_len, ptr, ptr_remain);
+   DBG("user_len:   %lld\n", str_len);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+   NEED( str_len < ptr_remain );
+   NEED( ptr[str_len] == 0 );
+
+   user_name = ptr;
+
+   ptr        += str_len +1;
+   ptr_remain -= str_len +1;
+   DBG("user_name:  %s\n", user_name);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   
+
+   // --- SIGNATURE
+   RECV_VALUE_SAFE(str_len, ptr, ptr_remain);
+   DBG("sign_len:   %lld\n", str_len);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+   NEED( str_len < ptr_remain );
+   NEED( ptr[str_len] == 0 );
+
+   signature = ptr;
+
+   ptr        += str_len +1;
+   ptr_remain -= str_len +1;
+   
+   DBG("sign [in]:  %s\n", signature);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+
+   // --- done
+   if ((size_t)(ptr - s3_data) != size) {
+      ERR("size of parsed fields (%llu) didn't match provided size (%llu)\n",
+          (size_t)(ptr - s3_data), size);
+      return -1;
+   }
+
+   // generate our own signature, from the relevant fields
+   // Compare with the signature provided in the msg.
+
+   //   char* s3_pass = NULL;
+   //   if (find_s3_password(user_name, s3_pass)) {
+   //      ERR("unknown user '%s'\n", user_name);
+   //      return -1;
+   //   }
+   DBG("user_name:  %s\n", user_name);
+   if (aws_read_config_r((char* const)user_name, aws_ctx)) {
+      // probably missing a line in ~/.awsAuth
+      ERR("aws-read-config for user '%s' failed\n", user_name);
+      return -1;
+   }
+   // DBG("pass:       %s\n", aws_ctx->awsKey);
+
+   char  resource[1024];        // matches use in aws4c.c
+   char* srv_date = NULL;
+   char* srv_signature = GetStringToSign(resource,
+                                         sizeof(resource),
+                                         &srv_date,
+                                         (char* const)command_str(op),
+                                         NULL,
+                                         fname,
+                                         aws_ctx);
+   NEED( srv_signature );
+
+   DBG("res  [srv]: %s\n", resource);
+   DBG("date [srv]: %s\n", srv_date);
+   DBG("sign [srv]: %s\n", srv_signature);
+
+   int retval = ( 0 - (strcmp(signature, srv_signature) != 0) ); // 0:success, -1:fail
+   DBG("-- AUTHENTICATION: %s for %s %s\n", (retval ? "FAIL" : "OK"), command_str(op), fname);
+
+   return retval;
+}
+
+
+int server_s3_authenticate(int client_fd, PseudoPacketHeader* hdr, char* fname, size_t fname_size) {
+   AWSContext aws_ctx = {0};
+
+   int rc = server_s3_authenticate_internal(client_fd, hdr, fname, fname_size, &aws_ctx);
+   if (rc)
+      LOG("auth failed: %s %s\n", command_str(hdr->command), (fname ? fname : "<unknown_path>"));
+
+   aws_context_release_r(&aws_ctx); // free strdup'ed name, password, etc
+
+   // send response to client
+   NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
+
+   return rc;
+}
+
+#endif
+
+
 // --- read <fname> from peer (client)
 //
 // <fname_length> is the size they told us it would be.
@@ -278,7 +514,7 @@ sig_handler(int sig) {
 // name must include terminal-NULL (which must be part of <fname_size>)
 //
 // NOTE: We require the fully-canonicalized path to be a proper
-//     sub-path of <dir_root> (i.e. the direcotry-tree indicated on
+//     sub-path of <dir_root> (i.e. the directory-tree indicated on
 //     the command-line, when the server was started.
 // 
 int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
@@ -821,7 +1057,7 @@ void* server_thread(void* arg) {
   DBG("server_thread entry\n");
 
   // cleanup fd's etc, if we pthread_exit(), or get cancelled.
-  // NOTE: This isn't actually a function, but rather a butt-ugly
+  // NOTE: This isn't actually a function; it's a butt-ugly
   //     macro ending in '{', where the corresponding
   //     pthread_cleanup_pop() macro (below) supplies the closing '}'.
 
@@ -843,17 +1079,36 @@ void* server_thread(void* arg) {
   DBG("\n");
   DBG("server thread: %s\n", command_str(hdr->command));
 
-  // maybe read fname, if command implies one
-  switch (hdr->command) {
-  case CMD_PUT:
-  case CMD_GET:
-  case CMD_DEL:
-  case CMD_STAT:
-  case CMD_CHOWN:
-  case CMD_RENAME:
-  case CMD_UNLINK:
-    rc = read_fname(client_fd, fname, hdr->size, FNAME_SIZE);
-  };
+#ifdef S3_AUTH
+  // Part of the authentication includes specification of the command to be
+  // performed, as well as the path.  This obviates the need for us to read
+  // the path after authentication, and redefines the operation to perform.
+  // Authentication does two things to help us: (a) install the path into
+  // fname, and (b) update the header with the authorized cmd.
+  //
+  if (hdr->command == CMD_S3_AUTH) {
+     if ( server_s3_authenticate(client_fd, hdr, fname, FNAME_SIZE) ) {
+        ctx->flags |= CTX_THREAD_ERR;
+        pthread_exit(ctx);
+     }
+  }
+#endif
+
+  // maybe read fname, if command implies one 
+  // (and if it wasn't already received as part of S3-authentication)
+  if (! *fname) {
+
+     switch (hdr->command) {
+     case CMD_PUT:
+     case CMD_GET:
+     case CMD_DEL:
+     case CMD_STAT:
+     case CMD_CHOWN:
+     case CMD_RENAME:
+     case CMD_UNLINK:
+        rc = read_fname(client_fd, fname, hdr->size, FNAME_SIZE);
+     };
+  }
 
   if (! rc) {
     // always print command and arg for log
@@ -880,6 +1135,7 @@ void* server_thread(void* arg) {
 
   // cleanup, and release context for use by another thread
   pthread_cleanup_pop(1);
+  return ctx;
 }
 
 

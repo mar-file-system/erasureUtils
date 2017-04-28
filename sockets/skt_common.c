@@ -501,6 +501,7 @@ const char* _command_str[] = {
   "RENAME",
   "UNLINK",
 
+  "S3_AUTH",
   "RIO_OFFSET",
   "DATA",
   "ACK",
@@ -526,7 +527,7 @@ int write_pseudo_packet(int fd, SocketCommand command, size_t size, void* buf) {
   NEED_0( write_raw(fd, (char*)&cmd, sizeof(cmd)) );
 
   // --- write <size>
-  DBG("-> size:  %llu\n", size);
+  DBG("-> size:  %lld\n", size);
   uint64_t sz = hton64(size);
   NEED_0( write_raw(fd, (char*)&sz, sizeof(sz)) );
 
@@ -560,7 +561,7 @@ int read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr) {
   uint64_t sz;
   NEED_0( read_raw(fd, (char*)&sz, sizeof(sz)) );
   hdr->size = ntoh64(sz);
-  DBG("<- size:  %llu\n", hdr->size);
+  DBG("<- size:  %lld\n", hdr->size);
 
   return 0;
 }
@@ -955,6 +956,183 @@ ssize_t copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size
 
 
 
+#ifdef S3_AUTH
+
+// --- send S3 authentication request
+//
+// See server_s3_authenticat().  That function expects something like the
+// header-fields in an S3 authentication header.  These currently include
+// the following:
+//
+//     date_size       // sizeof(time_t) is not standardized
+//     date            // current time (within RD/WR_TIMEOUT of now)
+//     op              // the GET/PUT/STAT/etc op being secured
+//     filename        // (plus null) possibly a libne "path template"
+//     user_name       // (plus null) assoc w/ passwd for hash.  (~/.awsAuth token 2).
+//     signature       // (plus null) see GetStringToSign() in libaws4c.
+//
+// numerical values are expected to be in network-byte-order
+// string fields are expected to include the terminal null.
+//
+// Because the client-side will typically be running de-escalated (in
+// pftool or fuse), but credentials are protected in ~/.awsAuth, we need a
+// way for the client-side to cache credentials at start-up.  We currently
+// do that in the MC-sockets DAL init.  This can then pass-them through
+// ne_fcntl() to skt_fcntl(), to install them on a handle that has been
+// opened, but not yet written/read.  This has the effect of triggering a
+// call to client_s3_authenticate(), when basic_init() is called the first
+// time.  As a result, the initial interaction with the server on this
+// connection will perform an authentication.
+
+int client_s3_authenticate_internal(SocketHandle* handle, int command) {
+   char        s3_data[MAX_S3_DATA];
+   char*       ptr        = s3_data;
+   size_t      ptr_remain = MAX_S3_DATA;
+   char*       ptr_prev   = ptr; // DEBUGGING
+
+   size_t      str_len;
+
+   // generate, convert, and install individual fields
+   int32_t        date_size = sizeof(time_t);
+   struct timeval now;
+   uint32_t       op = command;
+   const char*    user_name = SKT_S3_USER;
+   char           signature;
+
+
+   // --- DATE  (no guarantee for cross-platform size of time_t)
+   if (gettimeofday(&now, NULL)) {
+      ERR("gettimeofday failed: %s\n", strerror(errno));
+      return -1;
+   }
+   char now_str[32];           // max 26
+   NEED_GT0( ctime_r(&now.tv_sec, now_str) );
+   DBG("date [now]: %s", now_str); // includes newline
+
+   SEND_VALUE_SAFE(ptr, date_size, ptr_remain);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+   SEND_VALUE_SAFE(ptr, now.tv_sec, ptr_remain);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+
+   // --- OP
+   DBG("op:         %s\n", command_str(op));
+   SEND_VALUE_SAFE(ptr, op, ptr_remain);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+
+   // --- PATH
+   PathSpec* spec = &handle->path_spec;
+   str_len        = strlen(spec->fname);
+
+   DBG("path_len:   %lld\n", str_len);
+   SEND_VALUE_SAFE(ptr, str_len, ptr_remain);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+   DBG("path:       %s\n", spec->fname);
+   SEND_STRING_SAFE(ptr, spec->fname, str_len, ptr_remain);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+
+   // --- USER_NAME
+   str_len        = strlen(user_name);
+
+   DBG("user_len:   %lld\n", str_len);
+   SEND_VALUE_SAFE(ptr, str_len, ptr_remain);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+   DBG("user_name:  %s\n", user_name);
+   SEND_STRING_SAFE(ptr, user_name, str_len, ptr_remain);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+
+   // --- SIGNATURE
+   AWSContext* aws_ctx = handle->aws_ctx;
+   // DBG("pass:       %s\n", aws_ctx->awsKey);
+
+   char  resource[1024];        // matches use in aws4c.c
+   char* cl_date = NULL;
+   char* cl_signature = GetStringToSign(resource,
+                                        sizeof(resource),
+                                        &cl_date,
+                                        (char* const)command_str(op),
+                                        NULL,
+                                        spec->fname,
+                                        aws_ctx);
+   NEED( cl_signature );
+   DBG("res  [cl]:  %s\n", resource);
+   DBG("date [cl]:  %s\n", cl_date);
+   DBG("sign [cl]:  %s\n", cl_signature);
+
+   str_len = strlen(cl_signature);
+
+   DBG("sign_len:   %lld\n", str_len);
+   SEND_VALUE_SAFE(ptr, str_len, ptr_remain);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+   DBG("sign:       %s\n", cl_signature);
+   SEND_STRING_SAFE(ptr, cl_signature, str_len, ptr_remain);
+   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+
+
+
+
+   // --- send to server
+   size_t data_size = (ptr - s3_data);
+   DBG("data_sz:    %lld\n", data_size);
+   NEED_0( write_pseudo_packet(handle->peer_fd, CMD_S3_AUTH, data_size, s3_data) );
+
+   // --- get reply
+   PseudoPacketHeader header;
+   NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
+   if (header.command != CMD_RETURN) {
+      ERR("expected RETURN pseudo-packet, not %s\n", command_str(header.command));
+      return -1;
+   }
+   NEED_0(header.size);
+
+   return 0;
+}
+
+
+
+// In normal operation, the DAL should call skt_fcntl() on the handle
+// (after skt_open(), but before doing any operation that moves data) in
+// order to install the credentials cached by the DAL at start-up.
+// However, it's possible you are running the test_client, and you need to
+// try to read from ~/.awsAuth to find the credential at run-time.  We'll
+// try that.
+//
+int client_s3_authenticate(SocketHandle* handle, int command) {
+
+   int needs_free = 0;
+   if (! handle->aws_ctx) {
+      LOG("WARNING: handle->AWSContext hasn't been initialized with skt_fcntl().  Try reading from ~/.awsAuth ...\n");
+      NEED( handle->aws_ctx = aws_context_new() );
+
+      if (aws_read_config_r((char* const)SKT_S3_USER, handle->aws_ctx)) {
+         // probably missing a line in ~/.awsAuth
+         ERR("aws-read-config for user '%s' failed\n", SKT_S3_USER);
+         aws_context_free_r(handle->aws_ctx);
+         handle->aws_ctx = NULL;
+         return -1;
+      }
+      needs_free = 1;
+   }
+
+   int retval = client_s3_authenticate_internal(handle, command);
+
+   if (needs_free)
+      aws_context_free_r(handle->aws_ctx);
+
+   handle->aws_ctx = NULL;
+   return retval;
+}
+
+
+#endif
+
 
 
 
@@ -1174,6 +1352,45 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 // ...........................................................................
 
 
+// We can't assume that client_s3_authenticate() can access ~/.awsAuth at run-time,
+// because we may have de-escalated by now (e.g. if caller is fuse/pftool).
+// Therefore, we provide a way for the DAL to install a previously-cached
+// AWSContext, which has awsKey initialized.
+
+int skt_fcntl(SocketHandle* handle, SocketFcntlCmd cmd, ...) {
+
+   if (cmd != SKT_F_SETAUTH) {
+
+#ifdef S3_AUTH
+      if (! (handle->flags & HNDL_PUT)) {
+         ERR("handle not open for writing\n");
+         errno = EINVAL;
+         return -1;
+      }
+
+      va_list ap;
+      va_start( ap, cmd );
+      AWSContext* aws_ctx = va_arg( ap, AWSContext* );
+      va_end( ap );
+
+      handle->aws_ctx = aws_ctx;
+      return 0;
+
+#else
+      ERR("attempt to install S3 auth info, but not built with S3_AUTH\n");
+      errno = EPERM;
+      return -1;
+#endif
+
+   }
+
+
+   ERR("unknown cmd: %d\n", cmd);
+   errno = ENOTSUP;
+   return -1;
+}
+
+
 
 // This does non-RDMA-related init tasks (including sending the
 // command to the server, unless the command is CMD_NULL), on a handle
@@ -1194,6 +1411,10 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 //     However, it's a convenient way to send the initial command to
 //     the server, and won't hurt you, unless you really did want to
 //     use RDMA.
+//
+// NOTE: server-side always calls with cmd==CMD_NULL.  Thus,
+//     in the case of S3_AUTH, we can be sure we are acting on behalf
+//     of the client, when cmd is non-NULL.
 
 int basic_init(SocketHandle* handle, SocketCommand cmd) {
   DBG("basic_init(0x%llx, %s)\n", (size_t)handle, command_str(cmd));
@@ -1207,7 +1428,11 @@ int basic_init(SocketHandle* handle, SocketCommand cmd) {
 
     if (cmd != CMD_NULL) {
       PathSpec* spec = &handle->path_spec;
+#if S3_AUTH
+      NEED_0( client_s3_authenticate(handle, cmd) );
+#else
       NEED_0( write_pseudo_packet(handle->peer_fd, cmd, strlen(spec->fname)+1, spec->fname) );
+#endif
     }
   }
   return 0;
@@ -1601,6 +1826,12 @@ off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
   }
   else if (unlikely (handle->flags & HNDL_PUT)) {
     ERR("lseek(%llu, %d) from %llu -- non-zero head motion on a PUT is not supported\n",
+        offset, handle->stream_pos, whence);
+    errno = EINVAL;
+    return (off_t)-1;
+  }
+  else if (unlikely (! (handle->flags & HNDL_GET))) {
+    ERR("lseek(%llu, %d) from %llu -- filehandle is not open\n",
         offset, handle->stream_pos, whence);
     errno = EINVAL;
     return (off_t)-1;

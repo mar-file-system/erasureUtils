@@ -67,6 +67,10 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#ifdef S3_AUTH
+#  include <aws4c.h>
+#endif
+
 // allow override from erasure.h for its local use
 #ifndef NE_LOG_PREFIX
 #  define  NE_LOG_PREFIX   "libne_sockets"
@@ -102,7 +106,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
       PRINT(#EXPR " " #TEST "\n");                                      \
     }                                                                   \
     else {                                                              \
-      LOG("* fail: " #EXPR " " #TEST ": %s\n", strerror(errno));        \
+       LOG("* fail: " #EXPR " " #TEST "%s%s\n",                         \
+           (errno ? ": " : ""),                                         \
+           (errno ? strerror(errno) : ""));                             \
       RETURN;                                                           \
     }                                                                   \
   } while(0)
@@ -151,6 +157,8 @@ typedef void(*jHandlerType)(void* arg);
 #define HOST_SIZE               128 /* incl final null */
 #define PORT_STR_SIZE            16 /* incl final null */
 
+
+
 // now that we are using riomap(), these must be the same?  [for rsocket builds]
 #ifndef SERVER_BUF_SIZE
 # define SERVER_BUF_SIZE         (1024 * 1024)
@@ -178,6 +186,17 @@ typedef void(*jHandlerType)(void* arg);
 #  define WR_TIMEOUT             30
 #  define RD_TIMEOUT             30
 #endif
+
+
+// max seconds server-side date string can lag behind date-string generated
+// on client, for S3-authentication.
+#define MAX_S3_DATE_LAG          ((WR_TIMEOUT > RD_TIMEOUT) ? WR_TIMEOUT : RD_TIMEOUT)
+#define MAX_S3_DATA              1024 + FNAME_SIZE /* authentication data */
+
+// #define SKT_S3_USER              "mc_admin"  /* token 1 in ~/.awsAuth */
+#define SKT_S3_USER              "root"  /* token 1 in ~/.awsAuth */
+
+
 
 /* -----------------------------------
  * UNIX sockets
@@ -318,9 +337,13 @@ typedef enum {
 } SHFlags;
 
 
+typedef enum {
+   SKT_F_SETAUTH   = 1          // install credentials on opened socket-handle
+} SocketFcntlCmd;
 
-// SocketHandle is only used on the client-side.
-// Server maintains per-connection state in its own ThreadContext.
+
+
+// per-connection state
 typedef struct {
   PathSpec         path_spec;   // host,port,path parsed from URL
   int              open_flags;  // skt_open()
@@ -332,6 +355,10 @@ typedef struct {
   volatile size_t  stream_pos;  // ignore redundant skt_seek(), support reaper
   ssize_t          seek_pos;    // ignore, unless HNDL_SEEK_ABS
   uint16_t         flags;       // SHFlags
+
+#ifdef S3_AUTH
+   AWSContext*     aws_ctx;     // DAL installs credentials cached at init-time
+#endif
 } SocketHandle;
 
 
@@ -354,6 +381,7 @@ typedef enum {
   CMD_RENAME,
   CMD_UNLINK,
 
+  CMD_S3_AUTH,                  // client submits S3 signature, etc
   CMD_RIO_OFFSET,               // reader sends riomapped offset (for riowrite)
   CMD_DATA,                     // amount of data sent (via riowrite)
   CMD_ACK,                      // got data (ready for riowrite), <size> has read-size
@@ -395,17 +423,87 @@ typedef struct {
 
 // --- network-byte-order conversions
 
-#define jSEND_VALUE(BUF, VAR)                                    \
-  do {                                                          \
-    jNEED_0( hton_generic((BUF), (char*)&(VAR), sizeof(VAR)) ); \
-    (BUF)+=sizeof(VAR);                                         \
-  } while (0)
+// These have to be macros, because sizeof(VAR) varies with VAR
+#define _SEND_VALUE(NEED_MACRO, BUF, VAR)                               \
+   do {                                                                 \
+      NEED_MACRO( hton_generic((BUF), (char*)&(VAR), sizeof(VAR)) == 0 ); \
+      (BUF)    += sizeof(VAR);                                          \
+   } while (0)
 
-#define jRECV_VALUE(VAR, BUF)                                    \
-  do {                                                          \
-    jNEED_0( ntoh_generic((char*)&(VAR), (BUF), sizeof(VAR)) ); \
-    (BUF)+=sizeof(VAR);                                         \
-  } while (0)
+#define _SEND_VALUE_SAFE(NEED_MACRO, BUF, VAR, REMAIN)                  \
+   do {                                                                 \
+      NEED_MACRO( (sizeof(VAR) <= (REMAIN)) );                          \
+      _SEND_VALUE(NEED_MACRO, BUF, VAR);                                \
+      (REMAIN) -= sizeof(VAR);                                          \
+   } while (0)
+
+
+#define  SEND_VALUE(BUF, VAR)                _SEND_VALUE( NEED, BUF, VAR)
+#define jSEND_VALUE(BUF, VAR)                _SEND_VALUE(jNEED, BUF, VAR)
+
+#define  SEND_VALUE_SAFE(BUF, VAR, REMAIN)   _SEND_VALUE_SAFE(NEED, BUF, VAR, REMAIN)
+
+
+
+
+// // These need char**, and size_t*, so we can side-effect caller's variables
+// inline void _send_string(char** dest, char* src, size_t len) {
+//    strncpy(*dest, src, len);
+//    (*dest)[len] = 0;
+//    *dest += len +1;
+// }
+// inline int _send_string_safe(char** dest, char* src, size_t len, size_t* remain) {
+//    SEND_VALUE_SAFE(*dest, len, *remain); // send the length
+//    NEED( len <= (REMAIN) );
+//    _send_string(dest, src, len);
+//    *remain -= len +1;
+//    return 0;
+// }
+// 
+// #define  SEND_STRING_SAFE(BUF, STR, REMAIN)                           \
+//    NEED0( _send_string_safe(&(BUF), (STR), strlen(STR), &(BUF_REMAIN)) )
+
+// send size too, because we have to compute it anyhow, and
+// it saves server having to do it again to do its own checking.
+#define  SEND_STRING_SAFE(BUF, STR, LEN, REMAIN)          \
+   do {                                                   \
+      NEED( (LEN) < (REMAIN));                            \
+      strncpy((BUF), (STR), (LEN));                       \
+      (BUF)[LEN] = 0;                                     \
+      (BUF)      += (LEN) +1;                             \
+      (REMAIN)   -= (LEN) +1;                             \
+   } while(0)
+
+
+
+
+
+
+#define _RECV_VALUE(NEED_MACRO, VAR, BUF)                            \
+   do {                                                              \
+      NEED_MACRO( ntoh_generic((char*)&(VAR), (BUF), sizeof(VAR)) == 0 ); \
+      (BUF)+=sizeof(VAR);                                            \
+   } while (0)
+
+#define  RECV_VALUE(VAR, BUF) _RECV_VALUE( NEED_0, VAR, BUF) 
+#define jRECV_VALUE(VAR, BUF) _RECV_VALUE(jNEED_0, VAR, BUF) 
+
+
+
+#define _RECV_VALUE_SAFE(NEED_MACRO, VAR, BUF, REMAIN)                  \
+   do {                                                                 \
+      NEED_MACRO( (sizeof(VAR) <= (REMAIN)) );                          \
+      _RECV_VALUE(NEED_MACRO, VAR, BUF);                                \
+      (REMAIN) -= sizeof(VAR);                                          \
+   } while (0)
+
+#define  RECV_VALUE_SAFE(VAR, BUF, REMAIN)   _RECV_VALUE_SAFE(NEED, VAR, BUF, REMAIN)
+
+
+
+
+
+
 
 uint64_t hton64(uint64_t ll);
 uint64_t ntoh64(uint64_t ll);
@@ -457,6 +555,7 @@ int           skt_stat  (const char* service_path, struct stat* st);
 // libne uses fsetxattr() [taking fd] for sets, but getxattr() [taking path] for gets.
 int           skt_getxattr(const char* service_path, const char* name, void* value, size_t size);
 
+int           skt_fcntl(SocketHandle* handle, SocketFcntlCmd cmd, ...);
 
 
 

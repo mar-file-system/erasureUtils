@@ -19,7 +19,7 @@
       const int file_blob_size=24;                                      \
       const int file_pad_size = IMAX(1, file_blob_size - strlen(__FILE__)); \
       const int fn_blob_size=20;                                        \
-      FN((FD), "%-*.*s  %08x  %s:%-6d%*.*s  %-*.*s |  " FMT,            \
+      FN(FD, "%-*.*s  %08x  %s:%-6d%*.*s  %-*.*s |  " FMT,              \
          prefix_size, prefix_size, NE_LOG_PREFIX,                       \
          (unsigned int)pthread_self(),                                  \
          __FILE__, __LINE__, file_pad_size, file_pad_size, " ",         \
