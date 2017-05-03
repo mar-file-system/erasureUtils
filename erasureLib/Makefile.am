@@ -79,9 +79,12 @@ else
    DEBUG_NE_VALUE=1
 endif
 
+
 if DEBUG_NE
+  AM_CFLAGS = -g -O1
   SOCKET_DEFS += -DDEBUG_NE=$(DEBUG_NE_VALUE)  -fstack-protector-all -fstack-check
 else
+  AM_CFLAGS = -g -O3
   SOCKET_DEFS += -DDEBUG_NE=0
 endif
 

@@ -122,6 +122,19 @@ sig_handler(int sig) {
 
 
 
+void* aws_ctx = NULL;
+
+#ifdef S3_AUTH
+#  define    AUTH_INIT(USER, AWS_CTX)     NEED_0( aws_read_config_r((USER), (AWSContext*)(AWS_CTX)) )
+#  define    AUTH_INSTALL(HANDLEp, AWS_CTX)     NEED_0( skt_fcntl((HANDLEp), SKT_F_SETAUTH, (AWSContext*)(AWS_CTX)) )
+#  define thrAUTH_INSTALL(HANDLEp, AWS_CTX)  thrNEED_0( skt_fcntl((HANDLEp), SKT_F_SETAUTH, (AWSContext*)(AWS_CTX)) )
+
+#else
+#  define    AUTH_INIT(USER, AWS_CTX)
+#  define    AUTH_INSTALL(HANDLEp, AWS_CTX)
+#  define thrAUTH_INSTALL(HANDLEp, AWS_CTX)
+#endif
+
 
 // ---------------------------------------------------------------------------
 // operations dispatched from main
@@ -134,8 +147,8 @@ ssize_t client_put(const char* path) {
 
   char buf[CLIENT_BUF_SIZE] __attribute__ (( aligned(64) )); /* copy stdin to socket */
 
-  // --- TBD: authentication handshake
   NEED_GT0( skt_open(&handle, path, (O_WRONLY|O_CREAT), 0660) );
+  AUTH_INSTALL(&handle, aws_ctx);
 
   ssize_t bytes_moved = copy_file_to_socket(STDIN_FILENO, &handle, buf, CLIENT_BUF_SIZE);
 
@@ -155,6 +168,7 @@ ssize_t client_get(const char* path) {
 
   // --- TBD: authentication handshake
   NEED_GT0( skt_open(&handle, path, (O_RDONLY)) );
+  AUTH_INSTALL(&handle, aws_ctx);
 
   ssize_t bytes_moved = copy_socket_to_file(&handle, STDOUT_FILENO, buf, CLIENT_BUF_SIZE);
 
@@ -172,7 +186,7 @@ int client_rename(const char* path) {
   snprintf(new_fname, FNAME_SIZE, path);
   strncat(new_fname, ".renamed", FNAME_SIZE - strlen(path));
 
-  NEED_0( skt_rename(path, new_fname) );
+  NEED_0( skt_rename(aws_ctx, path, new_fname) );
 
   return 0;
 }
@@ -180,9 +194,9 @@ int client_rename(const char* path) {
 
 int client_chown(const char* path) {
 
-  NEED_0( skt_chown(path, 99, 99) );
+   NEED_0( skt_chown(aws_ctx, path, 99, 99) );
 
-  return 0;
+   return 0;
 }
 
 
@@ -196,6 +210,7 @@ int client_reap_read(const char* path) {
 
   // --- TBD: authentication handshake
   NEED_GT0( skt_open(&handle, path, (O_RDONLY)) );
+  AUTH_INSTALL(&handle, aws_ctx);
 
   // some server-side work is deferred until we actually read.
   printf("reading\n");
@@ -227,7 +242,7 @@ ssize_t client_stat(const char* path) {
 
   struct stat st;
 
-  int rc = skt_stat(path, &st);
+  int rc = skt_stat(aws_ctx, path, &st);
   if (rc < 0) {
     perror("stat failed");
     return 0;                   /* "bytes-moved" */
@@ -267,7 +282,10 @@ int client_test1(const char* path) {
 
   // open
   NEED_GT0( skt_open(&handle,  path,  (O_WRONLY|O_CREAT), 0660) );
+  AUTH_INSTALL(&handle, aws_ctx);
+
   NEED_GT0( skt_open(&handle2, path2, (O_WRONLY|O_CREAT), 0660) );
+  AUTH_INSTALL(&handle2, aws_ctx); // auth is read-only
 
   // write
   ssize_t bytes_moved  = skt_write(&handle,  buf, buf_len);
@@ -307,6 +325,7 @@ int client_test1b(const char* path) {
 
     NEED_GT0( skt_open(&state[i].handle, state[i].path, (O_WRONLY|O_CREAT), 0660) );
     printf("           opened\n");
+    AUTH_INSTALL(&handle, aws_ctx);
   }
   printf("\n");
 
@@ -348,6 +367,8 @@ int client_test1b(const char* path) {
 
     NEED_GT0( OPEN(fd, file, (O_WRONLY|O_CREAT), 0660) );
     printf("           opened\n");
+
+    AUTH_INSTALL(&handle, aws_ctx);
 
     printf("file [%d] : writing\n", i);
     write_count = skt_write(&fd, buf, buf_len);
@@ -398,6 +419,8 @@ int client_test1c(const char* path) {
     fflush(stdout);
     NEED_GT0( skt_open(&state[i].handle, state[i].path, (O_WRONLY|O_CREAT), 0660) );
     printf("           opened\n");
+
+    AUTH_INSTALL(&handle, aws_ctx);
   }
   printf("\n");
 
@@ -454,6 +477,8 @@ int client_test1c(const char* path) {
     NEED_GT0( OPEN(fd, file, (O_WRONLY|O_CREAT), 0660) );
     printf("           opened\n");
 
+    AUTH_INSTALL(&handle, aws_ctx);
+
     printf("file [%d] : writing\n", i);
     write_count = skt_write(&fd, buf, buf_len);
     NEED( write_count == buf_len );
@@ -498,6 +523,8 @@ int client_test2(const char* path, int do_seteuid) {
   // open, put, close
   ssize_t bytes_moved;
   NEED_GT0( skt_open(&handle,  path,  (O_WRONLY|O_CREAT), 0660) );
+  AUTH_INSTALL(&handle, aws_ctx);
+
   bytes_moved = skt_write(&handle, buf, buf_len);
   NEED( bytes_moved == buf_len );
   NEED_0( skt_close(&handle) );
@@ -518,6 +545,8 @@ int client_test2(const char* path, int do_seteuid) {
   size_t      buf2_len = strlen(buf2);
 
   NEED_GT0( skt_open(&handle2,  path2,  (O_WRONLY|O_CREAT), 0660) );
+  AUTH_INSTALL(&handle2, aws_ctx); // auth is read-only
+
   ssize_t bytes_moved2 = skt_write(&handle2, buf2, buf2_len);
   NEED( bytes_moved2 == buf2_len );
   NEED_0( skt_close(&handle2) );
@@ -528,7 +557,7 @@ int client_test2(const char* path, int do_seteuid) {
   strcpy(path2b, path);
   strcat(path2b, ".2");
 
-  NEED_0( skt_rename(path2, path2b) );
+  NEED_0( skt_rename(aws_ctx, path2, path2b) );
 
   return bytes_moved + bytes_moved2;
 }
@@ -620,6 +649,7 @@ void* client_test3_thr(void* arg) {
      cLOG("thr%d: opening %s\n", ctx->thr_no, thr_path);
      // thrNEED_GT0( skt_open(handle,  thr_path,  (O_WRONLY|O_CREAT), 0660) );
      thrNEED_GT0( skt_open(handle,  thr_path,  (O_WRONLY|O_CREAT), 0666) );
+     thrAUTH_INSTALL(handle, aws_ctx);
   }
 
 
@@ -672,6 +702,7 @@ void* client_test3_thr(void* arg) {
      SocketHandle fd = {0};
      // thrNEED_GT0( skt_open(&fd,  thr_path,  (O_WRONLY|O_CREAT), 0660) );
      thrNEED_GT0( skt_open(&fd,  thr_path,  (O_WRONLY|O_CREAT), 0666) );
+     thrAUTH_INSTALL(&fd, aws_ctx);
   }
 
   // --- put
@@ -1078,7 +1109,17 @@ ssize_t client_test3e(const char* path) {
 
 
 
+// ---------------------------------------------------------------------------
+// test4:  S3-AUTHENTICATION
+// ---------------------------------------------------------------------------
 
+// test experimental protocol-extensions to the RDMA-sockets interface,
+// adding S3-style authentication.
+// 
+int client_test4(const char* path, int do_seteuid) {
+   // TBD
+   return 0;
+}
 
 
 
@@ -1188,6 +1229,9 @@ main(int argc, char* argv[]) {
     return -1;                // errno is set
   }
 
+  // --- initialize authentication (iff S3_AUTH)
+  AUTH_INIT(SKT_S3_USER, &aws_ctx);
+
   // --- perform op
   ssize_t bytes_moved = 0;
   switch (cmd) {
@@ -1201,6 +1245,7 @@ main(int argc, char* argv[]) {
   case 't': {
     size_t  test_no_len = strlen(test_no);
 #   define MATCH(TEST_NO,STR)  ((test_no_len == strlen(STR)) && !strcmp((TEST_NO), (STR)))
+
     if (     MATCH(test_no, "1"))
       bytes_moved = client_test1(file_spec);
     else if (MATCH(test_no, "1b"))
@@ -1221,6 +1266,8 @@ main(int argc, char* argv[]) {
        bytes_moved = client_test3d(file_spec);
     else if (MATCH(test_no, "3e"))
       bytes_moved = client_test3e(file_spec);
+    //    else if (MATCH(test_no, "4"))
+    //       bytes_moved = client_test4(file_spec);
     else {
       ERR("unknown test: %s\n", test_no);
       return -1;

@@ -1,22 +1,3 @@
-#include <erasure.h>
-
-#include <stdio.h>
-#include <fcntl.h>
-#include <stdarg.h>
-#include <limits.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <errno.h>
-#include <string.h>
-
-#if (AXATTR_RES == 2)
-# include <attr/xattr.h>
-#else
-# include <sys/xattr.h>
-#endif
-#include <assert.h>
-#include <pthread.h>
-
 #ifndef __MARFS_COPYRIGHT_H__
 #define __MARFS_COPYRIGHT_H__
 
@@ -80,24 +61,76 @@ LANL contributions is found at https://github.com/jti-lanl/aws4c.
 GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
-#endif
+#endif  // copyright
  
-/********************************************************/
-/*
 
-This file provides the implementation of multiple operations intended for use by the MarFS MultiComponent DAL.
+/* ---------------------------------------------------------------------------
+
+This file provides the implementation of multiple operations intended for
+use by the MarFS MultiComponent DAL.
 
 These include:   ne_read(), ne_write(), ne_health(), and ne_rebuild().
 
-Additionally, each output file gets an xattr added to it  (yes all 12 files in the case of a 10+2
-the xattr looks like this
-n.e.offset.blocksize.nsz.ncompsz.ncrcsum.totsz: 10 2 64 0 196608 196608 3304199718723886772 1717171
-N is nparts, E is numerasure, offset is the starting position of the stripe in terms of part number, chunksize is chunksize, nsz is the size of the part, ncompsz is the size of the part but might get used if we ever compress the parts, totsz is the total real data in the N part files.
-Since creating erasure requires full stripe writes, the last part of the file may all be zeros in the parts.  This totsz is the real size of the data, not counting the trailing zeros.
-All the parts and all the erasure stripes should be the same size.
-To fill in the trailing zeros, this program uses truncate - punching a hole in the N part files for the zeros.
+Additionally, each output file gets an xattr added to it (yes all 12 files
+in the case of a 10+2 the xattr looks something like this:
 
-*********************************************************/
+   10 2 64 0 196608 196608 3304199718723886772 1717171
+
+These fields, in order, are:
+
+    N         is nparts
+    E         is numerasure
+    offset    is the starting position of the stripe in terms of part number
+    chunksize is chunksize
+    nsz       is the size of the part
+    ncompsz   is the size of the part but might get used if we ever compress the parts
+    totsz     is the total real data in the N part files.
+
+Since creating erasure requires full stripe writes, the last part of the
+file may all be zeros in the parts.  Thus, totsz is the real size of the
+data, not counting the trailing zeros.
+
+All the parts and all the erasure stripes should be the same size.  To fill
+in the trailing zeros, this program uses truncate - punching a hole in the
+N part files for the zeros.
+
+In the case where libne is built to include support for S3-authentication,
+and to use the libne sockets extensions (RDMA, etc) instead of files, then
+the caller (for example, the MarFS sockets DAL) may acquire
+authentication-information at program-initialization-time which we could
+not acquire at run-time.  For example, access to authentication-information
+may require escalated privileges, whereas fuse and pftool de-escalate
+priviledges after start-up.  To support such cases, we must allow a caller
+to pass cached credentials through the ne_etc() functions, to the
+underlying skt_etc() functions.
+
+--------------------------------------------------------------------------- */
+
+
+#include <erasure.h>
+
+#include <stdio.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <limits.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <string.h>
+
+#if (AXATTR_RES == 2)
+#  include <attr/xattr.h>
+#else
+#  include <sys/xattr.h>
+#endif
+#include <assert.h>
+#include <pthread.h>
+
+
+// #defines, macros, external functions, etc, that we don't want exported
+// for users of the library some are also used in libneTest.c
+//
+// #include "erasure_internals.h"
 
 /* The following are defined here, so as to hide them from users of the library */
 #ifdef HAVE_LIBISAL
@@ -117,36 +150,48 @@ extern void          gf_vect_mul_init(unsigned char c, unsigned char *tbl);
 extern unsigned char gf_mul(unsigned char a, unsigned char b);
 extern int           gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);
 
-int        xattr_check( ne_handle handle, char *path );
-void       ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls);
-static int gf_gen_decode_matrix(unsigned char *encode_matrix,
-                                unsigned char *decode_matrix,
-                                unsigned char *invert_matrix,
-                                unsigned int *decode_index,
-                                unsigned char *src_err_list,
-                                unsigned char *src_in_err,
-                                int nerrs, int nsrcerrs, int k, int m);
+int                  xattr_check( ne_handle handle, char *path );
+void                 ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls);
+static int           gf_gen_decode_matrix(unsigned char *encode_matrix,
+                                          unsigned char *decode_matrix,
+                                          unsigned char *invert_matrix,
+                                          unsigned int *decode_index,
+                                          unsigned char *src_err_list,
+                                          unsigned char *src_in_err,
+                                          int nerrs, int nsrcerrs, int k, int m);
 //void dump(unsigned char *buf, int len);
 
 
 
-// This allows more-ledgible support for sockets versus file semantics
+// This allows more-ledgible selection of sockets versus file semantics
 #ifdef SOCKETS
 #  define FD(FDESC)                           (FDESC).peer_fd
-#  define OPEN(      FDESC, ...)              skt_open(&(FDESC), ## __VA_ARGS__)
+#  define OPEN(      FDESC, AUTH, ...)        skt_open(&(FDESC), ## __VA_ARGS__)
 #  define HNDLOP(OP, FDESC, ...)              skt_##OP(&(FDESC), ## __VA_ARGS__)
 #  define pHNDLOP(OP, FDESC_PTR, ...)         skt_##OP((FDESC_PTR), ## __VA_ARGS__)
-#  define PATHOP(OP, PATH, ...)               skt_##OP((PATH), ## __VA_ARGS__)
+#  define PATHOP(OP, AUTH, PATH, ...)         skt_##OP((AUTH), (PATH), ## __VA_ARGS__)
 #  define UMASK(FDESC, MASK)                  umask(MASK) /* TBD */
+#  define DEFAULT_AUTH_INIT(AUTH)             skt_auth_init(SKT_S3_USER, &(AUTH))
+#  define AUTH_INSTALL(FD, AUTH)              skt_auth_install((FD), (AUTH))
 
 #else
 #  define FD(FDESC)                           (FDESC)
-#  define OPEN(      FDESC, ...)   ((FDESC) = open(__VA_ARGS__))
+#  define OPEN(      FDESC, AUTH, ...)        ((FDESC) = open(__VA_ARGS__))
 #  define HNDLOP(OP, FDESC, ...)              OP((FDESC), ## __VA_ARGS__)
 #  define pHNDLOP(OP, FDESC_PTR, ...)         OP(*(FDESC_PTR), ## __VA_ARGS__)
-#  define PATHOP(OP, PATH, ...)               OP((PATH), ## __VA_ARGS__)
+#  define PATHOP(OP, AUTH, PATH, ...)         OP((PATH), ## __VA_ARGS__)
 #  define UMASK(FDESC, MASK)                  umask(MASK)
+#  define DEFAULT_AUTH_INIT(AUTH)             ((AUTH) = NULL)  /* just like a funcall returning zero */
+#  define AUTH_INSTALL(FD, AUTH)
 #endif
+
+
+
+
+// int default_auth_init(SktAuth* auth) {
+//    *(auth) = NULL
+//    return 0;
+// }
 
 
 /**
@@ -274,7 +319,7 @@ static int set_block_xattr(ne_handle handle, int block) {
   mode_t mask = umask(0000);
   FileDesc fd = {0};
 
-  OPEN(fd, meta_file, O_WRONLY | O_CREAT, 0666);
+  OPEN(fd, handle->auth, meta_file, O_WRONLY | O_CREAT, 0666);
   umask(mask);
   if ( FD(fd) < 0 ) { 
     PRINTerr("set_block_attr: failed to open file %s\n", meta_file);
@@ -292,7 +337,7 @@ static int set_block_xattr(ne_handle handle, int block) {
       tmp = HNDLOP( close, fd );
     }
   }
-  PATHOP(chown, meta_file, handle->owner, handle->group);
+  PATHOP(chown, handle->auth, meta_file, handle->owner, handle->group);
 
 #else
 
@@ -333,7 +378,7 @@ void *bq_writer(void *arg) {
   pthread_cleanup_push(bq_writer_finis, bq);
 
   // open the file.
-  OPEN(bq->file, bq->path, O_WRONLY|O_CREAT, 0666);
+  OPEN(bq->file, handle->auth, bq->path, O_WRONLY|O_CREAT, 0666);
 
   if(pthread_mutex_lock(&bq->qlock) != 0) {
     exit(-1); // XXX: is this the appropriate response??
@@ -366,7 +411,7 @@ void *bq_writer(void *arg) {
     if(bq->flags & BQ_ABORT) {
       PRINTerr("aborting buffer queue\n");
       if(HNDLOP(close, bq->file) == 0) {
-         PATHOP(unlink, bq->path); // try to clean up after ourselves.
+         PATHOP(unlink, handle->auth, bq->path); // try to clean up after ourselves.
       }
       pthread_mutex_unlock(&bq->qlock);
       return NULL;
@@ -440,7 +485,7 @@ void *bq_writer(void *arg) {
   handle->snprintf( block_file_path, 2048, handle->path,
                     (bq->block_number+handle->erasure_offset)%(handle->N+handle->E), handle->state );
 
-  if( PATHOP( rename, bq->path, block_file_path ) != 0 ) {
+  if( PATHOP( rename, handle->auth, bq->path, block_file_path ) != 0 ) {
     PRINTerr("bq_writer: failed to rename written file %s\n", bq->path );
     bq->flags |= BQ_ERROR;
   }
@@ -449,7 +494,7 @@ void *bq_writer(void *arg) {
   // rename the META file too
   strncat( bq->path, META_SFX, strlen(META_SFX)+1 );
   strncat( block_file_path, META_SFX, strlen(META_SFX)+1 );
-  if ( PATHOP( rename, bq->path, block_file_path ) != 0 ) {
+  if ( PATHOP( rename, handle->auth, bq->path, block_file_path ) != 0 ) {
     PRINTerr("bq_writer: failed to rename written meta file %s\n", bq->path );
     bq->flags |= BQ_ERROR;
   }
@@ -590,10 +635,16 @@ int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
 }
 
 
+// This might work, if you have an NFS Multi-Component implementation, and
+// your block-directories are named something like /path/to/block%d/more/path/filename
+//
 // default: ignore <state>
+
 int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, void* state) {
   return snprintf(dest, size, format, block);
 }
+
+
 
 /**
  * Opens a new handle for a specific erasure striping
@@ -602,6 +653,7 @@ int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, 
  *
  * @param SnprintfFunc : function takes block-number and <state> and produces per-block path from template.
  * @param state : optional state to be used by SnprintfFunc (e.g. configuration details)
+ * @param cred : optional credentials (actually AWSContext*) to authenticate socket connections (e.g. RDMA)
  * @param char* path : sprintf format-template for individual files of in each stripe.
  * @param ne_mode mode : Mode in which the file is to be opened.  Either NE_RDONLY, NE_WRONLY, or NE_REBUILD.
  * @param int erasure_offset : Offset of the erasure stripe, defining the name of the first N file
@@ -611,7 +663,7 @@ int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, 
  * @return ne_handle : The new handle for the opened erasure striping
  */
 
-ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... )
+ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, char *path, ne_mode mode, va_list ap )
 {
    char file[MAXNAME];       /* array name of files */
    int counter;
@@ -637,8 +689,6 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
    }
 
    // Parse variadic arguments
-   va_list ap;
-   va_start( ap, mode );
    if ( counter == 1 ) {
       bsz = va_arg( ap, int );
    }
@@ -650,7 +700,6 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
          bsz = va_arg( ap, int );
       }
    }
-   va_end( ap );
 
    if ( mode == NE_WRONLY  &&  counter < 2 ) {
       PRINTerr( "ne_open: recieved an invalid \"NE_NOINFO\" flag for \"NE_WRONLY\" operation\n");
@@ -705,13 +754,14 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
 
    handle->snprintf = fn;
    handle->state    = state;
+   handle->auth     = auth;
 
    char* nfile = malloc( strlen(path) + 1 );
    strncpy( nfile, path, strlen(path) + 1 );
    handle->path = nfile;
 
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
-      ret = xattr_check(handle,path); //idenfity total data size of stripe
+      ret = xattr_check(handle, path); //idenfity total data size of stripe
       if ( handle->mode == NE_STAT ) {
          handle->mode = mode;
          PRINTout( "ne_open: resetting mode to %d\n", mode);
@@ -720,7 +770,7 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
             handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
             handle->src_err_list[handle->nerr] = 0;
          }
-         ret = xattr_check(handle,path); //perform the check again, identifying mismatched values
+         ret = xattr_check(handle, path); //perform the check again, identifying mismatched values
          if ( ret != 0 ) {
             PRINTerr( "ne_open: extended attribute check has failed\n" );
             free( handle );
@@ -823,15 +873,17 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
 
       if( mode == NE_WRONLY ) {
          PRINTout( "   opening %s%s for write\n", file, WRITE_SFX );
-         OPEN(handle->FDArray[counter], strncat( file, WRITE_SFX, strlen(WRITE_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
+         OPEN(handle->FDArray[counter], handle->auth,
+              strncat( file, WRITE_SFX, strlen(WRITE_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
       }
       else if ( mode == NE_REBUILD  &&  handle->src_in_err[counter] == 1 ) {
          PRINTout( "   opening %s%s for write\n", file, REBUILD_SFX );
-         OPEN(handle->FDArray[counter], strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
+         OPEN(handle->FDArray[counter], handle->auth,
+              strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
       }
       else {
          PRINTout( "   opening %s for read\n", file );
-         OPEN(handle->FDArray[counter], file, O_RDONLY );
+         OPEN(handle->FDArray[counter], handle->auth, file, O_RDONLY );
       }
 
       if ( FD(handle->FDArray[counter]) == -1  &&  handle->src_in_err[counter] == 0 ) {
@@ -861,6 +913,39 @@ ne_handle ne_open1( SnprintfFunc fn, void* state, char *path, ne_mode mode, ... 
    return handle;
 
 }
+
+// caller (e.g. MC-sockets DAL) specifies SprintfFunc, stat, and SktAuth
+ne_handle ne_open1( SnprintfFunc fn, void* state, SktAuth auth, char *path, ne_mode mode, ... ) {
+
+   va_list vl;
+   va_start(vl, mode);
+   return ne_open1_vl(fn, state, auth, path, mode, vl);
+   va_end(vl);
+}
+
+
+// provide defaults for SprintfFunc, state, and SktAuth
+// so naive callers can continue to work (in some cases).
+ne_handle ne_open( char *path, ne_mode mode, ... ) {
+
+   // this is safe for builds with/without sockets enabled
+   // and with/without socket-authentication enabled
+   // However, if you do build with socket-authentication, this will require a read
+   // from a file (~/.awsAuth) that should probably only be accessible if ~ is /root.
+   SktAuth  auth;
+   if (DEFAULT_AUTH_INIT(auth)) {
+      PRINTerr("failed to initialize default socket-authentication credentials\n");
+      return NULL;
+   }
+
+   va_list vl;
+   va_start(vl, mode);
+   return ne_open1_vl(ne_default_snprintf, NULL, auth, path, mode, vl);
+   va_end(vl);
+}
+
+
+
 
 
 /**
@@ -1470,7 +1555,7 @@ void sync_file(ne_handle handle, int block_index) {
 
   strcat(path, WRITE_SFX);
   HNDLOP(close, handle->FDArray[block_index]);
-  OPEN(handle->FDArray[block_index], path, O_WRONLY);
+  OPEN(handle->FDArray[block_index], handle->auth, path, O_WRONLY);
   if(FD(handle->FDArray[block_index]) == -1) {
     PRINTerr( "failed to reopen file\n");
     handle->src_in_err[block_index] = 1;
@@ -1768,8 +1853,8 @@ int ne_close( ne_handle handle )
 
          if ( handle->e_ready == 1 ) {
 
-            PATHOP( chown, file, handle->owner, handle->group);
-            if ( PATHOP( rename, file, nfile ) != 0 ) {
+            PATHOP( chown, handle->auth, file, handle->owner, handle->group);
+            if ( PATHOP( rename, handle->auth, file, nfile ) != 0 ) {
                PRINTerr( "ne_close: failed to rename rebuilt file\n" );
                // rebuild should fail even if only one file can't be renamed
                ret = -1;
@@ -1780,7 +1865,7 @@ int ne_close( ne_handle handle )
             strncat( file,  META_SFX, strlen(META_SFX)+1 );
             strncat( nfile, META_SFX, strlen(META_SFX)+1 );
 
-            if ( PATHOP( rename, file, nfile ) != 0 ) {
+            if ( PATHOP( rename, handle->auth, file, nfile ) != 0 ) {
                PRINTerr( "ne_close: failed to rename rebuilt meta file\n" );
                // rebuild should fail even if only one file can't be renamed
                ret = -1;
@@ -1791,13 +1876,13 @@ int ne_close( ne_handle handle )
          else{
 
             PRINTerr( "ne_close: cleaning up file %s from failed rebuild\n", file );
-            PATHOP( unlink, file );
+            PATHOP( unlink, handle->auth, file );
 
 #ifdef META_FILES
             // corresponding "meta" file ...
             strncat( file, META_SFX, strlen(META_SFX)+1 );
             PRINTerr( "ne_close: cleaning up file %s from failed rebuild\n", file );
-            PATHOP( unlink, file );
+            PATHOP( unlink, handle->auth, file );
 #endif
 
          }
@@ -1878,22 +1963,36 @@ int ne_close( ne_handle handle )
  * @param int width : Total width of the erasure striping (i.e. N+E)
  * @return int : 0 on success and -1 on failure
  */
-int ne_delete1( SnprintfFunc fn, void* state, char* path, int width ) {
-   char file[MAXNAME];       /* array name of files */
-   int counter;
-   int ret = 0;
-   
+int ne_delete1( SnprintfFunc fn, void* state, SktAuth auth, char* path, int width ) {
+   char  file[MAXNAME];       /* array name of files */
+   int   counter;
+   int   ret = 0;
+
    for( counter=0; counter<width; counter++ ) {
       bzero( file, sizeof(file) );
       fn( file, MAXNAME, path, counter, state );
-      if ( PATHOP( unlink, file ) ) ret = 1;
+      if ( PATHOP( unlink, auth, file ) ) ret = 1;
 #ifdef META_FILES
       strncat( file, META_SFX, strlen(META_SFX)+1 );
-      if ( PATHOP( unlink, file ) ) ret = 1;
+      if ( PATHOP( unlink, auth, file ) ) ret = 1;
 #endif
    }
 
    return ret;
+}
+
+int ne_delete(char* path, int width ) {
+
+   // this is safe for builds with/without sockets and/or socket-authentication enabled
+   // However, if you do build with socket-authentication, this will require a read
+   // from a file (~/.awsAuth) that should probably only be accessible if ~ is /root.
+   SktAuth  auth;
+   if (DEFAULT_AUTH_INIT(auth)) {
+      PRINTerr("failed to initialize default socket-authentication credentials\n");
+      return -1;
+   }
+
+   return ne_delete1(ne_default_snprintf, NULL, auth, path, width);
 }
 
 
@@ -1966,7 +2065,7 @@ int xattr_check( ne_handle handle, char *path )
    for ( counter = 0; counter < lN+lE; counter++ ) {
       bzero(file,sizeof(file));
       handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_offset)%(lN+lE), handle->state );
-      ret = PATHOP(stat, file, partstat);
+      ret = PATHOP(stat, handle->auth, file, partstat);
       PRINTout( "xattr_check: stat of file %s returns %d\n", file, ret );
       if ( ret != 0 ) {
          PRINTerr( "xattr_check: file %s: failure of stat\n", file );
@@ -1980,14 +2079,13 @@ int xattr_check( ne_handle handle, char *path )
       bzero(xattrval,sizeof(xattrval));
 
 #ifdef META_FILES
-
       handle->snprintf( nfile, MAXNAME, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
       strncat( nfile, META_SFX, strlen(META_SFX)+1 );
       PRINTout("xattr_check: opening file %s\n", nfile);
 
       FileDesc   meta_fd = {0};
 
-      OPEN(meta_fd, nfile, O_RDONLY);
+      OPEN(meta_fd, handle->auth, nfile, O_RDONLY);
       if ( FD(meta_fd) < 0 ) {
          ret = -1;
          PRINTerr("xattr_check: failed to open file %s\n", nfile);
@@ -2009,16 +2107,12 @@ int xattr_check( ne_handle handle, char *path )
             ret = tmp;
          }
       }
-
-
 #else
-
 #  if (AXATTR_GET_FUNC == 4)
-      ret = FILEOP(getxattr, file, XATTRKEY, &xattrval[0], sizeof(xattrval));
+      ret = FILEOP(getxattr, handle->auth, file, XATTRKEY, &xattrval[0], sizeof(xattrval));
 #  else
-      ret = FILEOP(getxattr, file, XATTRKEY, &xattrval[0], sizeof(xattrval), 0, 0);
+      ret = FILEOP(getxattr, handle->auth, file, XATTRKEY, &xattrval[0], sizeof(xattrval), 0, 0);
 #  endif
-
 #endif //META_FILES
 
       PRINTout("xattr_check: file %s xattr returned %s\n",file,xattrval);
@@ -2320,7 +2414,7 @@ static int reopen_for_rebuild(ne_handle handle, int block) {
   HNDLOP(close, handle->FDArray[block]);
   PRINTout( "   opening %s for write\n", file );
 
-  OPEN(handle->FDArray[block],
+  OPEN(handle->FDArray[block], handle->auth,
        strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ),
        O_WRONLY | O_CREAT, 0666 );
 
@@ -2943,7 +3037,7 @@ int ne_noxattr_rebuild(ne_handle handle) {
  *                  parts (E), and blocksize (bsz) for the stripe.
  */
 
-ne_stat ne_status1( SnprintfFunc fn, void* state, char *path )
+ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth, char *path )
 {
    char file[MAXNAME];       /* array name of files */
    int counter;
@@ -2955,7 +3049,7 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, char *path )
    unsigned int bsz = BLKSZ;
 #endif
 
-   ne_stat stat = malloc( sizeof( struct ne_stat_struct ) );
+   ne_stat   stat   = malloc( sizeof( struct ne_stat_struct ) );
    ne_handle handle = malloc( sizeof( struct handle ) );
    if ( stat == NULL  ||  handle == NULL ) {
       PRINTerr( "ne_status: failed to allocate stat/handle structures!\n" );
@@ -2985,18 +3079,19 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, char *path )
 
    handle->snprintf = fn;
    handle->state    = state;
+   handle->auth     = auth;
 
    char* nfile = malloc( strlen(path) + 1 );
    strncpy( nfile, path, strlen(path) + 1 );
    handle->path = nfile;
 
-   ret = xattr_check(handle,path); //idenfity total data size of stripe
+   ret = xattr_check(handle, path); //idenfity total data size of stripe
    while ( handle->nerr > 0 ) {
       handle->nerr--;
       handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
       handle->src_err_list[handle->nerr] = 0;
    }
-   ret = xattr_check(handle,path); //verify the stripe, now that values have been established
+   ret = xattr_check(handle, path); //verify the stripe, now that values have been established
    if ( ret != 0 ) {
       PRINTerr( "ne_status: extended attribute check has failed\n" );
       free( handle );
@@ -3063,7 +3158,7 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, char *path )
 #endif
 
       PRINTout( "ne_status:    opening %s for read\n", file );
-      OPEN(handle->FDArray[counter], file, O_RDONLY);
+      OPEN(handle->FDArray[counter], handle->auth, file, O_RDONLY);
 
       if ( FD(handle->FDArray[counter]) == -1  &&  handle->src_in_err[counter] == 0 ) {
          PRINTerr( "ne_status:    failed to open file %s!!!!\n", file );
@@ -3112,3 +3207,17 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, char *path )
 
 }
 
+
+ne_stat ne_status(char *path) {
+
+   // this is safe for builds with/without sockets and/or socket-authentication enabled
+   // However, if you do build with socket-authentication, this will require a read
+   // from a file (~/.awsAuth) that should probably only be accessible if ~ is /root.
+   SktAuth  auth;
+   if (DEFAULT_AUTH_INIT(auth)) {
+      PRINTerr("failed to initialize default socket-authentication credentials\n");
+      return NULL;
+   }
+
+   return ne_status1(ne_default_snprintf, NULL, auth, path);
+}

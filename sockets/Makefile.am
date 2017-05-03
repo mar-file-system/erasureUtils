@@ -88,10 +88,13 @@ else
    DEBUG_SOCKETS_VALUE=1
 endif
 
+
 if DEBUG_SOCKETS
+  AM_CFLAGS    = -g -O1
   DEFS        += -DDEBUG_SOCKETS=$(DEBUG_SOCKETS_VALUE)
   AM_CPPFLAGS += -fstack-protector-all -fstack-check
 else
+  AM_CFLAGS    = -g -O3
   DEFS        += -DDEBUG_SOCKETS=0
 endif
 

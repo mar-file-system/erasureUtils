@@ -71,6 +71,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  include <aws4c.h>
 #endif
 
+
 // allow override from erasure.h for its local use
 #ifndef NE_LOG_PREFIX
 #  define  NE_LOG_PREFIX   "libne_sockets"
@@ -100,18 +101,18 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 // Callers can suppress printing of successful tests, by choice of <PRINT>
 // All failures go to stderr.
 #define _TEST(EXPR, TEST, PRINT, RETURN)                                \
-  do {                                                                  \
-    PRINT(#EXPR " " #TEST "  ?\n");                                     \
-    if ((EXPR) TEST) {                                                  \
-      PRINT(#EXPR " " #TEST "\n");                                      \
-    }                                                                   \
-    else {                                                              \
-       LOG("* fail: " #EXPR " " #TEST "%s%s\n",                         \
-           (errno ? ": " : ""),                                         \
-           (errno ? strerror(errno) : ""));                             \
-      RETURN;                                                           \
-    }                                                                   \
-  } while(0)
+   do {                                                                 \
+      PRINT(#EXPR " " #TEST "  ?\n");                                   \
+      if ((EXPR) TEST) {                                                \
+         PRINT(#EXPR " " #TEST "\n");                                   \
+      }                                                                 \
+      else {                                                            \
+         LOG("* fail: " #EXPR " " #TEST "%s%s\n",                       \
+             (errno ? ": " : ""),                                       \
+             (errno ? strerror(errno) : ""));                           \
+         RETURN;                                                        \
+      }                                                                 \
+   } while(0)
 
 
 // print warning, if expression doesn't have expected value
@@ -174,6 +175,8 @@ typedef void(*jHandlerType)(void* arg);
 
 #define STAT_DATA_SIZE          (13 * sizeof(size_t)) /* room enough for all 13 members */
 
+
+
 // These represent the max delay (in sec), waiting for tokens to/from
 // client/server.  When debugging, we may want to slowly step through an
 // exchange, without causing a timeout.
@@ -188,14 +191,19 @@ typedef void(*jHandlerType)(void* arg);
 #endif
 
 
+
 // max seconds server-side date string can lag behind date-string generated
 // on client, for S3-authentication.
 #define MAX_S3_DATE_LAG          ((WR_TIMEOUT > RD_TIMEOUT) ? WR_TIMEOUT : RD_TIMEOUT)
 #define MAX_S3_DATA              1024 + FNAME_SIZE /* authentication data */
 
-// #define SKT_S3_USER              "mc_admin"  /* token 1 in ~/.awsAuth */
-#define SKT_S3_USER              "root"  /* token 1 in ~/.awsAuth */
+#define SKT_S3_USER              "mc_admin"  /* token 1 in ~/.awsAuth */
 
+
+// This allows SocketHandle (which needs a reference to an AWSContext*, iff
+// S3_AUTH is defined) to be used in other contexts where S3_AUTH does not
+// get defined.  In other words, this typedef is agnostic about S3_AUTH.
+typedef void*    SktAuth; // actually, AWSContext*
 
 
 /* -----------------------------------
@@ -345,20 +353,17 @@ typedef enum {
 
 // per-connection state
 typedef struct {
-  PathSpec         path_spec;   // host,port,path parsed from URL
-  int              open_flags;  // skt_open()
-  mode_t           open_mode;   // skt_open()
-  int              peer_fd;     // fd for comms with socket-peer
-  off_t            rio_offset;  // reader sends mapping to writer, for riowrite()
-  char*            rio_buf;     // reader saves riomapp'ed address, for riounmap()
-  size_t           rio_size;    // reader saves riomapp'ed size, for riounmap()
-  volatile size_t  stream_pos;  // ignore redundant skt_seek(), support reaper
-  ssize_t          seek_pos;    // ignore, unless HNDL_SEEK_ABS
-  uint16_t         flags;       // SHFlags
-
-#ifdef S3_AUTH
-   AWSContext*     aws_ctx;     // DAL installs credentials cached at init-time
-#endif
+  PathSpec           path_spec;   // host,port,path parsed from URL
+  int                open_flags;  // skt_open()
+  mode_t             open_mode;   // skt_open()
+  int                peer_fd;     // fd for comms with socket-peer
+  off_t              rio_offset;  // reader sends mapping to writer, for riowrite()
+  char*              rio_buf;     // reader saves riomapp'ed address, for riounmap()
+  size_t             rio_size;    // reader saves riomapp'ed size, for riounmap()
+  volatile size_t    stream_pos;  // ignore redundant skt_seek(), support reaper
+  ssize_t            seek_pos;    // ignore, unless HNDL_SEEK_ABS
+  uint16_t           flags;       // SHFlags
+  SktAuth            aws_ctx;     // S3_AUTH credentials (e.g. cached by DAL at init-time)
 } SocketHandle;
 
 
@@ -485,8 +490,8 @@ typedef struct {
       (BUF)+=sizeof(VAR);                                            \
    } while (0)
 
-#define  RECV_VALUE(VAR, BUF) _RECV_VALUE( NEED_0, VAR, BUF) 
-#define jRECV_VALUE(VAR, BUF) _RECV_VALUE(jNEED_0, VAR, BUF) 
+#define  RECV_VALUE(VAR, BUF) _RECV_VALUE( NEED, VAR, BUF) 
+#define jRECV_VALUE(VAR, BUF) _RECV_VALUE(jNEED, VAR, BUF) 
 
 
 
@@ -531,6 +536,14 @@ void     jshut_down_handle(void* handle);
 void     jskt_close(void* handle);
 
 
+// --- build-agnostic functions for initializing S3-credentials
+//     (i.e. these can always be safely called, regardless of S3_AUTH)
+//
+int  skt_auth_init(const char* user,  SktAuth* auth);      // typically once per program
+int  skt_auth_install(SocketHandle* handle, SktAuth auth); // after skt_open()
+void skt_auth_free(SktAuth auth);                          // no future calls to skt_auth_install()
+
+
 // --- For now, we'll use a open/read/write/close model, because that
 //     will fit most easily into libne.
 
@@ -547,15 +560,24 @@ int           skt_fsetxattr(SocketHandle* handle, const char* name, const void* 
 int           skt_fsync    (SocketHandle* handle);  // no-op, for now
 int           skt_close    (SocketHandle* handle);  // also does fsync()
 
-int           skt_unlink(const char* service_path);
-int           skt_chown (const char* service_path, uid_t uid, gid_t gid);
-int           skt_rename(const char* service_path, const char* new_fname);
-int           skt_stat  (const char* service_path, struct stat* st);
 
-// libne uses fsetxattr() [taking fd] for sets, but getxattr() [taking path] for gets.
-int           skt_getxattr(const char* service_path, const char* name, void* value, size_t size);
-
+// --- install an AWSContext with awsKey into a SocketHandle (after
+//     skt_open(), but before any data or comms have been sent), to support
+//     S3-based authentication.
 int           skt_fcntl(SocketHandle* handle, SocketFcntlCmd cmd, ...);
+
+// --- these all create ad hoc SocketHandles, so there is an aws_ctx in
+//     case we are built with authentication enabled.  Arg is ignored in
+//     builds with authentication disabled.  We use void*, so erasureLib/*
+//     doesn't have to know about AWSContext.
+int           skt_unlink(const void* aws_ctx, const char* service_path);
+int           skt_chown (const void* aws_ctx, const char* service_path, uid_t uid, gid_t gid);
+int           skt_rename(const void* aws_ctx, const char* service_path, const char* new_fname);
+int           skt_stat  (const void* aws_ctx, const char* service_path, struct stat* st);
+
+// libne uses fsetxattr() [taking fd] for sets, but getxattr() [taking path] for gets
+int           skt_getxattr(const void* aws_auth, const char* service_path, const char* name, void* value, size_t size);
+
 
 
 

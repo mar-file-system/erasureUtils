@@ -64,7 +64,7 @@ LANL contributions is found at https://github.com/jti-lanl/aws4c.
 GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
-#endif
+#endif // copyright
 
 
 #define INT_CRC
@@ -84,6 +84,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #else
 #  include "ne_logging.h"
    typedef int           FileDesc;
+   typedef void*         SktAuth;
 #endif
 
 
@@ -225,6 +226,7 @@ typedef struct handle {
    unsigned long buff_rem;
    off_t buff_offset;
    FileDesc FDArray[ MAXPARTS ];
+   SktAuth  auth;               /* pass-through to RDMA/sockets impl */
 
    /* Threading fields */
    void *buffer_list[MAX_QDEPTH];
@@ -263,15 +265,15 @@ typedef struct handle {
 
 
 /* Erasure Utility Functions taking a raw path argument */
-ne_handle ne_open1  ( SnprintfFunc func, void* state, char *path, ne_mode mode, ... );
-int       ne_delete1( SnprintfFunc func, void* state, char *path, int width );
-ne_stat   ne_status1( SnprintfFunc func, void* state, char *path );
+ne_handle ne_open1  ( SnprintfFunc func, void* state, SktAuth auth, char *path, ne_mode mode, ... );
+int       ne_delete1( SnprintfFunc func, void* state, SktAuth auth, char *path, int width );
+ne_stat   ne_status1( SnprintfFunc func, void* state, SktAuth auth, char *path );
 
 // these interfaces provide a default SnprintfFunc, which supports the
 // expectations of the default MarFS multi-component implementation
-#define ne_open(   PATH, MODE, ... )  ne_open1  (ne_default_snprintf, NULL, (PATH), (MODE), ##__VA_ARGS__)
-#define ne_delete( PATH, WIDTH )      ne_delete1(ne_default_snprintf, NULL, (PATH), (WIDTH))
-#define ne_status( PATH )             ne_status1(ne_default_snprintf, NULL, (PATH))
+ne_handle ne_open  ( char *path, ne_mode mode, ... );
+int       ne_delete( char* path, int width );
+ne_stat   ne_status( char* path);
 
 
 /* Erause Utility functions taking a <handle> argument */

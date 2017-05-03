@@ -65,12 +65,14 @@ AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
 AC_PROG_RANLIB
 
-# Checks for programs.
+# default to empty flags, instead of "-g -O2"
+: ${CFLAGS=""}
 AC_PROG_CC
+
 
 # Checks for libraries.
 AC_CHECK_LIB([pthread], [pthread_create])
-AC_CHECK_LIB([isal], [crc32_ieee], [],
+AC_CHECK_LIB([isal],    [crc32_ieee], [],
    [AC_CHECK_LIB([isal], [crc32_ieee_base],
       [echo
        echo "WARNING:  Could not properly link 'crc32_ieee' from isa-l, defaulting to '_base' implementation"
@@ -105,14 +107,14 @@ AXATTR_SET_FUNC_CHECK
 # optional build uses RDMA-sockets
 # The server must be deployed on remote hosts (after building) to support this mode.
 AC_ARG_ENABLE([sockets],
-               AS_HELP_STRING([--enable-sockets],
-                              [One of {rdma,ip,unix}.  File operations go to a server, via sockets.]),
+              AS_HELP_STRING([--enable-sockets],
+                             [One of {rdma,ip,unix}.  File operations go to a server, via sockets.]),
               [case "${enableval}" in
                  rdma) enable_sockets=rdma ;;
                  no)   enable_sockets=no ;;
                  *)    AC_MSG_FAILURE([enable-sockets={rdma,ip,unix}. Currently, only rdma is supported]) ;;
-                esac],
-               [enable_sockets=no])
+               esac],
+              [enable_sockets=no])
 
 AM_CONDITIONAL([ANY_SOCKETS],   [test "$enable_sockets" != no ])
 AM_CONDITIONAL([RDMA_SOCKETS],  [test "$enable_sockets"  = rdma])
@@ -131,7 +133,7 @@ AM_COND_IF([RDMA_SOCKETS],
 AC_ARG_ENABLE([auth],
                AS_HELP_STRING([--disable-auth],
                               [Don't require RDMA client/server to use authentication.  (Avoid link with aws4c, curl, etc)]),
-               ,
+               [enable_auth=${enableval}],
                [enable_auth=yes])
 
 AM_CONDITIONAL([AUTH_SOCKETS],  [test "$enable_sockets" != no && test x"$enable_auth" != xno])

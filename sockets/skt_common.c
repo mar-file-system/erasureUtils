@@ -1108,16 +1108,19 @@ int client_s3_authenticate(SocketHandle* handle, int command) {
 
    int needs_free = 0;
    if (! handle->aws_ctx) {
-      LOG("WARNING: handle->AWSContext hasn't been initialized with skt_fcntl().  Try reading from ~/.awsAuth ...\n");
+      LOG("WARNING: handle->AWSContext hasn't been initialized with skt_fcntl().\n");
+      LOG("Trying to read info for user '%s' from ~/.awsAuth ...\n", SKT_S3_USER);
       NEED( handle->aws_ctx = aws_context_new() );
 
       if (aws_read_config_r((char* const)SKT_S3_USER, handle->aws_ctx)) {
          // probably missing a line in ~/.awsAuth
-         ERR("aws-read-config for user '%s' failed\n", SKT_S3_USER);
+         ERR("aws_read_config for user '%s' failed\n", SKT_S3_USER);
          aws_context_free_r(handle->aws_ctx);
          handle->aws_ctx = NULL;
          return -1;
       }
+
+      LOG("Read from ~/.awsAuth succeeded\n");
       needs_free = 1;
    }
 
@@ -1359,21 +1362,26 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 
 int skt_fcntl(SocketHandle* handle, SocketFcntlCmd cmd, ...) {
 
-   if (cmd != SKT_F_SETAUTH) {
+   switch (cmd) {
+
+   case SKT_F_SETAUTH: {
 
 #ifdef S3_AUTH
-      if (! (handle->flags & HNDL_PUT)) {
-         ERR("handle not open for writing\n");
-         errno = EINVAL;
-         return -1;
-      }
+
+      //      if (! (handle->flags & HNDL_PUT)) {
+      //         ERR("handle not open for writing\n");
+      //         errno = EINVAL;
+      //         return -1;
+      //      }
 
       va_list ap;
       va_start( ap, cmd );
-      AWSContext* aws_ctx = va_arg( ap, AWSContext* );
+
+      // We allow the arg to be void*, so that ne_open1(), ne_delete1(),
+      // etc, can remain blissfully ignorant of AWSContext.
+      handle->aws_ctx = (AWSContext*)va_arg( ap, void* );
       va_end( ap );
 
-      handle->aws_ctx = aws_ctx;
       return 0;
 
 #else
@@ -1381,15 +1389,82 @@ int skt_fcntl(SocketHandle* handle, SocketFcntlCmd cmd, ...) {
       errno = EPERM;
       return -1;
 #endif
-
    }
 
-
-   ERR("unknown cmd: %d\n", cmd);
-   errno = ENOTSUP;
-   return -1;
+   default:
+      ERR("unknown cmd: %d\n", cmd);
+      errno = ENOTSUP;
+      return -1;
+   }
 }
 
+
+
+// allow erasureLib/* to always call something for initialization of
+// credentials at the top-level, without having to know about building
+// with/without S3_AUTH.
+//
+// NOTE: SktAuth is already a ptr.  We're getting a ptr to caller's ptr.
+
+int  skt_auth_init(const char* user, SktAuth* auth) {
+
+#ifdef S3_AUTH
+   const char*  aws_user = user;  // token 1 in ~/.awsAuth
+   AWSContext*  aws_ctx  = aws_context_new();
+   int          retval   = 0;
+
+   if (! aws_ctx) {
+      ERR("Couldn't allocate an AWSContext\n");
+      errno = ENOMEM;
+      retval = -1;
+   }
+   else {
+      if (! aws_user)
+         aws_user = SKT_S3_USER;
+
+      if (aws_read_config_r((char* const)user, aws_ctx)) {
+         // probably missing a line in ~/.awsAuth
+         ERR("aws_read_config failed, for user '%s'\n", user);
+         aws_context_free_r(aws_ctx);
+         aws_ctx = NULL;
+         retval = -1;
+      }
+   }
+
+   *auth = aws_ctx;
+   return retval;
+
+#else
+   // QUESTION: should this fail?  We allow building libne without auth, so
+   //     that generic libne users are not required to link with libaws4c.
+   //     But if we do build libne without auth, then link to marfs (which
+   //     now assumes that sockets are authenticated), shouldn't marfs get
+   //     a runtime error here, so that we can't miss that mistake?
+   //
+   // ANSWER: Apps that link with libne (and expect authentication based on
+   //     the SktAuth we are initializing) should test the SktAuth after
+   //     return, to assure it is non-null, as well as testing the return
+   //     code to assure it is zero.  Apps that are allowed to use sockets
+   //     without authentication should just test the return-code.
+
+   *auth = NULL;
+   return 0;
+#endif
+}
+
+
+// This always works correctly, whether built for S3_AUTH or not, as long
+// as you called skt_auth_init() previously.
+//
+int skt_auth_install(SocketHandle* handle, void* aws_ctx) {
+   return skt_fcntl(handle, SKT_F_SETAUTH, aws_ctx);
+}
+
+
+void skt_auth_free(SktAuth auth) {
+   if (auth)
+      aws_context_free_r((AWSContext*)auth);
+}
 
 
 // This does non-RDMA-related init tasks (including sending the
@@ -2079,7 +2154,7 @@ int skt_close(SocketHandle* handle) {
 // UNLINK
 // ...........................................................................
 
-int skt_unlink(const char* service_path) {
+int skt_unlink(const void* aws_ctx, const char* service_path) {
   //  NO_IMPL();
 
   SocketHandle       handle = {0};
@@ -2090,6 +2165,9 @@ int skt_unlink(const char* service_path) {
 
   // jNEED() macros will run this before exiting
   jHANDLER( jshut_down_handle, &handle );
+
+  // install authentication info that will be used in basic_init()
+  jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
 
   // send UNLINK with pathname
   jNEED_0( basic_init(&handle, CMD_UNLINK) );
@@ -2110,7 +2188,7 @@ int skt_unlink(const char* service_path) {
 // CHOWN
 // ...........................................................................
 
-int  skt_chown (const char* service_path, uid_t uid, gid_t gid) {
+int  skt_chown (const void* aws_ctx, const char* service_path, uid_t uid, gid_t gid) {
 
   SocketHandle       handle = {0};
   PseudoPacketHeader hdr = {0};
@@ -2120,6 +2198,9 @@ int  skt_chown (const char* service_path, uid_t uid, gid_t gid) {
 
   // jNEED() macros will run this before exiting
   jHANDLER( jshut_down_handle, &handle );
+
+  // install authentication info that will be used in basic_init()
+  jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
 
   // send CHOWN with pathname
   jNEED_0( basic_init(&handle, CMD_CHOWN) );
@@ -2158,7 +2239,7 @@ int  skt_chown (const char* service_path, uid_t uid, gid_t gid) {
 //     that one thing.  Instead, we'll just resort to write_raw(), and
 //     our cleanup devolves to shut_down_handle().
 
-int skt_rename (const char* service_path, const char* new_path) {
+int skt_rename (const void* aws_ctx, const char* service_path, const char* new_path) {
   DBG("skt_rename from: %s\n", service_path);
   DBG("skt_rename to:   %s\n", new_path);
 
@@ -2181,12 +2262,18 @@ int skt_rename (const char* service_path, const char* new_path) {
   // jNEED() macros will run this before exiting
   jHANDLER( jskt_close, &handle );
 
+  // install authentication info that will be used in basic_init()
+  jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
+  
   // perform deferred initial protocol exchanges, and send fname
-  NEED_0( write_init(&handle, CMD_RENAME) );
+  jNEED_0( write_init(&handle, CMD_RENAME) );
 
 #else
   // jNEED() macros will run this before exiting
   jHANDLER( jshut_down_handle, &handle );
+
+  // install authentication info that will be used in basic_init()
+  jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
 
   // perform deferred initial protocol exchanges, and send fname
   jNEED_0( basic_init(&handle, CMD_RENAME) );
@@ -2238,7 +2325,7 @@ int skt_rename (const char* service_path, const char* new_path) {
 //
 // ...........................................................................
 
-int skt_stat(const char* service_path, struct stat* st) {
+int skt_stat(const void* aws_ctx, const char* service_path, struct stat* st) {
   SocketHandle   handle = {0};
   char           buf[STAT_DATA_SIZE]   __attribute__ (( aligned(64) ));
   char*          ptr = buf;
@@ -2255,11 +2342,17 @@ int skt_stat(const char* service_path, struct stat* st) {
   // jNEED() macros will run this before exiting
   jHANDLER( jskt_close, &handle );
 
+  // install authentication info that will be used in basic_init()
+  jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
+
   // send STAT plus fname, and prepare for reading via skt_read()
   jNEED_0( read_init(&handle, CMD_STAT, ptr, STAT_DATA_SIZE) );
 #else
   // jNEED() macros will run this before exiting
   jHANDLER( jshut_down_handle, &handle );
+
+  // install authentication info that will be used in basic_init()
+  jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
 
   // send STAT plus fname, and prepare for reading via read_raw()
   jNEED_0( basic_init(&handle, CMD_STAT) );
@@ -2321,7 +2414,7 @@ int skt_stat(const char* service_path, struct stat* st) {
 // GETXATTR
 // ...........................................................................
 
-int skt_getxattr(const char* service_path, const char* name, void* value, size_t size) {
+int skt_getxattr(const void* aws_ctx, const char* service_path, const char* name, void* value, size_t size) {
   NO_IMPL();
 }
 
