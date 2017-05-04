@@ -190,7 +190,7 @@ pthread_t       reap_thr;
 void
 shut_down_thread(void* arg) {
   ThreadContext* ctx = (ThreadContext*)arg;
-  DBG("pos: %d, peer_fd: %d, file_fd: %d\n", ctx->pos, ctx->handle.peer_fd, ctx->file_fd);
+  neDBG("pos: %d, peer_fd: %d, file_fd: %d\n", ctx->pos, ctx->handle.peer_fd, ctx->file_fd);
 
   // maybe close the local file
   if (ctx->file_fd > 0) {
@@ -213,7 +213,7 @@ shut_down_thread(void* arg) {
   if (ctx->flags & CTX_PRE_THREAD) {
     SocketHandle*  handle = &ctx->handle; // shorthand
 
-    DBG("closing client_fd %d\n", handle->peer_fd);
+    neDBG("closing client_fd %d\n", handle->peer_fd);
     shut_down_handle(handle);
   }
 
@@ -227,30 +227,30 @@ void
 shut_down_server() {
 
   // shutdown reaper
-  DBG("stopping reaper\n");
+  neDBG("stopping reaper\n");
   pthread_cancel(reap_thr);
   pthread_join(reap_thr, NULL);
   // pthread_mutex_destroy(&reap_mtx);
-  DBG("done.\n");
+  neDBG("done.\n");
 
   // shutdown all connection-handling threads
   int i;
   for (i=0; i<MAX_SOCKET_CONNS; ++i) {
     if (IS_ACTIVE(&conn_list[i].ctx)) {
-      DBG("cancelling conn %d ...", i);
+      neDBG("cancelling conn %d ...", i);
       pthread_cancel(conn_list[i].thr);
       pthread_join(conn_list[i].thr, NULL);
-      DBG("done.\n");
+      neDBG("done.\n");
     }
   }
 
   // close up shop
   if (main_flags & MAIN_BIND) {
-    DBG("unlinking '%s'\n", server_name);
+    neDBG("unlinking '%s'\n", server_name);
     (void)unlink(server_name);
   }
   if (main_flags & MAIN_SOCKET_FD) {
-    DBG("closing socket_fd %d\n", socket_fd);
+    neDBG("closing socket_fd %d\n", socket_fd);
     CLOSE(socket_fd);
   }
 }
@@ -259,7 +259,7 @@ shut_down_server() {
 // for main()
 static void
 sig_handler(int sig) {
-  ERR("sig_handler exiting on signal %d\n", sig);
+  neERR("sig_handler exiting on signal %d\n", sig);
   shut_down_server();
   exit(0);
 }
@@ -328,10 +328,10 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    // size of authentication-info
    ssize_t     size = hdr->size;
    if (size > MAX_S3_DATA) {
-      ERR("size %lld exceeds max S3 header-size (%llu)\n", size, MAX_S3_DATA);
+      neERR("size %lld exceeds max S3 header-size (%llu)\n", size, MAX_S3_DATA);
       return -1;
    }
-   DBG("data-size:  %lld\n", size);
+   neDBG("data-size:  %lld\n", size);
 
    // read authentication info
    NEED_0( read_raw(client_fd, s3_data, size) );
@@ -350,50 +350,50 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
 
    // --- DATE  (no guarantee for cross-platform size of time_t)
    RECV_VALUE_SAFE(date_size, ptr, ptr_remain);
-   DBG("date_size:  %d\n", date_size);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   neDBG("date_size:  %d\n", date_size);
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
    if (date_size != sizeof(date)) {
-      ERR("date size %lld doesn't match sizeof(time_t)\n", date_size, sizeof(date));
+      neERR("date size %lld doesn't match sizeof(time_t)\n", date_size, sizeof(date));
       return -1;
    }
 
    RECV_VALUE_SAFE(date, ptr, ptr_remain);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 #if DEBUG_SOCKETS
    char time_in[32];           // max 26
    NEED_GT0( ctime_r(&date, time_in) );
-   DBG("date [in]:  %s", time_in); // includes newline
+   neDBG("date [in]:  %s", time_in); // includes newline
 #endif
 
    // validate DATE
    struct timeval now;           // we're assuming client/server in the same timezone
    if (gettimeofday(&now, NULL)) {
-      ERR("gettimeofday failed: %s\n", strerror(errno));
+      neERR("gettimeofday failed: %s\n", strerror(errno));
       return -1;
    }
 #if DEBUG_SOCKETS
    char time_now[32];           // max 26
    NEED_GT0( ctime_r(&now.tv_sec, time_now) );
-   DBG("date [now]: %s", time_now); // includes newline
+   neDBG("date [now]: %s", time_now); // includes newline
 #endif
    if ((MAX_S3_DATE_LAG < 0) && ((now.tv_sec - date) > MAX_S3_DATE_LAG)) {
-      ERR("caller's date is %llu seconds behind (limit: %llu)\n",
+      neERR("caller's date is %llu seconds behind (limit: %llu)\n",
           (now.tv_sec - date), MAX_S3_DATE_LAG);
       return -1;
    }
 
    // --- OP
    RECV_VALUE_SAFE(op, ptr, ptr_remain);
-   DBG("op:         %s\n", command_str(op));
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   neDBG("op:         %s\n", command_str(op));
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
    hdr->command = op;
    hdr->size = 0;
 
 
    // --- PATH
    RECV_VALUE_SAFE(str_len, ptr, ptr_remain);
-   DBG("fname_len:  %lld\n", str_len);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   neDBG("fname_len:  %lld\n", str_len);
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
    NEED( str_len < fname_len );
    strncpy(fname, ptr, str_len);
@@ -405,14 +405,14 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    ptr        += str_len  +1;
    ptr_remain -= str_len +1;
 
-   DBG("fname:      %s\n", fname);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   neDBG("fname:      %s\n", fname);
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
 
    // --- USER-NAME
    RECV_VALUE_SAFE(str_len, ptr, ptr_remain);
-   DBG("user_len:   %lld\n", str_len);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   neDBG("user_len:   %lld\n", str_len);
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
    NEED( str_len < ptr_remain );
    NEED( ptr[str_len] == 0 );
@@ -421,14 +421,14 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
 
    ptr        += str_len +1;
    ptr_remain -= str_len +1;
-   DBG("user_name:  %s\n", user_name);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   neDBG("user_name:  %s\n", user_name);
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
    
 
    // --- SIGNATURE
    RECV_VALUE_SAFE(str_len, ptr, ptr_remain);
-   DBG("sign_len:   %lld\n", str_len);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   neDBG("sign_len:   %lld\n", str_len);
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
    NEED( str_len < ptr_remain );
    NEED( ptr[str_len] == 0 );
@@ -438,13 +438,13 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    ptr        += str_len +1;
    ptr_remain -= str_len +1;
    
-   DBG("sign [in]:  %s\n", signature);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   neDBG("sign [in]:  %s\n", signature);
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
 
    // --- done
    if ((size_t)(ptr - s3_data) != size) {
-      ERR("size of parsed fields (%llu) didn't match provided size (%llu)\n",
+      neERR("size of parsed fields (%llu) didn't match provided size (%llu)\n",
           (size_t)(ptr - s3_data), size);
       return -1;
    }
@@ -454,16 +454,16 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
 
    //   char* s3_pass = NULL;
    //   if (find_s3_password(user_name, s3_pass)) {
-   //      ERR("unknown user '%s'\n", user_name);
+   //      neERR("unknown user '%s'\n", user_name);
    //      return -1;
    //   }
-   DBG("user_name:  %s\n", user_name);
+   neDBG("user_name:  %s\n", user_name);
    if (aws_read_config_r((char* const)user_name, aws_ctx)) {
       // probably missing a line in ~/.awsAuth
-      ERR("aws-read-config for user '%s' failed\n", user_name);
+      neERR("aws-read-config for user '%s' failed\n", user_name);
       return -1;
    }
-   // DBG("pass:       %s\n", aws_ctx->awsKey);
+   // neDBG("pass:       %s\n", aws_ctx->awsKey);
 
    char  resource[1024];        // matches use in aws4c.c
    char* srv_date = NULL;
@@ -476,12 +476,12 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
                                          aws_ctx);
    NEED( srv_signature );
 
-   DBG("res  [srv]: %s\n", resource);
-   DBG("date [srv]: %s\n", srv_date);
-   DBG("sign [srv]: %s\n", srv_signature);
+   neDBG("res  [srv]: %s\n", resource);
+   neDBG("date [srv]: %s\n", srv_date);
+   neDBG("sign [srv]: %s\n", srv_signature);
 
    int retval = ( 0 - (strcmp(signature, srv_signature) != 0) ); // 0:success, -1:fail
-   DBG("-- AUTHENTICATION: %s for %s %s\n", (retval ? "FAIL" : "OK"), command_str(op), fname);
+   neDBG("-- AUTHENTICATION: %s for %s %s\n", (retval ? "FAIL" : "OK"), command_str(op), fname);
 
    return retval;
 }
@@ -492,7 +492,7 @@ int server_s3_authenticate(int client_fd, PseudoPacketHeader* hdr, char* fname, 
 
    int rc = server_s3_authenticate_internal(client_fd, hdr, fname, fname_size, &aws_ctx);
    if (rc)
-      LOG("auth failed: %s %s\n", command_str(hdr->command), (fname ? fname : "<unknown_path>"));
+      neLOG("auth failed: %s %s\n", command_str(hdr->command), (fname ? fname : "<unknown_path>"));
 
    aws_context_release_r(&aws_ctx); // free strdup'ed name, password, etc
 
@@ -520,17 +520,17 @@ int server_s3_authenticate(int client_fd, PseudoPacketHeader* hdr, char* fname, 
 int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
 
   if (fname_size > max_size) {
-    ERR("fname-length %llu exceeds maximum %u\n", fname_size, max_size);
+    neERR("fname-length %llu exceeds maximum %u\n", fname_size, max_size);
     return -1;
   }
 
   // read fname from the peer
   NEED_0( read_raw(peer_fd, fname, fname_size) );
   if (!fname[0] || fname[fname_size -1]) {
-    ERR("bad fname\n");
+    neERR("bad fname\n");
     return -1;
   }
-  DBG("fname: %s\n", fname);
+  neDBG("fname: %s\n", fname);
 
 
   // validate canonicalized name, using "<dir>" from server command-line.
@@ -551,7 +551,7 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
     *last_slash = 0;
     char* path = realpath(fname, canon); // canonicalize the parent-dir?
     if (!path)
-      ERR("realpath(%s) failed (parent-directory): %s\n", fname, strerror(errno));
+      neERR("realpath(%s) failed (parent-directory): %s\n", fname, strerror(errno));
     
     *last_slash = '/';               // restore original fname
     if (!path)
@@ -562,18 +562,18 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
     canon_len = strlen(canon);
     size_t last_slash_len = strlen(last_slash);
     if ((canon_len + last_slash_len +1) > PATH_MAX) {
-      ERR("hand-built realpath (%s%s) would be too big\n", canon, last_slash);
+      neERR("hand-built realpath (%s%s) would be too big\n", canon, last_slash);
       return -1;
     }
     strcat(canon, last_slash);
     canon_len += last_slash_len;
   }
   else if (strrchr(dir_root, '/')) {
-    ERR("path %s has no '/', so obvisouly it can't be under '%s'\n", fname, dir_root);
+    neERR("path %s has no '/', so obvisouly it can't be under '%s'\n", fname, dir_root);
     return -1;
   }
   else {
-    ERR("Neither path '%s' nor dir_root '%s' have slashes.  "
+    neERR("Neither path '%s' nor dir_root '%s' have slashes.  "
         "Let's hope you know what you're doing\n",
         fname, dir_root);
     strncpy(canon, fname, PATH_MAX);
@@ -586,7 +586,7 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
   if (strncmp(canon, dir_root, dir_root_len)
       || (canon[dir_root_len] != '/')) {
 
-    ERR("illegal path: '%s'  (canonicalized path: '%s' does not begin with '%s')\n",
+    neERR("illegal path: '%s'  (canonicalized path: '%s' does not begin with '%s')\n",
         fname, canon, dir_root);
     return -1;
   }
@@ -626,7 +626,7 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
 //     on your handle, and shut_down_handle() at "close" time.
 //
 int fake_open(SocketHandle* handle, int flags, char* buf, size_t size) {
-  DBG("fake_open(0x%llx, 0x%x, 0x%llx, %lld)\n", (size_t)handle, flags, (size_t)buf, size);
+  neDBG("fake_open(0x%llx, 0x%x, 0x%llx, %lld)\n", (size_t)handle, flags, (size_t)buf, size);
 
   // RD/WR with RDMA would require riomaps on both ends, or else
   // two different channels, each with a single riomap.
@@ -675,7 +675,7 @@ int fake_open(SocketHandle* handle, int flags, char* buf, size_t size) {
 //    skt_open(RD)/fake_open_basic(WR).
 
 int fake_open_basic(SocketHandle* handle, int flags) {
-  DBG("fake_open_basic(0x%llx, 0x%x, 0x%llx, %lld)\n", (size_t)handle, flags);
+  neDBG("fake_open_basic(0x%llx, 0x%x, 0x%llx, %lld)\n", (size_t)handle, flags);
 
   // this isn't even meaningful for the tokens-only exchanges we will
   // be doing.  It would apply to data.  We can always exchange
@@ -722,11 +722,11 @@ int server_put(ThreadContext* ctx) {
 #ifndef SKIP_FILE_WRITES
   ctx->file_fd = open(fname, (O_WRONLY | O_CREAT | O_TRUNC), 0660);
   if (ctx->file_fd < 0) {
-    ERR("couldn't open '%s' for writing: %s\n",
+    neERR("couldn't open '%s' for writing: %s\n",
         fname, strerror(errno));
     return -1;
   }
-  DBG("opened file '%s'\n", fname);
+  neDBG("opened file '%s'\n", fname);
 #endif
 
 
@@ -773,11 +773,11 @@ int server_get(ThreadContext* ctx) {
 #ifndef SKIP_FILE_WRITES
   ctx->file_fd = open(fname, (O_RDONLY));
   if (ctx->file_fd < 0) {
-    ERR("couldn't open '%s' for reading: %s\n",
+    neERR("couldn't open '%s' for reading: %s\n",
         fname, strerror(errno));
     return -1;
   }
-  DBG("opened file '%s'\n", fname);
+  neDBG("opened file '%s'\n", fname);
 #endif
 
 
@@ -798,7 +798,7 @@ int server_get(ThreadContext* ctx) {
 
 int server_del(ThreadContext* ctx) {
   if (unlink(ctx->fname)) {
-    ERR("couldn't unlink '%s'\n", ctx->fname);
+    neERR("couldn't unlink '%s'\n", ctx->fname);
     ctx->flags |= CTX_THREAD_ERR;
     return -1;
   }
@@ -829,7 +829,7 @@ int server_chown(ThreadContext* ctx) {
 
   // perform op
   int rc = lchown(fname, uid, gid);
-  DBG("result: %d %s\n", rc, (rc ? strerror(errno) : ""));
+  neDBG("result: %d %s\n", rc, (rc ? strerror(errno) : ""));
 
   // send RETURN with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
@@ -869,7 +869,7 @@ int server_rename(ThreadContext* ctx) {
 
   // perform op
   int rc = rename(fname, new_fname);
-  DBG("rc: %d %s\n", rc, (rc ? strerror(errno) : ""));
+  neDBG("rc: %d %s\n", rc, (rc ? strerror(errno) : ""));
 
   // send RETURN with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
@@ -898,7 +898,7 @@ int server_unlink(ThreadContext* ctx) {
 
   // perform op
   int rc = unlink(fname);
-  DBG("rc: %d %s\n", rc, (rc ? strerror(errno) : ""));
+  neDBG("rc: %d %s\n", rc, (rc ? strerror(errno) : ""));
 
   // send RETURN with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
@@ -959,7 +959,7 @@ int server_stat(ThreadContext* ctx) {
   char*              fname     = ctx->fname;
   struct stat        st;
 
-  DBG("stat %s\n", fname);
+  neDBG("stat %s\n", fname);
 
 
 #if 1
@@ -979,14 +979,14 @@ int server_stat(ThreadContext* ctx) {
   // Failure doesn't mean the server-routine failed
   if (lstat(fname, &st)) {
     // case (1), stat failed
-    DBG("stat failed: %s\n", strerror(errno));
+    neDBG("stat failed: %s\n", strerror(errno));
 
     // (a) send RETURN with return-code == negative errno
     NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, -errno, NULL) );
   }
   else {
     // case (2), stat succeeded
-    DBG("stat OK\n");
+    neDBG("stat OK\n");
 
     // (a) send RETURN with return-code == sizeof(struct stat), for crude validation
     jNEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, sizeof(struct stat), NULL) );
@@ -1054,7 +1054,7 @@ int server_stat(ThreadContext* ctx) {
 
 void* server_thread(void* arg) {
   ThreadContext* ctx = (ThreadContext*)arg;
-  DBG("server_thread entry\n");
+  neDBG("server_thread entry\n");
 
   // cleanup fd's etc, if we pthread_exit(), or get cancelled.
   // NOTE: This isn't actually a function; it's a butt-ugly
@@ -1073,11 +1073,11 @@ void* server_thread(void* arg) {
 
   // read client command
   if (read_pseudo_packet_header(client_fd, hdr)) {
-    DBG("failed to read pseudo-packet header\n");
+    neDBG("failed to read pseudo-packet header\n");
     pthread_exit(ctx);
   }
-  DBG("\n");
-  DBG("server thread: %s\n", command_str(hdr->command));
+  neDBG("\n");
+  neDBG("server thread: %s\n", command_str(hdr->command));
 
 #ifdef S3_AUTH
   // Part of the authentication includes specification of the command to be
@@ -1112,7 +1112,7 @@ void* server_thread(void* arg) {
 
   if (! rc) {
     // always print command and arg for log
-    LOG("server_thread (fd=%d): %s %s\n", client_fd, command_str(hdr->command), fname);
+    neLOG("server_thread (fd=%d): %s %s\n", client_fd, command_str(hdr->command), fname);
 
     // perform command
     switch (hdr->command) {
@@ -1125,7 +1125,7 @@ void* server_thread(void* arg) {
     case CMD_UNLINK: rc = server_unlink(ctx);  break;
 
     default:
-      ERR("unsupported op: '%s'\n", command_str(hdr->command));
+      neERR("unsupported op: '%s'\n", command_str(hdr->command));
       rc = -1;
     }
   }
@@ -1154,7 +1154,7 @@ void* reap_thread(void* arg) {
   while (1) {
 
     sleep(reap_timeout_sec);
-    // ERR("reaper: awake\n");
+    // neERR("reaper: awake\n");
 
     pthread_mutex_lock(&reap_mtx);
 
@@ -1171,13 +1171,13 @@ void* reap_thread(void* arg) {
 
         // --- first sighting of this connection?  Note current pos
         else if (reap_list[i] < 0) {
-          // ERR("reaper [%3d]: first sighting\n", i);
+          // neERR("reaper [%3d]: first sighting\n", i);
           reap_list[i] = current_pos;
         }
 
         // --- if nothing has moved, kill the thread (and the connection)
         else if (reap_list[i] == current_pos) {
-          ERR("reaper [%3d]: reaping  (peer_fd: %d, file_fd: %d)\n",
+          neERR("reaper [%3d]: reaping  (peer_fd: %d, file_fd: %d)\n",
               i, conn_list[i].ctx.handle.peer_fd, conn_list[i].ctx.file_fd);
           reap_list[i] = -2;
           pthread_cancel(conn_list[i].thr); // cleanup sets CTX_THREAD_EXIT
@@ -1240,7 +1240,7 @@ int find_available_conn(int client_fd) {
 
 
   if (result >= 0) {
-    DBG("connection[%d] <- fd=%d\n", i, client_fd);
+    neDBG("connection[%d] <- fd=%d\n", i, client_fd);
     memset(&conn_list[pos].ctx, 0, sizeof(conn_list[pos].ctx));
 
     conn_list[pos].ctx.pos             = pos;   // for diagnostics
@@ -1275,11 +1275,11 @@ int push_thread(int client_fd) {
 
 
 void usage(const char* progname) {
-  ERR("Usage: %s -p <port> -d <dir> [ -r ]\n", progname);
-  ERR("  -p <port>   port on which the server should listen\n");
-  ERR("  -d <dir>    server will allow clients to write arbitrary files under <dir>\n");
-  ERR("                (but nowhere else)\n");
-  ERR("  -r          use a 'reap' thread, to clean up stuck threads\n");
+  neERR("Usage: %s -p <port> -d <dir> [ -r ]\n", progname);
+  neERR("  -p <port>   port on which the server should listen\n");
+  neERR("  -d <dir>    server will allow clients to write arbitrary files under <dir>\n");
+  neERR("                (but nowhere else)\n");
+  neERR("  -r          use a 'reap' thread, to clean up stuck threads\n");
   exit(1);
 }
 
@@ -1318,7 +1318,7 @@ main(int argc, char* argv[]) {
   errno = 0;
   port = strtol(port_str, NULL, 10);
   if (errno) {
-    ERR("couldn't read integer from '%s'", port_str);
+    neERR("couldn't read integer from '%s'", port_str);
     abort();
   }
 
@@ -1368,7 +1368,7 @@ main(int argc, char* argv[]) {
 
   int rc = rdma_getaddrinfo(NULL, (char*)port_str, &hints, &res);
   if (rc) {
-    ERR("rdma_getaddrinfo() failed: %s\n", strerror(errno));
+    neERR("rdma_getaddrinfo() failed: %s\n", strerror(errno));
     exit(1);
   }
 
@@ -1420,7 +1420,7 @@ main(int argc, char* argv[]) {
 
   REQUIRE_0( LISTEN(socket_fd, SOMAXCONN) );
   main_flags |= MAIN_SOCKET_FD;
-  LOG("%s listening\n", server_name);
+  neLOG("%s listening\n", server_name);
 
 
   // spin up reaper-thread to clean-up dead-beat connections
@@ -1441,13 +1441,13 @@ main(int argc, char* argv[]) {
     ///  int client_fd = ACCEPT(socket_fd, (struct sockaddr*)&c_addr, &c_addr_size);
     int client_fd = ACCEPT(socket_fd, NULL, 0);
     if (client_fd < 0) {
-      ERR("failed accept: %s", strerror(errno));
+      neERR("failed accept: %s", strerror(errno));
       continue;
     }
 
-    DBG("main: connected fd=%d\n", client_fd);
+    neDBG("main: connected fd=%d\n", client_fd);
     if (push_thread(client_fd)) {
-      ERR("main: couldn't allocate thread, dropping fd=%d\n", client_fd);
+      neERR("main: couldn't allocate thread, dropping fd=%d\n", client_fd);
       SHUTDOWN(client_fd, SHUT_RDWR);
       CLOSE(client_fd);
     }

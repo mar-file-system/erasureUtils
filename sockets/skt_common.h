@@ -78,21 +78,23 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #endif
 #include "ne_logging.h"
 
+#define FAIL_STR   "* fail: "
+
 #if (DEBUG_SOCKETS == 2)
 #  include <syslog.h>
-#  define LOG(FMT,...)  SYSLOG(LOG_INFO,           FMT, ##__VA_ARGS__)
-#  define ERR(FMT,...)  SYSLOG(LOG_ERR,   "fail: " FMT, ##__VA_ARGS__)
-#  define DBG(FMT,...)  SYSLOG(LOG_DEBUG,          FMT, ##__VA_ARGS__)
+#  define neLOG(FMT,...)  SYSLOG(LOG_INFO,           FMT, ##__VA_ARGS__)
+#  define neERR(FMT,...)  SYSLOG(LOG_ERR,   FAIL_STR FMT, ##__VA_ARGS__)
+#  define neDBG(FMT,...)  SYSLOG(LOG_DEBUG,          FMT, ##__VA_ARGS__)
 
 #elif (DEBUG_SOCKETS)
-#  define LOG(FMT,...)  FPRINTF(stderr,            FMT, ##__VA_ARGS__)
-#  define ERR(FMT,...)  FPRINTF(stderr,   "fail: " FMT, ##__VA_ARGS__)
-#  define DBG(FMT,...)  FPRINTF(stderr,            FMT, ##__VA_ARGS__)
+#  define neLOG(FMT,...)  FPRINTF(stderr,            FMT, ##__VA_ARGS__)
+#  define neERR(FMT,...)  FPRINTF(stderr,   FAIL_STR FMT, ##__VA_ARGS__)
+#  define neDBG(FMT,...)  FPRINTF(stderr,            FMT, ##__VA_ARGS__)
 
 #else
-#  define LOG(FMT,...)  fprintf(stdout,            FMT, ##__VA_ARGS__)
-#  define ERR(FMT,...)  fprintf(stderr,   "fail: " FMT, ##__VA_ARGS__)
-#  define DBG(...)
+#  define neLOG(FMT,...)  fprintf(stdout,            FMT, ##__VA_ARGS__)
+#  define neERR(FMT,...)  fprintf(stderr,   FAIL_STR FMT, ##__VA_ARGS__)
+#  define neDBG(...)
 #endif
 
 
@@ -107,7 +109,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
          PRINT(#EXPR " " #TEST "\n");                                   \
       }                                                                 \
       else {                                                            \
-         LOG("* fail: " #EXPR " " #TEST "%s%s\n",                       \
+         neLOG(FAIL_STR #EXPR " " #TEST "%s%s\n",                       \
              (errno ? ": " : ""),                                       \
              (errno ? strerror(errno) : ""));                           \
          RETURN;                                                        \
@@ -116,33 +118,33 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 // print warning, if expression doesn't have expected value
-#define EXPECT(EXPR)        _TEST(EXPR,    , DBG,          )
-#define EXPECT_0(EXPR)      _TEST(EXPR, ==0, DBG,          )
-#define EXPECT_GT0(EXPR)    _TEST(EXPR,  >0, DBG,          )
+#define EXPECT(EXPR)        _TEST(EXPR,    , neDBG,          )
+#define EXPECT_0(EXPR)      _TEST(EXPR, ==0, neDBG,          )
+#define EXPECT_GT0(EXPR)    _TEST(EXPR,  >0, neDBG,          )
 
 // return -1, if expr doesn't have expected value
-#define NEED(EXPR)          _TEST(EXPR,    , DBG,    return -1)
-#define NEED_0(EXPR)        _TEST(EXPR, ==0, DBG,    return -1)
-#define NEED_GT0(EXPR)      _TEST(EXPR,  >0, DBG,    return -1)
+#define NEED(EXPR)          _TEST(EXPR,    , neDBG,    return -1)
+#define NEED_0(EXPR)        _TEST(EXPR, ==0, neDBG,    return -1)
+#define NEED_GT0(EXPR)      _TEST(EXPR,  >0, neDBG,    return -1)
 
 // // jump to cleanup-handler, if expr doesn't have expected value
-// #define jNEED(EXPR)         _TEST(EXPR,    , DBG,    goto jCLEANUP)
-// #define jNEED_0(EXPR)       _TEST(EXPR, ==0, DBG,    goto jCLEANUP)
-// #define jNEED_GT0(EXPR)     _TEST(EXPR,  >0, DBG,    goto jCLEANUP)
+// #define jNEED(EXPR)         _TEST(EXPR,    , neDBG,    goto jCLEANUP)
+// #define jNEED_0(EXPR)       _TEST(EXPR, ==0, neDBG,    goto jCLEANUP)
+// #define jNEED_GT0(EXPR)     _TEST(EXPR,  >0, neDBG,    goto jCLEANUP)
 
 // call cleanup function before exiting, if expr doesn't return expected value
 // [put a "jHANDLER" invocation at the top of a function that uses jNEED() macros.]
 typedef void(*jHandlerType)(void* arg);
 #define jHANDLER(FN, ARG)   jHandlerType j_handler = &(FN); void* j_handler_arg = (ARG)
 
-#define jNEED(EXPR)         _TEST(EXPR,    , DBG,    j_handler(j_handler_arg); return -1)
-#define jNEED_0(EXPR)       _TEST(EXPR, ==0, DBG,    j_handler(j_handler_arg); return -1)
-#define jNEED_GT0(EXPR)     _TEST(EXPR,  >0, DBG,    j_handler(j_handler_arg); return -1)
+#define jNEED(EXPR)         _TEST(EXPR,    , neDBG,    j_handler(j_handler_arg); return -1)
+#define jNEED_0(EXPR)       _TEST(EXPR, ==0, neDBG,    j_handler(j_handler_arg); return -1)
+#define jNEED_GT0(EXPR)     _TEST(EXPR,  >0, neDBG,    j_handler(j_handler_arg); return -1)
 
 // abort(), if expr doesn't have expected value
-#define REQUIRE(EXPR)       _TEST(EXPR,    , DBG,    abort()  )
-#define REQUIRE_0(EXPR)     _TEST(EXPR, ==0, DBG,    abort()  )
-#define REQUIRE_GT0(EXPR)   _TEST(EXPR,  >0, DBG,    abort()  )
+#define REQUIRE(EXPR)       _TEST(EXPR,    , neDBG,    abort()  )
+#define REQUIRE_0(EXPR)     _TEST(EXPR, ==0, neDBG,    abort()  )
+#define REQUIRE_GT0(EXPR)   _TEST(EXPR,  >0, neDBG,    abort()  )
 
 
 

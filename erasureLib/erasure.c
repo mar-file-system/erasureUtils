@@ -166,7 +166,8 @@ static int           gf_gen_decode_matrix(unsigned char *encode_matrix,
 // This allows more-ledgible selection of sockets versus file semantics
 #ifdef SOCKETS
 #  define FD(FDESC)                           (FDESC).peer_fd
-#  define OPEN(      FDESC, AUTH, ...)        skt_open(&(FDESC), ## __VA_ARGS__)
+#  define OPEN(FDESC, AUTH, ...)              do{ skt_open(&(FDESC), ## __VA_ARGS__); \
+                                                  skt_fcntl(&(FDESC), SKT_F_SETAUTH, (AUTH)); } while(0)
 #  define HNDLOP(OP, FDESC, ...)              skt_##OP(&(FDESC), ## __VA_ARGS__)
 #  define pHNDLOP(OP, FDESC_PTR, ...)         skt_##OP((FDESC_PTR), ## __VA_ARGS__)
 #  define PATHOP(OP, AUTH, PATH, ...)         skt_##OP((AUTH), (PATH), ## __VA_ARGS__)
@@ -176,7 +177,7 @@ static int           gf_gen_decode_matrix(unsigned char *encode_matrix,
 
 #else
 #  define FD(FDESC)                           (FDESC)
-#  define OPEN(      FDESC, AUTH, ...)        ((FDESC) = open(__VA_ARGS__))
+#  define OPEN(FDESC, AUTH, ...)              ((FDESC) = open(__VA_ARGS__))
 #  define HNDLOP(OP, FDESC, ...)              OP((FDESC), ## __VA_ARGS__)
 #  define pHNDLOP(OP, FDESC_PTR, ...)         OP(*(FDESC_PTR), ## __VA_ARGS__)
 #  define PATHOP(OP, AUTH, PATH, ...)         OP((PATH), ## __VA_ARGS__)

@@ -76,7 +76,7 @@ shut_down_handle(SocketHandle* handle) {
 
 #if UNIX_SOCKETS
   if (handle->flags & HNDL_FNAME) {
-    DBG("unlinking '%s'\n", handle->fname);
+    neDBG("unlinking '%s'\n", handle->fname);
     unlink(handle->fname);
     handle->flags &= ~HNDL_FNAME;
   }
@@ -92,9 +92,9 @@ shut_down_handle(SocketHandle* handle) {
     // we're just unmapping the address here, not using it.
     //
     if (handle->flags & HNDL_RIOMAPPED) {
-      DBG("peer_fd %3d: riounmap'ing\n", handle->peer_fd);
+      neDBG("peer_fd %3d: riounmap'ing\n", handle->peer_fd);
       dbg = RIOUNMAP(handle->peer_fd, handle->rio_buf, handle->rio_size);
-      DBG("peer_fd %3d: unmap = %d\n", handle->peer_fd, dbg);
+      neDBG("peer_fd %3d: unmap = %d\n", handle->peer_fd, dbg);
       handle->flags &= ~HNDL_RIOMAPPED;
     }
 
@@ -115,19 +115,19 @@ shut_down_handle(SocketHandle* handle) {
     //    0x00002b9eb5452aa1 in start_thread (arg=0x2b9eb718a700) at pthread_create.c:301
     //    0x00002b9eb596593d in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:115
 
-    DBG("peer_fd %3d: shutdown\n", handle->peer_fd);
+    neDBG("peer_fd %3d: shutdown\n", handle->peer_fd);
     dbg = SHUTDOWN(handle->peer_fd, SHUT_RDWR);
-    DBG("peer_fd %3d: shutdown = %d\n", handle->peer_fd, dbg);
+    neDBG("peer_fd %3d: shutdown = %d\n", handle->peer_fd, dbg);
 #endif
 
-    DBG("peer_fd %3d: close\n", handle->peer_fd);
+    neDBG("peer_fd %3d: close\n", handle->peer_fd);
     dbg = CLOSE(handle->peer_fd);
-    DBG("peer_fd %3d: close = %d\n", handle->peer_fd, dbg);
+    neDBG("peer_fd %3d: close = %d\n", handle->peer_fd, dbg);
 
     handle->flags &= ~HNDL_CONNECTED;
   }
 
-  DBG("peer_fd %3d: done\n", handle->peer_fd);
+  neDBG("peer_fd %3d: done\n", handle->peer_fd);
 }
 
 void jshut_down_handle(void* handle) {
@@ -145,7 +145,7 @@ void jskt_close(void* handle) {
 // but less than <size>, there must've been an EOF.
 
 ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
-  DBG("read_buffer(%d, 0x%llx, %lld, %d)\n", fd, buf, size, is_socket);
+  neDBG("read_buffer(%d, 0x%llx, %lld, %d)\n", fd, buf, size, is_socket);
 
 
 #ifdef USE_RIOWRITE
@@ -163,7 +163,7 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
     PseudoPacketHeader header;
     NEED_0( read_pseudo_packet_header(fd, &header) );
     if (header.command != CMD_DATA) {
-      ERR("unexpected pseudo-packet: %s\n", command_str(header.command));
+      neERR("unexpected pseudo-packet: %s\n", command_str(header.command));
       return -1;
     }
 
@@ -184,25 +184,25 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
     else
       read_count = read(fd, read_ptr, read_remain);
 
-    DBG("read_count(1): %lld\n", read_count);
+    neDBG("read_count(1): %lld\n", read_count);
 
     if (read_count < 0) {
-      DBG("read error: %s\n", strerror(errno));
+      neDBG("read error: %s\n", strerror(errno));
       return read_count;
     }
     else if (read_count == 0) {
       eof = 1;
-      DBG("read EOF\n");
+      neDBG("read EOF\n");
     }
 
     read_total  += read_count;
     read_ptr    += read_count;
     read_remain -= read_count;
   }
-  DBG("read_total: %lld\n", read_total);
+  neDBG("read_total: %lld\n", read_total);
 
   // // wouldn't want to do this with large reads ...
-  // DBG("contents: %s\n", read_buf);
+  // neDBG("contents: %s\n", read_buf);
 
   return read_total;
 }
@@ -227,7 +227,7 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 //    copy_file_to_socket()
 
 int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offset) {
-  DBG("write_buffer(%d, 0x%llx, %lld, skt:%d, off:0x%llx)\n", fd, buf, size, is_socket, offset);
+  neDBG("write_buffer(%d, 0x%llx, %lld, skt:%d, off:0x%llx)\n", fd, buf, size, is_socket, offset);
 
   const char*  write_ptr     = buf;
   size_t       write_remain  = size;
@@ -245,9 +245,9 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
     else
       write_count = write(fd, write_ptr, write_remain);
 
-    DBG("write_count: %lld\n", write_count);
+    neDBG("write_count: %lld\n", write_count);
     if (write_count < 0) {
-      ERR("write of %llu bytes failed, after writing %llu: %s\n",
+      neERR("write of %llu bytes failed, after writing %llu: %s\n",
           write_remain, write_total, strerror(errno));
       return -1;
     }
@@ -257,9 +257,9 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 
 #if 0
     if (errno == ENOSPC)
-      DBG("buffer is full.  ignoring.\n");
+      neDBG("buffer is full.  ignoring.\n");
     else if (errno == EPIPE) {
-      DBG("client disconnected?\n");
+      neDBG("client disconnected?\n");
       return -1;
       break;
     }
@@ -270,7 +270,7 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
     }
 #endif
   }
-  DBG("write_total: %lld\n", write_total);
+  neDBG("write_total: %lld\n", write_total);
 
 
 #ifdef USE_RIOWRITE
@@ -310,7 +310,7 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 //     like write_buffer() does, to handle incomplete writes.
 
 int read_raw(int fd, char* buf, size_t size) {
-  DBG("read_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
+  neDBG("read_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
 
   fd_set         rd_fds;
   struct timeval tv;
@@ -326,7 +326,7 @@ int read_raw(int fd, char* buf, size_t size) {
   } while ((rc < 0) && (errno == EINTR));
 
   if (! rc) {
-     ERR("timeout after %d sec\n", RD_TIMEOUT);
+     neERR("timeout after %d sec\n", RD_TIMEOUT);
      errno = EIO;
      return -1;
   }
@@ -335,11 +335,11 @@ int read_raw(int fd, char* buf, size_t size) {
   ssize_t read_count = RECV(fd, buf, size, MSG_WAITALL);
 
   if (! read_count) {
-    ERR("EOF\n");
+    neERR("EOF\n");
     return -1;
   }
   else if (read_count != size) {
-    ERR("read %lld instead of %lld bytes\n", read_count, size);
+    neERR("read %lld instead of %lld bytes\n", read_count, size);
     return -1;
   }
   return 0;
@@ -351,7 +351,7 @@ int read_raw(int fd, char* buf, size_t size) {
 //     like write_buffer() does.
 
 int write_raw(int fd, char* buf, size_t size) {
-   DBG("write_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
+   neDBG("write_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
 
   fd_set         wr_fds;
   struct timeval tv;
@@ -367,7 +367,7 @@ int write_raw(int fd, char* buf, size_t size) {
   } while ((rc < 0) && (errno == EINTR));
 
   if (! rc) {
-     ERR("timeout after %d sec\n", WR_TIMEOUT);
+     neERR("timeout after %d sec\n", WR_TIMEOUT);
      errno = EIO;
      return -1;
   }
@@ -378,7 +378,7 @@ int write_raw(int fd, char* buf, size_t size) {
   ssize_t write_count = SEND(fd, buf, size, MSG_WAITALL);
 
   if (write_count != size) {
-    ERR("wrote %lld instead of %lld bytes\n", write_count, size);
+    neERR("wrote %lld instead of %lld bytes\n", write_count, size);
     return -1;
   }
   return 0;
@@ -522,21 +522,21 @@ int write_pseudo_packet(int fd, SocketCommand command, size_t size, void* buf) {
   ssize_t write_count;
 
   // --- write <command>
-  DBG("-> command: %s\n", command_str(command));
+  neDBG("-> command: %s\n", command_str(command));
   uint32_t cmd = htonl(command);
   NEED_0( write_raw(fd, (char*)&cmd, sizeof(cmd)) );
 
   // --- write <size>
-  DBG("-> size:  %lld\n", size);
+  neDBG("-> size:  %lld\n", size);
   uint64_t sz = hton64(size);
   NEED_0( write_raw(fd, (char*)&sz, sizeof(sz)) );
 
   // --- maybe write <buf>
   if (buf) {
     if (size <= FNAME_SIZE)
-      DBG("-> buf:     0x%08x ='%s'\n", (size_t)buf, buf);
+      neDBG("-> buf:     0x%08x ='%s'\n", (size_t)buf, buf);
     else
-      DBG("-> buf:     0x%08x\n", (size_t)buf);
+      neDBG("-> buf:     0x%08x\n", (size_t)buf);
 
     NEED_0( write_raw(fd, (char*)buf, size) );
   }
@@ -554,14 +554,14 @@ int read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr) {
   uint32_t cmd;
   NEED_0( read_raw(fd, (char*)&cmd, sizeof(cmd)) );
   hdr->command = ntohl(cmd);
-  DBG("<- command: %s\n", command_str(hdr->command));
+  neDBG("<- command: %s\n", command_str(hdr->command));
 
 
   // --- read <size>
   uint64_t sz;
   NEED_0( read_raw(fd, (char*)&sz, sizeof(sz)) );
   hdr->size = ntoh64(sz);
-  DBG("<- size:  %lld\n", hdr->size);
+  neDBG("<- size:  %lld\n", hdr->size);
 
   return 0;
 }
@@ -583,16 +583,16 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
   size_t       length = strcspn(ptr, ":");
 
   if (! ptr[length]) {
-    ERR("couldn't find port in '%s'\n", ptr);
+    neERR("couldn't find port in '%s'\n", ptr);
     return -1;
   }
   else if (length >= HOST_SIZE) {
-    ERR("host token-length (plus NULL) %u exceeds max %u in '%s'\n",
+    neERR("host token-length (plus NULL) %u exceeds max %u in '%s'\n",
         length +1, HOST_SIZE, service_path);
     return -1;
   }
   else if (! strcmp(ptr + length, "://")) {
-    ERR("protocol-specs not yet supported, for '%s'\n",
+    neERR("protocol-specs not yet supported, for '%s'\n",
         service_path);
     return -1;
   }
@@ -605,11 +605,11 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
   length = strcspn(ptr, "/");
 
   if (! ptr[length]) {
-    ERR("couldn't find file-path in '%s'\n", ptr);
+    neERR("couldn't find file-path in '%s'\n", ptr);
     return -1;
   }
   else if (length >= PORT_STR_SIZE) {
-    ERR("port-token length (plus NULL) %u exceeds max %u in '%s'\n",
+    neERR("port-token length (plus NULL) %u exceeds max %u in '%s'\n",
         length +1, PORT_STR_SIZE, service_path);
     return -1;
   }
@@ -620,11 +620,11 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
   errno = 0;
   unsigned long  port = strtoul(ptr, NULL, 10);
   if (errno) {
-    ERR("couldn't read port from '%s': %s", ptr, strerror(errno));
+    neERR("couldn't read port from '%s': %s", ptr, strerror(errno));
     return -1;
   }
   if (port >> 16) {
-    ERR("port %lu is greater than %u\n", port, ((uint32_t)1 << 16) -1);
+    neERR("port %lu is greater than %u\n", port, ((uint32_t)1 << 16) -1);
     return -1;
   }
   spec->port = port;
@@ -634,11 +634,11 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
   ptr += length;                // don't skip over '/'
   length = strlen(ptr);
   if (! length) {
-    ERR("couldn't find file-component in '%s'\n", service_path);
+    neERR("couldn't find file-component in '%s'\n", service_path);
     return -1;
   }
   else if (length >= FNAME_SIZE) {
-    ERR("file-token length (plus NULL) %u exceeds max %u in '%s'\n",
+    neERR("file-token length (plus NULL) %u exceeds max %u in '%s'\n",
         length +1, FNAME_SIZE, ptr);
     return -1;
   }
@@ -693,18 +693,18 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
     ssize_t read_count  = size;
 
     if (unlikely(iters-- <= 0)) {
-      DBG("fake EOF\n");
+      neDBG("fake EOF\n");
       eof = 1;
       read_count  = 0;
       break;
     }
-    DBG("%d: fake read: %lld\n", iters, read_count);
+    neDBG("%d: fake read: %lld\n", iters, read_count);
 
 #else
     // read data up to <size>, or EOF
     size_t  read_pos   = handle->stream_pos;
     ssize_t read_count = read_buffer(fd, buf, size, 0);
-    DBG("read_count: %lld\n", read_count);
+    neDBG("read_count: %lld\n", read_count);
     NEED( read_count >= 0 );
 
 #ifdef DEBUG_SOCKETS
@@ -729,12 +729,12 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
           *(dbg_bufp++) = ',';
        }
        *(dbg_bufp++) = 0;
-       DBG("pos: %llu, dbg_buf=%s\n", read_pos, dbg_buf);
+       neDBG("pos: %llu, dbg_buf=%s\n", read_pos, dbg_buf);
     }
 #endif
 
     if (read_count == 0) {
-      DBG("read EOF\n");
+      neDBG("read EOF\n");
 
       ///#  ifdef USE_RIOWRITE
       ///      // make sure client isn't going to seek.
@@ -754,7 +754,7 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
       ///         // copy_file_to_socket().
       ///
       ///         if (header.command == CMD_SEEK_SET) {
-      ///            DBG("got SEEK %lld\n", header.size);
+      ///            neDBG("got SEEK %lld\n", header.size);
       ///            off_t rc = lseek(fd, handle->seek_pos, SEEK_SET);
       ///
       ///            // peer gets the return-code from lseek()
@@ -762,11 +762,11 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
       ///            NEED( rc != (off_t)-1 );
       ///         }
       ///         else if (header.command == CMD_RIO_OFFSET) {
-      ///            DBG("got RIO_OFFSET: 0x%llx\n", header.size);
+      ///            neDBG("got RIO_OFFSET: 0x%llx\n", header.size);
       ///            handle->rio_offset = header.size;
       ///         }
       ///         else {
-      ///            ERR("expected ACK, but got %s\n", command_str(header.command));
+      ///            neERR("expected ACK, but got %s\n", command_str(header.command));
       ///            return -1;
       ///         }
       ///
@@ -818,7 +818,7 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
       if (unlikely(write_count < 0)) {
 
         if (handle->flags & HNDL_SEEK_SET) {
-           DBG("write failed due to SEEK.  from %lld to %lld\n",
+           neDBG("write failed due to SEEK.  from %lld to %lld\n",
                handle->stream_pos, handle->seek_pos);
            handle->flags &= ~(HNDL_SEEK_SET);
 
@@ -830,15 +830,15 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
               remain = read_count - handle->seek_pos;
 
               handle->stream_pos = handle->seek_pos;
-              DBG("seek_pos is in existing buffer, at local offset %lld (length %lld)\n",
+              neDBG("seek_pos is in existing buffer, at local offset %lld (length %lld)\n",
                   copied, remain);
               continue;
            }
 
            off_t rc = lseek(fd, handle->seek_pos, SEEK_SET);
-           DBG("rc: %lld\n", (ssize_t)rc);
+           neDBG("rc: %lld\n", (ssize_t)rc);
            if (eof && (rc != (off_t)-1) && (rc != handle->stream_pos)) {
-              DBG("SEEK after EOF, ready for more reading at %lld\n",
+              neDBG("SEEK after EOF, ready for more reading at %lld\n",
                   handle->seek_pos);
               eof = 0;           // more file-reading to do
            }
@@ -851,12 +851,12 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
            break;
         }
         else if (handle->flags & HNDL_PEER_EOF) {
-           DBG("write failed due to peer EOF\n");
+           neDBG("write failed due to peer EOF\n");
            peer_eof = 1;
            break;
         }
 
-        ERR("write failed: moved: %llu, read_ct: %lld, remain: %llu, flags: 0x%04x\n",
+        neERR("write failed: moved: %llu, read_ct: %lld, remain: %llu, flags: 0x%04x\n",
             bytes_moved, read_count, remain, handle->flags);
         return -1;
       }
@@ -869,7 +869,7 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
     // entire read-buffer was moved
     bytes_moved += read_count;
   }
-  DBG("copy-loop done  (moved: %llu, stream_pos: %llu).\n", bytes_moved, handle->stream_pos);
+  neDBG("copy-loop done  (moved: %llu, stream_pos: %llu).\n", bytes_moved, handle->stream_pos);
 
 
   return bytes_moved;
@@ -904,13 +904,13 @@ ssize_t copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size
     //    do the fsync, and pick up where we left off.
     //    
     ssize_t read_count = skt_read(handle, buf, size);
-    DBG("read_count: %lld\n", read_count);
+    neDBG("read_count: %lld\n", read_count);
 
     // NEED( read_count >= 0 );
     if (unlikely(read_count < 0)) {
 
       if (handle->flags & HNDL_FSYNC) {
-        DBG("read failed due to FSYNC\n");
+        neDBG("read failed due to FSYNC\n");
         handle->flags &= ~(HNDL_FSYNC);
         ssize_t rc = fsync(fd);
 
@@ -920,12 +920,12 @@ ssize_t copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size
         continue;
       }
 
-      ERR("read failed: moved: %llu\n", bytes_moved);
+      neERR("read failed: moved: %llu\n", bytes_moved);
       return -1;
     }
 
     if (unlikely(read_count == 0)) {
-      DBG("read EOF\n");
+      neDBG("read EOF\n");
       eof = 1;
       break;
     }
@@ -934,17 +934,17 @@ ssize_t copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size
     // --- copy all of buffer to file (unless file-writes are suppressed)
 #ifdef SKIP_FILE_WRITES
     // don't waste time writing to file
-    DBG("fake write: %lld\n", read_count);
+    neDBG("fake write: %lld\n", read_count);
 #else
     // copy all of buffer to file
     NEED_0( write_buffer(fd, buf, read_count, 0, 0) );
-    DBG("copied out\n");
+    neDBG("copied out\n");
 #endif
 
 
     bytes_moved += read_count;
   }
-  DBG("copy-loop done  (moved: %llu, stream_pos: %llu).\n", bytes_moved, handle->stream_pos);
+  neDBG("copy-loop done  (moved: %llu, stream_pos: %llu).\n", bytes_moved, handle->stream_pos);
 
   return bytes_moved;
 }
@@ -1002,54 +1002,54 @@ int client_s3_authenticate_internal(SocketHandle* handle, int command) {
 
    // --- DATE  (no guarantee for cross-platform size of time_t)
    if (gettimeofday(&now, NULL)) {
-      ERR("gettimeofday failed: %s\n", strerror(errno));
+      neERR("gettimeofday failed: %s\n", strerror(errno));
       return -1;
    }
    char now_str[32];           // max 26
    NEED_GT0( ctime_r(&now.tv_sec, now_str) );
-   DBG("date [now]: %s", now_str); // includes newline
+   neDBG("date [now]: %s", now_str); // includes newline
 
    SEND_VALUE_SAFE(ptr, date_size, ptr_remain);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
    SEND_VALUE_SAFE(ptr, now.tv_sec, ptr_remain);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
 
    // --- OP
-   DBG("op:         %s\n", command_str(op));
+   neDBG("op:         %s\n", command_str(op));
    SEND_VALUE_SAFE(ptr, op, ptr_remain);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
 
    // --- PATH
    PathSpec* spec = &handle->path_spec;
    str_len        = strlen(spec->fname);
 
-   DBG("path_len:   %lld\n", str_len);
+   neDBG("path_len:   %lld\n", str_len);
    SEND_VALUE_SAFE(ptr, str_len, ptr_remain);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
-   DBG("path:       %s\n", spec->fname);
+   neDBG("path:       %s\n", spec->fname);
    SEND_STRING_SAFE(ptr, spec->fname, str_len, ptr_remain);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
 
    // --- USER_NAME
    str_len        = strlen(user_name);
 
-   DBG("user_len:   %lld\n", str_len);
+   neDBG("user_len:   %lld\n", str_len);
    SEND_VALUE_SAFE(ptr, str_len, ptr_remain);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
-   DBG("user_name:  %s\n", user_name);
+   neDBG("user_name:  %s\n", user_name);
    SEND_STRING_SAFE(ptr, user_name, str_len, ptr_remain);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
 
    // --- SIGNATURE
    AWSContext* aws_ctx = handle->aws_ctx;
-   // DBG("pass:       %s\n", aws_ctx->awsKey);
+   // neDBG("pass:       %s\n", aws_ctx->awsKey);
 
    char  resource[1024];        // matches use in aws4c.c
    char* cl_date = NULL;
@@ -1061,33 +1061,33 @@ int client_s3_authenticate_internal(SocketHandle* handle, int command) {
                                         spec->fname,
                                         aws_ctx);
    NEED( cl_signature );
-   DBG("res  [cl]:  %s\n", resource);
-   DBG("date [cl]:  %s\n", cl_date);
-   DBG("sign [cl]:  %s\n", cl_signature);
+   neDBG("res  [cl]:  %s\n", resource);
+   neDBG("date [cl]:  %s\n", cl_date);
+   neDBG("sign [cl]:  %s\n", cl_signature);
 
    str_len = strlen(cl_signature);
 
-   DBG("sign_len:   %lld\n", str_len);
+   neDBG("sign_len:   %lld\n", str_len);
    SEND_VALUE_SAFE(ptr, str_len, ptr_remain);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
-   DBG("sign:       %s\n", cl_signature);
+   neDBG("sign:       %s\n", cl_signature);
    SEND_STRING_SAFE(ptr, cl_signature, str_len, ptr_remain);
-   // DBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
+   // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
 
 
 
    // --- send to server
    size_t data_size = (ptr - s3_data);
-   DBG("data_sz:    %lld\n", data_size);
+   neDBG("data_sz:    %lld\n", data_size);
    NEED_0( write_pseudo_packet(handle->peer_fd, CMD_S3_AUTH, data_size, s3_data) );
 
    // --- get reply
    PseudoPacketHeader header;
    NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
    if (header.command != CMD_RETURN) {
-      ERR("expected RETURN pseudo-packet, not %s\n", command_str(header.command));
+      neERR("expected RETURN pseudo-packet, not %s\n", command_str(header.command));
       return -1;
    }
    NEED_0(header.size);
@@ -1108,19 +1108,19 @@ int client_s3_authenticate(SocketHandle* handle, int command) {
 
    int needs_free = 0;
    if (! handle->aws_ctx) {
-      LOG("WARNING: handle->AWSContext hasn't been initialized with skt_fcntl().\n");
-      LOG("Trying to read info for user '%s' from ~/.awsAuth ...\n", SKT_S3_USER);
+      neLOG("WARNING: handle->AWSContext hasn't been initialized with skt_fcntl().\n");
+      neLOG("Trying to read info for user '%s' from ~/.awsAuth ...\n", SKT_S3_USER);
       NEED( handle->aws_ctx = aws_context_new() );
 
       if (aws_read_config_r((char* const)SKT_S3_USER, handle->aws_ctx)) {
          // probably missing a line in ~/.awsAuth
-         ERR("aws_read_config for user '%s' failed\n", SKT_S3_USER);
+         neERR("aws_read_config for user '%s' failed\n", SKT_S3_USER);
          aws_context_free_r(handle->aws_ctx);
          handle->aws_ctx = NULL;
          return -1;
       }
 
-      LOG("Read from ~/.awsAuth succeeded\n");
+      neLOG("Read from ~/.awsAuth succeeded\n");
       needs_free = 1;
    }
 
@@ -1147,7 +1147,7 @@ int client_s3_authenticate(SocketHandle* handle, int command) {
 
 
 #define NO_IMPL()                                               \
-  ERR("%s not implemented\n", __FUNCTION__);                    \
+  neERR("%s not implemented\n", __FUNCTION__);                    \
   abort()
 
 
@@ -1178,10 +1178,10 @@ int client_s3_authenticate(SocketHandle* handle, int command) {
 // ...........................................................................
 
 int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
-  DBG("skt_open(0x%llx (flags: 0x%x), '%s', %x, ...)\n", (size_t)handle, handle->flags, service_path, flags);
+  neDBG("skt_open(0x%llx (flags: 0x%x), '%s', %x, ...)\n", (size_t)handle, handle->flags, service_path, flags);
 
   if (handle->flags && (! (handle->flags & HNDL_CLOSED))) {
-    ERR("attempt to open handle that is not closed\n");
+    neERR("attempt to open handle that is not closed\n");
     return -1;
   }
   memset(handle, 0, sizeof(SocketHandle));
@@ -1243,7 +1243,7 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 
   int rc = rdma_getaddrinfo((char*)spec->host, (char*)spec->port_str, &hints, &res);
   if (rc) {
-    ERR("rdma_getaddrinfo(%s) failed: %s\n", spec->host, strerror(errno));
+    neERR("rdma_getaddrinfo(%s) failed: %s\n", spec->host, strerror(errno));
     return -1;
   }
 
@@ -1257,7 +1257,7 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 # include <arpa/inet.h>
   char dotted[INET_ADDRSTRLEN];
   NEED_GT0( inet_ntop(AF_INET, &sin_ptr->sin_addr, dotted, INET_ADDRSTRLEN) );
-  DBG("rdma_getaddrinfo: %s:%d\n", dotted, ntohs(sin_ptr->sin_port));
+  neDBG("rdma_getaddrinfo: %s:%d\n", dotted, ntohs(sin_ptr->sin_port));
 
 
 #else  // IP sockets
@@ -1270,7 +1270,7 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 
   struct hostent* server = gethostbyname(spec->host);
   if (! server) {
-    ERR("gethostbyname(%s) failed: %s\n", spec->host, strerror(errno));
+    neERR("gethostbyname(%s) failed: %s\n", spec->host, strerror(errno));
     return -1;
   }
 
@@ -1289,7 +1289,7 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 
   // open socket to server
   NEED_GT0( fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
-  DBG("fd = %d\n", fd);
+  neDBG("fd = %d\n", fd);
 
   //  // don't do this on the PUT-client?
   //  int disable = 0;
@@ -1301,7 +1301,7 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
   }
 
   NEED_0( CONNECT(fd, s_addr_ptr, s_addr_len) );
-  DBG("skt_open: connected [%d] '%s'\n", fd, spec->fname);
+  neDBG("skt_open: connected [%d] '%s'\n", fd, spec->fname);
 
   handle->peer_fd = fd;         // now peer_fd can be assigned
   handle->flags |= HNDL_CONNECTED;
@@ -1366,33 +1366,51 @@ int skt_fcntl(SocketHandle* handle, SocketFcntlCmd cmd, ...) {
 
    case SKT_F_SETAUTH: {
 
+      va_list ap;
+      va_start( ap, cmd );
+
+      // We expect the arg to be void*, so that ne_open1(), ne_delete1(),
+      // etc, can remain blissfully ignorant of AWSContext.
+      AWSContext* aws_ctx = (AWSContext*)va_arg( ap, void* );
+
+      va_end( ap );
+
+
 #ifdef S3_AUTH
 
       //      if (! (handle->flags & HNDL_PUT)) {
-      //         ERR("handle not open for writing\n");
+      //         neERR("handle not open for writing\n");
       //         errno = EINVAL;
       //         return -1;
       //      }
 
-      va_list ap;
-      va_start( ap, cmd );
-
-      // We allow the arg to be void*, so that ne_open1(), ne_delete1(),
-      // etc, can remain blissfully ignorant of AWSContext.
-      handle->aws_ctx = (AWSContext*)va_arg( ap, void* );
-      va_end( ap );
-
+      handle->aws_ctx = aws_ctx;
       return 0;
 
 #else
-      ERR("attempt to install S3 auth info, but not built with S3_AUTH\n");
-      errno = EPERM;
-      return -1;
+      // If libne was built without authentication (allowed, because
+      // someone might not want to have to link with libaws4c), but the
+      // client program (fuse/pftool) assumes we are authenticating, then
+      // that client should have detected this situation when it tried to
+      // initialize its SktAuth (e.g. in DAL.config), calling
+      // skt_auth_init().  So, by the time someone gets here, we can assume
+      // that they are "approved" to be running without authentication, in
+      // which case their call to skt_auth_init() must've returned NULL, so
+      // our <aws_ctx> will be NULL.  [So, testing for non-NULL is
+      // useless?]
+
+      if (aws_ctx) {
+         neERR("attempt to install S3 auth info, but not built with S3_AUTH\n");
+         errno = EPERM;
+         return -1;
+      }
+      return 0;
+
 #endif
    }
 
    default:
-      ERR("unknown cmd: %d\n", cmd);
+      neERR("unknown cmd: %d\n", cmd);
       errno = ENOTSUP;
       return -1;
    }
@@ -1414,7 +1432,7 @@ int  skt_auth_init(const char* user, SktAuth* auth) {
    int          retval   = 0;
 
    if (! aws_ctx) {
-      ERR("Couldn't allocate an AWSContext\n");
+      neERR("Couldn't allocate an AWSContext\n");
       errno = ENOMEM;
       retval = -1;
    }
@@ -1424,7 +1442,7 @@ int  skt_auth_init(const char* user, SktAuth* auth) {
 
       if (aws_read_config_r((char* const)user, aws_ctx)) {
          // probably missing a line in ~/.awsAuth
-         ERR("aws_read_config failed, for user '%s'\n", user);
+         neERR("aws_read_config failed, for user '%s'\n", user);
          aws_context_free_r(aws_ctx);
          aws_ctx = NULL;
          retval = -1;
@@ -1492,7 +1510,7 @@ void skt_auth_free(SktAuth auth) {
 //     of the client, when cmd is non-NULL.
 
 int basic_init(SocketHandle* handle, SocketCommand cmd) {
-  DBG("basic_init(0x%llx, %s)\n", (size_t)handle, command_str(cmd));
+  neDBG("basic_init(0x%llx, %s)\n", (size_t)handle, command_str(cmd));
 
   if (! (handle->flags & HNDL_OP_INIT)) {
 
@@ -1542,11 +1560,11 @@ int write_init(SocketHandle* handle, SocketCommand cmd) {
     PseudoPacketHeader header;
     NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
     if (header.command != CMD_RIO_OFFSET) {
-      ERR("expected RIO_OFFSET pseudo-packet, not %s\n", command_str(header.command));
+      neERR("expected RIO_OFFSET pseudo-packet, not %s\n", command_str(header.command));
       return -1;
     }
     handle->rio_offset = header.size;
-    DBG("got riomap offset from peer: 0x%llx\n", header.size);
+    neDBG("got riomap offset from peer: 0x%llx\n", header.size);
 #endif  
 
   }
@@ -1557,7 +1575,7 @@ int write_init(SocketHandle* handle, SocketCommand cmd) {
 
 
 ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
-  DBG("skt_write(%d(flags: 0x%x), %llx, %llu)\n", handle->peer_fd, handle->flags, (size_t)buf, size);
+  neDBG("skt_write(%d(flags: 0x%x), %llx, %llu)\n", handle->peer_fd, handle->flags, (size_t)buf, size);
 
   ///  // COMMENTED OUT.  See UPDATE under "WRITE"
   ///  if (! size)
@@ -1587,16 +1605,16 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
     if (header.command == CMD_SEEK_SET) {
       handle->flags |= HNDL_SEEK_SET;
       handle->seek_pos = header.size;
-      DBG("got SEEK %lld\n", header.size);
+      neDBG("got SEEK %lld\n", header.size);
       return -1;
     }
     else if (header.command == CMD_RIO_OFFSET) {
-      DBG("got RIO_OFFSET: 0x%llx\n", header.size);
+      neDBG("got RIO_OFFSET: 0x%llx\n", header.size);
       handle->rio_offset = header.size;
       return skt_write(handle, buf, size); // try again to read ACK ...
     }
     else {
-      ERR("expected ACK, but got %s\n", command_str(header.command));
+      neERR("expected ACK, but got %s\n", command_str(header.command));
       return -1;
     }
   }
@@ -1703,9 +1721,9 @@ int riomap_reader(SocketHandle* handle, void* buf, size_t size) {
       return 0;
 
     THREAD_CANCEL(DISABLE);
-    DBG("peer_fd %3d: Dropping old riomaping\n", handle->peer_fd);
+    neDBG("peer_fd %3d: Dropping old riomaping\n", handle->peer_fd);
     int dbg = RIOUNMAP(handle->peer_fd, handle->rio_buf, handle->rio_size);
-    DBG("peer_fd %3d: unmap = %d\n", handle->peer_fd, dbg);
+    neDBG("peer_fd %3d: unmap = %d\n", handle->peer_fd, dbg);
 
     handle->flags &= ~HNDL_RIOMAPPED;
     THREAD_CANCEL(ENABLE);
@@ -1720,15 +1738,15 @@ int riomap_reader(SocketHandle* handle, void* buf, size_t size) {
 
   THREAD_CANCEL(DISABLE);
 
-  DBG("riomap(%d, 0x%llu, ...)\n", handle->peer_fd, (size_t)buf);
+  neDBG("riomap(%d, 0x%llu, ...)\n", handle->peer_fd, (size_t)buf);
   handle->rio_offset = RIOMAP(handle->peer_fd, buf, size, PROT_WRITE, 0, -1);
   if (handle->rio_offset == (off_t)-1) {
-    ERR("riomap failed: %s\n", strerror(errno));
+    neERR("riomap failed: %s\n", strerror(errno));
     THREAD_CANCEL(ENABLE);
     return -1;
   }
-  DBG("riomap offset: 0x%llx\n", handle->rio_offset);
-  DBG("riomap size:   %llu\n", size);
+  neDBG("riomap offset: 0x%llx\n", handle->rio_offset);
+  neDBG("riomap size:   %llu\n", size);
 
   handle->rio_buf  = buf;     // to allow the riounmap in shut_down_thread()
   handle->rio_size = size;    // to allow the riounmap in shut_down_thread()
@@ -1786,7 +1804,7 @@ int read_init(SocketHandle* handle, SocketCommand cmd, char* buf, size_t size) {
 //    RDMA writes from the peer will go there.
 
 ssize_t skt_read(SocketHandle* handle, void* buf, size_t size) {
-  DBG("skt_read(%d(flags: 0x%x), %llx, %llu)\n", handle->peer_fd, handle->flags, (size_t)buf, size);
+  neDBG("skt_read(%d(flags: 0x%x), %llx, %llu)\n", handle->peer_fd, handle->flags, (size_t)buf, size);
 
   ssize_t   read_count = 0;
 
@@ -1818,11 +1836,11 @@ ssize_t skt_read(SocketHandle* handle, void* buf, size_t size) {
 
     if (header.command == CMD_FSYNC) {
       handle->flags |= HNDL_FSYNC;
-      DBG("got FSYNC\n");
+      neDBG("got FSYNC\n");
       return -1;
     }
 
-    ERR("expected DATA, but got %s\n", command_str(header.command));
+    neERR("expected DATA, but got %s\n", command_str(header.command));
     return -1;
   }
 
@@ -1881,32 +1899,32 @@ ssize_t skt_read_all(SocketHandle* handle, void* buffer, size_t size) {
 // ...........................................................................
 
 off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
-  DBG("skt_lseek(%d (flags: 0x%x), 0x%llx, %d)\n", handle->peer_fd, handle->flags, offset, whence);
+  neDBG("skt_lseek(%d (flags: 0x%x), 0x%llx, %d)\n", handle->peer_fd, handle->flags, offset, whence);
 
   if ((whence == SEEK_SET) && (offset == handle->stream_pos)) {
-     DBG("seek to 0x%llx is a no-op\n", offset);
+     neDBG("seek to 0x%llx is a no-op\n", offset);
     return handle->stream_pos;
   }
   else if ((whence == SEEK_CUR) && (offset == 0)) {
-     DBG("seek to 0x%llx is a no-op\n", offset);
+     neDBG("seek to 0x%llx is a no-op\n", offset);
     return handle->stream_pos;
   }
   else if (unlikely ((whence != SEEK_SET)
                      && (whence != SEEK_CUR)
                      && (whence != SEEK_END))) {
-    ERR("lseek(%llu, %d) from %llu -- unknown <whence>\n",
+    neERR("lseek(%llu, %d) from %llu -- unknown <whence>\n",
         offset, handle->stream_pos, whence);
     errno = EINVAL;
     return (off_t)-1;
   }
   else if (unlikely (handle->flags & HNDL_PUT)) {
-    ERR("lseek(%llu, %d) from %llu -- non-zero head motion on a PUT is not supported\n",
+    neERR("lseek(%llu, %d) from %llu -- non-zero head motion on a PUT is not supported\n",
         offset, handle->stream_pos, whence);
     errno = EINVAL;
     return (off_t)-1;
   }
   else if (unlikely (! (handle->flags & HNDL_GET))) {
-    ERR("lseek(%llu, %d) from %llu -- filehandle is not open\n",
+    neERR("lseek(%llu, %d) from %llu -- filehandle is not open\n",
         offset, handle->stream_pos, whence);
     errno = EINVAL;
     return (off_t)-1;
@@ -1923,7 +1941,7 @@ off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
     // leave seek_pos where it is; this is just a failed seek.
 
     // seek_pos = <file_size> + offset;
-    ERR("lseek(... SEEK_END) not supported\n");
+    neERR("lseek(... SEEK_END) not supported\n");
     errno = EINVAL;
     return (off_t)-1;
   }    
@@ -1935,7 +1953,7 @@ off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
     seek_pos           = handle->stream_pos + offset;
     handle->stream_pos = seek_pos; // after the seek
   }
-  DBG("resolved seek pos: 0x%llx\n", seek_pos);
+  neDBG("resolved seek pos: 0x%llx\n", seek_pos);
 
 
   // fit the SEEK into the GET protocol.
@@ -1973,11 +1991,11 @@ off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
   PseudoPacketHeader header;
   NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
   if (unlikely(header.command != CMD_RETURN)) {
-    ERR("expected RETURN, but got %s\n", command_str(header.command));
+    neERR("expected RETURN, but got %s\n", command_str(header.command));
     return -1;
   }
   else if (header.size == (off_t)-1) {
-    ERR("lseek RETURN was -1\n");
+    neERR("lseek RETURN was -1\n");
     return -1;
   }
 
@@ -2022,7 +2040,7 @@ int skt_fsync(SocketHandle* handle) {
 
 #else
   if (! (handle->flags & HNDL_PUT)) {
-    ERR("skt_fsync: handle not open for writing\n");
+    neERR("skt_fsync: handle not open for writing\n");
     errno = EBADF;
     return -1;
   }
@@ -2032,7 +2050,7 @@ int skt_fsync(SocketHandle* handle) {
 
   // this ACK was intended for skt_write()
   if (unlikely(header.command != CMD_ACK)) {
-    ERR("expected ACK, but got %s\n", command_str(header.command));
+    neERR("expected ACK, but got %s\n", command_str(header.command));
     return -1;
   }
 
@@ -2041,11 +2059,11 @@ int skt_fsync(SocketHandle* handle) {
   // wait for peer to finish the fsync
   NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
   if (unlikely(header.command != CMD_RETURN)) {
-    ERR("expected RETURN, but got %s\n", command_str(header.command));
+    neERR("expected RETURN, but got %s\n", command_str(header.command));
     return -1;
   }
   else if (header.size) {
-    ERR("fsync RETURN was %lld\n", header.size);
+    neERR("fsync RETURN was %lld\n", header.size);
     return -1;
   }
 
@@ -2077,7 +2095,7 @@ int skt_close(SocketHandle* handle) {
          // If so, trying to send DATA 0 will fail.
          // That will just put failures into the log, so skip it.
          if (handle->flags & HNDL_PEER_EOF)
-            DBG("peer EOF previously detected.  Skipping DATA 0\n");
+            neDBG("peer EOF previously detected.  Skipping DATA 0\n");
 
          else {
 
@@ -2240,8 +2258,8 @@ int  skt_chown (const void* aws_ctx, const char* service_path, uid_t uid, gid_t 
 //     our cleanup devolves to shut_down_handle().
 
 int skt_rename (const void* aws_ctx, const char* service_path, const char* new_path) {
-  DBG("skt_rename from: %s\n", service_path);
-  DBG("skt_rename to:   %s\n", new_path);
+  neDBG("skt_rename from: %s\n", service_path);
+  neDBG("skt_rename to:   %s\n", new_path);
 
   // if libne is calling, both paths are service_paths.
   // Strip off the host:port portion of the new_path
@@ -2249,7 +2267,7 @@ int skt_rename (const void* aws_ctx, const char* service_path, const char* new_p
   PathSpec    new_spec;
   if (! parse_service_path(&new_spec, new_path) ) {
     new_fname = new_spec.fname;
-    DBG("skt_rename to2:  %s\n", new_fname);
+    neDBG("skt_rename to2:  %s\n", new_fname);
   }
 
   SocketHandle       handle = {0};
@@ -2367,7 +2385,7 @@ int skt_stat(const void* aws_ctx, const char* service_path, struct stat* st) {
 
     // case (1): remote lstat failed.
     errno = -rc;
-    DBG("stat failed: %s\n", strerror(errno));
+    neDBG("stat failed: %s\n", strerror(errno));
     return -1;
   }
 

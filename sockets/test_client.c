@@ -99,7 +99,7 @@ static SocketHandle handle = {0};
 // Also makes it easy to disable all local logging, e.g. when running strace.
 //
 #ifdef DEBUG_SOCKETS
-#  define cLOG(FMT,...)  LOG("--- " FMT, ##__VA_ARGS__)
+#  define cLOG(FMT,...)  neLOG("--- " FMT, ##__VA_ARGS__)
 #else
 #  define cLOG(FMT,...)
 #endif
@@ -107,7 +107,7 @@ static SocketHandle handle = {0};
 
 void
 shut_down() {
-  DBG("shut_down: closing socket_fd %d\n", handle.peer_fd);
+  neDBG("shut_down: closing socket_fd %d\n", handle.peer_fd);
   shut_down_handle(&handle);
 }
 
@@ -618,9 +618,9 @@ typedef struct {
 } ThreadContext;
 
 
-#define thrNEED(EXPR)          _TEST(EXPR,    , DBG,    return (void*)-1)
-#define thrNEED_0(EXPR)        _TEST(EXPR, ==0, DBG,    return (void*)-1)
-#define thrNEED_GT0(EXPR)      _TEST(EXPR,  >0, DBG,    return (void*)-1)
+#define thrNEED(EXPR)          _TEST(EXPR,    , neDBG,    return (void*)-1)
+#define thrNEED_0(EXPR)        _TEST(EXPR, ==0, neDBG,    return (void*)-1)
+#define thrNEED_GT0(EXPR)      _TEST(EXPR,  >0, neDBG,    return (void*)-1)
 
 
 
@@ -919,7 +919,7 @@ int client_test3c(const char* path) {
          pthread_join(thr[i], &rc);
          retval |= (ssize_t)rc;
          if (rc) {
-            ERR("thr %d returned non-zero\n", i);
+            neERR("thr %d returned non-zero\n", i);
          }
       }
 
@@ -1225,7 +1225,7 @@ main(int argc, char* argv[]) {
   // --- start timer
   struct timespec start;
   if (clock_gettime(CLOCK_REALTIME, &start)) {
-    ERR("failed to get START timer '%s'\n", strerror(errno));
+    neERR("failed to get START timer '%s'\n", strerror(errno));
     return -1;                // errno is set
   }
 
@@ -1269,7 +1269,7 @@ main(int argc, char* argv[]) {
     //    else if (MATCH(test_no, "4"))
     //       bytes_moved = client_test4(file_spec);
     else {
-      ERR("unknown test: %s\n", test_no);
+      neERR("unknown test: %s\n", test_no);
       return -1;
     }
 #   undef MATCH
@@ -1277,7 +1277,7 @@ main(int argc, char* argv[]) {
     break;
       
   default:
-    ERR("unsupported command: %s\n", command_str(cmd));
+    neERR("unsupported command: %s\n", command_str(cmd));
     return -1;
   }
 
@@ -1287,16 +1287,16 @@ main(int argc, char* argv[]) {
 
 
   if (bytes_moved < 0) {
-     LOG("fail  %s\n", (errno ? strerror(errno) : ""));
+     neLOG("fail  %s\n", (errno ? strerror(errno) : ""));
      return -1;
   }
-  LOG("success\n");
+  neLOG("success\n");
 
   // --- compute bandwidth
   if (bytes_moved) {
      struct timespec end;
      if (clock_gettime(CLOCK_REALTIME, &end)) {
-        ERR("failed to get END timer '%s'\n", strerror(errno));
+        neERR("failed to get END timer '%s'\n", strerror(errno));
         return -1;                // errno is set
      }
      size_t nsec = (end.tv_sec - start.tv_sec) * 1000UL * 1000 * 1000;
