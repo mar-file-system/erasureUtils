@@ -197,7 +197,7 @@ typedef void(*jHandlerType)(void* arg);
 #define MAX_S3_DATE_LAG          ((WR_TIMEOUT > RD_TIMEOUT) ? WR_TIMEOUT : RD_TIMEOUT)
 #define MAX_S3_DATA              1024 + FNAME_SIZE /* authentication data */
 
-#define SKT_S3_USER              "mc_admin"  /* token 1 in ~/.awsAuth */
+#define SKT_S3_USER              "mcadmin"  /* token 1 in ~/.awsAuth */
 
 
 // This allows SocketHandle (which needs a reference to an AWSContext*, iff
