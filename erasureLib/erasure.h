@@ -127,15 +127,18 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  include <syslog.h>
 #  define PRINTout(...)   SYSLOG(LOG_DEBUG, ##__VA_ARGS__)
 #  define PRINTerr(...)   SYSLOG(LOG_ERR,   ##__VA_ARGS__)
+#  define LOG_INIT()      openlog(NE_LOG_PREFIX, LOG_CONS|LOG_PID, LOG_USER)
 
 #elif (DEBUG_NE)
 // #  define PRINTout(...)   FPRINTF(stdout, ##__VA_ARGS__)
 #  define PRINTout(...)   FPRINTF(stderr, ##__VA_ARGS__) /* don't commit me, bro! */
 #  define PRINTerr(...)   FPRINTF(stderr, ##__VA_ARGS__)
+#  define LOG_INIT()
 
 #else
 #  define PRINTout(...)
 #  define PRINTerr(...)
+#  define LOG_INIT()
 #endif
 
 

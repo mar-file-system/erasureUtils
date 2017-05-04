@@ -111,12 +111,12 @@ int snprintf_for_vle(char*       dest,
 void usage(const char* prog_name, const char* op) {
 
 #define USAGE(CMD, ARGS)                                       \
-   fprintf(stderr, "  %2s %-10s %s\n",                         \
+   PRINTerr("  %2s %-10s %s\n",                                \
            (!strcmp(op, CMD) ? "->" : ""), (CMD), (ARGS))
 
-   fprintf(stderr, "Usage: %s <op> [args ...]\n", prog_name);
-   fprintf(stderr, "  where <op> and args are one of the following\n");
-   fprintf(stderr, "\n");
+   PRINTerr("Usage: %s <op> [args ...]\n", prog_name);
+   PRINTerr("  where <op> and args are one of the following\n");
+   PRINTerr("\n");
 
    USAGE("write",      "input_file output_path N E start_file [input_size]");
    USAGE("read",       "output_file erasure_path N E start_file total_bytes");
@@ -126,7 +126,7 @@ void usage(const char* prog_name, const char* op) {
    USAGE("crc_status", "");
    USAGE("help",       "");
 
-   fprintf(stderr, "\n");
+   PRINTerr("\n");
 }
 
 
@@ -143,6 +143,8 @@ int main( int argc, const char* argv[] )
    int E;
    int tmp;
    unsigned long long totbytes;
+
+   LOG_INIT();
 
    if ( argc < 2 ) {
       usage(argv[0], "help");
@@ -194,7 +196,7 @@ int main( int argc, const char* argv[] )
       return -1;
    }
    
-   fprintf( stdout, "libneTest: command = '%s'\n", argv[2]);
+   PRINTout("libneTest: command = '%s'\n", argv[2]);
 
 
    // --- command-specific extra args
@@ -241,18 +243,18 @@ int main( int argc, const char* argv[] )
 
       buff = malloc( sizeof(char) * totbytes );
 
-      fprintf( stdout, "libneTest: writing content of file %s to erasure striping (N=%d,E=%d,offset=%d)\n",
+      PRINTout("libneTest: writing content of file %s to erasure striping (N=%d,E=%d,offset=%d)\n",
                argv[2], N, E, start );
 
       filefd = open( argv[2], O_RDONLY );
       if ( filefd == -1 ) {
-         fprintf( stderr, "libneTest: failed to open file %s\n", argv[2] );
+         PRINTerr("libneTest: failed to open file %s\n", argv[2] );
          return -1;
       }
 
       handle = NE_OPEN( (char *)argv[3], NE_WRONLY, start, N, E );
       if ( handle == NULL ) {
-         fprintf( stderr, "libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
+         PRINTerr("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
          return -1;
       }
 
@@ -260,12 +262,12 @@ int main( int argc, const char* argv[] )
 
       while ( totbytes != 0 ) {
          nread = read( filefd, buff, toread );
-         fprintf( stdout, "libneTest: preparing to write %llu to erasure files...\n", nread );
+         PRINTout("libneTest: preparing to write %llu to erasure files...\n", nread );
          if ( nread != ne_write( handle, buff, nread ) ) {
-            fprintf( stderr, "libneTest: unexpected # of bytes written by ne_write\n" );
+            PRINTerr("libneTest: unexpected # of bytes written by ne_write\n" );
             return -1;
          }
-         fprintf( stdout, "libneTest: write successful\n" );
+         PRINTout("libneTest: write successful\n" );
 
          if ( argc == 8 ) {
             totbytes -= nread;
@@ -279,13 +281,13 @@ int main( int argc, const char* argv[] )
       }
 
       if ( ne_flush( handle ) != 0 ) {
-         fprintf( stderr, "libneTest: flush failed!\n" );
+         PRINTerr("libneTest: flush failed!\n" );
          return -1;
       }
 
       free(buff);
       close(filefd);
-      fprintf( stdout, "libneTest: all writes completed\nlibneTest: total written = %llu\n", totdone );
+      PRINTout("libneTest: all writes completed\nlibneTest: total written = %llu\n", totdone );
 
    }
 
@@ -294,15 +296,15 @@ int main( int argc, const char* argv[] )
    // -----------------------------------------------------------------
 
    else if ( wr == 0 ) {
-      fprintf( stdout, "libneTest: reading %llu bytes from erasure striping "
+      PRINTout("libneTest: reading %llu bytes from erasure striping "
                "(N=%d,E=%d,offset=%d) to file %s\n", totbytes, N, E, start, argv[2] );
 
       buff = malloc( sizeof(char) * totbytes );
-      fprintf( stdout, "libneTest: allocated buffer of size %llu\n", sizeof(char) * totbytes );
+      PRINTout("libneTest: allocated buffer of size %llu\n", sizeof(char) * totbytes );
 
       filefd = open( argv[2], O_WRONLY | O_CREAT, 0644 );
       if ( filefd == -1 ) {
-         fprintf( stderr, "libneTest: failed to open file %s\n", argv[2] );
+         PRINTerr("libneTest: failed to open file %s\n", argv[2] );
          return -1;
       }
 
@@ -314,7 +316,7 @@ int main( int argc, const char* argv[] )
       }
 
       if ( handle == NULL ) {
-         fprintf( stderr, "libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
+         PRINTerr("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
          return -1;
       }
       
@@ -323,17 +325,17 @@ int main( int argc, const char* argv[] )
       nread = 0;
 
       while ( totbytes > 0 ) {
-         fprintf( stdout, "libneTest: preparing to read %llu from erasure files with offset %llu\n", toread, nread );
+         PRINTout("libneTest: preparing to read %llu from erasure files with offset %llu\n", toread, nread );
          if ( toread > totbytes ) { exit(1000); }
 
          tmp = ne_read( handle, buff, toread, nread );
 
          if( toread != tmp ) {
-            fprintf( stderr, "libneTest: unexpected # of bytes read by ne_read\nlibneTest:  got %d but expected %llu\n", tmp, toread );
+            PRINTerr("libneTest: unexpected # of bytes read by ne_read\nlibneTest:  got %d but expected %llu\n", tmp, toread );
             return -1;
          }
 
-         fprintf( stdout, "libneTest: ...done.  Writing %llu to output file.\n", toread );
+         PRINTout("libneTest: ...done.  Writing %llu to output file.\n", toread );
          write( filefd, buff, toread );
 
          totbytes -= toread;
@@ -345,7 +347,7 @@ int main( int argc, const char* argv[] )
 
       free(buff); 
       close(filefd);
-      fprintf( stdout, "libneTest: all reads completed\nlibneTest: total read = %llu\n", totdone );
+      PRINTout("libneTest: all reads completed\nlibneTest: total read = %llu\n", totdone );
    }
 
 
@@ -354,7 +356,7 @@ int main( int argc, const char* argv[] )
    // -----------------------------------------------------------------
 
    else if ( wr == 2 ) {
-      fprintf( stdout, "libneTest: rebuilding erasure striping (N=%d,E=%d,offset=%d)\n", N, E, start );
+      PRINTout("libneTest: rebuilding erasure striping (N=%d,E=%d,offset=%d)\n", N, E, start );
 
       if ( N == 0 ) {
          handle = NE_OPEN( (char *)argv[2], NE_REBUILD | NE_NOINFO );
@@ -369,10 +371,10 @@ int main( int argc, const char* argv[] )
       tmp = ne_rebuild( handle );
       if ( tmp < 0 ) {
         printf("rebuild result %d, errno=%d (%s)\n", tmp, errno, strerror(errno));
-         fprintf( stderr, "libneTest: rebuild failed!\n" );
+        PRINTerr("libneTest: rebuild failed!\n" );
          return -1;
       }
-      fprintf( stdout, "libneTest: rebuild complete\n" );
+      PRINTout("libneTest: rebuild complete\n" );
    }
 
 
@@ -381,10 +383,10 @@ int main( int argc, const char* argv[] )
    // -----------------------------------------------------------------
 
    else if ( wr == 3 ) {
-      fprintf( stdout, "libneTest: retrieving status of erasure striping with path \"%s\"\n", (char *)argv[2] );
+      PRINTout("libneTest: retrieving status of erasure striping with path \"%s\"\n", (char *)argv[2] );
       ne_stat stat = NE_STATUS( (char *)argv[2] );
       if ( stat == NULL ) {
-         fprintf( stderr, "libneTest: ne_status failed!\n" );
+         PRINTerr("libneTest: ne_status failed!\n" );
          return -1;
       }
       printf( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\nExtended Attribute Errors : ",
@@ -416,12 +418,12 @@ int main( int argc, const char* argv[] )
    // -----------------------------------------------------------------
 
    else if ( wr == 4 ) {
-      fprintf( stdout, "libneTest: deleting striping corresponding to path \"%s\" with width %d...\n", (char*)argv[2], N );
+      PRINTout("libneTest: deleting striping corresponding to path \"%s\" with width %d...\n", (char*)argv[2], N );
       if ( ne_delete( (char*) argv[2], N ) ) {
-         fprintf( stderr, "libneTest: deletion attempt indicates a failure for path \"%s\"\n", (char*)argv[2] );
+         PRINTerr("libneTest: deletion attempt indicates a failure for path \"%s\"\n", (char*)argv[2] );
          return -1;
       }
-      fprintf( stdout, "libneTest: deletion successful\n" );
+      PRINTout("libneTest: deletion successful\n" );
       return 0;
    }
 
