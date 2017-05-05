@@ -63,22 +63,21 @@ AC_CONFIG_SRCDIR([COPYRIGHT.h])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
-AC_PROG_RANLIB
+
+# suppress compile/link noise, if the option is available
+m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
+
 
 # default to empty flags, instead of "-g -O2"
 : ${CFLAGS=""}
 AC_PROG_CC
 
+AC_PROG_RANLIB
 
-# Checks for libraries.
-AC_CHECK_LIB([pthread], [pthread_create])
-AC_CHECK_LIB([isal],    [crc32_ieee], [],
-   [AC_CHECK_LIB([isal], [crc32_ieee_base],
-      [echo
-       echo "WARNING:  Could not properly link 'crc32_ieee' from isa-l, defaulting to '_base' implementation"
-       echo "          IN THIS STATE, THESE UTILITES MAY NOT FUNCTION AND WILL ALMOST CERTAINLY HAVE VERY POOR PERFORMANCE"
-       echo], 
-         [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!  Please verify that the proper version of the library (v2.16.0 or higher) is installed."])])])
+# # ignored without 'libtoolize'
+# AM_PROG_AR
+# AC_PROG_LIBTOOL
+
 
 # Checks for header files.
 AC_CHECK_HEADERS([fcntl.h stdint.h stdlib.h string.h unistd.h])
@@ -175,8 +174,17 @@ AM_CONDITIONAL([USE_SYSLOG], [test "x$enable_syslog" != xno])
 
 
 
-# We always need this
-AC_CHECK_LIB([isal], [crc32_ieee])
+AC_CHECK_LIB([pthread], [pthread_create])
+
+# sockets subdir doesn't need this
+### AC_CHECK_LIB([isal],    [crc32_ieee],
+###     [],
+###     [AC_CHECK_LIB([isal], [crc32_ieee_base],
+###        [echo
+###         echo "WARNING:  Could not properly link 'crc32_ieee' from isa-l, defaulting to '_base' implementation"
+###         echo "          IN THIS STATE, THESE UTILITES MAY NOT FUNCTION AND WILL ALMOST CERTAINLY HAVE VERY POOR PERFORMANCE"
+###         echo], 
+###        [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!  Please verify that the proper version of the library (v2.16.0 or higher) is installed."])])])
 
 
 

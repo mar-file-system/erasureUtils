@@ -59,6 +59,7 @@
 
 AM_CPPFLAGS =
 #AM_LDFLAGS = -lrt
+#AM_LDFLAGS = -static
 AM_LDFLAGS =
 
 # Undo the effect of AC_CHECK_LIB() in configure.ac
@@ -129,13 +130,25 @@ endif
 
 
 
-
 bin_PROGRAMS = test_client socket_fserver
 
 
 socket_fserver_SOURCES = socket_fserver.c
 socket_fserver_LDADD = librdma_sockets.a
-#socket_fserver_LDFLAGS = -lpthread $(AM_LDFLAGS)
+#
+# # Various failed attempts to get autoconf to prefer static linking of
+# # libisal, if possible.  (Some of these assume libtool is selected in the
+# # configure.ac.)  Otherwise, we have to deploy libisal to all the storage
+# # servers, so they can run socket_fserver.  However, it seems autotools
+# # is violently opposed to allowing that sort of control.  Better
+# # approach: realize that we don't even need libisal.  Take that out of
+# # the top-level configure.ac, and let erasureLib/Makefile.am add it in
+# # locally.
+# 
+# socket_fserver_LDFLAGS = -lpthread $(AM_LDFLAGS)
+# socket_fserver_LDFLAGS = -lpthread -static
+# socket_fserver_LDFLAGS = -all-static -lisal
+# socket_fserver_LDFLAGS = "-Wl,-Bstatic -lisal -Wl,-Bdynamic"
 
 
 test_client_SOURCES = test_client.c

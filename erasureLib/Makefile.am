@@ -97,11 +97,13 @@ AM_CPPFLAGS = $(SOCKET_CPPFLAGS) $(SOCKET_DEFS)
 
 
 
+include_HEADERS = erasure.h ne_logging.h
+
+
 lib_LIBRARIES = libne.a
 libne_a_SOURCES = erasure.c erasure.h
 libne_a_LIBADD = $(SOCKET_LIBS)
 
-include_HEADERS = erasure.h ne_logging.h
 
 bin_PROGRAMS = libneTest
 libneTest_SOURCES = libneTest.c
