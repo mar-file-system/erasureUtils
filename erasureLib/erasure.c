@@ -1493,7 +1493,7 @@ int ne_close( ne_handle handle )
 {
 
    int counter;
-   char xattrval[strlen(XATTRKEY)+80];
+   char xattrval[XATTRLEN];
    char file[MAXNAME];       /* array name of files */
    char nfile[MAXNAME];       /* array name of files */
    int N;
@@ -1712,6 +1712,91 @@ int ne_delete( char* path, int width ) {
 }
 
 
+off_t ne_size( const char* path, int quorum, int max_stripe_width ) {
+   char ptemplate[MAXNAME];
+   char file[MAXNAME];
+   char xattrval[XATTRLEN];
+
+   if( max_stripe_width < 1 ) max_stripe_width = MAXPARTS;
+   if( quorum < 1 ) quorum = max_stripe_width;
+   if( quorum > max_stripe_width ) {
+      DBG_FPRINTF( stderr, "ne_size: received a quorum value greater than the max_stripe_width\n" );
+      errno = EINVAL;
+      return -1;
+   }
+
+   strncpy( ptemplate, path, MAXNAME );
+
+#ifdef META_FILES
+   strncat( ptemplate, META_SFX, strlen(META_SFX)+1 );
+#endif
+
+   int match = 0;
+   off_t sizes_reported[max_stripe_width];
+   off_t prev_size = -1;
+   int i;
+   for( i = 0; i < max_stripe_width  &&  match < quorum; i++ ) {
+      sprintf( file, ptemplate, i );
+
+#ifdef META_FILES
+
+      DBG_FPRINTF(stdout,"ne_size: opening file %s\n", file);
+      int meta_fd = open( file, O_RDONLY );
+      if ( meta_fd >= 0 ) {
+         int tmp = read( meta_fd, &xattrval[0], XATTRLEN );
+         if ( tmp < 0 ) {
+            DBG_FPRINTF(stderr,"ne_size: failed to read from file %s\n", file);
+            continue;
+         }
+         else if(tmp == 0) {
+            DBG_FPRINTF(stderr, "ne_size: read 0 bytes from metadata file %s\n", file);
+            continue;
+         }
+         tmp = close( meta_fd );
+         if ( tmp < 0 ) {
+            DBG_FPRINTF(stderr,"ne_size: failed to close file %s\n", file);
+            continue;
+         }
+      }
+      else {
+         DBG_FPRINTF(stderr,"ne_size: failed to open file %s\n", file);
+         continue;
+      }
+
+#else
+
+#if (AXATTR_GET_FUNC == 4)
+      if( getxattr(file,XATTRKEY,&xattrval[0],XATTRLEN) ) continue;
+#else
+      if( getxattr(file,XATTRKEY,&xattrval[0],XATTRLEN,0,0) ) continue;
+#endif
+
+#endif //META_FILES
+
+      DBG_FPRINTF( stdout, "ne_size: file %s xattr returned %s\n", file, xattrval );
+      
+      sscanf( xattrval, "%*s %*s %*s %*s %*s %*s %*s %zd", &sizes_reported[i] );
+
+      if ( prev_size == -1  ||  sizes_reported[i] == prev_size ) {
+         match++;
+      }
+      else { 
+         match = 1;
+         int k;
+         for( k = 0; k < i; k++ ) {
+            if( sizes_reported[k] == sizes_reported[i] ) match++;
+         }
+      }
+
+      prev_size = sizes_reported[i];
+   }
+
+   if( prev_size == -1 ) { errno = ENOENT; return -1; }
+   if( match < quorum ) { errno = ENODATA; return -1; }
+   return prev_size;
+}
+
+
 /**
  * Internal helper function intended to access xattrs for the purpose of validating/identifying handle information
  * @param ne_handle handle : The handle for the current erasure striping
@@ -1729,7 +1814,7 @@ int xattr_check( ne_handle handle, char *path )
    int ret;
    int tmp;
    int filefd;
-   char xattrval[strlen(XATTRKEY)+80];
+   char xattrval[XATTRLEN];
    char xattrchunks[20];       /* char array to get n parts from xattr */
    char xattrchunksizek[20];   /* char array to get chunksize from xattr */
    char xattrnsize[20];        /* char array to get total size from xattr */

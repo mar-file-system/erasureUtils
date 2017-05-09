@@ -131,6 +131,14 @@ int main( int argc, const char* argv[] )
       printf("MAX-N: %d   MAX-E: %d\n", MAXN, MAXE);
       return crc_status();
    }
+   else if ( strncmp( argv[1], "sizeof", strlen(argv[1]) ) == 0 ) {
+      if ( argc != 5 ) {
+         fprintf( stderr, "libneTest: inappropriate arguments for a sizeof operation\nlibneTest: expected \'%s %s erasure_path quorum stripe_width\'\n", argv[0], argv[1] );
+         return -1;
+      }
+      printf( "Size of \"%s\" -- %zd\n", argv[2], ne_size( argv[2], atoi(argv[3]), atoi(argv[4]) ) );
+      return 0;
+   }
    else {
       fprintf( stderr, "libneTest: argument 1 not recognized, expecting \"read\" or \"write\"\n" );
       return -1;
