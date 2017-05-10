@@ -131,7 +131,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #elif (DEBUG_NE)
 // #  define PRINTout(...)   FPRINTF(stdout, ##__VA_ARGS__)
-#  define PRINTout(...)   FPRINTF(stderr, ##__VA_ARGS__) /* don't commit me, bro! */
+#  define PRINTout(...)   FPRINTF(stderr, ##__VA_ARGS__) /* stderr for 'fuse -f ...' */
 #  define PRINTerr(...)   FPRINTF(stderr, ##__VA_ARGS__)
 #  define LOG_INIT()
 
