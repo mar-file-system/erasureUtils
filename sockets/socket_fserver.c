@@ -311,7 +311,7 @@ sig_handler(int sig) {
 //     requirements: libne will indeed have to compute the authentication
 //     hash for each of the individual N+E resolved paths.
 //
-//     On the plus size, we can return to the server the fully-parsed
+//     On the plus side, we can return to the server the fully-parsed
 //     op+path, which it can go ahead and use directly.
 //
 // NOTE: We replace header->command with the parsed op.  In the case of
@@ -720,7 +720,7 @@ int server_put(ThreadContext* ctx) {
 
   // open local file for writing (unless file-writes are suppressed)
 #ifndef SKIP_FILE_WRITES
-  ctx->file_fd = open(fname, (O_WRONLY | O_CREAT | O_TRUNC), 0660);
+  ctx->file_fd = open(fname, (O_WRONLY | O_CREAT | O_TRUNC), 0666);
   if (ctx->file_fd < 0) {
     neERR("couldn't open '%s' for writing: %s\n",
         fname, strerror(errno));
@@ -1044,7 +1044,7 @@ int server_stat(ThreadContext* ctx) {
 //
 // This is the thread that gets spun up to handle any new connection.
 // Figure out what the client wants (by reading a pseudo-packet), then
-// dispatch the function to handle that task.
+// dispatch to the function that handles that task.
 //
 // NOTE: To make our lockless interaction with the ThreadContext work, We
 //     need to do the following: (a) before exiting, reset
@@ -1083,8 +1083,8 @@ void* server_thread(void* arg) {
   // Part of the authentication includes specification of the command to be
   // performed, as well as the path.  This obviates the need for us to read
   // the path after authentication, and redefines the operation to perform.
-  // Authentication does two things to help us: (a) install the path into
-  // fname, and (b) update the header with the authorized cmd.
+  // Authentication does two things to help us: (a) install the authorized
+  // path into fname, and (b) update the header with the authorized cmd.
   //
   if (hdr->command == CMD_S3_AUTH) {
      if ( server_s3_authenticate(client_fd, hdr, fname, FNAME_SIZE) ) {
@@ -1337,6 +1337,8 @@ main(int argc, char* argv[]) {
   sigaction(SIGPIPE, &sig_act, NULL);
   sigaction(SIGABRT, &sig_act, NULL);
 
+  // let the open() in server_put() dictate the mode of new files
+  umask(0000);
 
   // --- initialize the sockaddr struct
 #ifdef UNIX_SOCKETS

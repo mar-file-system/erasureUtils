@@ -2116,7 +2116,6 @@ int xattr_check( ne_handle handle, char *path )
 #  endif
 #endif //META_FILES
 
-      PRINTout("xattr_check: file %s xattr returned %s\n",file,xattrval);
       if (ret < 0) {
          PRINTerr( "xattr_check: failure of xattr retrieval for file %s\n", file);
          handle->src_in_err[counter] = 1;
@@ -2124,6 +2123,7 @@ int xattr_check( ne_handle handle, char *path )
          handle->nerr++;
          continue;
       }
+      PRINTout("xattr_check: file %s xattr returned %s\n",file,xattrval);
 
       sscanf(xattrval,"%s %s %s %s %s %s %s %s",xattrchunks,xattrerasure,xattroffset,xattrchunksizek,xattrnsize,xattrncompsize,xattrnsum,xattrtotsize);
       N = atoi(xattrchunks);
