@@ -1,11 +1,11 @@
 *
-test-driver
 !*/
 !*.c
 !*.h
 !*.txt
 !*.am
 !*.ac
+!scripts/*
 !README*
 config.h
 
