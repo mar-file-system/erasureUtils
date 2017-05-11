@@ -597,6 +597,11 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
 
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
       ret = xattr_check(handle,path); //idenfity total data size of stripe
+      if( ret == -1 ) {
+         DBG_FPRINTF( stderr, "ne_status: extended attribute check has failed\n" );
+         free( handle );
+         return NULL;
+      }
       if ( handle->mode == NE_STAT ) {
          handle->mode = mode;
          DBG_FPRINTF( stdout, "ne_open: resetting mode to %d\n", mode);
@@ -611,10 +616,6 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
             free( handle );
             return NULL;
          }
-      }
-      else if(ret == -1) {
-        DBG_FPRINTF(stderr, "ne_open: failed xattr_check\n");
-        return NULL;
       }
 
    }
@@ -1836,16 +1837,16 @@ int xattr_check( ne_handle handle, char *path )
    unsigned int blocks;
    u32 crc;
 #endif
-   int N_list[ MAXE ] = { 0 };
-   int E_list[ MAXE ] = { 0 };
-   int O_list[ MAXE ] = { -1 };
-   unsigned int bsz_list[ MAXE ] = { 0 };
-   u64 totsz_list[ MAXE ] = { 0 };
-   int N_match[ MAXE ] = { 0 };
-   int E_match[ MAXE ] = { 0 };
-   int O_match[ MAXE ] = { 0 };
-   int bsz_match[ MAXE ] = { 0 };
-   int totsz_match[ MAXE ] = { 0 };
+   int N_list[ MAXPARTS ] = { 0 };
+   int E_list[ MAXPARTS ] = { 0 };
+   int O_list[ MAXPARTS ] = { -1 };
+   unsigned int bsz_list[ MAXPARTS ] = { 0 };
+   u64 totsz_list[ MAXPARTS ] = { 0 };
+   int N_match[ MAXPARTS ] = { 0 };
+   int E_match[ MAXPARTS ] = { 0 };
+   int O_match[ MAXPARTS ] = { 0 };
+   int bsz_match[ MAXPARTS ] = { 0 };
+   int totsz_match[ MAXPARTS ] = { 0 };
    struct stat* partstat = malloc (sizeof(struct stat));
    int lN;
    int lE;
@@ -1862,6 +1863,7 @@ int xattr_check( ne_handle handle, char *path )
       bzero(file,sizeof(file));
       sprintf( file, path, (counter+handle->erasure_offset)%(lN+lE) );
       ret = stat( file, partstat );
+      handle->csum[counter]=0; //reset csum to make results clearer
       DBG_FPRINTF( stdout, "xattr_check: stat of file %s returns %d\n", file, ret );
       if ( ret != 0 ) {
          DBG_FPRINTF( stderr, "xattr_check: file %s: failure of stat\n", file );
@@ -2017,13 +2019,13 @@ int xattr_check( ne_handle handle, char *path )
          DBG_FPRINTF( stdout, "setting csum for file %d to %llu\n", counter, (unsigned long long)csum);
          handle->csum[counter] = csum;
          if ( handle->mode == NE_RDONLY ) {
-            handle->totsz = totsz;
+            if( ! handle->totsz ) handle->totsz = totsz; //only set the file size if it is not already set (i.e. by a call with mode=NE_STAT)
             break;
          }
 
          // This bundle of spaghetti acts to individually verify each "important" xattr value and count matches amongst all files
          char nc = 1, ec = 1, of = 1, bc = 1, tc = 1;
-         for ( bcounter = 0; ( nc || ec || bc || tc || of )  &&  bcounter < MAXE; bcounter++ ) {
+         for ( bcounter = 0; ( nc || ec || bc || tc || of )  &&  bcounter < MAXPARTS; bcounter++ ) {
             if ( nc ) {
                if ( N_list[bcounter] == N ) {
                   N_match[bcounter]++;
@@ -2093,11 +2095,11 @@ int xattr_check( ne_handle handle, char *path )
    free(partstat);
    ret = 0;
 
-   if ( handle->mode != NE_RDONLY ) { //if the handle is uninitialized, store the necessary info
+   if ( handle->mode == NE_STAT ) { //if the handle is uninitialized, store the necessary info
       int maxmatch=0;
       int match=-1;
       //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
+      for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
          if ( N_match[bcounter] > maxmatch ) { maxmatch = N_match[bcounter]; match = bcounter; }
          if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
       }
@@ -2106,7 +2108,7 @@ int xattr_check( ne_handle handle, char *path )
          handle->N = N_list[match];
       }
       else {
-         DBG_FPRINTF( stderr, "xattr_check: number of mismatched N xattr vals exceeds erasure limits\n" );
+         DBG_FPRINTF( stderr, "xattr_check: failed to locate any matching N xattr vals!\n" );
          errno = ENODATA;
          return -1;
       }
@@ -2114,7 +2116,7 @@ int xattr_check( ne_handle handle, char *path )
       maxmatch=0;
       match=-1;
       //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
+      for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
          if ( E_match[bcounter] > maxmatch ) { maxmatch = E_match[bcounter]; match = bcounter; }
          if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
       }
@@ -2123,7 +2125,7 @@ int xattr_check( ne_handle handle, char *path )
          handle->E = E_list[match];
       }
       else {
-         DBG_FPRINTF( stderr, "xattr_check: number of mismatched E xattr vals exceeds erasure limits\n" );
+         DBG_FPRINTF( stderr, "xattr_check: failed to locate any matching E xattr vals!\n" );
          errno = ENODATA;
          return -1;
       }
@@ -2131,7 +2133,7 @@ int xattr_check( ne_handle handle, char *path )
       maxmatch=0;
       match=-1;
       //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
+      for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
          if ( O_match[bcounter] > maxmatch ) { maxmatch = O_match[bcounter]; match = bcounter; }
          if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
       }
@@ -2140,7 +2142,7 @@ int xattr_check( ne_handle handle, char *path )
          handle->erasure_offset = O_list[match];
       }
       else {
-         DBG_FPRINTF( stderr, "xattr_check: number of mismatched offset xattr vals exceeds erasure limits\n" );
+         DBG_FPRINTF( stderr, "xattr_check: failed to locate any matching offset xattr vals!\n" );
          errno = ENODATA;
          return -1;
       }
@@ -2148,7 +2150,7 @@ int xattr_check( ne_handle handle, char *path )
       maxmatch=0;
       match=-1;
       //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
+      for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
          if ( bsz_match[bcounter] > maxmatch ) { maxmatch = bsz_match[bcounter]; match = bcounter; }
          if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
       }
@@ -2157,7 +2159,7 @@ int xattr_check( ne_handle handle, char *path )
          handle->bsz = bsz_list[match];
       }
       else {
-         DBG_FPRINTF( stderr, "xattr_check: number of mismatched bsz xattr vals exceeds erasure limits\n" );
+         DBG_FPRINTF( stderr, "xattr_check: failed to locate any matching bsz xattr vals!\n" );
          errno = ENODATA;
          return -1;
       }
@@ -2165,7 +2167,7 @@ int xattr_check( ne_handle handle, char *path )
       maxmatch=0;
       match=-1;
       //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
+      for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
          if ( totsz_match[bcounter] > maxmatch ) { maxmatch = totsz_match[bcounter]; match = bcounter; }
          if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
       }
@@ -2174,7 +2176,7 @@ int xattr_check( ne_handle handle, char *path )
          handle->totsz = totsz_list[match];
       }
       else {
-         DBG_FPRINTF( stderr, "xattr_check: number of mismatched totsz xattr vals exceeds erasure limits\n" );
+         DBG_FPRINTF( stderr, "xattr_check: failed to locate any matching totsz xattr vals!\n" );
          errno = ENODATA;
          return -1;
       }
@@ -2182,7 +2184,7 @@ int xattr_check( ne_handle handle, char *path )
    }
 
    /* If no usable file was located or the number of errors is too great, notify of failure */
-   if ( handle->nerr > handle->E ) {
+   if ( handle->mode != NE_STAT  &&  handle->nerr > handle->E ) {
       errno = ENODATA;
       return -1;
    }
@@ -2205,11 +2207,19 @@ static int reopen_for_rebuild(ne_handle handle, int block) {
 
   DBG_FPRINTF( stdout, "   closing %s\n", file );
   close( handle->FDArray[block] );
-  DBG_FPRINTF( stdout, "   opening %s for write\n", file );
 
-  handle->FDArray[block] =
-    open( strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ),
+  if( handle->mode == NE_STAT ) {
+    handle->FDArray[block] = -1;
+  }
+  else {
+
+    DBG_FPRINTF( stdout, "   opening %s for write\n", file );
+
+    handle->FDArray[block] =
+      open( strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ),
           O_WRONLY | O_CREAT, 0666 );
+
+  }
 
   //ensure that sources are listed in order
   int i, tmp;
@@ -2811,13 +2821,20 @@ ne_stat ne_status( char *path )
    handle->path = nfile;
 
    ret = xattr_check(handle,path); //idenfity total data size of stripe
+   if( ret == -1 ) {
+      DBG_FPRINTF( stderr, "ne_status: extended attribute check has failed\n" );
+      free( handle );
+      return NULL;
+   }
    while ( handle->nerr > 0 ) {
       handle->nerr--;
       handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
       handle->src_err_list[handle->nerr] = 0;
    }
+
+   DBG_FPRINTF( stderr, "ne_status: post xattr_check() values -- N=%d, E=%d, S=%d\n", handle->N, handle->E, handle->erasure_offset );
    ret = xattr_check(handle,path); //verify the stripe, now that values have been established
-   if ( ret != 0 ) {
+   if ( ret == -1 ) {
       DBG_FPRINTF( stderr, "ne_status: extended attribute check has failed\n" );
       free( handle );
       return NULL;
