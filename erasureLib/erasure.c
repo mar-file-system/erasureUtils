@@ -123,6 +123,37 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 				int nerrs, int nsrcerrs, int k, int m);
 //void dump(unsigned char *buf, int len);
 
+// check for an incomplete write of an object
+int incomplete_write( ne_handle handle ) {
+   char fname[MAXNAME];
+   int i;
+   int err_cnt = 0;
+
+   for( i = 0; i < handle->nerr; i++ ) {
+      int block = handle->src_in_err[i];
+      snprintf( fname, MAXNAME, handle->path, (handle->erasure_offset + i) % (handle->N + handle->E) );
+      strcat( fname, WRITE_SFX );
+      
+      struct stat st;
+      // check for a partial data-file
+      if( stat( fname, &st ) == 0 ) {
+         continue;
+      }
+      else {
+         //check for a partial meta-file
+         strcat( fname, META_SFX );
+         if( stat( fname, &st ) == 0 ) continue;
+         err_cnt++;
+      }
+   }
+
+   if( err_cnt > handle->E ) {
+      DBG_FPRINTF( stderr, "incomplete_write: determined that source %s is not a partial write\n", handle->path );
+      return 0;
+   }
+   return 1;
+}
+
 void bq_destroy(BufferQueue *bq) {
   // XXX: Should technically check these for errors (ie. still locked)
   pthread_mutex_destroy(&bq->qlock);
@@ -597,12 +628,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
 
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
       ret = xattr_check(handle,path); //idenfity total data size of stripe
-      if( ret == -1 ) {
-         DBG_FPRINTF( stderr, "ne_status: extended attribute check has failed\n" );
-         free( handle );
-         return NULL;
-      }
-      if ( handle->mode == NE_STAT ) {
+      if ( ret == 0  &&  handle->mode == NE_STAT ) {
          handle->mode = mode;
          DBG_FPRINTF( stdout, "ne_open: resetting mode to %d\n", mode);
          while ( handle->nerr > 0 ) {
@@ -611,11 +637,13 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
             handle->src_err_list[handle->nerr] = 0;
          }
          ret = xattr_check(handle,path); //perform the check again, identifying mismatched values
-         if ( ret != 0 ) {
-            DBG_FPRINTF( stderr, "ne_open: extended attribute check has failed\n" );
-            free( handle );
-            return NULL;
-         }
+      }
+
+      if ( ret != 0 ) {
+         if( handle->N  &&  handle->E  &&  incomplete_write( handle ) ) { errno = ENOENT; return NULL; }
+         DBG_FPRINTF( stderr, "ne_open: extended attribute check has failed\n" );
+         free( handle );
+         return NULL;
       }
 
    }
