@@ -137,21 +137,17 @@ int incomplete_write( ne_handle handle ) {
       struct stat st;
       // check for a partial data-file
       if( stat( fname, &st ) == 0 ) {
-         continue;
+         return 1;
       }
       else {
          //check for a partial meta-file
          strcat( fname, META_SFX );
-         if( stat( fname, &st ) == 0 ) continue;
+         if( stat( fname, &st ) == 0 ) return 1;
          err_cnt++;
       }
    }
 
-   if( err_cnt > handle->E ) {
-      DBG_FPRINTF( stderr, "incomplete_write: determined that source %s is not a partial write\n", handle->path );
-      return 0;
-   }
-   return 1;
+   return 0;
 }
 
 void bq_destroy(BufferQueue *bq) {
