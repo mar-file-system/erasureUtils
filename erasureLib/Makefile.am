@@ -108,7 +108,8 @@ libne_a_LIBADD = $(SOCKET_LIBS)
 bin_PROGRAMS = libneTest
 libneTest_SOURCES = libneTest.c
 libneTest_LDADD = libne.a $(SOCKET_LIBS)
-libneTest_LDFLAGS = -lisal $(SOCKET_LD)
+# libneTest_LDFLAGS = -lisal $(SOCKET_LD)
+
 
 TESTS=erasureTest
 

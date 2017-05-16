@@ -64,8 +64,8 @@ AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
 
-# suppress compile/link noise, if the option is available
-m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
+# # suppress compile/link details, if the option is available
+# m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 
 
 # default to empty flags, instead of "-g -O2"
@@ -100,6 +100,22 @@ AC_CHECK_FUNCS([malloc])
 
 AXATTR_GET_FUNC_CHECK
 AXATTR_SET_FUNC_CHECK
+
+
+
+
+AC_CHECK_LIB([pthread], [pthread_create])
+
+# sockets subdir doesn't actually need this
+AC_CHECK_LIB([isal],    [crc32_ieee],
+    [],
+    [AC_CHECK_LIB([isal], [crc32_ieee_base],
+       [echo
+        echo "WARNING:  Could not properly link 'crc32_ieee' from isa-l, defaulting to '_base' implementation"
+        echo "          IN THIS STATE, THESE UTILITES MAY NOT FUNCTION AND WILL ALMOST CERTAINLY HAVE VERY POOR PERFORMANCE"
+        echo], 
+       [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!  Please verify that the proper version of the library (v2.16.0 or higher) is installed."])])])
+
 
 
 
@@ -172,19 +188,6 @@ AC_ARG_ENABLE([syslog],
 
 AM_CONDITIONAL([USE_SYSLOG], [test "x$enable_syslog" != xno])
 
-
-
-AC_CHECK_LIB([pthread], [pthread_create])
-
-# sockets subdir doesn't need this
-### AC_CHECK_LIB([isal],    [crc32_ieee],
-###     [],
-###     [AC_CHECK_LIB([isal], [crc32_ieee_base],
-###        [echo
-###         echo "WARNING:  Could not properly link 'crc32_ieee' from isa-l, defaulting to '_base' implementation"
-###         echo "          IN THIS STATE, THESE UTILITES MAY NOT FUNCTION AND WILL ALMOST CERTAINLY HAVE VERY POOR PERFORMANCE"
-###         echo], 
-###        [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!  Please verify that the proper version of the library (v2.16.0 or higher) is installed."])])])
 
 
 
