@@ -350,7 +350,7 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
 
    // --- DATE  (no guarantee for cross-platform size of time_t)
    RECV_VALUE_SAFE(date_size, ptr, ptr_remain);
-   neDBG("date_size:  %d\n", date_size);
+   neDBG("  date_size:  %d\n", date_size);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
    if (date_size != sizeof(date)) {
       neERR("date size %lld doesn't match sizeof(time_t)\n", date_size, sizeof(date));
@@ -362,7 +362,7 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
 #if DEBUG_SOCKETS
    char time_in[32];           // max 26
    NEED_GT0( ctime_r(&date, time_in) );
-   neDBG("date [in]:  %s", time_in); // includes newline
+   neDBG("  date [in]:  %s", time_in); // includes newline
 #endif
 
    // validate DATE
@@ -374,7 +374,7 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
 #if DEBUG_SOCKETS
    char time_now[32];           // max 26
    NEED_GT0( ctime_r(&now.tv_sec, time_now) );
-   neDBG("date [now]: %s", time_now); // includes newline
+   neDBG("  date [now]: %s", time_now); // includes newline
 #endif
    if ((MAX_S3_DATE_LAG < 0) && ((now.tv_sec - date) > MAX_S3_DATE_LAG)) {
       neERR("caller's date is %llu seconds behind (limit: %llu)\n",
@@ -384,7 +384,7 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
 
    // --- OP
    RECV_VALUE_SAFE(op, ptr, ptr_remain);
-   neDBG("op:         %s\n", command_str(op));
+   neDBG("  op:         %s\n", command_str(op));
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
    hdr->command = op;
    hdr->size = 0;
@@ -392,7 +392,7 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
 
    // --- PATH
    RECV_VALUE_SAFE(str_len, ptr, ptr_remain);
-   neDBG("fname_len:  %lld\n", str_len);
+   neDBG("  fname_len:  %lld\n", str_len);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
    NEED( str_len < fname_len );
@@ -405,13 +405,13 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    ptr        += str_len  +1;
    ptr_remain -= str_len +1;
 
-   neDBG("fname:      %s\n", fname);
+   neDBG("  fname:      %s\n", fname);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
 
    // --- USER-NAME
    RECV_VALUE_SAFE(str_len, ptr, ptr_remain);
-   neDBG("user_len:   %lld\n", str_len);
+   neDBG("  user_len:   %lld\n", str_len);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
    NEED( str_len < ptr_remain );
@@ -421,13 +421,13 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
 
    ptr        += str_len +1;
    ptr_remain -= str_len +1;
-   neDBG("user_name:  %s\n", user_name);
+   neDBG("  user_name:  %s\n", user_name);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
    
 
    // --- SIGNATURE
    RECV_VALUE_SAFE(str_len, ptr, ptr_remain);
-   neDBG("sign_len:   %lld\n", str_len);
+   neDBG("  sign_len:   %lld\n", str_len);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
    NEED( str_len < ptr_remain );
@@ -438,7 +438,7 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    ptr        += str_len +1;
    ptr_remain -= str_len +1;
    
-   neDBG("sign [in]:  %s\n", signature);
+   neDBG("  sign [in]:  %s\n", signature);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
 
@@ -457,7 +457,6 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    //      neERR("unknown user '%s'\n", user_name);
    //      return -1;
    //   }
-   neDBG("user_name:  %s\n", user_name);
    if (aws_read_config_r((char* const)user_name, aws_ctx)) {
       // probably missing a line in ~/.awsAuth
       neERR("aws-read-config for user '%s' failed\n", user_name);
@@ -476,12 +475,12 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
                                          aws_ctx);
    NEED( srv_signature );
 
-   neDBG("res  [srv]: %s\n", resource);
-   neDBG("date [srv]: %s\n", srv_date);
-   neDBG("sign [srv]: %s\n", srv_signature);
+   neDBG("  res  [srv]: %s\n", resource);
+   neDBG("  date [srv]: %s\n", srv_date);
+   neDBG("  sign [srv]: %s\n", srv_signature);
 
    int retval = ( 0 - (strcmp(signature, srv_signature) != 0) ); // 0:success, -1:fail
-   neDBG("-- AUTHENTICATION: %s for %s %s\n", (retval ? "FAIL" : "OK"), command_str(op), fname);
+   neDBG("-- AUTHENTICATION: %s for user=%s %s %s\n", (retval ? "FAIL" : "OK"), user_name, command_str(op), fname);
 
    return retval;
 }

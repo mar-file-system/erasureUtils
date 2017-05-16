@@ -996,8 +996,8 @@ int client_s3_authenticate_internal(SocketHandle* handle, int command) {
    int32_t        date_size = sizeof(time_t);
    struct timeval now;
    uint32_t       op = command;
-   const char*    user_name = SKT_S3_USER;
-   char           signature;
+   AWSContext*    aws_ctx = handle->aws_ctx;
+   const char*    user_name = (aws_ctx ? aws_ctx->awsKeyID : SKT_S3_USER);
 
 
    // --- DATE  (no guarantee for cross-platform size of time_t)
@@ -1007,7 +1007,7 @@ int client_s3_authenticate_internal(SocketHandle* handle, int command) {
    }
    char now_str[32];           // max 26
    NEED_GT0( ctime_r(&now.tv_sec, now_str) );
-   neDBG("date [now]: %s", now_str); // includes newline
+   neDBG("  date [now]: %s", now_str); // includes newline
 
    SEND_VALUE_SAFE(ptr, date_size, ptr_remain);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
@@ -1017,7 +1017,7 @@ int client_s3_authenticate_internal(SocketHandle* handle, int command) {
 
 
    // --- OP
-   neDBG("op:         %s\n", command_str(op));
+   neDBG("  op:         %s\n", command_str(op));
    SEND_VALUE_SAFE(ptr, op, ptr_remain);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
@@ -1026,11 +1026,11 @@ int client_s3_authenticate_internal(SocketHandle* handle, int command) {
    PathSpec* spec = &handle->path_spec;
    str_len        = strlen(spec->fname);
 
-   neDBG("path_len:   %lld\n", str_len);
+   neDBG("  path_len:   %lld\n", str_len);
    SEND_VALUE_SAFE(ptr, str_len, ptr_remain);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
-   neDBG("path:       %s\n", spec->fname);
+   neDBG("  path:       %s\n", spec->fname);
    SEND_STRING_SAFE(ptr, spec->fname, str_len, ptr_remain);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
@@ -1038,19 +1038,16 @@ int client_s3_authenticate_internal(SocketHandle* handle, int command) {
    // --- USER_NAME
    str_len        = strlen(user_name);
 
-   neDBG("user_len:   %lld\n", str_len);
+   neDBG("  user_len:   %lld\n", str_len);
    SEND_VALUE_SAFE(ptr, str_len, ptr_remain);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
-   neDBG("user_name:  %s\n", user_name);
+   neDBG("  user_name:  %s\n", user_name);
    SEND_STRING_SAFE(ptr, user_name, str_len, ptr_remain);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
-
-
-   // --- SIGNATURE
-   AWSContext* aws_ctx = handle->aws_ctx;
    // neDBG("pass:       %s\n", aws_ctx->awsKey);
 
+   // --- SIGNATURE
    char  resource[1024];        // matches use in aws4c.c
    char* cl_date = NULL;
    char* cl_signature = GetStringToSign(resource,
@@ -1061,17 +1058,17 @@ int client_s3_authenticate_internal(SocketHandle* handle, int command) {
                                         spec->fname,
                                         aws_ctx);
    NEED( cl_signature );
-   neDBG("res  [cl]:  %s\n", resource);
-   neDBG("date [cl]:  %s\n", cl_date);
-   neDBG("sign [cl]:  %s\n", cl_signature);
+   neDBG("  res  [cl]:  %s\n", resource);
+   neDBG("  date [cl]:  %s\n", cl_date);
+   neDBG("  sign [cl]:  %s\n", cl_signature);
 
    str_len = strlen(cl_signature);
 
-   neDBG("sign_len:   %lld\n", str_len);
+   neDBG("  sign_len:   %lld\n", str_len);
    SEND_VALUE_SAFE(ptr, str_len, ptr_remain);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
-   neDBG("sign:       %s\n", cl_signature);
+   neDBG("  sign:       %s\n", cl_signature);
    SEND_STRING_SAFE(ptr, cl_signature, str_len, ptr_remain);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 

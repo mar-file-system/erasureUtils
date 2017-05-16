@@ -122,15 +122,17 @@ sig_handler(int sig) {
 
 
 
-void* aws_ctx = NULL;
+SktAuth aws_ctx = NULL;
 
 #ifdef S3_AUTH
-#  define    AUTH_INIT(USER, AWS_CTX)     NEED_0( aws_read_config_r((USER), (AWSContext*)(AWS_CTX)) )
-#  define    AUTH_INSTALL(HANDLEp, AWS_CTX)     NEED_0( skt_fcntl((HANDLEp), SKT_F_SETAUTH, (AWSContext*)(AWS_CTX)) )
-#  define thrAUTH_INSTALL(HANDLEp, AWS_CTX)  thrNEED_0( skt_fcntl((HANDLEp), SKT_F_SETAUTH, (AWSContext*)(AWS_CTX)) )
+// #  define AUTH_INIT(USER, AWS_CTX)           NEED_0( skt_auth_init((USER), (SktAuth*)(AWS_CTX)) )
+#  define    AUTH_INIT(USER, AWS_CTX)                   skt_auth_init((USER), (SktAuth*)(AWS_CTX))
+#  define    AUTH_INSTALL(HANDLEp, AWS_CTX)     NEED_0( skt_fcntl((HANDLEp), SKT_F_SETAUTH, (SktAuth)(AWS_CTX)) )
+#  define thrAUTH_INSTALL(HANDLEp, AWS_CTX)  thrNEED_0( skt_fcntl((HANDLEp), SKT_F_SETAUTH, (SktAuth)(AWS_CTX)) )
 
 #else
-#  define    AUTH_INIT(USER, AWS_CTX)
+// #  define AUTH_INIT(USER, AWS_CTX)
+#  define    AUTH_INIT(USER, AWS_CTX)                   (0)
 #  define    AUTH_INSTALL(HANDLEp, AWS_CTX)
 #  define thrAUTH_INSTALL(HANDLEp, AWS_CTX)
 #endif
@@ -1230,7 +1232,12 @@ main(int argc, char* argv[]) {
   }
 
   // --- initialize authentication (iff S3_AUTH)
-  AUTH_INIT(SKT_S3_USER, &aws_ctx);
+  if (AUTH_INIT(getenv("USER"), &aws_ctx)
+      && AUTH_INIT(SKT_S3_USER, &aws_ctx)) {
+    neERR("failed to read aws-config for user '%s' or '%s': %s\n",
+          getenv("USER"), SKT_S3_USER, strerror(errno));
+    return -1;
+  }
 
   // --- perform op
   ssize_t bytes_moved = 0;
