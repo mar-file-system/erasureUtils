@@ -209,6 +209,8 @@ int ne_rebuild( ne_handle handle );
 int ne_noxattr_rebuild( ne_handle handle );
 ne_stat ne_status( char *path );
 int ne_flush( ne_handle handle );
+int ne_set_xattr(const char *path, const char *xattrval, size_t len);
+int ne_get_xattr(const char *path, char *xattrval, size_t len);
 
 #endif
 

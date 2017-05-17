@@ -182,6 +182,82 @@ void bq_abort(BufferQueue *bq) {
   bq_signal(bq, BQ_ABORT);
 }
 
+int ne_set_xattr(const char *path, const char *xattrval, size_t len) {
+   int tmp = -1;
+#ifdef META_FILES
+   char meta_file[2048];
+   strcpy( meta_file, path );
+   strncat( meta_file, META_SFX, strlen(META_SFX) + 1 );
+   mode_t mask = umask(0000);
+   int fd = open( meta_file, O_WRONLY | O_CREAT, 0666 );
+   umask(mask);
+   if ( fd < 0 ) { 
+      DBG_FPRINTF(stderr, "ne_close: failed to open file %s\n", meta_file);
+      tmp = -1;
+   }
+   else {
+      int val = write( fd, xattrval, strlen(xattrval) + 1 );
+      if ( val != strlen(xattrval) + 1 ) {
+         DBG_FPRINTF(stderr, "ne_close: failed to write to file %s\n",
+                     meta_file);
+         tmp = -1;
+         close( fd );
+      }
+      else {
+         tmp = close( fd );
+      }
+   }
+   //   chown(meta_file, handle->owner, handle->group);
+#else
+
+#warn "xattr metadata is not functional with new thread model"
+#if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
+   tmp = fsetxattr(path, XATTRKEY, xattrval,
+      strlen(xattrval), 0);
+#else
+   tmp = fsetxattr(path, XATTRKEY, xattrval,
+                strlen(xattrval), 0, 0);
+#endif
+
+#endif //META_FILES
+   return tmp;
+}
+
+int ne_get_xattr(const char *path, char *xattrval, size_t len) {
+   int ret = 0;
+#ifdef META_FILES
+   char meta_file_path[2048];
+   strncpy(meta_file_path, path, 2048);
+   strncat(meta_file_path, META_SFX, strlen(META_SFX)+1);
+   int meta_fd = open( meta_file_path, O_RDONLY );
+   if ( meta_fd >= 0 ) {
+      ret = read( meta_fd, xattrval, len );
+      if ( ret < 0 ) {
+         DBG_FPRINTF(stderr,"ne_get_xattr: failed to read from file %s\n", meta_file_path);
+      }
+      else if(ret == 0) {
+         DBG_FPRINTF(stderr, "ne_get_xattr: read 0 bytes from metadata file %s\n", meta_file_path);
+         ret = -1;
+      }
+      ret = close( meta_fd );
+      if ( ret < 0 ) {
+         DBG_FPRINTF(stderr,"ne_get_xattr: failed to close file %s\n",meta_file_path);
+      }
+   }
+   else {
+      ret = -1;
+      DBG_FPRINTF(stderr,"xattr_check: failed to open file %s\n",meta_file_path);
+   }
+#else
+#   if (AXATTR_GET_FUNC == 4)
+   ret = getxattr(file,XATTRKEY,&xattrval[0],len;
+#   else
+   ret = getxattr(file,XATTRKEY,&xattrval[0],len,0,0);
+#   endif
+#endif
+   return ret;
+}
+
 static int set_block_xattr(ne_handle handle, int block) {
   int tmp = 0;
   char xattrval[1024];
@@ -192,51 +268,16 @@ static int set_block_xattr(ne_handle handle, int block) {
           (unsigned long long)handle->totsz);
   DBG_FPRINTF( stdout, "ne_close: setting file %d xattr = \"%s\"\n",
                block, xattrval );
-
-#ifdef META_FILES
-  char meta_file[2048];
-  sprintf( meta_file, handle->path,
-           (block+handle->erasure_offset)%(handle->N+handle->E) );
-  if ( handle->mode == NE_REBUILD ) {
-    strncat( meta_file, REBUILD_SFX, strlen(REBUILD_SFX)+1 );
-  }
-  else if ( handle->mode == NE_WRONLY ) {
-    strncat( meta_file, WRITE_SFX, strlen(WRITE_SFX)+1 );
-  }
-  strncat( meta_file, META_SFX, strlen(META_SFX) + 1 );
-  mode_t mask = umask(0000);
-  int fd = open( meta_file, O_WRONLY | O_CREAT, 0666 );
-  umask(mask);
-  if ( fd < 0 ) { 
-    DBG_FPRINTF(stderr, "ne_close: failed to open file %s\n", meta_file);
-    tmp = -1;
-  }
-  else {
-    int val = write( fd, xattrval, strlen(xattrval) + 1 );
-    if ( val != strlen(xattrval) + 1 ) {
-      DBG_FPRINTF(stderr, "ne_close: failed to write to file %s\n",
-                  meta_file);
-      tmp = -1;
-      close( fd );
-    }
-    else {
-      tmp = close( fd );
-    }
-  }
-  chown(meta_file, handle->owner, handle->group);
-#else
-
-#warn "xattr metadata is not functional with new thread model"
-#if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
-  tmp = fsetxattr(handle->FDArray[counter], XATTRKEY, xattrval,
-                  strlen(xattrval), 0);
-#else
-  tmp = fsetxattr(handle->FDArray[counter], XATTRKEY, xattrval,
-                  strlen(xattrval), 0, 0);
-#endif
-
-#endif //META_FILES
-  return tmp;
+  char block_file_path[2048];
+  sprintf(block_file_path, handle->path, (block+handle->erasure_offset)%(handle->N+handle->E));
+   if ( handle->mode == NE_REBUILD ) {
+      strncat( block_file_path, REBUILD_SFX, strlen(REBUILD_SFX)+1 );
+   }
+   else if ( handle->mode == NE_WRONLY ) {
+      strncat( block_file_path, WRITE_SFX, strlen(WRITE_SFX)+1 );
+   }
+   
+   return ne_set_xattr(block_file_path, xattrval, strlen(xattrval));
 }
 
 void *bq_writer(void *arg) {
@@ -1753,42 +1794,7 @@ int xattr_check( ne_handle handle, char *path )
       handle->group = partstat->st_gid;
       bzero(xattrval,sizeof(xattrval));
 
-#ifdef META_FILES
-
-      sprintf( nfile, handle->path, (counter+handle->erasure_offset)%(N+E) );
-      strncat( nfile, META_SFX, strlen(META_SFX)+1 );
-      DBG_FPRINTF(stdout,"xattr_check: opening file %s\n",nfile);
-      int meta_fd = open( nfile, O_RDONLY );
-      if ( meta_fd >= 0 ) {
-         tmp = read( meta_fd, &xattrval[0], sizeof(xattrval) );
-         if ( tmp < 0 ) {
-            DBG_FPRINTF(stderr,"xattr_check: failed to read from file %s\n",nfile);
-            ret = tmp;
-         }
-         else if(tmp == 0) {
-           DBG_FPRINTF(stderr, "xattr_check: read 0 bytes from metadata file %s\n", nfile);
-           ret = -1;
-         }
-         tmp = close( meta_fd );
-         if ( tmp < 0 ) {
-            DBG_FPRINTF(stderr,"xattr_check: failed to close file %s\n",nfile);
-            ret = tmp;
-         }
-      }
-      else {
-         ret = -1;
-         DBG_FPRINTF(stderr,"xattr_check: failed to open file %s\n",nfile);
-      }
-
-#else
-
-#if (AXATTR_GET_FUNC == 4)
-      ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
-#else
-      ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
-#endif
-
-#endif //META_FILES
+      ret = ne_get_xattr(file, xattrval, sizeof(xattrval));
 
       DBG_FPRINTF(stdout,"xattr_check: file %s xattr returned %s\n",file,xattrval);
       if (ret < 0) {
