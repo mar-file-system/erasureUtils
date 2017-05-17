@@ -64,10 +64,14 @@ libneTest_SOURCES = libneTest.c
 libneTest_LDADD = libne.a
 libneTest_LDFLAGS = -lisal
 
-check_PROGRAMS = test_read_offset
+check_PROGRAMS = test_read_offset testLink
 test_read_offset_SOURCES = test_read_offset.c
 test_read_offset_LDADD = libne.a
 test_read_offset_LDFLAGS = -lisal
 
-TESTS=erasureTest test_read_offset
+testLink_SOURCES = testLink.c
+testLink_LDADD = libne.a
+testLink_LDFLAGS = -lisal
+
+TESTS=erasureTest test_read_offset testLink
 

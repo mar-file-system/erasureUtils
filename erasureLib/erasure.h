@@ -211,6 +211,8 @@ ne_stat ne_status( char *path );
 int ne_flush( ne_handle handle );
 int ne_set_xattr(const char *path, const char *xattrval, size_t len);
 int ne_get_xattr(const char *path, char *xattrval, size_t len);
+int ne_delete_block(const char *path);
+int ne_link_block(const char *link_path, const char *target);
 
 #endif
 

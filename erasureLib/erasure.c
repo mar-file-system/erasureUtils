@@ -1706,11 +1706,9 @@ int ne_delete( char* path, int width ) {
    for( counter=0; counter<width; counter++ ) {
       bzero( file, sizeof(file) );
       sprintf( file, path, counter );
-      if ( unlink( file ) ) ret = 1;
-#ifdef META_FILES
-      strncat( file, META_SFX, strlen(META_SFX)+1 );
-      if ( unlink( file ) ) ret = 1;
-#endif
+      if( ne_delete_block(file) ) {
+         ret = 1;
+      }
    }
 
    return ret;
@@ -2813,5 +2811,39 @@ ne_stat ne_status( char *path )
 
    return stat;
 
+}
+
+int ne_delete_block(const char *path) {
+   // unlink a single block, including the manifest file (if
+   // META_FILES is defined).
+   int ret = unlink(path);
+#ifdef META_FILE
+   char meta_path[2048];
+   strncpy(meta_path, path, 2048);
+   strcat(meta_path, META_SFX);
+   if(ret == 0) {
+      ret = unlink(meta_path);
+   }
+#endif
+   return ret;
+}
+
+/**
+ * Make a symlink to an existing block
+ */
+int ne_link_block(const char *link_path, const char *target) {
+   int ret = symlink(target, link_path);
+#ifdef META_FILES
+   char meta_path[2048];
+   char meta_path_target[2048];
+   strcpy(meta_path, link_path);
+   strcpy(meta_path_target, target);
+   strcat(meta_path, META_SFX);
+   strcat(meta_path_target, META_SFX);
+   if(ret == 0) {
+      ret = symlink(meta_path_target, meta_path);
+   }
+#endif
+   return ret;
 }
 
