@@ -227,11 +227,13 @@ void
 shut_down_server() {
 
   // shutdown reaper
-  neDBG("stopping reaper\n");
-  pthread_cancel(reap_thr);
-  pthread_join(reap_thr, NULL);
-  // pthread_mutex_destroy(&reap_mtx);
-  neDBG("done.\n");
+  if (reap) {
+    neDBG("stopping reaper\n");
+    pthread_cancel(reap_thr);
+    pthread_join(reap_thr, NULL);
+    // pthread_mutex_destroy(&reap_mtx);
+    neDBG("done.\n");
+  }
 
   // shutdown all connection-handling threads
   int i;
@@ -259,7 +261,7 @@ shut_down_server() {
 // for main()
 static void
 sig_handler(int sig) {
-  neERR("sig_handler exiting on signal %d\n", sig);
+  neLOG("sig_handler exiting on signal %d\n", sig);
   shut_down_server();
   exit(0);
 }
@@ -1287,8 +1289,6 @@ main(int argc, char* argv[]) {
 
   const char* port_str = NULL;
   int         port = 0;
-
-  int         reap = 0;
 
   int         c;
   while ( (c = getopt(argc, argv, "p:d:rh")) != -1) {
