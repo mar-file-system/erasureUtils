@@ -1294,10 +1294,13 @@ main(int argc, char* argv[]) {
 
 
   if (bytes_moved < 0) {
-     neLOG("fail  %s\n", (errno ? strerror(errno) : ""));
+     int errno1 = errno;
+     // neLOG(      "fail  %s\n", (errno1 ? strerror(errno1) : ""));
+     fprintf(stderr, "fail  %s\n", (errno1 ? strerror(errno1) : ""));
      return -1;
   }
-  neLOG("success\n");
+  // neLOG(       "success\n");
+  fprintf(stderr, "success\n");
 
   // --- compute bandwidth
   if (bytes_moved) {
