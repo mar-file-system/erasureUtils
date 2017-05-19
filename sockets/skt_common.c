@@ -1375,12 +1375,6 @@ int skt_fcntl(SocketHandle* handle, SocketFcntlCmd cmd, ...) {
 
 #ifdef S3_AUTH
 
-      //      if (! (handle->flags & HNDL_PUT)) {
-      //         neERR("handle not open for writing\n");
-      //         errno = EINVAL;
-      //         return -1;
-      //      }
-
       handle->aws_ctx = aws_ctx;
       return 0;
 

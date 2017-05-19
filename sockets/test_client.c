@@ -1163,17 +1163,20 @@ typedef enum {
 
 
 int usage(const char* prog) {
-  fprintf(stderr, "Usage: %s  <operation>  <file_spec>\n", prog);
+  fprintf(stderr, "Usage: %s  [ <option> ... ] <operation>  <file_spec>\n", prog);
   fprintf(stderr, "where:\n");
   fprintf(stderr, "\n");
+  fprintf(stderr, "<option> is one of:\n");
+  fprintf(stderr, "  -u <user>      authenticate as <user> (looked up in ~/.awsAuth)\n");
+  fprintf(stderr, "\n");
   fprintf(stderr, "<operation> is one of:\n");
-  fprintf(stderr, "  -p             PUT -- read from stdin, write to remote file\n");
-  fprintf(stderr, "  -g             GET -- read from remote file, write to stdout\n");
-  fprintf(stderr, "  -s             stat the remote file\n");
-  fprintf(stderr, "  -r             rename to original + '.renamed'\n");
-  fprintf(stderr, "  -o             chown to 99:99\n");
-  fprintf(stderr, "  -R             hold read-handle open, so reaper-thread will kill connection\n");
-  fprintf(stderr, "  -t <test_no>   perform various unit-tests {1,1b,1c,2,3,3b}\n");
+  fprintf(stderr, "  -p <file>             PUT -- read from stdin, write to remote file\n");
+  fprintf(stderr, "  -g <file>             GET -- read from remote file, write to stdout\n");
+  fprintf(stderr, "  -s <file>             stat the remote file\n");
+  fprintf(stderr, "  -r <file>             rename to original + '.renamed'\n");
+  fprintf(stderr, "  -o <file>             chown to 99:99\n");
+  fprintf(stderr, "  -R <file>             hold read-handle open, so reaper-thread will kill connection\n");
+  fprintf(stderr, "  -t <test_no> <file>   perform various unit-tests {1,1b,1c,2,3,3b}\n");
   fprintf(stderr, "\n");
   fprintf(stderr, "<flie_spec> is <host>:<port>/<fname>\n");
 }
@@ -1195,33 +1198,85 @@ main(int argc, char* argv[]) {
 
 
   // --- parse args
-  char    cmd;
+  char    cmd = '@';
+  char*   user_name = NULL;
   char*   test_no = NULL;
   char*   file_spec = NULL;
-  int     c;
-  while ( (c = getopt(argc, argv, "t:gpsroRh")) != -1) {
-    switch (c) {
-    case 't':      cmd = 't';  test_no=optarg;    break;
+  int     help = 0;
 
-    case 'p':      cmd = 'p';  break;
-    case 'g':      cmd = 'g';  break;
-    case 's':      cmd = 's';  break;
-    case 'r':      cmd = 'r';  break;
-    case 'o':      cmd = 'o';  break;
-    case 'R':      cmd = 'R';  break;
+  while (optind < argc) {
 
-    case 'h':
-    default:
-      usage(argv[0]);
-      return -1;
-    }
+     int     c;
+     if ((c = getopt(argc, argv, "u:t:g:p:s:r:o:R:h")) != -1) {
+
+        switch (c) {
+        case 'u': user_name=optarg;  break;
+
+        case 'p': cmd = 'p';  file_spec=optarg;  break;
+        case 'g': cmd = 'g';  file_spec=optarg;  break;
+        case 's': cmd = 's';  file_spec=optarg;  break;
+        case 'r': cmd = 'r';  file_spec=optarg;  break;
+        case 'o': cmd = 'o';  file_spec=optarg;  break;
+        case 'R': cmd = 'R';  file_spec=optarg;  break;
+
+        case 't': cmd = 't';  test_no=optarg;    file_spec=argv[optind];  optind++; break;
+
+        case 'h':
+        default: {
+           usage(argv[0]);
+           return -1;
+        }
+        }
+     }
+     else {
+        // non-option arguments
+        optind ++;
+     }
   }
 
-  // I thought getopt() was supposed to strip out the argv elements
-  // that it pulled out.  Apparently not.
-  file_spec=argv[2];
-  if (cmd == 't')
-    file_spec=argv[3];
+
+  // --- validate parsed args
+  if (! cmd) {
+     usage(argv[0]);
+     return -1;
+  }
+  if (! file_spec) {
+     usage(argv[0]);
+     return -1;
+  }
+
+
+
+#if 0
+  // --- DEBUGGING: show parsed commands
+  const size_t CL_BUF_SIZE = 2048;
+  char         cl_buf[CL_BUF_SIZE];
+  char*        buf_ptr     = cl_buf;
+  size_t       remain      = CL_BUF_SIZE;
+  int          write_ct;
+
+  NEED_GT0( write_ct = snprintf(buf_ptr, remain, "%s", argv[0]) );
+  remain  -= write_ct;
+  buf_ptr += write_ct;
+
+  if (user_name) {
+     NEED_GT0( write_ct = snprintf(buf_ptr, remain, " -u %s", user_name) );
+     remain  -= write_ct;
+     buf_ptr += write_ct;
+  }
+
+  if (cmd) {
+     if (cmd == 't')
+        NEED_GT0( write_ct = snprintf(buf_ptr, remain, " -t %s %s", test_no, file_spec) );
+     else
+        NEED_GT0( write_ct = snprintf(buf_ptr, remain, " -%c %s", cmd, file_spec) );
+
+     remain  -= write_ct;
+     buf_ptr += write_ct;
+  }
+
+  fprintf(stderr, "parsed: %s\n", cl_buf); /* always show on console, too */
+#endif
 
 
   // --- start timer
@@ -1232,8 +1287,15 @@ main(int argc, char* argv[]) {
   }
 
   // --- initialize authentication (iff S3_AUTH)
-  if (AUTH_INIT(getenv("USER"), &aws_ctx)
-      && AUTH_INIT(SKT_S3_USER, &aws_ctx)) {
+  if (user_name) {
+     if (AUTH_INIT(user_name, &aws_ctx)) {
+        neERR("failed to read aws-config for user '%s': %s\n",
+              user_name, strerror(errno));
+        return -1;
+     }
+  }
+  else if (AUTH_INIT(getenv("USER"), &aws_ctx)
+           && AUTH_INIT(SKT_S3_USER, &aws_ctx)) {
     neERR("failed to read aws-config for user '%s' or '%s': %s\n",
           getenv("USER"), SKT_S3_USER, strerror(errno));
     return -1;

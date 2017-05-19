@@ -287,7 +287,8 @@ int main( int argc, const char* argv[] )
 
       free(buff);
       close(filefd);
-      PRINTout("libneTest: all writes completed\nlibneTest: total written = %llu\n", totdone );
+      PRINTout("libneTest: all writes completed\n");
+      PRINTout("libneTest: total written = %llu\n", totdone );
 
    }
 
@@ -331,7 +332,8 @@ int main( int argc, const char* argv[] )
          tmp = ne_read( handle, buff, toread, nread );
 
          if( toread != tmp ) {
-            PRINTerr("libneTest: unexpected # of bytes read by ne_read\nlibneTest:  got %d but expected %llu\n", tmp, toread );
+            PRINTerr("libneTest: unexpected # of bytes read by ne_read\n");
+            PRINTerr("libneTest:  got %d but expected %llu\n", tmp, toread );
             return -1;
          }
 
@@ -347,7 +349,8 @@ int main( int argc, const char* argv[] )
 
       free(buff); 
       close(filefd);
-      PRINTout("libneTest: all reads completed\nlibneTest: total read = %llu\n", totdone );
+      PRINTout("libneTest: all reads completed\n");
+      PRINTout("libneTest: total read = %llu\n", totdone );
    }
 
 

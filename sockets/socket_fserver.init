@@ -1,0 +1,115 @@
+#!/bin/bash
+#
+# socket_fsrvd  This shell script takes care of starting and stopping socket_fserver.
+#
+# ### chkconfig: [TBD]
+
+
+### BEGIN INIT INFO
+### lifted from ntpd
+# Provides: socket_fserver
+# Required-Start: $network $local_fs $remote_fs
+# Required-Stop: $network $local_fs $remote_fs
+# Should-Start: $syslog $named ntpdate
+# Should-Stop: $syslog $named
+# Short-Description: start and stop socket_fserver
+# Description: socket_fserver supports MarFS by allowing direct
+#              access to files using RDMA over IB via rsockets.
+### END INIT INFO
+
+# Source function library.
+. /etc/init.d/functions
+
+# Source networking configuration.
+. /etc/sysconfig/network
+
+executable=socket_fserver
+dir=/usr/local/marfs_sockets
+
+prog=${dir}/$executable
+config_file=${prog}.conf
+logfile=${prog}.log
+
+# lockfile=/var/lock/subsys/$executable
+lockfile=${prog}.lock
+
+
+start() {
+        [ "$EUID" != "0" ] && exit 4
+        [ "$NETWORKING" = "no" ] && exit 1
+
+        if ! [ -e $config_file ]; then
+            echo "Didn't find $config_file"
+            exit 1
+        fi
+        . $config_file
+
+        # Allow running server under valgrind
+        # valgrind diagnostics will go whereever $config_file redirects output
+        if [ "$1" == "valgrind" ]; then
+            OPTIONS="--tool=memcheck --fair-sched=try --track-origins=yes $prog $OPTIONS"
+            prog=valgrind
+        fi
+
+        # Start daemons.
+        # The "[OK]" from 'daemon' would get printed at column 60, overwriting this text.
+        # So, don't bother with "echo -n"
+        echo "Starting: $prog $OPTIONS"
+
+        # The default 'daemon' invocation causes this script
+        # to fail to return when running 'ssh host <this_script> start'
+        # The problem is that the program has output.
+        # Redirecting to a log-file (or /dev/null) allows ssh to return
+        echo "Starting: $prog $OPTIONS" > $logfile
+
+        daemon $prog $OPTIONS
+
+        RETVAL=$?
+        echo
+        [ $RETVAL -eq 0 ] && touch $lockfile
+        return $RETVAL
+}
+
+stop() {
+        [ "$EUID" != "0" ] && exit 4
+        echo -n $"Shutting down $prog: "
+        killproc $prog
+        RETVAL=$?
+        echo
+        [ $RETVAL -eq 0 ] && rm -f $lockfile
+        return $RETVAL
+}
+
+
+
+# See how we were called.
+case "$1" in
+  start)
+        start
+        ;;
+  start_valgrind)
+        start valgrind
+        ;;
+  stop)
+        stop
+        ;;
+  status)
+        status $prog
+        ;;
+  restart|force-reload)
+        stop
+        start
+        ;;
+  try-restart|condrestart)
+        if status $prog > /dev/null; then
+            stop
+            start
+        fi
+        ;;
+  reload)
+        exit 3
+        ;;
+  *)
+        echo $"Usage: $0 {start|stop|status|restart|try-restart|force-reload}"
+        exit 2
+esac

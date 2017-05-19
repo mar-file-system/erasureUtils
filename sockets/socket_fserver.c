@@ -91,21 +91,24 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 // These are now only used in main_flags
-#define  MAIN_BIND         0x0001
-#define  MAIN_SOCKET_FD    0x0002
+#define  MAIN_BIND               0x0001
+#define  MAIN_SOCKET_FD          0x0002
 
 // These are now only used in ThreadContext.flags
-#define  CTX_PRE_THREAD   0x0010 /* client_fd has been opened */
-#define  CTX_THREAD_EXIT  0x0020
-#define  CTX_THREAD_ERR   0x0040
-#define  CTX_EOF          0x0080
+#define  CTX_PRE_THREAD          0x0010 /* client_fd has been opened */
+#define  CTX_THREAD_EXIT         0x0020
+#define  CTX_THREAD_ERR          0x0040
+#define  CTX_EOF                 0x0080
+#define  CTX_AUTH_SETEUID_REQ    0x0100 /* server_s3_authenticate() should seteuid */
+#define  CTX_AUTH_SETEUID        0x0200 /* server_s3_authenticate() did seteuid */
+
 
 
 static unsigned char  main_flags = 0;
 
-static char server_name[MAX_SOCKET_NAME_SIZE +1];
+static char   server_name[MAX_SOCKET_NAME_SIZE +1];
 
-static int  socket_fd;               // main listens to this
+static int    socket_fd;               // main listens to this
 
 
 // command-line '-d' provides restricted dir-tree where files may be affected
@@ -114,6 +117,9 @@ size_t        dir_root_len;
 
 // command-line '-r' [option] says whether to run a reaper-thread
 int           reap = 0;
+
+// command-line '-u' [option] says whether to do per-thread seteuid
+int           do_seteuid = 0;
 
 
 
@@ -271,6 +277,127 @@ sig_handler(int sig) {
 
 
 #ifdef S3_AUTH
+
+#include <pwd.h>
+#include <sys/syscall.h>
+
+// ...........................................................................
+// push_user support lifted and adapted from from MarFS (bfc6d7af, 2017-05-11)
+// ...........................................................................
+
+// using "saved" uid/gid to hold the state, so no state needed in Context.
+// using syscalls to get thread-safety, based on this:
+// http://stackoverflow.com/questions/1223600/change-uid-gid-only-of-one-thread-in-linux
+
+typedef struct PerThreadContext {
+   int   pushed;                 // detect double-push
+   int   pushed_groups;          // need to pop groups, too?
+
+   gid_t groups[NGROUPS_MAX];    // orig group list of *process*
+   int   group_ct;               // size of <groups>
+} PerThreadContext;
+
+
+// pull the contents of the marfs version of push_groups4(), if we ever
+// want to allow different groups for admin access to storage.
+int ne_push_groups4(PerThreadContext* ctx, uid_t uid, gid_t gid) {
+   return 0;
+}
+
+
+int ne_push_user4(PerThreadContext* ctx,
+                  uid_t             new_euid,
+                  gid_t             new_egid,
+                  int               push_groups) {
+
+#  if (_BSD_SOURCE || _POSIX_C_SOURCE >= 200112L || _XOPEN_SOURCE >= 600)
+
+   int rc;
+
+   // check for two pushes without a pop
+   if (ctx->pushed) {
+      neLOG("double-push -> %u\n", new_euid);
+      errno = EPERM;
+      return -1;
+   }
+
+   // --- maybe install the user's group-list (see comments, above)
+   if (push_groups) {
+      if (ne_push_groups4(ctx, new_euid, new_egid)) {
+         return -1;
+      }
+   }
+
+   // get current real/effective/saved gid
+   gid_t old_rgid;
+   gid_t old_egid;
+   gid_t old_sgid;
+
+   rc = syscall(SYS_getresgid, &old_rgid, &old_egid, &old_sgid);
+   if (rc) {
+      neLOG("getresgid() failed\n");
+      // exit(EXIT_FAILURE);       // fuse should fail
+      return -1;
+   }
+
+   // install the new egid, and save the current one
+   neLOG("gid %u(%u) -> (%u)\n", old_rgid, old_egid, new_egid);
+   rc = syscall(SYS_setresgid, -1, new_egid, old_egid);
+   if (rc == -1) {
+      if ((errno == EACCES) && ((new_egid == old_egid) || (new_egid == old_rgid))) {
+         neLOG("failed (but okay)\n"); /* okay [see NOTE] */
+      }
+      else {
+         neLOG("failed!\n");
+         return -1;             // no changes were made
+      }
+   }
+
+   // get current real/effect/saved uid
+   uid_t old_ruid;
+   uid_t old_euid;
+   uid_t old_suid;
+
+   rc = syscall(SYS_getresuid, &old_ruid, &old_euid, &old_suid);
+   if (rc) {
+      neLOG("getresuid() failed\n");
+      // exit(EXIT_FAILURE);       // fuse should fail (?)
+      return -1;
+   }
+
+   // install the new euid, and save the current one
+   neLOG("uid %u(%u) -> (%u)\n", old_ruid, old_euid, new_euid);
+   rc = syscall(SYS_setresuid, -1, new_euid, old_euid);
+   if (rc == -1) {
+      if ((errno == EACCES) && ((new_euid == old_ruid) || (new_euid == old_euid))) {
+         neLOG("failed (but okay)\n");
+         return 0;              /* okay [see NOTE] */
+      }
+
+      // try to restore gid from before push
+      rc = syscall(SYS_setresgid, -1, old_egid, -1);
+      if (! rc) {
+         neLOG("failed!\n");
+         return -1;             // restored to initial conditions
+      }
+      else {
+         neLOG("failed -- couldn't restore egid %d!\n", old_egid);
+         // exit(EXIT_FAILURE);  // don't leave thread stuck with wrong egid
+         return -1;
+      }
+   }
+
+   ctx->pushed = 1;             // prevent double-push
+
+   return 0;
+
+#  else
+#    error "No support for seteuid()/setegid()"
+#  endif
+}
+
+
+
 
 // --- perform S3 authentication
 //
@@ -482,22 +609,53 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    neDBG("  sign [srv]: %s\n", srv_signature);
 
    int retval = ( 0 - (strcmp(signature, srv_signature) != 0) ); // 0:success, -1:fail
-   neDBG("-- AUTHENTICATION: %s for user=%s %s %s\n", (retval ? "FAIL" : "OK"), user_name, command_str(op), fname);
+   neLOG("-- AUTHENTICATION: %s for user=%s %s %s\n",
+         (retval ? "FAIL" : "OK"), user_name, command_str(op), fname);
 
    return retval;
 }
 
 
-int server_s3_authenticate(int client_fd, PseudoPacketHeader* hdr, char* fname, size_t fname_size) {
+
+int server_s3_authenticate(ThreadContext* ctx, int client_fd, PseudoPacketHeader* hdr, char* fname, size_t fname_size) {
    AWSContext aws_ctx = {0};
 
    int rc = server_s3_authenticate_internal(client_fd, hdr, fname, fname_size, &aws_ctx);
    if (rc)
       neLOG("auth failed: %s %s\n", command_str(hdr->command), (fname ? fname : "<unknown_path>"));
 
+   // maybe seteuid to UID of authenticated user
+   else if (ctx->flags & CTX_AUTH_SETEUID_REQ) {
+
+      const char*         username   = aws_ctx.ID;
+      static const size_t STRBUF_LEN = 2048;
+      char                strbuf[STRBUF_LEN];
+      struct passwd       pwd;
+      struct passwd*      pwd_ptr    = NULL;
+
+      PerThreadContext    pt_ctx = {0};
+
+      if ((rc = getpwnam_r(username, &pwd, strbuf, STRBUF_LEN, &pwd_ptr)))
+         neERR("lookup-user: %s failed: %s\n", username, strerror(errno));
+      else if (! pwd_ptr) {
+         rc = -1;
+         neERR("lookup-user: %s failed(2): %s\n", username, strerror(errno));
+      }
+      else if ((rc = ne_push_user4(&pt_ctx, pwd_ptr->pw_uid, pwd_ptr->pw_gid, 0)))
+         neERR("push-user: %s (uid:%d) failed: %s\n", username, pwd_ptr->pw_uid, strerror(errno));
+      else {
+         neDBG("push-user: %s (uid:%d, gid:%d)\n", username, pwd_ptr->pw_uid, pwd_ptr->pw_gid);
+         ctx->flags |= CTX_AUTH_SETEUID;
+      }
+   
+      if (rc)
+         neLOG("auth failed: %s %s\n", command_str(hdr->command), (fname ? fname : "<unknown_path>"));
+   }
+
    aws_context_release_r(&aws_ctx); // free strdup'ed name, password, etc
 
-   // send response to client
+   // this response to client just concerns the authentication, not the
+   // task that they are authenticating.  Both sides now move on to that.
    NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
 
    return rc;
@@ -1088,7 +1246,7 @@ void* server_thread(void* arg) {
   // path into fname, and (b) update the header with the authorized cmd.
   //
   if (hdr->command == CMD_S3_AUTH) {
-     if ( server_s3_authenticate(client_fd, hdr, fname, FNAME_SIZE) ) {
+     if ( server_s3_authenticate(ctx, client_fd, hdr, fname, FNAME_SIZE) ) {
         ctx->flags |= CTX_THREAD_ERR;
         pthread_exit(ctx);
      }
@@ -1269,6 +1427,9 @@ int push_thread(int client_fd) {
   if (i < 0)
     return -1;
 
+  if (do_seteuid)
+     conn_list[i].ctx.flags |= CTX_AUTH_SETEUID_REQ;
+
   NEED_0( pthread_create(&conn_list[i].thr, NULL, server_thread, &conn_list[i].ctx) );
   return 0;
 }
@@ -1281,6 +1442,7 @@ void usage(const char* progname) {
   neERR("  -d <dir>    server will allow clients to write arbitrary files under <dir>\n");
   neERR("                (but nowhere else)\n");
   neERR("  -r          use a 'reap' thread, to clean up stuck threads\n");
+  neERR("  -u          perform a per-thread seteuid to the authenticated user\n");
   exit(1);
 }
 
@@ -1291,11 +1453,12 @@ main(int argc, char* argv[]) {
   int         port = 0;
 
   int         c;
-  while ( (c = getopt(argc, argv, "p:d:rh")) != -1) {
+  while ( (c = getopt(argc, argv, "p:d:ruh")) != -1) {
     switch (c) {
-    case 'p':      port_str = optarg;    break;
-    case 'd':      dir_root = optarg;    break;
-    case 'r':      reap     = 1;         break;
+    case 'p':      port_str   = optarg;    break;
+    case 'd':      dir_root   = optarg;    break;
+    case 'r':      reap       = 1;         break;
+    case 'u':      do_seteuid = 1;         break;
 
     case 'h':
     default:
