@@ -229,6 +229,14 @@ shut_down_thread(void* arg) {
 
 
 // main uses this for surprise exits
+//
+// TBD: close socket_fd first, to prevent new connections.
+//
+// TBD: do all the cancels in one pass (marking conn_list[i].ctx.flags |=
+//      CTX_CANCELLED, or something), then iterate through joins.  That
+//      way, if the threads all have to time-out, we can at least do the
+//      time-outs in parallel.
+//
 void
 shut_down_server() {
 
@@ -666,11 +674,11 @@ int server_s3_authenticate(ThreadContext* ctx, int client_fd, PseudoPacketHeader
 
 // --- read <fname> from peer (client)
 //
-// <fname_length> is the size they told us it would be.
+// name must include terminal-NULL (which must be part of <fname_size>)
+//
+// <fname_length> is the size they told us the fname would be (w/ terminal NULL).
 // <max_size> is the space available in <fname>.  It must be big enough
 //     to hold the canonicalized version of the fname.
-//
-// name must include terminal-NULL (which must be part of <fname_size>)
 //
 // NOTE: We require the fully-canonicalized path to be a proper
 //     sub-path of <dir_root> (i.e. the directory-tree indicated on
@@ -694,21 +702,22 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
 
   // validate canonicalized name, using "<dir>" from server command-line.
   //
-  // realpath() thinks we want to know whether the path exists,
-  // ignoring possible cases where the canonicalized path could be
-  // produced regardless of whether it exists or not.
+  // realpath() thinks we want to know whether the path exists, ignoring
+  // possible cases where the canonicalized path could be a legitimate
+  // argument to open(O_WRONLY), even if it doesn't exist.
   //
   // Let's try a simpler question: does the fully-canonicalized
-  // parent-directory exist?  [Instead of copying the entire path in
-  // order to safely extract the parent-dir with basename(), let's try
-  // a low-impact alternative.]
+  // parent-directory exist?  [Instead of copying the entire path, just to
+  // be able to safely extract the parent-dir with basename(), we'll use a
+  // cheaper alternative.]
+  //
   char   canon[PATH_MAX+1];
   size_t canon_len = 0;
 
   char*  last_slash = strrchr(fname, '/');
   if (last_slash) {
     *last_slash = 0;
-    char* path = realpath(fname, canon); // canonicalize the parent-dir?
+    char* path = realpath(fname, canon); // canonicalize the parent-dir
     if (!path)
       neERR("realpath(%s) failed (parent-directory): %s\n", fname, strerror(errno));
     
@@ -728,13 +737,13 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
     canon_len += last_slash_len;
   }
   else if (strrchr(dir_root, '/')) {
-    neERR("path %s has no '/', so obvisouly it can't be under '%s'\n", fname, dir_root);
+    neERR("path %s has no '/', so obviously it can't be under '%s'\n", fname, dir_root);
     return -1;
   }
   else {
     neERR("Neither path '%s' nor dir_root '%s' have slashes.  "
-        "Let's hope you know what you're doing\n",
-        fname, dir_root);
+          "Let's hope you know what you're doing\n",
+          fname, dir_root);
     strncpy(canon, fname, PATH_MAX);
     canon[PATH_MAX] = 0;
     canon_len = strlen(canon);
@@ -1475,6 +1484,17 @@ main(int argc, char* argv[]) {
     usage(argv[0]);
 
   dir_root_len = strlen(dir_root);
+
+  // remove trailing slash, if present.
+  if ((dir_root_len > 1)
+      && (dir_root[dir_root_len -1] == '/')) {
+
+     // deliberately overriding const char*, just here
+     dir_root_len -= 1;
+     *((char*)dir_root + dir_root_len) = 0;
+  }
+  neLOG("dir_root: %s\n", dir_root);
+
 
   // parse <port>
   errno = 0;
