@@ -131,7 +131,7 @@ int incomplete_write( ne_handle handle ) {
 
    for( i = 0; i < handle->nerr; i++ ) {
       int block = handle->src_in_err[i];
-      snprintf( fname, MAXNAME, handle->path, (handle->erasure_offset + i) % (handle->N + handle->E) );
+      snprintf( fname, MAXNAME, handle->path, (handle->erasure_offset + i) % ( (handle->N) ? (handle->N + handle->E) : MAXPARTS ) );
       strcat( fname, WRITE_SFX );
       
       struct stat st;
@@ -636,7 +636,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
       }
 
       if ( ret != 0 ) {
-         if( handle->N  &&  handle->E  &&  incomplete_write( handle ) ) { errno = ENOENT; return NULL; }
+         if( incomplete_write( handle ) ) { errno = ENOENT; return NULL; }
          DBG_FPRINTF( stderr, "ne_open: extended attribute check has failed\n" );
          free( handle );
          return NULL;
@@ -1713,6 +1713,7 @@ int parent_dir_missing( char* path, int max_length ) {
  */
 int ne_delete( char* path, int width ) {
    char file[MAXNAME];       /* array name of files */
+   char partial[MAXNAME];
    int counter;
    int ret = 0;
    int parent_missing;
@@ -1721,12 +1722,15 @@ int ne_delete( char* path, int width ) {
       parent_missing = -2;
       bzero( file, sizeof(file) );
       sprintf( file, path, counter );
-      // unlink the file.  If the unlink fails, check if the parent directory exists.  If not, indicate an error.
-      if ( unlink( file )  &&  (parent_missing = parent_dir_missing(file, MAXNAME)) ) ret = -1;
+      sprintf( partial, path, counter );
+      strncat( partial, WRITE_SFX, MAXNAME );
+      // unlink the file or the unfinished file.  If both fail, check if the parent directory exists.  If not, indicate an error.
+      if ( ( unlink( file )  &&  unlink( partial ) )  &&  (parent_missing = parent_dir_missing(file, MAXNAME)) ) ret = -1;
 #ifdef META_FILES
-      strncat( file, META_SFX, strlen(META_SFX)+1 );
+      strncat( file, META_SFX, MAXNAME );
+      strncat( partial, META_SFX, MAXNAME );
       // same as the above, but only stat the parent dir if we haven't already verified that it exists
-      if ( unlink( file ) ) {
+      if ( unlink( file )  &&  unlink( partial ) ) {
          if( parent_missing == -2 ) parent_missing = parent_dir_missing(file, MAXNAME);
          if( parent_missing ) ret = -1;
       }
