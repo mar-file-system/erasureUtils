@@ -96,11 +96,12 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 // These are now only used in ThreadContext.flags
 #define  CTX_PRE_THREAD          0x0010 /* client_fd has been opened */
-#define  CTX_THREAD_EXIT         0x0020
-#define  CTX_THREAD_ERR          0x0040
-#define  CTX_EOF                 0x0080
-#define  CTX_AUTH_SETEUID_REQ    0x0100 /* server_s3_authenticate() should seteuid */
-#define  CTX_AUTH_SETEUID        0x0200 /* server_s3_authenticate() did seteuid */
+#define  CTX_THREAD_CANCELED     0x0020 /* shut_down_server() */
+#define  CTX_THREAD_EXIT         0x0040
+#define  CTX_THREAD_ERR          0x0080
+#define  CTX_EOF                 0x0100
+#define  CTX_AUTH_SETEUID_REQ    0x0200 /* server_s3_authenticate() should seteuid */
+#define  CTX_AUTH_SETEUID        0x0400 /* server_s3_authenticate() did seteuid */
 
 
 
@@ -240,35 +241,43 @@ shut_down_thread(void* arg) {
 void
 shut_down_server() {
 
-  // shutdown reaper
-  if (reap) {
-    neDBG("stopping reaper\n");
-    pthread_cancel(reap_thr);
-    pthread_join(reap_thr, NULL);
-    // pthread_mutex_destroy(&reap_mtx);
-    neDBG("done.\n");
-  }
+   // close up shop
+   // (stop receiving new connections)
+   if (main_flags & MAIN_SOCKET_FD) {
+      neDBG("closing socket_fd %d\n", socket_fd);
+      CLOSE(socket_fd);
+   }
+   if (main_flags & MAIN_BIND) {
+      neDBG("unlinking '%s'\n", server_name);
+      (void)unlink(server_name);
+   }
 
-  // shutdown all connection-handling threads
-  int i;
-  for (i=0; i<MAX_SOCKET_CONNS; ++i) {
-    if (IS_ACTIVE(&conn_list[i].ctx)) {
-      neDBG("cancelling conn %d ...", i);
-      pthread_cancel(conn_list[i].thr);
-      pthread_join(conn_list[i].thr, NULL);
+   // shutdown reaper
+   if (reap) {
+      neDBG("stopping reaper\n");
+      pthread_cancel(reap_thr);
+      pthread_join(reap_thr, NULL);
+      // pthread_mutex_destroy(&reap_mtx);
       neDBG("done.\n");
-    }
-  }
+   }
 
-  // close up shop
-  if (main_flags & MAIN_BIND) {
-    neDBG("unlinking '%s'\n", server_name);
-    (void)unlink(server_name);
-  }
-  if (main_flags & MAIN_SOCKET_FD) {
-    neDBG("closing socket_fd %d\n", socket_fd);
-    CLOSE(socket_fd);
-  }
+   // shutdown all connection-handling threads
+   int i;
+   for (i=0; i<MAX_SOCKET_CONNS; ++i) {
+      if (IS_ACTIVE(&conn_list[i].ctx)) {
+         neDBG("canceling thread for conn %d\n", i);
+         pthread_cancel(conn_list[i].thr);
+         conn_list[i].ctx.flags |= CTX_THREAD_CANCELED;
+      }
+   }
+   for (i=0; i<MAX_SOCKET_CONNS; ++i) {
+      if (conn_list[i].ctx.flags & CTX_THREAD_CANCELED) {
+         neDBG("waiting on thread for conn %d ...", i);
+         pthread_join(conn_list[i].thr, NULL);
+         neDBG("done.\n");
+      }
+   }
+
 }
 
 
