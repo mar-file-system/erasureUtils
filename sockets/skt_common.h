@@ -183,8 +183,10 @@ typedef void(*jHandlerType)(void* arg);
 // client/server.  When debugging, we typically want to be able to step
 // slowly through an exchange, without causing a timeout.
 #ifdef DEBUG_SOCKETS
-#  define WR_TIMEOUT          10000
-#  define RD_TIMEOUT          10000
+// #  define WR_TIMEOUT          10000
+// #  define RD_TIMEOUT          10000
+#  define WR_TIMEOUT          30
+#  define RD_TIMEOUT          30
 #else
 #  define WR_TIMEOUT             30
 #  define RD_TIMEOUT             30
@@ -193,7 +195,7 @@ typedef void(*jHandlerType)(void* arg);
 
 
 // max seconds server-side date string can lag behind date-string generated
-// on client, for S3-authentication.
+// on client, for S3-authentication.  (Set negative to disable.)
 #define MAX_S3_DATE_LAG          ((WR_TIMEOUT > RD_TIMEOUT) ? WR_TIMEOUT : RD_TIMEOUT)
 #define MAX_S3_DATA              1024 + FNAME_SIZE /* authentication data */
 

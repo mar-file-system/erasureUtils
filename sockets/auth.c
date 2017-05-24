@@ -16,15 +16,16 @@
 char* create_auth_signature(AWSContext* const ctx, // auth_info
                             char* const       method,
                             char* const       obj_id) {
-  char  resource [1024];
-  char* date = NULL;
+
+  char         resource [1024];
+  DateConv     date_conv = { .time = NULL };
 
   //  AWSContext ctx = {0};
   //  aws_set_key_r  (auth_info->awsKeyID, &ctx); /* "user" */
   //  aws_set_keyid_r(auth_info->awsKey, &ctx);   /* "pass" */
 
   char* sign = GetStringToSign(resource, sizeof(resource),
-                               &date, method, NULL, obj_id, ctx);
+                               &date_conv, method, NULL, obj_id, ctx);
 }
 
 

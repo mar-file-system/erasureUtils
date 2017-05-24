@@ -818,7 +818,7 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
       if (unlikely(write_count < 0)) {
 
         if (handle->flags & HNDL_SEEK_SET) {
-           neDBG("write failed due to SEEK.  from %lld to %lld\n",
+           neDBG("write 'failed' due to SEEK.  from %lld to %lld\n",
                handle->stream_pos, handle->seek_pos);
            handle->flags &= ~(HNDL_SEEK_SET);
 
@@ -994,25 +994,21 @@ int client_s3_authenticate_internal(SocketHandle* handle, int command) {
 
    // generate, convert, and install individual fields
    int32_t        date_size = sizeof(time_t);
-   struct timeval now;
+   time_t         now = time(NULL);
    uint32_t       op = command;
    AWSContext*    aws_ctx = handle->aws_ctx;
    const char*    user_name = (aws_ctx ? aws_ctx->awsKeyID : SKT_S3_USER);
 
 
    // --- DATE  (no guarantee for cross-platform size of time_t)
-   if (gettimeofday(&now, NULL)) {
-      neERR("gettimeofday failed: %s\n", strerror(errno));
-      return -1;
-   }
-   char now_str[32];           // max 26
-   NEED_GT0( ctime_r(&now.tv_sec, now_str) );
+   char    now_str[32];           // max 26
+   NEED_GT0( ctime_r(&now, now_str) );
    neDBG("  date [now]: %s", now_str); // includes newline
 
    SEND_VALUE_SAFE(ptr, date_size, ptr_remain);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
-   SEND_VALUE_SAFE(ptr, now.tv_sec, ptr_remain);
+   SEND_VALUE_SAFE(ptr, now, ptr_remain);
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
 
 
@@ -1048,18 +1044,19 @@ int client_s3_authenticate_internal(SocketHandle* handle, int command) {
    // neDBG("pass:       %s\n", aws_ctx->awsKey);
 
    // --- SIGNATURE
-   char  resource[1024];        // matches use in aws4c.c
-   char* cl_date = NULL;
+   char     resource[1024];        // matches use in aws4c.c
+   DateConv date_conv = { .time = &now };
+
    char* cl_signature = GetStringToSign(resource,
                                         sizeof(resource),
-                                        &cl_date,
+                                        &date_conv,
                                         (char* const)command_str(op),
                                         NULL,
                                         spec->fname,
                                         aws_ctx);
    NEED( cl_signature );
    neDBG("  res  [cl]:  %s\n", resource);
-   neDBG("  date [cl]:  %s\n", cl_date);
+   neDBG("  date [cl]:  %s\n", (char*)date_conv.chars);
    neDBG("  sign [cl]:  %s\n", cl_signature);
 
    str_len = strlen(cl_signature);

@@ -503,19 +503,15 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
 #endif
 
    // validate DATE
-   struct timeval now;           // we're assuming client/server in the same timezone
-   if (gettimeofday(&now, NULL)) {
-      neERR("gettimeofday failed: %s\n", strerror(errno));
-      return -1;
-   }
+   time_t now = time(NULL); // UTC
 #if DEBUG_SOCKETS
    char time_now[32];           // max 26
-   NEED_GT0( ctime_r(&now.tv_sec, time_now) );
+   NEED_GT0( ctime_r(&now, time_now) );
    neDBG("  date [now]: %s", time_now); // includes newline
 #endif
-   if ((MAX_S3_DATE_LAG < 0) && ((now.tv_sec - date) > MAX_S3_DATE_LAG)) {
+   if ((MAX_S3_DATE_LAG >= 0) && ((now - date) > MAX_S3_DATE_LAG)) {
       neERR("caller's date is %llu seconds behind (limit: %llu)\n",
-          (now.tv_sec - date), MAX_S3_DATE_LAG);
+          (now - date), MAX_S3_DATE_LAG);
       return -1;
    }
 
@@ -601,11 +597,12 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    }
    // neDBG("pass:       %s\n", aws_ctx->awsKey);
 
-   char  resource[1024];        // matches use in aws4c.c
-   char* srv_date = NULL;
+   char      resource[1024];        // matches use in aws4c.c
+   DateConv  date_conv = { .time = &date };
+
    char* srv_signature = GetStringToSign(resource,
                                          sizeof(resource),
-                                         &srv_date,
+                                         &date_conv,
                                          (char* const)command_str(op),
                                          NULL,
                                          fname,
@@ -613,7 +610,7 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    NEED( srv_signature );
 
    neDBG("  res  [srv]: %s\n", resource);
-   neDBG("  date [srv]: %s\n", srv_date);
+   neDBG("  date [srv]: %s\n", (char*)date_conv.chars);
    neDBG("  sign [srv]: %s\n", srv_signature);
 
    int retval = ( 0 - (strcmp(signature, srv_signature) != 0) ); // 0:success, -1:fail
