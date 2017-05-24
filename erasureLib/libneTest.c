@@ -301,7 +301,7 @@ int main( int argc, const char* argv[] )
       for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
          printf( "%d ", stat->xattr_status[tmp] );
       }
-      printf( "\nData/Erasure Errors : " );
+      printf( "\nData/Erasure Errors :       " );
       for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
          if( stat->data_status[tmp] ) nerr++;
          printf( "%d ", stat->data_status[tmp] );

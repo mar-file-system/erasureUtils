@@ -130,8 +130,8 @@ int incomplete_write( ne_handle handle ) {
    int err_cnt = 0;
 
    for( i = 0; i < handle->nerr; i++ ) {
-      int block = handle->src_in_err[i];
-      snprintf( fname, MAXNAME, handle->path, (handle->erasure_offset + i) % ( (handle->N) ? (handle->N + handle->E) : MAXPARTS ) );
+      int block = handle->src_err_list[i];
+      snprintf( fname, MAXNAME, handle->path, (handle->erasure_offset + block) % ( (handle->N) ? (handle->N + handle->E) : MAXPARTS ) );
       strcat( fname, WRITE_SFX );
       
       struct stat st;
@@ -635,10 +635,13 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
          ret = xattr_check(handle,path); //perform the check again, identifying mismatched values
       }
 
+      DBG_FPRINTF( stdout, "ne_open: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d\n", handle->nerr, handle->N, handle->E, handle->erasure_offset );
+
       if ( ret != 0 ) {
          if( incomplete_write( handle ) ) { errno = ENOENT; return NULL; }
          DBG_FPRINTF( stderr, "ne_open: extended attribute check has failed\n" );
          free( handle );
+         errno = ENODATA;
          return NULL;
       }
 
@@ -660,6 +663,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
      if(initialize_queues(handle) < 0) {
        // all destroction/cleanup should be handled in initialize_queues()
        free(handle);
+       errno = ENOMEM;
        return NULL;
      }
      if( UNSAFE(handle) ) {
@@ -683,7 +687,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
 #endif
      if ( ret != 0 ) {
        DBG_FPRINTF( stderr, "ne_open: failed to allocate handle buffer\n" );
-       errno = ret;
+       errno = ENOMEM;
        return NULL;
      }
 
@@ -729,6 +733,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
          handle->nerr++;
          handle->src_in_err[counter] = 1;
          if ( handle->nerr > E ) { //if errors are unrecoverable, terminate
+           errno = ENODATA;
            return NULL;
          }
          if ( mode != NE_REBUILD ) { counter++; }
