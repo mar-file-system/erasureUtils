@@ -357,7 +357,7 @@ int write_raw(int fd, char* buf, size_t size) {
   struct timeval tv;
   int            rc;
 
-  // wait until <fd> has input (or timeout)
+  // wait until <fd> has room for output (or timeout)
   FD_ZERO(&wr_fds);
   FD_SET(fd, &wr_fds);
   do {
@@ -506,6 +506,7 @@ const char* _command_str[] = {
   "DATA",
   "ACK",
   "RETURN",
+  "NOP",
 
   "NULL"
 };
@@ -1539,7 +1540,7 @@ int write_init(SocketHandle* handle, SocketCommand cmd) {
   // --- first time through, initialize comms with server
   if (! (handle->flags & HNDL_OP_INIT)) {
 
-    // inits common to read/write, allows simpler inits for non-RDMA tasks
+     // inits common to read/write, allows simpler inits for non-RDMA tasks
      NEED_0( basic_init(handle, cmd) );
 
 
@@ -2073,7 +2074,7 @@ int skt_close(SocketHandle* handle) {
 
    if (handle->flags & HNDL_OP_INIT) {
 
-      // set this now.  If we only get part-way through, don't try again.
+      // Reset this now.  If we only get part-way through, don't try again.
       handle->flags &= ~HNDL_OP_INIT;
 
       if (handle->flags & HNDL_PUT) {
@@ -2117,6 +2118,22 @@ int skt_close(SocketHandle* handle) {
          jNEED_0( write_pseudo_packet(handle->peer_fd, CMD_ACK, 0, NULL) );
 #endif
       }
+   }
+
+   // When reading small files, some libne threads close their SocketHandle
+   // without ever reading.  But those SocketHandles were minimally open,
+   // meaning a server-side thread was spun up to listen to them.  The
+   // result is that when the client-side shuts down, the server-side
+   // thread gets an EOF.  This is harmless, but it results in "fail"
+   // messages written from the server into the log, which can be
+   // distracting or alarming.  Therefore, we're trying adding this little
+   // sign-off, which will allow the server threads to close gracefully.
+   // I'm not sure whether this can create trouble for client-side reads,
+   // in the event of some server-side crash, e.g. during a GET.  The
+   // client-side doesn't expect NOP.
+   else {
+      // server spun up a listener-thread.  Let it exit gracefully
+      jNEED_0( write_pseudo_packet(handle->peer_fd, CMD_NOP, 0, NULL) );
    }
 
 

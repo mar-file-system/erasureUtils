@@ -393,6 +393,7 @@ typedef enum {
   CMD_DATA,                     // amount of data sent (via riowrite)
   CMD_ACK,                      // got data (ready for riowrite), <size> has read-size
   CMD_RETURN,                   // command received (<size> has ack'ed cmd)
+  CMD_NOP,                      // graceful server-thread exit (see skt_close())
 
   CMD_NULL,                     // THIS IS ALWAYS LAST
 } SocketCommand;

@@ -1297,6 +1297,7 @@ void* server_thread(void* arg) {
     case CMD_CHOWN:  rc = server_chown(ctx);   break;
     case CMD_RENAME: rc = server_rename(ctx);  break;
     case CMD_UNLINK: rc = server_unlink(ctx);  break;
+    case CMD_NOP:    rc = 0;                   break;
 
     default:
       neERR("unsupported op: '%s'\n", command_str(hdr->command));
