@@ -45,9 +45,12 @@ start() {
         . $config_file
 
         # Allow running server under valgrind
-        # valgrind diagnostics will go whereever $config_file redirects output
-        if [ "$1" == "valgrind" ]; then
+        # valgrind diagnostics will go wherever $config_file redirects output
+        if [ "$1" == "memcheck" ]; then
             OPTIONS="--tool=memcheck --fair-sched=try --track-origins=yes $prog $OPTIONS"
+            prog=valgrind
+        elif [ "$1" == "callgrind" ]; then
+            OPTIONS="--tool=callgrind --fair-sched=try $prog $OPTIONS"
             prog=valgrind
         fi
 
@@ -87,8 +90,11 @@ case "$1" in
   start)
         start
         ;;
-  start_valgrind)
-        start valgrind
+  start_memcheck)
+        start memcheck
+        ;;
+  start_callgrind)
+        start callgrind
         ;;
   stop)
         stop
