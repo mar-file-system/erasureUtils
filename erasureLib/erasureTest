@@ -59,12 +59,13 @@
 ITER=2 # Number of N+E file arrays to generate
 INITER=2 # (Must be 1 until regeneration is added to lib!!!)Number of error patterns to test for each file array
 POSTSLEEP=0 # Number of seconds the program should sleep after a test
-TLOGPREF="log_time."    # Prefix for execution time logfiles
-LOGFILE=log_errTests.$$ # Name of the test logfile
-LIBTLOG=log_libneTests.$$ # Name of the libneTest output logfile
-DATAFILE=testfile.$$
-OUTFILE=outfile.$$
-EPAT=testout.%d.$$
+WORK_DIRECTORY=wrkdir_errasureTest
+TLOGPREF="$WORK_DIRECTORY/log_time."    # Prefix for execution time logfiles
+LOGFILE=$WORK_DIRECTORY/log_errTests.$$ # Name of the test logfile
+LIBTLOG=$WORK_DIRECTORY/log_libneTests.$$ # Name of the libneTest output logfile
+DATAFILE=$WORK_DIRECTORY/testfile.$$
+OUTFILE=$WORK_DIRECTORY/outfile.$$
+EPAT=$WORK_DIRECTORY/testout.%d.$$
 FSZ=20  # Size of the input file in 10s of MBytes (i.e. a value of 20 -> 200M file)
 
 re='^[0-9]+$'
@@ -82,6 +83,15 @@ if [[ $# -gt 1 ]]; then
    else
       echo "erasureTest: warning: ignoring unrecognized arumgent \"$2\", expected an integer number of error patterns per stripe to be tested"
    fi
+fi
+
+CREATED_WRKDIR=0
+
+if [[ ! -e $WORK_DIRECTORY ]]; then
+   echo -n "Creating working directory \"$WORK_DIRECTORY\"..."
+   mkdir -p $WORK_DIRECTORY
+   CREATED_WRKDIR=1
+   echo "done"
 fi
 
 echo
@@ -650,5 +660,9 @@ echo "done"
 echo -n "Removing time files..."
 rm $TLOGPREF$$.*
 echo "done"
-
+if [[ $CREATED_WRKDIR == 1 ]]; then
+   echo -n "Deleting working directory..."
+   rmdir $WORK_DIRECTORY
+   echo "done"
+fi
 
