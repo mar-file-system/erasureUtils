@@ -304,8 +304,8 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 // just iterative sleep() and recv().
 //
 // [In the test case that was deadlocking due to the race-condition in
-// rselect(), the new approach succeeds 349 time on iteration 0, 459 times
-// on iteration 1, and 2 time on iteration 2.  This doesn't say how much
+// rselect(), the new approach succeeds 349 times on iteration 0, 459 times
+// on iteration 1, and 2 times on iteration 2.  This doesn't say how much
 // time is spent in rselect().  According to the select(2) manpage, Linux
 // modifies the tv struct to show remaining time, after select returns.
 // However, this must not apply to rselect(), because tv is always 1.0,
@@ -325,68 +325,74 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 //     like write_buffer() does, to handle incomplete writes.
 
 int read_raw(int fd, char* buf, size_t size) {
-  neDBG("read_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
+   neDBG("read_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
 
-  fd_set         rd_fds;
-  struct timeval tv;
-  int            rc;
+   fd_set         rd_fds;
+   struct timeval tv;
+   int            rc;
 
-  // wait until <fd> has input (or timeout)
-  FD_ZERO(&rd_fds);
-  FD_SET(fd, &rd_fds);
+   // wait until <fd> has input (or timeout)
+   FD_ZERO(&rd_fds);
+   FD_SET(fd, &rd_fds);
 
-  int  sec;
-  rc = 0;
-  for (sec=0; (rc>=0 && sec<RD_TIMEOUT); ++sec) {
+   int  sec;
+   rc = 0;
+   for (sec=0; (rc>=0 && sec<RD_TIMEOUT); ++sec) {
 
-     // --- wait for the fd to have data
-     //    (see comment about race-condition)
-     if (sec) {
-        do {
-           tv.tv_sec  = 1;
-           tv.tv_usec = 0;
-           rc = SELECT(fd +1, &rd_fds, NULL, NULL, &tv); // side-effect on <tv>
-        } while ((rc < 0) && (errno == EINTR));
+      // --- wait for the fd to have data
+      //    (see comment about race-condition)
+      if (sec) {
+         do {
+            tv.tv_sec  = 1;
+            tv.tv_usec = 0;
+            rc = SELECT(fd +1, &rd_fds, NULL, NULL, &tv); // side-effect on <tv>
+         } while ((rc < 0) && (errno == EINTR));
 
-        if (rc < 0) {
-           neERR("select failed (iter: %d)\n", sec);
-           errno = EIO;
-           return -1;
-        }
-        //        neDBG("[%d] select returned %d, with %ld.%06ld sec remaining\n",
-        //              sec, rc, tv.tv_sec, tv.tv_usec);
-     }
+         if (rc < 0) {
+            neERR("select failed (iter: %d)\n", sec);
+            errno = EIO;
+            return -1;
+         }
+         //        neDBG("[%d] select returned %d, with %ld.%06ld sec remaining\n",
+         //              sec, rc, tv.tv_sec, tv.tv_usec);
+      }
 
 
-     // --- try the read
-     ssize_t read_count = RECV(fd, buf, size, MSG_DONTWAIT);
+      // --- try the read
+      ssize_t read_count = RECV(fd, buf, size, MSG_DONTWAIT);
 
-     if (read_count == size) {
-        neDBG("read OK (iter: %d)\n", sec);
-        return 0;
-     }
-     else if (! read_count) {
-        neERR("read EOF (iter: %d)\n", sec);
-        return -1;             // you called read_raw() expecting something
-     }
-     else if (read_count > 0) {
-        neERR("read %lld instead of %lld bytes (iter: %d)\n",
-              read_count, size, sec);
-        return -1;
-     }
-     else if ((errno != EAGAIN)
-              && (errno != EWOULDBLOCK)) {
-        neERR("read failed (iter: %d)\n", sec);
-        return -1;
-     }
-  }
+      if (read_count == size) {
+         neDBG("read OK (iter: %d)\n", sec);
+         return 0;
+      }
+      else if (! read_count) {
+         neERR("read EOF (iter: %d)\n", sec);
+         return -1;             // you called read_raw() expecting something
+      }
+      else if (read_count > 0) {
+         neERR("read %lld instead of %lld bytes (iter: %d)\n",
+               read_count, size, sec);
+         return -1;
+      }
+      else if ((errno != EAGAIN)
+               && (errno != EWOULDBLOCK)) {
+         neERR("read failed (iter: %d)\n", sec);
+         return -1;
+      }
+   }
 
-  neERR("timeout after %d sec\n", RD_TIMEOUT);
-  errno = EIO;
-  return -1;
+   neERR("timeout after %d sec\n", RD_TIMEOUT);
+   errno = EIO;
+   return -1;
 }
   
+
 // for small socket-writes that don't use RDMA
+//
+// See notes above read_raw().  It's much more rare that rselect() would
+// fail to find room in the fd.  I thought I saw an indication that it may
+// have been happening, but the test I'm looking at shows 0/7946 calls that
+// had to iterate in write_raw().
 //
 // TBD: As loads grow on the server, this might want to do something
 //     like write_buffer() does.
@@ -394,35 +400,65 @@ int read_raw(int fd, char* buf, size_t size) {
 int write_raw(int fd, char* buf, size_t size) {
    neDBG("write_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
 
-  fd_set         wr_fds;
-  struct timeval tv;
-  int            rc;
+   fd_set         wr_fds;
+   struct timeval tv;
+   int            rc;
 
-  // wait until <fd> has room for output (or timeout)
-  FD_ZERO(&wr_fds);
-  FD_SET(fd, &wr_fds);
-  do {
-     tv.tv_sec = WR_TIMEOUT;
-     tv.tv_usec = 0;
-     rc = SELECT(fd +1, NULL, &wr_fds, NULL, &tv); // side-effect on <tv>
-  } while ((rc < 0) && (errno == EINTR));
+   // wait until <fd> has room for output (or timeout)
+   FD_ZERO(&wr_fds);
+   FD_SET(fd, &wr_fds);
 
-  if (! rc) {
-     neERR("timeout after %d sec\n", WR_TIMEOUT);
-     errno = EIO;
-     return -1;
-  }
-  NEED_GT0(rc);
+   int  sec;
+   rc = 0;
+   for (sec=0; (rc>=0 && sec<WR_TIMEOUT); ++sec) {
 
-  // ssize_t write_count = WRITE(fd, buf, size);
-  // ssize_t write_count = SEND(fd, buf, size, 0); // TBD: flags?
-  ssize_t write_count = SEND(fd, buf, size, MSG_WAITALL);
+      // --- wait for the fd to have room
+      //    (see comment about race-condition)
+      if (sec) {
+         do {
+            tv.tv_sec  = 1;
+            tv.tv_usec = 0;
+            rc = SELECT(fd +1, NULL, &wr_fds, NULL, &tv); // side-effect on <tv>
+         } while ((rc < 0) && (errno == EINTR));
 
-  if (write_count != size) {
-    neERR("wrote %lld instead of %lld bytes\n", write_count, size);
-    return -1;
-  }
-  return 0;
+
+         if (rc < 0) {
+            neERR("select failed (iter: %d)\n", sec);
+            errno = EIO;
+            return -1;
+         }
+         //        neDBG("[%d] select returned %d, with %ld.%06ld sec remaining\n",
+         //              sec, rc, tv.tv_sec, tv.tv_usec);
+      }
+
+      // --- try the write
+      // ssize_t write_count = WRITE(fd, buf, size);
+      // ssize_t write_count = SEND(fd, buf, size, 0); // TBD: flags?
+      ssize_t write_count = SEND(fd, buf, size, MSG_DONTWAIT);
+
+      if (write_count == size) {
+         neDBG("write OK (iter: %d)\n", sec);
+         return 0;
+      }
+      else if (! write_count) {
+         neERR("write EOF (iter: %d)\n", sec);
+         return -1;
+      }
+      else if (write_count > 0) {
+         neERR("write %lld instead of %lld bytes (iter: %d)\n",
+               write_count, size, sec);
+         return -1;
+      }
+      else if ((errno != EAGAIN)
+               && (errno != EWOULDBLOCK)) {
+         neERR("write failed (iter: %d)\n", sec);
+         return -1;
+      }
+   }
+
+   neERR("timeout after %d sec\n", RD_TIMEOUT);
+   errno = EIO;
+   return -1;
 }
 
 
