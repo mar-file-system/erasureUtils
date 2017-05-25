@@ -528,12 +528,12 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
    int bsz = BLKSZ;
 
    counter = 3;
-   if ( mode >= NE_SETBSZ ) {
+   if ( mode & NE_SETBSZ ) {
       counter++;
       mode -= NE_SETBSZ;
       DBG_FPRINTF( stdout, "ne_open: NE_SETBSZ flag detected\n");
    }
-   if ( mode >= NE_NOINFO ) {
+   if ( mode & NE_NOINFO ) {
       counter -= 3;
       mode -= NE_NOINFO;
       DBG_FPRINTF( stdout, "ne_open: NE_NOINFO flag detected\n");
@@ -635,7 +635,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
          ret = xattr_check(handle,path); //perform the check again, identifying mismatched values
       }
 
-      DBG_FPRINTF( stdout, "ne_open: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d\n", handle->nerr, handle->N, handle->E, handle->erasure_offset );
+      DBG_FPRINTF( stdout, "ne_open: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d, TotSz = %llu\n", handle->nerr, handle->N, handle->E, handle->erasure_offset, handle->totsz );
 
       if ( ret != 0 ) {
          if( incomplete_write( handle ) ) { errno = ENOENT; return NULL; }
@@ -682,8 +682,10 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
      if ( E > 0 ) { crccount = E; }
 
      ret = posix_memalign( &(handle->buffer), 64, ((N+E)*bsz) + (sizeof(u32)*crccount) ); //add space for intermediate checksum
+     DBG_FPRINTF(stdout,"ne_open: Allocated handle buffer of size %zd for bsz=%d, N=%d, E=%d\n", ((N+E)*bsz) + (sizeof(u32)*crccount), bsz, N, E);
 #else
      ret = posix_memalign( &(handle->buffer), 64, ((N+E)*bsz) );
+     DBG_FPRINTF(stdout,"ne_open: Allocated handle buffer of size %zd for bsz=%d, N=%d, E=%d\n", (N+E)*bsz, bsz, N, E);
 #endif
      if ( ret != 0 ) {
        DBG_FPRINTF( stderr, "ne_open: failed to allocate handle buffer\n" );
@@ -691,7 +693,6 @@ ne_handle ne_open( char *path, ne_mode mode, ... )
        return NULL;
      }
 
-     DBG_FPRINTF(stdout,"ne_open: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n", ret, bsz, N, E);
         /* loop through and open up all the output files and initilize per part info and allocate buffers */
      counter = 0;
      DBG_FPRINTF( stdout, "opening file descriptors...\n" );
@@ -2058,6 +2059,7 @@ int xattr_check( ne_handle handle, char *path )
 
          // This bundle of spaghetti acts to individually verify each "important" xattr value and count matches amongst all files
          char nc = 1, ec = 1, of = 1, bc = 1, tc = 1;
+         if ( handle->mode != NE_STAT ) { nc = 0; ec = 0; of = 0; bc = 0; } //if these values are already initialized, skip setting them
          for ( bcounter = 0; ( nc || ec || bc || tc || of )  &&  bcounter < MAXPARTS; bcounter++ ) {
             if ( nc ) {
                if ( N_list[bcounter] == N ) {
@@ -2128,77 +2130,10 @@ int xattr_check( ne_handle handle, char *path )
    free(partstat);
    ret = 0;
 
-   if ( handle->mode == NE_STAT ) { //if the handle is uninitialized, store the necessary info
+   if ( handle->mode != NE_RDONLY ) { //if the handle is uninitialized, store the necessary info
+
       int maxmatch=0;
       int match=-1;
-      //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
-         if ( N_match[bcounter] > maxmatch ) { maxmatch = N_match[bcounter]; match = bcounter; }
-         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
-      }
-
-      if ( match != -1 ) {
-         handle->N = N_list[match];
-      }
-      else {
-         DBG_FPRINTF( stderr, "xattr_check: failed to locate any matching N xattr vals!\n" );
-         errno = ENODATA;
-         return -1;
-      }
-
-      maxmatch=0;
-      match=-1;
-      //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
-         if ( E_match[bcounter] > maxmatch ) { maxmatch = E_match[bcounter]; match = bcounter; }
-         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
-      }
-
-      if ( match != -1 ) {
-         handle->E = E_list[match];
-      }
-      else {
-         DBG_FPRINTF( stderr, "xattr_check: failed to locate any matching E xattr vals!\n" );
-         errno = ENODATA;
-         return -1;
-      }
-
-      maxmatch=0;
-      match=-1;
-      //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
-         if ( O_match[bcounter] > maxmatch ) { maxmatch = O_match[bcounter]; match = bcounter; }
-         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
-      }
-
-      if ( match != -1 ) {
-         handle->erasure_offset = O_list[match];
-      }
-      else {
-         DBG_FPRINTF( stderr, "xattr_check: failed to locate any matching offset xattr vals!\n" );
-         errno = ENODATA;
-         return -1;
-      }
-
-      maxmatch=0;
-      match=-1;
-      //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
-         if ( bsz_match[bcounter] > maxmatch ) { maxmatch = bsz_match[bcounter]; match = bcounter; }
-         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
-      }
-
-      if ( match != -1 ) {
-         handle->bsz = bsz_list[match];
-      }
-      else {
-         DBG_FPRINTF( stderr, "xattr_check: failed to locate any matching bsz xattr vals!\n" );
-         errno = ENODATA;
-         return -1;
-      }
-
-      maxmatch=0;
-      match=-1;
       //loop through the counts of matching xattr values and identify the most prevalent match
       for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
          if ( totsz_match[bcounter] > maxmatch ) { maxmatch = totsz_match[bcounter]; match = bcounter; }
@@ -2214,6 +2149,75 @@ int xattr_check( ne_handle handle, char *path )
          return -1;
       }
 
+      if ( handle->mode == NE_STAT ) {
+         maxmatch=0;
+         match=-1;
+         //loop through the counts of matching xattr values and identify the most prevalent match
+         for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
+            if ( N_match[bcounter] > maxmatch ) { maxmatch = N_match[bcounter]; match = bcounter; }
+            if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
+         }
+
+         if ( match != -1 ) {
+            handle->N = N_list[match];
+         }
+         else {
+            DBG_FPRINTF( stderr, "xattr_check: failed to locate any matching N xattr vals!\n" );
+            errno = ENODATA;
+            return -1;
+         }
+
+         maxmatch=0;
+         match=-1;
+         //loop through the counts of matching xattr values and identify the most prevalent match
+         for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
+            if ( E_match[bcounter] > maxmatch ) { maxmatch = E_match[bcounter]; match = bcounter; }
+            if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
+         }
+
+         if ( match != -1 ) {
+            handle->E = E_list[match];
+         }
+         else {
+            DBG_FPRINTF( stderr, "xattr_check: failed to locate any matching E xattr vals!\n" );
+            errno = ENODATA;
+            return -1;
+         }
+
+         maxmatch=0;
+         match=-1;
+         //loop through the counts of matching xattr values and identify the most prevalent match
+         for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
+            if ( O_match[bcounter] > maxmatch ) { maxmatch = O_match[bcounter]; match = bcounter; }
+            if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
+         }
+
+         if ( match != -1 ) {
+            handle->erasure_offset = O_list[match];
+         }
+         else {
+            DBG_FPRINTF( stderr, "xattr_check: failed to locate any matching offset xattr vals!\n" );
+            errno = ENODATA;
+            return -1;
+         }
+
+         maxmatch=0;
+         match=-1;
+         //loop through the counts of matching xattr values and identify the most prevalent match
+         for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
+            if ( bsz_match[bcounter] > maxmatch ) { maxmatch = bsz_match[bcounter]; match = bcounter; }
+            if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
+         }
+
+         if ( match != -1 ) {
+            handle->bsz = bsz_list[match];
+         }
+         else {
+            DBG_FPRINTF( stderr, "xattr_check: failed to locate any matching bsz xattr vals!\n" );
+            errno = ENODATA;
+            return -1;
+         }
+      } //end of NE_STAT exclusive checks
    }
 
    /* If no usable file was located or the number of errors is too great, notify of failure */
@@ -2865,13 +2869,14 @@ ne_stat ne_status( char *path )
       handle->src_err_list[handle->nerr] = 0;
    }
 
-   DBG_FPRINTF( stderr, "ne_status: post xattr_check() values -- N=%d, E=%d, S=%d\n", handle->N, handle->E, handle->erasure_offset );
    ret = xattr_check(handle,path); //verify the stripe, now that values have been established
    if ( ret == -1 ) {
       DBG_FPRINTF( stderr, "ne_status: extended attribute check has failed\n" );
       free( handle );
       return NULL;
    }
+
+   DBG_FPRINTF( stdout, "ne_status: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d, TotSz = %llu\n", handle->nerr, handle->N, handle->E, handle->erasure_offset, handle->totsz );
 
    stat->N = handle->N;
    stat->E = handle->E;
@@ -2895,16 +2900,16 @@ ne_stat ne_status( char *path )
    if ( handle->E > 0 ) { crccount = handle->E; }
 
    ret = posix_memalign( &(handle->buffer), 64, ((handle->N+handle->E)*bsz) + (sizeof(u32)*crccount) ); //add space for intermediate checksum
+   DBG_FPRINTF(stdout,"ne_stat: Allocated handle buffer of size %zd for bsz=%d, N=%d, E=%d\n", ((handle->N+handle->E)*handle->bsz)+(sizeof(u32)*crccount), handle->bsz, handle->N, handle->E);
 #else
    ret = posix_memalign( &(handle->buffer), 64, ((handle->N+handle->E)*bsz) );
+   DBG_FPRINTF(stdout,"ne_stat: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n", (handle->N+handle->E)*handle->bsz, handle->bsz, handle->N, handle->E);
 #endif
    if ( ret != 0 ) {
       DBG_FPRINTF( stderr, "ne_status: failed to allocate handle buffer\n" );
       errno = ret;
       return NULL;
    }
-
-   DBG_FPRINTF(stdout,"ne_stat: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n", (handle->N+handle->E)*handle->bsz, handle->bsz, handle->N, handle->E);
 
    /* allocate matrices */
    handle->encode_matrix = malloc(MAXPARTS * MAXPARTS);
