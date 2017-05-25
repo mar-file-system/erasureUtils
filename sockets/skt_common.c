@@ -290,11 +290,26 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 
 // for small socket-reads that don't use RDMA
 //
-// We now use non-blocking I/O. When a client is killed,
-// server-threads will eventually time-out (currently 30 sec), at
-// which point the thread will shutdown its own handle.  This seems to
-// work smoothly, without deadlocks.  And has no noticable performance
-// cost, compared with blocking I/O.
+// We use non-blocking I/O. When a client is killed, server-threads will
+// eventually time-out (currently 30 sec), at which point the thread will
+// shutdown its own handle.  This seems to work smoothly, without
+// deadlocks.  No noticable performance cost, compared with blocking I/O.
+//
+// However, it seems (as of RHEL 6.6) that rselect() has a race-condition.
+// It does not detect the case where a message arrived before rselect() was
+// entered.  We make an ugly kludge to accommmodate this by breaking our
+// timeout into many small wait periods (currently 1 sec), and trying the
+// recv() in between.  Presumably, we will sometimes enter the rselect()
+// before the message arrives, making this approach somewhat better than
+// just iterative sleep() and recv().
+//
+// [In the test case that was deadlocking due to the race-condition in
+// rselect(), the new approach succeeds 349 time on iteration 0, 459 times
+// on iteration 1, and 2 time on iteration 2.  This doesn't say how much
+// time is spent in rselect().  According to the select(2) manpage, Linux
+// modifies the tv struct to show remaining time, after select returns.
+// However, this must not apply to rselect(), because tv is always 1.0,
+// whether rselect() returns 1 or 0.]
 //
 // NOTE: We previously used blocking requests, but they continue to
 // hang, after a client is killed.  The reaper-task was added to come
@@ -319,30 +334,56 @@ int read_raw(int fd, char* buf, size_t size) {
   // wait until <fd> has input (or timeout)
   FD_ZERO(&rd_fds);
   FD_SET(fd, &rd_fds);
-  do {
-     tv.tv_sec  = RD_TIMEOUT;
-     tv.tv_usec = 0;
-     rc = SELECT(fd +1, &rd_fds, NULL, NULL, &tv); // side-effect on <tv>
-  } while ((rc < 0) && (errno == EINTR));
 
-  if (! rc) {
-     neERR("timeout after %d sec\n", RD_TIMEOUT);
-     errno = EIO;
-     return -1;
-  }
-  NEED_GT0( rc );
+  int  sec;
+  rc = 0;
+  for (sec=0; (rc>=0 && sec<RD_TIMEOUT); ++sec) {
 
-  ssize_t read_count = RECV(fd, buf, size, MSG_WAITALL);
+     // --- wait for the fd to have data
+     //    (see comment about race-condition)
+     if (sec) {
+        do {
+           tv.tv_sec  = 1;
+           tv.tv_usec = 0;
+           rc = SELECT(fd +1, &rd_fds, NULL, NULL, &tv); // side-effect on <tv>
+        } while ((rc < 0) && (errno == EINTR));
 
-  if (! read_count) {
-    neERR("EOF\n");
-    return -1;
+        if (rc < 0) {
+           neERR("select failed (iter: %d)\n", sec);
+           errno = EIO;
+           return -1;
+        }
+        //        neDBG("[%d] select returned %d, with %ld.%06ld sec remaining\n",
+        //              sec, rc, tv.tv_sec, tv.tv_usec);
+     }
+
+
+     // --- try the read
+     ssize_t read_count = RECV(fd, buf, size, MSG_DONTWAIT);
+
+     if (read_count == size) {
+        neDBG("read OK (iter: %d)\n", sec);
+        return 0;
+     }
+     else if (! read_count) {
+        neERR("read EOF (iter: %d)\n", sec);
+        return -1;             // you called read_raw() expecting something
+     }
+     else if (read_count > 0) {
+        neERR("read %lld instead of %lld bytes (iter: %d)\n",
+              read_count, size, sec);
+        return -1;
+     }
+     else if ((errno != EAGAIN)
+              && (errno != EWOULDBLOCK)) {
+        neERR("read failed (iter: %d)\n", sec);
+        return -1;
+     }
   }
-  else if (read_count != size) {
-    neERR("read %lld instead of %lld bytes\n", read_count, size);
-    return -1;
-  }
-  return 0;
+
+  neERR("timeout after %d sec\n", RD_TIMEOUT);
+  errno = EIO;
+  return -1;
 }
   
 // for small socket-writes that don't use RDMA
@@ -1120,6 +1161,18 @@ int client_s3_authenticate(SocketHandle* handle, int command) {
    }
 
    int retval = client_s3_authenticate_internal(handle, command);
+
+#ifdef DEBUG_SOCKETS
+   AWSContext*    aws_ctx = handle->aws_ctx;
+   const char*    user_name = (aws_ctx ? aws_ctx->awsKeyID : SKT_S3_USER);
+   PathSpec*      spec = &handle->path_spec;
+
+   neDBG("-- AUTHENTICATION: %s for user=%s %s %s\n",
+         (retval ? "FAIL" : "OK"),
+         user_name,
+         command_str(command),
+         spec->fname);
+#endif
 
    if (needs_free)
       aws_context_free_r(handle->aws_ctx);
