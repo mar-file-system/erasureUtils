@@ -355,10 +355,13 @@ void *bq_writer(void *arg) {
   }
 
   pthread_mutex_unlock(&bq->qlock);
-  if(close(bq->file)) {
-    bq->flags |= BQ_ERROR;
+
+  // close the file and terminate if any errors were encountered
+  if( close(bq->file)  ||  bq->flags & BQ_ERROR ) {
+    bq->flags |= BQ_ERROR; // ensure the error was noted
     return NULL; // don't bother trying to rename
   }
+
   handle->csum[bq->block_number] = bq->csum;
   if(set_block_xattr(bq->handle, bq->block_number) != 0) {
     bq->flags |= BQ_ERROR;
