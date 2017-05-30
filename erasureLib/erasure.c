@@ -1947,7 +1947,6 @@ int xattr_check( ne_handle handle, char *path )
 
 #endif //META_FILES
 
-      DBG_FPRINTF(stdout,"xattr_check: file %s xattr returned %s\n",file,xattrval);
       if (ret < 0) {
          DBG_FPRINTF(stderr, "xattr_check: failure of xattr retrieval for file %s\n", file);
          handle->src_in_err[counter] = 1;
@@ -1955,6 +1954,7 @@ int xattr_check( ne_handle handle, char *path )
          handle->nerr++;
          continue;
       }
+      DBG_FPRINTF(stdout,"xattr_check: file %d (%s) xattr returned \"%s\"\n",counter,file,xattrval);
 
       sscanf(xattrval,"%s %s %s %s %s %s %s %s",xattrchunks,xattrerasure,xattroffset,xattrchunksizek,xattrnsize,xattrncompsize,xattrnsum,xattrtotsize);
       N = atoi(xattrchunks);
@@ -2242,11 +2242,12 @@ static int reopen_for_rebuild(ne_handle handle, int block) {
   sprintf( file, handle->path,
            (block+handle->erasure_offset)%(handle->N+handle->E) );
 
-  DBG_FPRINTF( stdout, "   closing %s\n", file );
+  DBG_FPRINTF( stdout, "   closing %s\n", &file[0] );
   close( handle->FDArray[block] );
 
   if( handle->mode == NE_STAT ) {
     handle->FDArray[block] = -1;
+    DBG_FPRINTF( stdout, "   setting FD %d to -1\n", block );
   }
   else {
 
@@ -2296,6 +2297,7 @@ static int reset_blocks(ne_handle handle) {
           return -1;
         }
         else {
+          DBG_FPRINTF( stderr, "ne_rebuild: encountered error while seeking file %d\n", block_index );
           reopen_for_rebuild(handle, block_index);
           return 1;
         }
@@ -2869,12 +2871,14 @@ ne_stat ne_status( char *path )
       handle->src_err_list[handle->nerr] = 0;
    }
 
+   handle->mode = NE_REBUILD;
    ret = xattr_check(handle,path); //verify the stripe, now that values have been established
    if ( ret == -1 ) {
       DBG_FPRINTF( stderr, "ne_status: extended attribute check has failed\n" );
       free( handle );
       return NULL;
    }
+   handle->mode = NE_STAT;
 
    DBG_FPRINTF( stdout, "ne_status: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d, TotSz = %llu\n", handle->nerr, handle->N, handle->E, handle->erasure_offset, handle->totsz );
 
@@ -2952,8 +2956,6 @@ ne_stat ne_status( char *path )
 
       counter++;
    }
-
-   handle->path = NULL;
 
    if ( ne_rebuild( handle ) < 0 ) {
       DBG_FPRINTF( stderr, "ne_status: rebuild indicates that data is unrecoverable\n" );
