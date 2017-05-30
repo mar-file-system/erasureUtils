@@ -290,6 +290,16 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 
 // for small socket-reads that don't use RDMA
 //
+// BACKGROUND: We previously used blocking requests, but they continue to
+//     hang, after a client is killed.  The reaper-task was added to come
+//     along and cancel threads in that situation, but rsockets seems
+//     vulnerable to deadlocking in shutdown/close, when we use a
+//     reaper-thread to clean-up stalled blocking I/O.  Presumably, the
+//     issue has to do with state that is left in the rsocket handles when
+//     the reaper-task kills a task that is blocked on I/O.  The result is
+//     that file-descriptors are lost, even when the reaper is cleaning up
+//     stalled/cancelled descriptors.
+//
 // We use non-blocking I/O. When a client is killed, server-threads will
 // eventually time-out (currently 30 sec), at which point the thread will
 // shutdown its own handle.  This seems to work smoothly, without
@@ -303,23 +313,21 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 // before the message arrives, making this approach somewhat better than
 // just iterative sleep() and recv().
 //
-// [In the test case that was deadlocking due to the race-condition in
+// In the test case that was deadlocking due to the race-condition in
 // rselect(), the new approach succeeds 349 times on iteration 0, 459 times
 // on iteration 1, and 2 times on iteration 2.  This doesn't say how much
 // time is spent in rselect().  According to the select(2) manpage, Linux
 // modifies the tv struct to show remaining time, after select returns.
 // However, this must not apply to rselect(), because tv is always 1.0,
-// whether rselect() returns 1 or 0.]
+// whether rselect() returns 1 or 0.
 //
-// NOTE: We previously used blocking requests, but they continue to
-// hang, after a client is killed.  The reaper-task was added to come
-// along and cancel threads in that situation, but rsockets seems
-// vulnerable to deadlocking in shutdown/close, when we use a
-// reaper-thread to clean-up stalled blocking I/O.  Presumably, the
-// issue has to do with state that is left in the rsocket handles when
-// the reaper-task kills a task that is blocked on I/O.  The result is
-// that file-descriptors are lost, even when the reaper is cleaning up
-// stalled/cancelled descriptors.
+// UPDATE: See the comments about the test-case, above.  The rselect() is
+//     apparently never actually returning.  Instead, we're effectively
+//     just iterating with a 1 second sleep.  Therefore, I'm pulling it
+//     back out, reverting to MSG_WAITALL, for now (see "#if 0").  This
+//     revives the possibility that client/server threads may hang forever
+//     in the event of an undetected peer-failure, but allows
+//     non-disastrous read-performance, in the meantime.
 //
 // TBD: As loads grow on the server, this might want to do something
 //     like write_buffer() does, to handle incomplete writes.
@@ -339,6 +347,7 @@ int read_raw(int fd, char* buf, size_t size) {
    rc = 0;
    for (sec=0; (rc>=0 && sec<RD_TIMEOUT); ++sec) {
 
+#if 0
       // --- wait for the fd to have data
       //    (see comment about race-condition)
       if (sec) {
@@ -360,6 +369,9 @@ int read_raw(int fd, char* buf, size_t size) {
 
       // --- try the read
       ssize_t read_count = RECV(fd, buf, size, MSG_DONTWAIT);
+#else
+      ssize_t read_count = RECV(fd, buf, size, MSG_WAITALL);
+#endif
 
       if (read_count == size) {
          neDBG("read OK (iter: %d)\n", sec);
@@ -389,8 +401,8 @@ int read_raw(int fd, char* buf, size_t size) {
 
 // for small socket-writes that don't use RDMA
 //
-// See notes above read_raw().  It's much more rare that rselect() would
-// fail to find room in the fd.  I thought I saw an indication that it may
+// See notes at read_raw().  It's much more rare that rselect() would
+// fail for write_raw().  I thought I saw an indication that it may
 // have been happening, but the test I'm looking at shows 0/7946 calls that
 // had to iterate in write_raw().
 //
@@ -412,6 +424,7 @@ int write_raw(int fd, char* buf, size_t size) {
    rc = 0;
    for (sec=0; (rc>=0 && sec<WR_TIMEOUT); ++sec) {
 
+#if 0
       // --- wait for the fd to have room
       //    (see comment about race-condition)
       if (sec) {
@@ -435,6 +448,9 @@ int write_raw(int fd, char* buf, size_t size) {
       // ssize_t write_count = WRITE(fd, buf, size);
       // ssize_t write_count = SEND(fd, buf, size, 0); // TBD: flags?
       ssize_t write_count = SEND(fd, buf, size, MSG_DONTWAIT);
+#else
+      ssize_t write_count = SEND(fd, buf, size, MSG_WAITALL);
+#endif
 
       if (write_count == size) {
          neDBG("write OK (iter: %d)\n", sec);
@@ -785,31 +801,31 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
     neDBG("read_count: %lld\n", read_count);
     NEED( read_count >= 0 );
 
-#ifdef DEBUG_SOCKETS
-    // DEBUGGING: chasing readback problems.
-    if (read_count > 0) {
-       char  dbg_buf[128];
-       char* dbg_bufp = dbg_buf;
-       int   i;
-       for (i=0; i<32; ++i) {
-
-          if (i && !(i%4))
-             *(dbg_bufp++) = ' ';
-
-          int j;
-          for (j=0; j<2; ++j) {
-             uint8_t nybble = (buf[i] >> ((1-j)*4)) & 0x0f;
-             if (nybble < 10)
-                *(dbg_bufp++) = nybble | '0';
-             else
-                *(dbg_bufp++) = ((nybble - 10) | ((uint8_t)'a' -1)) +1; /* 'a' = 0x61 */
-          }
-          *(dbg_bufp++) = ',';
-       }
-       *(dbg_bufp++) = 0;
-       neDBG("pos: %llu, dbg_buf=%s\n", read_pos, dbg_buf);
-    }
-#endif
+    //#   ifdef DEBUG_SOCKETS
+    //    // DEBUGGING: chasing readback problems.
+    //    if (read_count > 0) {
+    //       char  dbg_buf[128];
+    //       char* dbg_bufp = dbg_buf;
+    //       int   i;
+    //       for (i=0; i<32; ++i) {
+    //
+    //          if (i && !(i%4))
+    //             *(dbg_bufp++) = ' ';
+    //
+    //          int j;
+    //          for (j=0; j<2; ++j) {
+    //             uint8_t nybble = (buf[i] >> ((1-j)*4)) & 0x0f;
+    //             if (nybble < 10)
+    //                *(dbg_bufp++) = nybble | '0';
+    //             else
+    //                *(dbg_bufp++) = ((nybble - 10) | ((uint8_t)'a' -1)) +1; /* 'a' = 0x61 */
+    //          }
+    //          *(dbg_bufp++) = ',';
+    //       }
+    //       *(dbg_bufp++) = 0;
+    //       neDBG("pos: %llu, dbg_buf=%s\n", read_pos, dbg_buf);
+    //    }
+    //#   endif
 
     if (read_count == 0) {
       neDBG("read EOF\n");
@@ -877,7 +893,7 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
     //
     // NOTE: We are copying a continuous stream from the file to the
     //    socket.  We only discover seeks from the client when skt_write()
-    //    waits for an ACK, and get a SEEK, instead.  skt_write() then
+    //    waits for an ACK, and gets a SEEK, instead.  skt_write() then
     //    returns an "error" to us, with the socket-handle marked
     //    HNDL_SEEK.  We must then drop the write of this buffer we read
     //    (ahead) in the file, do our seek in the fd associated with the
@@ -914,7 +930,7 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
            }
 
            off_t rc = lseek(fd, handle->seek_pos, SEEK_SET);
-           neDBG("rc: %lld\n", (ssize_t)rc);
+           neDBG("lseek returned: %lld\n", (ssize_t)rc);
            if (eof && (rc != (off_t)-1) && (rc != handle->stream_pos)) {
               neDBG("SEEK after EOF, ready for more reading at %lld\n",
                   handle->seek_pos);
