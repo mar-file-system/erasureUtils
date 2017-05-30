@@ -111,5 +111,10 @@ libneTest_LDADD = libne.a $(SOCKET_LIBS)
 # libneTest_LDFLAGS = -lisal $(SOCKET_LD)
 
 
-TESTS=erasureTest
+check_PROGRAMS = test_read_offset
+test_read_offset_SOURCES = test_read_offset.c
+test_read_offset_LDADD = libne.a
+test_read_offset_LDFLAGS = -lisal
+
+TESTS=erasureTest test_read_offset
 

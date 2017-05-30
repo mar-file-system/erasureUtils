@@ -1256,7 +1256,8 @@ read:
                datasz[counter] = llcounter - out_off;
                firstchunk = 0;
             }
-
+            // ensure that the stripe is flagged as having an error.
+            error_in_stripe = 1;
          }
          else {    //this data chunk is valid, store it
             if ( (nbytes-llcounter) < readsize  &&  error_in_stripe == 0 ) {
@@ -1809,7 +1810,6 @@ int ne_close( ne_handle handle )
       errno = EINVAL;
       return -1;
    }
-
    N = handle->N;
    E = handle->E;
    bsz = handle->bsz;
@@ -1891,14 +1891,23 @@ int ne_close( ne_handle handle )
       else if (handle->mode == NE_WRONLY ) {
         bq_close(&handle->blocks[counter]);
       }
-      else if (handle->mode == NE_RDONLY ) {
+      else if (FD(handle->FDArray[counter]) != -1) {
+
          // RDMA leaves FDs open on the server until timeout or we close.
          // We don't currently have reader-threads (corresponding to
          // bq_writer), so instead of signalling a reader thread to close
          // its connection with the corresponding server, we'll just do it
          // ourselves, right here.
          PRINTout( "ne_close: closing read-only block %d\n", counter);
-         HNDLOP(close, handle->FDArray[counter]);
+
+         if ((HNDLOP(close, handle->FDArray[counter]) != 0)
+             && (handle->src_in_err[counter] == 0)) {
+
+            // If the close fails mark the block as errored.
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+         }
       }
 
       counter++;
@@ -2039,8 +2048,8 @@ int xattr_check( ne_handle handle, char *path )
    int N_list[ MAXE ] = { 0 };
    int E_list[ MAXE ] = { 0 };
    int O_list[ MAXE ] = { -1 };
-   int bsz_list[ MAXE ] = { 0 };
-   int totsz_list[ MAXE ] = { 0 };
+   unsigned int bsz_list[ MAXE ] = { 0 };
+   u64 totsz_list[ MAXE ] = { 0 };
    int N_match[ MAXE ] = { 0 };
    int E_match[ MAXE ] = { 0 };
    int O_match[ MAXE ] = { 0 };
