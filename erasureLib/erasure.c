@@ -1499,8 +1499,6 @@ int ne_write( ne_handle handle, void *buffer, size_t nbytes )
 
    // If the errors exceed the minimum protection threshold number of
    // errrors then fail the write.
-   // XXX: How do I handle this with the threads? need a loop to check the bq->flags for error in each BQ, or have a return code from bq_enqueue?
-   //      Ignoring it for now.
    if( UNSAFE(handle) ) {
      DBG_FPRINTF(stderr,
                  "ne_write: errors exceed minimum protection level (%d)\n",
