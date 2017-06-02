@@ -813,7 +813,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
       nbytes = handle->totsz - offset;
       if ( nbytes <= 0 ) {
          DBG_FPRINTF( stderr, "ne_read: offset is beyond filesize\n" );
-         return 0;
+         return -1;
       }
    }
 
@@ -973,6 +973,12 @@ read:
    /**** output each data stipe, regenerating as necessary ****/
    while ( llcounter < nbytes ) {
 
+      if( handle->nerr > handle->E ) {
+         DBG_FPRINTF(stderr,"ne_read: errors exceed erasure limits\n");
+         errno=ENODATA;
+         return llcounter;
+      }
+
       handle->buff_offset = (offset+llcounter);
       handle->buff_rem = 0;
 
@@ -1045,36 +1051,25 @@ read:
             //check for a read error
             if ( ret_in < readsize ) {
 
-               if ( ret_in < 0  ||  handle->nerr < handle->E ) {
-                  DBG_FPRINTF(stderr, "ne_read: error encountered while reading data file %d\n", counter);
-                  if ( counter > maxNerr )  maxNerr = counter;
-                  if ( counter < minNerr )  minNerr = counter;
-                  handle->src_in_err[counter] = 1;
-                  handle->src_err_list[handle->nerr] = counter;
-                  handle->nerr++;
-                  nsrcerr++;
-                  handle->e_ready = 0; //indicate that erasure structs require re-initialization
-                  ret_in = 0;
-                  counter--;
-                  //if this is the first encountered error for the stripe, we must start over
-                  if ( error_in_stripe == 0 ) {
-                     for( tmp = counter; tmp >=0; tmp-- ) {
-                        llcounter -= datasz[tmp];
-                     }
-                     DBG_FPRINTF( stdout, "ne_read: restarting stripe read, reset total read to %lu\n", (unsigned long)llcounter);
-                     goto read;
+               DBG_FPRINTF(stderr, "ne_read: error encountered while reading data file %d (expected %d but received %d)\n", counter, readsize, ret_in);
+               if ( counter > maxNerr )  maxNerr = counter;
+               if ( counter < minNerr )  minNerr = counter;
+               handle->src_in_err[counter] = 1;
+               handle->src_err_list[handle->nerr] = counter;
+               handle->nerr++;
+               nsrcerr++;
+               handle->e_ready = 0; //indicate that erasure structs require re-initialization
+               ret_in = 0;
+               counter--;
+               //if this is the first encountered error for the stripe, we must start over
+               if ( error_in_stripe == 0 ) {
+                  for( tmp = counter; tmp >=0; tmp-- ) {
+                     llcounter -= datasz[tmp];
                   }
-                  continue;
+                  DBG_FPRINTF( stdout, "ne_read: restarting stripe read, reset total read to %lu\n", (unsigned long)llcounter);
+                  goto read;
                }
-               else {
-                  nbytes = llcounter + ret_in;
-                  DBG_FPRINTF(stderr, "ne_read: inputs exhausted, limiting read to %d bytes\n",nbytes);
-               }
-
-               DBG_FPRINTF(stderr, "ne_read: failed to read all requested data from file %d\n", counter);
-               DBG_FPRINTF(stdout,"ne_read: zeroing missing data for %d from %lu to %d\n",counter,ret_in,bsz);
-
-               bzero(handle->buffs[counter]+ret_in,bsz-ret_in);
+               continue;
 
             }
 #ifdef INT_CRC
