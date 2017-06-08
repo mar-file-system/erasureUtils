@@ -50,6 +50,7 @@ start() {
             OPTIONS="--tool=memcheck --fair-sched=try --track-origins=yes $prog $OPTIONS"
             prog=valgrind
         elif [ "$1" == "callgrind" ]; then
+            # afterwards: "callgrind_annotate --tree=both --inclusive=yes callgrind.out.xxxx"
             OPTIONS="--tool=callgrind --fair-sched=try $prog $OPTIONS"
             prog=valgrind
         fi
@@ -90,12 +91,17 @@ case "$1" in
   start)
         start
         ;;
+
+  # Careful, the valgrind process doesn't stop when you stop the service.
   start_memcheck)
         start memcheck
         ;;
+
+  # Careful, the valgrind process doesn't stop when you stop the service.
   start_callgrind)
         start callgrind
         ;;
+
   stop)
         stop
         ;;
