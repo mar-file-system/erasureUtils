@@ -69,8 +69,11 @@ AM_LDFLAGS =
 
 
 # number says how many buffers to fake reading from file, to send to server
-# for PUT (or to client for GET)
-# SOCKET_DEFS=-DSKIP_FILE_READS=1
+# for PUT (or to client for GET).  Each buffer is CLIENT_BUF_SIZE (default 1MB).
+if SUPPRESS_FILE_IO
+  DEFS += -DSKIP_FILE_READS=1024
+  DEFS += -DSKIP_FILE_WRITES
+endif
 
 
 # ne_logging.h now lives over there

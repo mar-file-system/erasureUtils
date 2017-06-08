@@ -126,6 +126,8 @@ AC_ARG_ENABLE([sockets],
                              [One of {rdma,ip,unix}.  File operations go to a server, via sockets.]),
               [case "${enableval}" in
                  rdma) enable_sockets=rdma ;;
+                 # ip)   enable_sockets=ip ;;    # TBD
+                 # unix) enable_sockets=unix ;;  # TBD
                  no)   enable_sockets=no ;;
                  *)    AC_MSG_FAILURE([enable-sockets={rdma,ip,unix}. Currently, only rdma is supported]) ;;
                esac],
@@ -140,6 +142,7 @@ AM_COND_IF([ANY_SOCKETS],
 
 AM_COND_IF([RDMA_SOCKETS],
            [AC_CHECK_LIB([rdmacm], [rdma_getaddrinfo]) ])
+
 
 
 
@@ -158,6 +161,20 @@ AM_COND_IF([AUTH_SOCKETS],
             AC_CHECK_LIB([curl],        [curl_easy_cleanup])
             AC_CHECK_LIB([aws4c],       [GetStringToSign])
             AC_CHECK_LIB([aws4c_extra], [get_object_list]) ])
+
+
+
+
+# whether to disable file I/O used in the sockets sub-library.  For
+# example, if disabled, neither GET nor PUT via test_client do any
+# file-reads or file-writes.
+AC_ARG_ENABLE([file-io],
+               AS_HELP_STRING([--disable-file-io],
+                              [Suppress file I/O for GET/PUT through RDMA client/server.  (For throughput tests)]),
+               [enable_file_io=${enableval}],
+               [enable_file_io=yes])
+
+AM_CONDITIONAL([SUPPRESS_FILE_IO],  [test "$enable_file_io" != yes])
 
 
 
