@@ -1006,6 +1006,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset )
    char firstchunk;
    char error_in_stripe;
    unsigned char *temp_buffs[ MAXPARTS ];
+   int            temp_buffs_alloc = 0;
    int N = handle->N;
    int E = handle->E;
    unsigned int bsz = handle->bsz;
@@ -1064,17 +1065,12 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset )
    }
 
    //if entire request was cached, nothing remains to be done
-   if ( llcounter == nbytes ) { return llcounter; }
+   if ( llcounter == nbytes )
+      return llcounter;
 
 
    //determine min/max errors and allocate temporary buffers
    for ( counter = 0; counter < mtot; counter++ ) {
-      tmp = posix_memalign((void **)&(temp_buffs[counter]),64,bsz);
-      if ( tmp != 0 ) {
-         PRINTerr( "ne_read: failed to allocate temporary data buffer\n" );
-         errno = tmp;
-         return -1;
-      }
       if ( handle->src_in_err[counter] ) {
          nerr++;
          if ( counter < N ) { 
@@ -1164,7 +1160,8 @@ read:
       error_in_stripe = 0;
    }
    else {  //if not, we will require the entire stripe for rebuild
-      PRINTout("startpart = %d, endchunk = %d\n   This stipe contains corrupted blocks...\n", startpart, endchunk);
+
+      PRINTout("startpart = %d, endchunk = %d\n   This stripe contains corrupted blocks...\n", startpart, endchunk);
       while (counter < mtot) {
          if( handle->src_in_err[counter] == 0 ) {
 
@@ -1199,7 +1196,20 @@ read:
       tmpoffset = 0;
       error_in_stripe = 1;
       //handle->e_ready = 0; //test
+
+
+      // temp_buffs[] will be needed for regeneration
+      for ( counter = 0; counter < mtot; counter++ ) {
+         tmp = posix_memalign((void **)&(temp_buffs[counter]),64,bsz);
+         if ( tmp != 0 ) {
+            PRINTerr( "ne_read: failed to allocate temporary data buffer\n" );
+            errno = tmp;
+            return -1;
+         }
+      }
+      temp_buffs_alloc = mtot;
    }
+
 
    firstchunk = 1;
    firststripe = 1;
@@ -1260,9 +1270,9 @@ read:
             error_in_stripe = 1;
          }
          else {    //this data chunk is valid, store it
-            if ( (nbytes-llcounter) < readsize  &&  error_in_stripe == 0 ) {
+
+            if ( (nbytes-llcounter) < readsize  &&  error_in_stripe == 0 )
                readsize = nbytes-llcounter;
-            }
 
 #ifdef INT_CRC
             PRINTout("ne_read: read %lu from datafile %d\n", bsz+sizeof(crc), counter);
@@ -1360,6 +1370,8 @@ read:
 
       } //completion of read from stripe
 
+
+
       //notice, we only need the erasure stripes if we hit an error
       while ( counter < mtot  &&  error_in_stripe == 1 ) {
 
@@ -1383,7 +1395,7 @@ read:
                handle->nerr++;
                handle->e_ready = 0; //indicate that erasure structs require re-initialization
                error_in_stripe = 1;
-               PRINTerr( "ne_read: failed to read all erasure data in file %d\n", counter);
+               PRINTerr("ne_read: failed to read all erasure data in file %d\n", counter);
                PRINTout("ne_read: zeroing data for faulty erasure %d from %lu to %d\n",counter,ret_in,bsz);
                bzero(handle->buffs[counter]+ret_in,bsz-ret_in);
                PRINTout("ne_read: zeroing temp_data for faulty erasure %d\n",counter);
@@ -1395,7 +1407,7 @@ read:
                //calculate and verify crc
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
                if ( memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) ) != 0 ){
-                  PRINTerr( "ne_read: mismatch of int-crc for file %d (erasure)\n", counter);
+                  PRINTerr("ne_read: mismatch of int-crc for file %d (erasure)\n", counter);
                   if ( counter > maxNerr )  maxNerr = counter;
                   if ( counter < minNerr )  minNerr = counter;
                   handle->src_in_err[counter] = 1;
@@ -1435,6 +1447,10 @@ read:
             if (ret_in != 0) {
                PRINTerr("ne_read: failure to generate decode matrix, errors may exceed erasure limits\n");
                errno=ENODATA;
+
+               for ( counter = 0; counter < temp_buffs_alloc; counter++ )
+                  free(temp_buffs[counter]);
+
                return -1;
             }
 
@@ -1459,6 +1475,10 @@ read:
 #if DEBUG_NE
          if ( readsize+out_off > llcounter ) {
            fprintf(stderr,"ne_read: out_off + readsize(%lu) > llcounter at counter = %d!!!\n",(unsigned long)readsize,counter);
+
+           for ( counter = 0; counter < temp_buffs_alloc; counter++ )
+              free(temp_buffs[counter]);
+
            return -1;
          }
 #endif
@@ -1485,6 +1505,10 @@ read:
                if ( tmp == handle->nerr ) {
                   PRINTerr( "ne_read: improperly definded erasure structs, failed to locate %d in src_err_list\n", tmp );
                   errno = ENOTRECOVERABLE;
+
+                  for ( counter = 0; counter < temp_buffs_alloc; counter++ )
+                     free(temp_buffs[counter]);
+
                   return -1;
                }
             }
@@ -1509,13 +1533,17 @@ read:
       if ( out_off != llcounter ) {
          PRINTerr( "ne_read: internal mismatch : llcounter (%lu) and out_off (%zd)\n", (unsigned long)llcounter, out_off );
          errno = ENOTRECOVERABLE;
+
+         for ( counter = 0; counter < temp_buffs_alloc; counter++ )
+            free(temp_buffs[counter]);
+
          return -1;
       }
 
       firststripe=0;
       tmpoffset = 0; tmpchunk = 0; startpart=0;
 
-   } //end of generating loop for each stripe
+    }//end of generating loop for each stripe
 
    if ( error_in_stripe == 1 ) {
       handle->buff_offset -= ( handle->buff_offset % (N*bsz) );
@@ -1539,9 +1567,13 @@ read:
          }
          handle->buff_rem += bsz;
       }
-      else if ( counter < N ) { handle->buff_rem += datasz[counter]; }
-      free(temp_buffs[counter]);
+      else if ( counter < N ) {
+         handle->buff_rem += datasz[counter];
+      }
    }
+
+   for ( counter = 0; counter < temp_buffs_alloc; counter++ )
+      free(temp_buffs[counter]);
 
    PRINTout( "ne_read: cached %lu bytes from stripe at offset %zd\n", handle->buff_rem, handle->buff_offset );
 
