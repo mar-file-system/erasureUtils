@@ -129,12 +129,14 @@ SktAuth aws_ctx = NULL;
 #  define    AUTH_INIT(USER, AWS_CTX)                   skt_auth_init((USER), (SktAuth*)(AWS_CTX))
 #  define    AUTH_INSTALL(HANDLEp, AWS_CTX)     NEED_0( skt_fcntl((HANDLEp), SKT_F_SETAUTH, (SktAuth)(AWS_CTX)) )
 #  define thrAUTH_INSTALL(HANDLEp, AWS_CTX)  thrNEED_0( skt_fcntl((HANDLEp), SKT_F_SETAUTH, (SktAuth)(AWS_CTX)) )
+#  define    DO_AUTH(HANDLEp, CMD)              NEED_0( write_init((HANDLEp), CMD) )
 
 #else
 // #  define AUTH_INIT(USER, AWS_CTX)
 #  define    AUTH_INIT(USER, AWS_CTX)                   (0)
 #  define    AUTH_INSTALL(HANDLEp, AWS_CTX)
 #  define thrAUTH_INSTALL(HANDLEp, AWS_CTX)
+#  define    DO_AUTH(HANDLEp, CMD)
 #endif
 
 
@@ -151,6 +153,7 @@ ssize_t client_put(const char* path) {
 
   NEED_GT0( skt_open(&handle, path, (O_WRONLY|O_CREAT), 0660) );
   AUTH_INSTALL(&handle, aws_ctx);
+  DO_AUTH(&handle, CMD_PUT);
 
   ssize_t bytes_moved = copy_file_to_socket(STDIN_FILENO, &handle, buf, CLIENT_BUF_SIZE);
 
@@ -171,6 +174,7 @@ ssize_t client_get(const char* path) {
   // --- TBD: authentication handshake
   NEED_GT0( skt_open(&handle, path, (O_RDONLY)) );
   AUTH_INSTALL(&handle, aws_ctx);
+  // DO_AUTH(&handle, CMD_GET);
 
   ssize_t bytes_moved = copy_socket_to_file(&handle, STDOUT_FILENO, buf, CLIENT_BUF_SIZE);
 
