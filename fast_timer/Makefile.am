@@ -57,98 +57,25 @@
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
-AM_CPPFLAGS =
 
-#AM_LDFLAGS = -lrt
-#AM_LDFLAGS = -static
-AM_LDFLAGS =
-
-
-# number says how many buffers to fake reading from file, to send to server
-# for PUT (or to client for GET).  Each buffer is CLIENT_BUF_SIZE (default 1MB).
-if SUPPRESS_FILE_IO
-  DEFS += -DSKIP_FILE_READS=1024
-  DEFS += -DSKIP_FILE_WRITES
-endif
+# if DEBUG_FT
+#   AM_CFLAGS    = -g -O1
+#   DEFS        += -DDEBUG_FT=1
+# else
+#   AM_CFLAGS    = -g -O3
+#   DEFS        += -DDEBUG_FT=0
+# endif
+AM_CFLAGS    = -g -O3
 
 
-# at build-time, we want the versions in the source-tree
-AM_CPPFLAGS += -I${top_srcdir}/erasureLib
-AM_CPPFLAGS += -I${top_srcdir}/fast_timer
+include_HEADERS = fast_timer.h
+
+lib_LIBRARIES = libft.a
+libft_a_SOURCES = fast_timer.c fast_timer.h
 
 
 
-if RDMA_SOCKETS
-  DEFS        += -DRDMA_SOCKETS -DUSE_RIOWRITE
-  LIBS        += -lrdmacm
-endif
+bin_PROGRAMS = test_fast_timer
 
-if USE_SYSLOG
-   DEBUG_SOCKETS_VALUE=2
-else
-   DEBUG_SOCKETS_VALUE=1
-endif
-
-
-if DEBUG_SOCKETS
-  AM_CFLAGS    = -g -O1
-  DEFS        += -DDEBUG_SOCKETS=$(DEBUG_SOCKETS_VALUE)
-  AM_CPPFLAGS += -fstack-protector-all -fstack-check
-else
-  AM_CFLAGS    = -g -O3
-  DEFS        += -DDEBUG_SOCKETS=0
-endif
-
-
-
-if AUTH_SOCKETS
-   DEFS        += -DS3_AUTH
-   AM_CPPFLAGS += -I$(AWS4C)
-endif
-
-
-if HAVE_S_BUFSIZE
-   DEFS        += -DSERVER_BUF_SIZE=$(S_BUFSIZE)
-endif
-
-if HAVE_C_BUFSIZE
-   DEFS        += -CLIENT_BUF_SIZE=$(C_BUFSIZE)
-endif
-
-
-
-
-
-include_HEADERS = skt_common.h
-
-lib_LIBRARIES = librdma_sockets.a
-librdma_sockets_a_SOURCES = skt_common.c skt_common.h
-if AUTH_SOCKETS
-   librdma_sockets_a_SOURCES += auth.c
-endif
-
-
-
-
-bin_PROGRAMS = test_client socket_fserver
-
-socket_fserver_SOURCES = socket_fserver.c
-socket_fserver_LDADD = librdma_sockets.a
-#
-# # Various failed attempts to get autoconf to prefer static linking of
-# # libisal, if possible.  (Some of these assume libtool is selected in the
-# # configure.ac.)  Otherwise, we have to deploy libisal to all the storage
-# # servers, so they can run socket_fserver.  However, it seems autotools
-# # is violently opposed to allowing that sort of control.  Better
-# # approach: realize that we don't even need libisal.  Take that out of
-# # the top-level configure.ac, and let erasureLib/Makefile.am add it in
-# # locally.
-# 
-# socket_fserver_LDFLAGS = -lpthread $(AM_LDFLAGS)
-# socket_fserver_LDFLAGS = -lpthread -static
-# socket_fserver_LDFLAGS = -all-static -lisal
-# socket_fserver_LDFLAGS = "-Wl,-Bstatic -lisal -Wl,-Bdynamic"
-
-
-test_client_SOURCES = test_client.c
-test_client_LDADD = librdma_sockets.a
+test_fast_timer_SOURCES = test_fast_timer.c
+test_fast_timer_LDADD = libft.a

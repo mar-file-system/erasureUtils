@@ -57,8 +57,8 @@
 # Allow automake to figure out what "+=" means
 SOCKET_DEFS =
 
-# This is the pitiful approach required to avoid "already defined"
-# warnings, if you were to try to re-assign SOCKET_DEFS to the thing
+# This is the pitiful approach required to avoid "already defined" warnings
+# from automake, if you were to try to re-assign SOCKET_DEFS to the thing
 # you wanted based on two different conditions
 if RDMA_SOCKETS
   SOCKET_DEFS += -DSOCKETS=RDMA
@@ -112,9 +112,11 @@ libneTest_LDADD = libne.a $(SOCKET_LIBS)
 
 
 check_PROGRAMS = test_read_offset
+
 test_read_offset_SOURCES = test_read_offset.c
 test_read_offset_LDADD = libne.a
 test_read_offset_LDFLAGS = -lisal
+
 
 TESTS=erasureTest test_read_offset
 

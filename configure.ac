@@ -230,6 +230,7 @@ AM_CONDITIONAL([HAVE_C_BUFSIZE], [test x"$C_BUFSIZE" != x])
 
 
 AC_CONFIG_FILES([Makefile
+                 fast_timer/Makefile
                  sockets/Makefile
                  fileraid/Makefile
                  erasureLib/Makefile])
