@@ -8,9 +8,9 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #if (AXATTR_RES == 2)
-#include <attr/xattr.h>
+#  include <attr/xattr.h>
 #else
-#include <sys/xattr.h>
+#  include <sys/xattr.h>
 #endif
 #include <assert.h>
 #include <pthread.h>
@@ -2686,6 +2686,7 @@ int ne_flush( ne_handle handle ) {
 }
 
 
+#ifndef HAVE_LIBISAL
 void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls)
 {
         int i, j;
@@ -2697,6 +2698,7 @@ void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls)
                 }
         }
 }
+#endif
 
 //void dump(unsigned char *buf, int len)
 //{
