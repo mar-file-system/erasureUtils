@@ -161,13 +161,13 @@ ssize_t read_buffer(int fd, char* buf, size_t size, int is_socket) {
 
   if (is_socket) {
     PseudoPacketHeader header;
-    NEED_0( read_pseudo_packet_header(fd, &header) );
-    if (header.command != CMD_DATA) {
-      neERR("unexpected pseudo-packet: %s\n", command_str(header.command));
+    NEED_0( read_pseudo_packet_header(fd, &header, 0) );
+    if (HDR_CMD(&header) != CMD_DATA) {
+       neERR("unexpected pseudo-packet: %s\n", command_str(HDR_CMD(&header)));
       return -1;
     }
 
-    return header.size;
+    return HDR_SIZE(&header);
   }
 #endif
 
@@ -332,8 +332,8 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 // TBD: As loads grow on the server, this might want to do something
 //     like write_buffer() does, to handle incomplete writes.
 
-int read_raw(int fd, char* buf, size_t size) {
-   neDBG("read_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
+int read_raw(int fd, char* buf, size_t size, int peek_p) {
+   neDBG("read_raw(%d, 0x%llx, %lld, %d)\n", fd, buf, size, peek_p);
 
    fd_set         rd_fds;
    struct timeval tv;
@@ -368,9 +368,9 @@ int read_raw(int fd, char* buf, size_t size) {
 
 
       // --- try the read
-      ssize_t read_count = RECV(fd, buf, size, MSG_DONTWAIT);
+      ssize_t read_count = RECV(fd, buf, size, (peek_p ? MSG_PEEK : MSG_DONTWAIT));
 #else
-      ssize_t read_count = RECV(fd, buf, size, MSG_WAITALL);
+      ssize_t read_count = RECV(fd, buf, size, (peek_p ? MSG_PEEK : MSG_WAITALL));
 #endif
 
       if (read_count == size) {
@@ -615,15 +615,19 @@ const char* command_str(SocketCommand command) {
 int write_pseudo_packet(int fd, SocketCommand command, size_t size, void* buf) {
   ssize_t write_count;
 
-  // --- write <command>
-  neDBG("-> command: %s\n", command_str(command));
-  uint32_t cmd = htonl(command);
-  NEED_0( write_raw(fd, (char*)&cmd, sizeof(cmd)) );
+  // --- fill in buffer, for single send()
+  PseudoPacketHeader  hdr;
 
-  // --- write <size>
-  neDBG("-> size:  %lld\n", size);
-  uint64_t sz = hton64(size);
-  NEED_0( write_raw(fd, (char*)&sz, sizeof(sz)) );
+  // --- install <command>
+  neDBG("-> command: %s\n", command_str(command));
+  HDR_CMD(&hdr) = htonl(command);
+
+  // --- install <size>
+  neDBG("-> size:    %lld\n", size);
+  HDR_SIZE(&hdr) = hton64(size);
+
+  // --- send header as single unit
+  NEED_0( write_raw(fd, (char*)HDR_BUF(&hdr), HDR_BUFSIZE) );
 
   // --- maybe write <buf>
   if (buf) {
@@ -640,25 +644,27 @@ int write_pseudo_packet(int fd, SocketCommand command, size_t size, void* buf) {
 
 // for now, this is only used by server
 // NOTE: We take care of network-byte-order conversions
-int read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr) {
+int read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr, int peek) {
+  static const char*  peek_indicator = " *";
   ssize_t read_count;
   memset(hdr, 0, sizeof(PseudoPacketHeader));
 
-  // --- read <command>
-  uint32_t cmd;
-  NEED_0( read_raw(fd, (char*)&cmd, sizeof(cmd)) );
-  hdr->command = ntohl(cmd);
-  neDBG("<- command: %s\n", command_str(hdr->command));
+  // --- read header in one go
+  NEED_0( read_raw(fd, (char*)HDR_BUF(hdr), HDR_BUFSIZE, peek) );
 
+  // --- extract <command>
+  HDR_CMD(hdr) = ntohl(HDR_CMD(hdr));
+  neDBG("<- command: %s %c\n", command_str(HDR_CMD(hdr)), peek_indicator[(peek != 0)]);
 
-  // --- read <size>
-  uint64_t sz;
-  NEED_0( read_raw(fd, (char*)&sz, sizeof(sz)) );
-  hdr->size = ntoh64(sz);
-  neDBG("<- size:  %lld\n", hdr->size);
+  // --- extract <size>
+  HDR_SIZE(hdr) = ntoh64(HDR_SIZE(hdr));
+  neDBG("<- size:    %lld %c\n", HDR_SIZE(hdr), peek_indicator[(peek != 0)]);
 
   return 0;
 }
+
+
+
 
 
 // paths to the server can be specified as  host:port/path/to/file
@@ -1173,12 +1179,12 @@ int client_s3_authenticate_internal(SocketHandle* handle, int command) {
 
    // --- get reply
    PseudoPacketHeader header;
-   NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
-   if (header.command != CMD_RETURN) {
-      neERR("expected RETURN pseudo-packet, not %s\n", command_str(header.command));
+   NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 0) );
+   if (HDR_CMD(&header) != CMD_RETURN) {
+      neERR("expected RETURN pseudo-packet, not %s\n", command_str(HDR_CMD(&header)));
       return -1;
    }
-   NEED_0(header.size);
+   NEED_0(HDR_SIZE(&header));
 
    return 0;
 }
@@ -1652,13 +1658,13 @@ int write_init(SocketHandle* handle, SocketCommand cmd) {
 #if USE_RIOWRITE
     // server sends us the offset she got from riomap()
     PseudoPacketHeader header;
-    NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
-    if (header.command != CMD_RIO_OFFSET) {
-      neERR("expected RIO_OFFSET pseudo-packet, not %s\n", command_str(header.command));
+    NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 0) );
+    if (HDR_CMD(&header) != CMD_RIO_OFFSET) {
+       neERR("expected RIO_OFFSET pseudo-packet, not %s\n", command_str(HDR_CMD(&header)));
       return -1;
     }
-    handle->rio_offset = header.size;
-    neDBG("got riomap offset from peer: 0x%llx\n", header.size);
+    handle->rio_offset = HDR_SIZE(&header);
+    neDBG("got riomap offset from peer: 0x%llx\n", HDR_SIZE(&header));
 #endif  
 
   }
@@ -1684,9 +1690,9 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
   // Don't call write_buffer() until the other-end reports that it
   // is finished with the buffer.
   PseudoPacketHeader header;
-  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
+  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 0) );
 
-  if (unlikely (header.command != CMD_ACK)) {
+  if (unlikely (HDR_CMD(&header) != CMD_ACK)) {
 
     // (This is analogous to the FSYNC-handling inside skt_read().)
     // SEEK here means client is calling skt_lseek(), and skt_write()
@@ -1696,23 +1702,23 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
     // fd, which is why we have to throw an error back to
     // copy_file_to_socket().
 
-    if (header.command == CMD_SEEK_SET) {
+     if (HDR_CMD(&header) == CMD_SEEK_SET) {
       handle->flags |= HNDL_SEEK_SET;
-      handle->seek_pos = header.size;
-      neDBG("got SEEK %lld\n", header.size);
+      handle->seek_pos = HDR_SIZE(&header);
+      neDBG("got SEEK %lld\n", HDR_SIZE(&header));
       return -1;
     }
-    else if (header.command == CMD_RIO_OFFSET) {
-      neDBG("got RIO_OFFSET: 0x%llx\n", header.size);
-      handle->rio_offset = header.size;
+     else if (HDR_CMD(&header) == CMD_RIO_OFFSET) {
+       neDBG("got RIO_OFFSET: 0x%llx\n", HDR_SIZE(&header));
+       handle->rio_offset = HDR_SIZE(&header);
       return skt_write(handle, buf, size); // try again to read ACK ...
     }
     else {
-      neERR("expected ACK, but got %s\n", command_str(header.command));
+       neERR("expected ACK, but got %s\n", command_str(HDR_CMD(&header)));
       return -1;
     }
   }
-  int64_t ack_size = header.size;
+  int64_t ack_size = HDR_SIZE(&header);
 
   // if reader shut-down nicely, and closed before reading everything,
   // their last message to us will be an ACK 0.  If we are serving
@@ -1916,9 +1922,9 @@ ssize_t skt_read(SocketHandle* handle, void* buf, size_t size) {
   // wait for peer to finish riowrite()
   // NOTE: we may optionally receive an FSYNC, before the DATA
   PseudoPacketHeader header;
-  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
+  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 0) );
 
-  if (unlikely(header.command != CMD_DATA)) {
+  if (unlikely(HDR_CMD(&header) != CMD_DATA)) {
 
     // (This is analogous to the SEEK-handling inside skt_write().)
     // FSYNC here means client is calling skt_fsync(), and skt_read()
@@ -1928,18 +1934,18 @@ ssize_t skt_read(SocketHandle* handle, void* buf, size_t size) {
     // fd, which is why we have to throw an error back to
     // copy_socket_to_file().
 
-    if (header.command == CMD_FSYNC) {
+     if (HDR_CMD(&header) == CMD_FSYNC) {
       handle->flags |= HNDL_FSYNC;
       neDBG("got FSYNC\n");
       return -1;
     }
 
-    neERR("expected DATA, but got %s\n", command_str(header.command));
+     neERR("expected DATA, but got %s\n", command_str(HDR_CMD(&header)));
     return -1;
   }
 
   // writer's DATA might conceivably be less than <size>
-  read_count = header.size;
+  read_count = HDR_SIZE(&header);
 
 #else
   read_count = read_buffer(handle->peer_fd, buf, size, 1);
@@ -2083,18 +2089,18 @@ off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
 
   // wait for peer to respond
   PseudoPacketHeader header;
-  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
-  if (unlikely(header.command != CMD_RETURN)) {
-    neERR("expected RETURN, but got %s\n", command_str(header.command));
+  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 0) );
+  if (unlikely(HDR_CMD(&header) != CMD_RETURN)) {
+     neERR("expected RETURN, but got %s\n", command_str(HDR_CMD(&header)));
     return -1;
   }
-  else if (header.size == (off_t)-1) {
+  else if (HDR_SIZE(&header) == (off_t)-1) {
     neERR("lseek RETURN was -1\n");
     return -1;
   }
 
 
-  return header.size;
+  return HDR_SIZE(&header);
 }
 
 
@@ -2140,24 +2146,24 @@ int skt_fsync(SocketHandle* handle) {
   }
 
   PseudoPacketHeader header;
-  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
+  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 0) );
 
   // this ACK was intended for skt_write()
-  if (unlikely(header.command != CMD_ACK)) {
-    neERR("expected ACK, but got %s\n", command_str(header.command));
+  if (unlikely(HDR_CMD(&header) != CMD_ACK)) {
+     neERR("expected ACK, but got %s\n", command_str(HDR_CMD(&header)));
     return -1;
   }
 
   NEED_0( write_pseudo_packet(handle->peer_fd, CMD_FSYNC, 1, NULL) );
 
   // wait for peer to finish the fsync
-  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
-  if (unlikely(header.command != CMD_RETURN)) {
-    neERR("expected RETURN, but got %s\n", command_str(header.command));
+  NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 0) );
+  if (unlikely(HDR_CMD(&header) != CMD_RETURN)) {
+     neERR("expected RETURN, but got %s\n", command_str(HDR_CMD(&header)));
     return -1;
   }
-  else if (header.size) {
-    neERR("fsync RETURN was %lld\n", header.size);
+  else if (HDR_SIZE(&header)) {
+     neERR("fsync RETURN was %lld\n", HDR_SIZE(&header));
     return -1;
   }
 
@@ -2206,12 +2212,12 @@ int skt_close(SocketHandle* handle) {
             //       rather than the ACK for the DATA 0 we just wrote.  Skip
             //       over the former to get to the latter.
             PseudoPacketHeader hdr;
-            EXPECT_0( read_pseudo_packet_header(handle->peer_fd, &hdr) );
-            EXPECT(   (hdr.command == CMD_ACK) );
+            EXPECT_0( read_pseudo_packet_header(handle->peer_fd, &hdr, 0) );
+            EXPECT(   (HDR_CMD(&hdr) == CMD_ACK) );
 
-            if ((hdr.command == CMD_ACK) && hdr.size) {
-               EXPECT_0( read_pseudo_packet_header(handle->peer_fd, &hdr) );
-               EXPECT(   (hdr.command == CMD_ACK) );
+            if ((HDR_CMD(&hdr) == CMD_ACK) && HDR_SIZE(&hdr)) {
+               EXPECT_0( read_pseudo_packet_header(handle->peer_fd, &hdr, 0) );
+               EXPECT(   (HDR_CMD(&hdr) == CMD_ACK) );
             }
          }
       }
@@ -2301,9 +2307,9 @@ int skt_unlink(const void* aws_ctx, const char* service_path) {
   jNEED_0( basic_init(&handle, CMD_UNLINK) );
 
   // read RETURN, providing return-code from the remote rename().
-  jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr) );
-  jNEED(   (hdr.command == CMD_RETURN) );
-  int rc =   (int)hdr.size;
+  jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr, 0) );
+  jNEED(   (HDR_CMD(&hdr) == CMD_RETURN) );
+  int rc =   (int)HDR_SIZE(&hdr);
 
   // close()
   NEED_0( skt_close(&handle) );
@@ -2343,9 +2349,9 @@ int  skt_chown (const void* aws_ctx, const char* service_path, uid_t uid, gid_t 
 
 
   // read RETURN, providing return-code from the remote lchown().
-  jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr) );
-  jNEED(   (hdr.command == CMD_RETURN) );
-  int rc =   (int)hdr.size;
+  jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr, 0) );
+  jNEED(   (HDR_CMD(&hdr) == CMD_RETURN) );
+  int rc =   (int)HDR_SIZE(&hdr);
 
   // close()
   jNEED_0( skt_close(&handle) );
@@ -2414,9 +2420,9 @@ int skt_rename (const void* aws_ctx, const char* service_path, const char* new_p
   jNEED_0( write_raw(handle.peer_fd, (char*)new_fname, len) );
 
   // read RETURN, providing return-code from the remote rename().
-  jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr) );
-  jNEED(   (hdr.command == CMD_RETURN) );
-  int rc =   (int)hdr.size;
+  jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr, 0) );
+  jNEED(   (HDR_CMD(&hdr) == CMD_RETURN) );
+  int rc =   (int)HDR_SIZE(&hdr);
 
 #if 1
   // close()
@@ -2488,9 +2494,9 @@ int skt_stat(const void* aws_ctx, const char* service_path, struct stat* st) {
 
   // rc is sent as a pseudo-packet
   PseudoPacketHeader hdr;
-  jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr) );
-  jNEED(   (hdr.command == CMD_RETURN) );
-  rc = hdr.size;
+  jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr, 0) );
+  jNEED(   (HDR_CMD(&hdr) == CMD_RETURN) );
+  rc = HDR_SIZE(&hdr);
   if (rc < 0) {
 
     // case (1): remote lstat failed.
@@ -2509,7 +2515,7 @@ int skt_stat(const void* aws_ctx, const char* service_path, struct stat* st) {
   ssize_t read_size = skt_read_all(&handle, ptr, STAT_DATA_SIZE);
   jNEED( read_size == STAT_DATA_SIZE );
 #else
-  jNEED_0( read_raw(handle.peer_fd, ptr, STAT_DATA_SIZE) );
+  jNEED_0( read_raw(handle.peer_fd, ptr, STAT_DATA_SIZE, 0) );
 #endif
 
   jRECV_VALUE(st->st_dev, ptr);     /* ID of device containing file */

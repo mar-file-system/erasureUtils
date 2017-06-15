@@ -203,14 +203,14 @@ shut_down_thread(void* arg) {
   if (ctx->file_fd > 0) {
 
 #ifndef SKIP_FILE_WRITES
-    if (ctx->hdr.command == CMD_PUT) {
+     if (HDR_CMD(&ctx->hdr) == CMD_PUT) {
       EXPECT_0( fsync(ctx->file_fd) );	// for consistent sustained ZFS throughput
       EXPECT_0( close(ctx->file_fd) );
     }
 #endif
 
 #ifndef SKIP_FILE_READS
-    if (ctx->hdr.command == CMD_GET)
+     if (HDR_CMD(&ctx->hdr) == CMD_GET)
       EXPECT_0( close(ctx->file_fd) );
 #endif
 
@@ -472,7 +472,7 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    char*       ptr_prev = ptr; // DEBUGGING
 
    // size of authentication-info
-   ssize_t     size = hdr->size;
+   ssize_t     size = HDR_SIZE(hdr);
    if (size > MAX_S3_DATA) {
       neERR("size %lld exceeds max S3 header-size (%llu)\n", size, MAX_S3_DATA);
       return -1;
@@ -528,8 +528,8 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    RECV_VALUE_SAFE(op, ptr, ptr_remain);
    neDBG("  op:         %s\n", command_str(op));
    // neDBG("-- length:  %lld\n", (size_t)ptr - (size_t)ptr_prev);  ptr_prev=ptr;
-   hdr->command = op;
-   hdr->size = 0;
+   HDR_CMD(hdr) = op;
+   HDR_SIZE(hdr) = 0;
 
 
    // --- PATH
@@ -636,7 +636,7 @@ int server_s3_authenticate(ThreadContext* ctx, int client_fd, PseudoPacketHeader
 
    int rc = server_s3_authenticate_internal(client_fd, hdr, fname, fname_size, &aws_ctx);
    if (rc)
-      neLOG("auth failed: %s %s\n", command_str(hdr->command), (fname ? fname : "<unknown_path>"));
+      neLOG("auth failed: %s %s\n", command_str(HDR_CMD(hdr)), (fname ? fname : "<unknown_path>"));
 
    // maybe seteuid to UID of authenticated user
    else if (ctx->flags & CTX_AUTH_SETEUID_REQ) {
@@ -663,7 +663,7 @@ int server_s3_authenticate(ThreadContext* ctx, int client_fd, PseudoPacketHeader
       }
    
       if (rc)
-         neLOG("auth failed: %s %s\n", command_str(hdr->command), (fname ? fname : "<unknown_path>"));
+         neLOG("auth failed: %s %s\n", command_str(HDR_CMD(hdr)), (fname ? fname : "<unknown_path>"));
    }
 
    aws_context_release_r(&aws_ctx); // free strdup'ed name, password, etc
@@ -1246,12 +1246,12 @@ void* server_thread(void* arg) {
   int rc = 0;
 
   // read client command
-  if (read_pseudo_packet_header(client_fd, hdr)) {
+  if (read_pseudo_packet_header(client_fd, hdr, 0)) {
     neDBG("failed to read pseudo-packet header\n");
     pthread_exit(ctx);
   }
   neDBG("\n");
-  neDBG("server thread: %s\n", command_str(hdr->command));
+  neDBG("server thread: %s\n", command_str(HDR_CMD(hdr)));
 
 #ifdef S3_AUTH
   // Part of the authentication includes specification of the command to be
@@ -1260,7 +1260,7 @@ void* server_thread(void* arg) {
   // Authentication does two things to help us: (a) install the authorized
   // path into fname, and (b) update the header with the authorized cmd.
   //
-  if (hdr->command == CMD_S3_AUTH) {
+  if (HDR_CMD(hdr) == CMD_S3_AUTH) {
      if ( server_s3_authenticate(ctx, client_fd, hdr, fname, FNAME_SIZE) ) {
         ctx->flags |= CTX_THREAD_ERR;
         pthread_exit(ctx);
@@ -1272,7 +1272,7 @@ void* server_thread(void* arg) {
   // (and if it wasn't already received as part of S3-authentication)
   if (! *fname) {
 
-     switch (hdr->command) {
+     switch (HDR_CMD(hdr)) {
      case CMD_PUT:
      case CMD_GET:
      case CMD_DEL:
@@ -1280,16 +1280,16 @@ void* server_thread(void* arg) {
      case CMD_CHOWN:
      case CMD_RENAME:
      case CMD_UNLINK:
-        rc = read_fname(client_fd, fname, hdr->size, FNAME_SIZE);
+        rc = read_fname(client_fd, fname, HDR_SIZE(hdr), FNAME_SIZE);
      };
   }
 
   if (! rc) {
     // always print command and arg for log
-    neLOG("server_thread (fd=%d): %s %s\n", client_fd, command_str(hdr->command), fname);
+     neLOG("server_thread (fd=%d): %s %s\n", client_fd, command_str(HDR_CMD(hdr)), fname);
 
     // perform command
-    switch (hdr->command) {
+     switch (HDR_CMD(hdr)) {
     case CMD_PUT:    rc = server_put(ctx);     break;
     case CMD_GET:    rc = server_get(ctx);     break;
     case CMD_DEL:    rc = server_del(ctx);     break;
@@ -1300,7 +1300,7 @@ void* server_thread(void* arg) {
     case CMD_NOP:    rc = 0;                   break;
 
     default:
-      neERR("unsupported op: '%s'\n", command_str(hdr->command));
+       neERR("unsupported op: '%s'\n", command_str(HDR_CMD(hdr)));
       rc = -1;
     }
   }
