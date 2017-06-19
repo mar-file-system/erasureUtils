@@ -93,7 +93,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #else
 #  define neLOG(FMT,...)  fprintf(stdout,            FMT, ##__VA_ARGS__)
-#  define neERR(FMT,...)  fprintf(stderr,   FAIL_STR FMT, ##__VA_ARGS__)
+#  define neERR(FMT,...)  /* fprintf(stderr,   FAIL_STR FMT, ##__VA_ARGS__) */
 #  define neDBG(...)
 #endif
 
@@ -109,9 +109,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
          PRINT(#EXPR " " #TEST "\n");                                   \
       }                                                                 \
       else {                                                            \
-         neLOG(FAIL_STR #EXPR " " #TEST "%s%s\n",                       \
-             (errno ? ": " : ""),                                       \
-             (errno ? strerror(errno) : ""));                           \
+         /* neLOG(FAIL_STR #EXPR " " #TEST "%s%s\n",                    \
+            (errno ? ": " : ""),                                        \
+            (errno ? strerror(errno) : "")); */                         \
          RETURN;                                                        \
       }                                                                 \
    } while(0)

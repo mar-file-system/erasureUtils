@@ -944,7 +944,7 @@ int server_get(ThreadContext* ctx) {
   fake_open(handle, O_WRONLY, buf, SERVER_BUF_SIZE);
 
   // open local file for reading (unless file-reads are suppressed)
-#ifndef SKIP_FILE_WRITES
+#ifndef SKIP_FILE_READS
   ctx->file_fd = open(fname, (O_RDONLY));
   if (ctx->file_fd < 0) {
     neERR("couldn't open '%s' for reading: %s\n",
