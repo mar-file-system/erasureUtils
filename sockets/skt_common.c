@@ -492,11 +492,13 @@ int write_raw(int fd, char* buf, size_t size) {
 //     systems that already provide them.
 
 
-// see http://esr.ibiblio.org/?p=5095
-#define IS_LITTLE_ENDIAN (*(uint16_t *)"\0\xff" >= 0x100)
+// // see http://esr.ibiblio.org/?p=5095
+// #define IS_LITTLE_ENDIAN (*(uint16_t *)"\0\xff" >= 0x100)
+// 
 
 uint64_t hton64(uint64_t ll) {
-  if (IS_LITTLE_ENDIAN) {
+   // if (IS_LITTLE_ENDIAN) {
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     uint64_t result;
     char* sptr = ((char*)&ll) +7; // gcc doesn't mind char* aliases
     char* dptr = (char*)&result; // gcc doesn't mind char* aliases
@@ -504,13 +506,16 @@ uint64_t hton64(uint64_t ll) {
     for (i=0; i<8; ++i)
       *dptr++ = *sptr--;
     return result;
-  }
-  else
+    //  }
+    //  else
+#else
     return ll;
+#endif
 }
 
 uint64_t ntoh64(uint64_t ll) {
-  if (IS_LITTLE_ENDIAN) {
+   //  if (IS_LITTLE_ENDIAN) {
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     uint64_t result;
     char* sptr = ((char*)&ll) +7; // gcc doesn't mind char* aliases
     char* dptr = (char*)&result; // gcc doesn't mind char* aliases
@@ -518,9 +523,11 @@ uint64_t ntoh64(uint64_t ll) {
     for (i=0; i<8; ++i)
       *dptr++ = *sptr--;
     return result;
-  }
-  else
+    //  }
+    //  else
+#else
     return ll;
+#endif
 }
 
 
@@ -761,6 +768,14 @@ int parse_service_path(PathSpec* spec, const char* service_path) {
 // seeks as an optional CMD_SEEK_SET pseudo-header, sent by the reader
 // before the ACK.
 //
+// UPDATE: libne actually calls seek quite frequently, typically seeking
+//    backwards by 1M.  We could keep previous buffers and just return
+//    them, in this common case.  Instead, we're picking a more-generic
+//    solution.  We peek for the SEEK.  If it's found, then do the seek
+//    before reading from file (or use pread()).  If, instead, the
+//    control-channel just has the ACK (in which the client is requesting a
+//    continuation of sequential reads in the GET-stream), then do that.
+//
 // NOTE: if the client calls lseek() after we have detected EOF on the
 //    input-file, we need to detect that and resume reading.  We can't exit
 //    this function until we're sure that that won't happen.  skt_write()
@@ -774,128 +789,166 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
 
 #ifdef SKIP_FILE_READS
   // This allows cutting out the performance cost of doing file reads
+  // for raw bandwidth tests.
   size_t iters = SKIP_FILE_READS; // we will write (SKIP_FILE_READ * <size>) bytes
 
   // initialize once, to allow diagnosis of results?
   memset(buf, 1, size);
 #endif
 
-  size_t bytes_moved = 0;       /* total */
-  int    eof         = 0;       // EOF reading file
-  int    peer_eof    = 0;       // EOF writing peer
-  int    err         = 0;
 
-  while (!eof && !peer_eof && !err) {
 
-    // --- read from file (unless file-reads are suppressed)
+  int     file_eof     = 0;     // EOF reading file
+  int     peer_eof     = 0;     // EOF writing peer
+  int     err          = 0;
+
+  size_t  read_pos     = 0;     // file reads
+  ssize_t read_count   = 0;
+
+  int     do_file_read = 1;
+  size_t  remain       = size;
+  size_t  copied       = 0;
+
+  size_t  bytes_moved  = 0;     // total
+
+
+  while (!peer_eof && !err) {
+
+     do_file_read = 1;
+
+     // --- peek at the next pseudo-packet, to see if it's a SEEK
+     PseudoPacketHeader header;
+     NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 1) );
+
+     while (HDR_CMD(&header) == CMD_SEEK_SET) {
+
+        // remove peeked packet-header
+        NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 0) );
+
+        neDBG("got SEEK %lld\n", HDR_SIZE(&header));
+        handle->seek_pos = HDR_SIZE(&header);
+
+
+        // maybe the seek is a no-op?
+        if (handle->seek_pos == handle->stream_pos) {
+           neDBG("already at seek-pos.  Ignoring\n");
+
+           // peer gets the return-code from lseek()
+           NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, handle->stream_pos, NULL) );
+           do_file_read = 1;
+        }
+
+        // maybe the seek is within the buffer we read previously?
+        else if ((handle->seek_pos >= read_pos)
+                 && (handle->seek_pos < handle->stream_pos)) {
+
+              copied = handle->seek_pos   - read_pos;
+              remain = handle->stream_pos - handle->seek_pos;
+
+              handle->stream_pos = handle->seek_pos;
+              neDBG("seek_pos is in existing buffer, at local offset %lld (length %lld)\n",
+                    copied, remain);
+
+              // peer gets the return-code from lseek()
+              NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, handle->stream_pos, NULL) );
+              do_file_read = 0;
+        }
+        else {
+           // Do the seek.
+           //
+           // TBD: File-reading (further down), could just pread() from
+           //     this position, saving the need for a separate seek, but
+           //     then we'd have to take care to return appropriately for
+           //     the seek(), analyzing the results of the pread().  For
+           //     now, we'll just do the seek explicitly.
+
+           off_t rc = lseek(fd, handle->seek_pos, SEEK_SET);
+           
+           // peer gets the return-code from lseek()
+           NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, rc, NULL) );
+
+           NEED( rc != (off_t)-1 );
+           handle->stream_pos = rc;
+           do_file_read = 1;
+        }
+
+        // peek again
+        NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 1) );
+     }
+
+    // --- read from file
+    //     got a non-SEEK pseudo-packet
+    //     (read-after-seek might be re-using buffer from previous read)
+    if (do_file_read) {
+
 #ifdef SKIP_FILE_READS
-    // File-reads suppressed.  Don't bother reading.  Just send a raw buffer.
-    ssize_t read_count  = size;
+       // File-reads suppressed.  Don't bother reading.  Just send a raw buffer.
+       if (unlikely(iters-- <= 0)) {
+          neDBG("fake EOF\n");
+          file_eof = 1;
+          read_count  = 0;
+          break;
+       }
+       neDBG("%d: fake read: %lld\n", iters, read_count);
 
-    if (unlikely(iters-- <= 0)) {
-      neDBG("fake EOF\n");
-      eof = 1;
-      read_count  = 0;
-      break;
-    }
-    neDBG("%d: fake read: %lld\n", iters, read_count);
+       read_count = size;
+       remain     = read_count;
+       copied     = 0;
 
 #else
-    // read data up to <size>, or EOF
-    size_t  read_pos   = handle->stream_pos;
-    ssize_t read_count = read_buffer(fd, buf, size, 0);
-    neDBG("read_count: %lld\n", read_count);
-    NEED( read_count >= 0 );
+       // read file data up to <size>, or EOF
+       read_pos   = handle->stream_pos;
+       read_count = read_buffer(fd, buf, size, 0);
+       neDBG("read_pos:   %lld\n", read_pos);
+       neDBG("read_count: %lld\n", read_count);
+       NEED( read_count >= 0 );
 
-    //#   ifdef DEBUG_SOCKETS
-    //    // DEBUGGING: chasing readback problems.
-    //    if (read_count > 0) {
-    //       char  dbg_buf[128];
-    //       char* dbg_bufp = dbg_buf;
-    //       int   i;
-    //       for (i=0; i<32; ++i) {
-    //
-    //          if (i && !(i%4))
-    //             *(dbg_bufp++) = ' ';
-    //
-    //          int j;
-    //          for (j=0; j<2; ++j) {
-    //             uint8_t nybble = (buf[i] >> ((1-j)*4)) & 0x0f;
-    //             if (nybble < 10)
-    //                *(dbg_bufp++) = nybble | '0';
-    //             else
-    //                *(dbg_bufp++) = ((nybble - 10) | ((uint8_t)'a' -1)) +1; /* 'a' = 0x61 */
-    //          }
-    //          *(dbg_bufp++) = ',';
-    //       }
-    //       *(dbg_bufp++) = 0;
-    //       neDBG("pos: %llu, dbg_buf=%s\n", read_pos, dbg_buf);
-    //    }
-    //#   endif
+       // #   ifdef DEBUG_SOCKETS
+       //        // DEBUGGING: chasing readback problems.
+       //        if (read_count > 0) {
+       //           char  dbg_buf[128];
+       //           char* dbg_bufp = dbg_buf;
+       //           int   i;
+       //           for (i=0; i<32; ++i) {
+       //              
+       //              if (i && !(i%4))
+       //                 *(dbg_bufp++) = ' ';
+       //              
+       //              int j;
+       //              for (j=0; j<2; ++j) {
+       //                 uint8_t nybble = (buf[i] >> ((1-j)*4)) & 0x0f;
+       //                 if (nybble < 10)
+       //                    *(dbg_bufp++) = nybble | '0';
+       //                 else
+       //                    *(dbg_bufp++) = ((nybble - 10) | ((uint8_t)'a' -1)) +1; /* 'a' = 0x61 */
+       //              }
+       //              *(dbg_bufp++) = ',';
+       //           }
+       //           *(dbg_bufp++) = 0;
+       //           neDBG("pos: %llu, dbg_buf=%s\n", read_pos, dbg_buf);
+       //        }
+       // #   endif
 
-    if (read_count == 0) {
-      neDBG("read EOF\n");
+       if (read_count == 0) {
+          neDBG("read EOF\n");
 
-      ///#  ifdef USE_RIOWRITE
-      ///      // make sure client isn't going to seek.
-      ///      // We can't quit until we've seen the ACK 0 from her skt_close() call.
-      ///      // 
-      ///      PseudoPacketHeader header;
-      ///      NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
-      ///
-      ///      while (header.command != CMD_ACK) {
-      ///
-      ///         // (This is analogous to the FSYNC-handling inside skt_read().)
-      ///         // SEEK here means client is calling skt_lseek(), and skt_write()
-      ///         // is called from copy_file_to_socket(), supporting a GET on the
-      ///         // server-side.  Therefore, the <fd> that the seek is intended for
-      ///         // is for the file, not this handle.  We don't have access to that
-      ///         // fd, which is why we have to throw an error back to
-      ///         // copy_file_to_socket().
-      ///
-      ///         if (header.command == CMD_SEEK_SET) {
-      ///            neDBG("got SEEK %lld\n", header.size);
-      ///            off_t rc = lseek(fd, handle->seek_pos, SEEK_SET);
-      ///
-      ///            // peer gets the return-code from lseek()
-      ///            NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, rc, NULL) );
-      ///            NEED( rc != (off_t)-1 );
-      ///         }
-      ///         else if (header.command == CMD_RIO_OFFSET) {
-      ///            neDBG("got RIO_OFFSET: 0x%llx\n", header.size);
-      ///            handle->rio_offset = header.size;
-      ///         }
-      ///         else {
-      ///            neERR("expected ACK, but got %s\n", command_str(header.command));
-      ///            return -1;
-      ///         }
-      ///
-      ///         // read another pseudo-packet, until we fail, or get an ACK
-      ///         NEED_0( read_pseudo_packet_header(handle->peer_fd, &header) );
-      ///      }
-      ///
-      ///#  endif
-      ///
-      ///      // Got an ACK from the reader (peer).
-      ///      // Now we can send our DATA 0 and quit.
-      ///      NEED_0( write_pseudo_packet(handle->peer_fd, CMD_DATA, 0, NULL) );
-      ///      eof = 1;
-      ///      break;
+          // We want to send a DATA 0, to tell the peer that we are done.  But
+          // peer may still seek back into the stream.  We can now use
+          // skt_write() to probe for, and handle, any SEEKs, RIO_OFFSETS, or
+          // ACK 0 that might be sent from the peer, after we have reached EOF
+          // on our input-file.  We'll do that in the write section, below.
+          file_eof = 1;
+       }
 
-
-      // We want to send a DATA 0, to tell the peer that we are done.  But
-      // peer may still seek back into the stream.  We can now use
-      // skt_write() to probe for, and handle, any SEEKs, RIO_OFFSETS, or
-      // ACK 0 that might be sent from the peer, after we have reached EOF
-      // on our input-file.  We'll do that in the write section, below.
-      eof = 1;
+       remain = read_count;
+       copied = 0;
+#endif
     }
 
-#endif
 
-    // --- copy all of buffer to socket
+    // --- copy file-data out on socket
     //
-    // NOTE: Do not use write_buffer(handle->peer_fd, ... )
+    // NOTE: Do not use write_buffer(fd, ... )
     //
     // NOTE: We are copying a continuous stream from the file to the
     //    socket.  We only discover seeks from the client when skt_write()
@@ -910,16 +963,18 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
     //    seek like that, but we can probably just wait until that gets
     //    fixed.
 
-    size_t remain = read_count;
-    size_t copied = 0;
-    while (remain || eof) {
+    while (remain || file_eof) {
       ssize_t write_count = skt_write(handle, buf+copied, remain);
 
       if (unlikely(write_count < 0)) {
 
         if (handle->flags & HNDL_SEEK_SET) {
+
+           // Apparently, this may still happen, despite the read-ahead for
+           // SEEKs at the top of the outer loop.
+
            neDBG("write 'failed' due to SEEK.  from %lld to %lld\n",
-               handle->stream_pos, handle->seek_pos);
+                 handle->stream_pos, handle->seek_pos);
            handle->flags &= ~(HNDL_SEEK_SET);
 
            // maybe the seek is within the buffer we just read?
@@ -931,33 +986,37 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
 
               handle->stream_pos = handle->seek_pos;
               neDBG("seek_pos is in existing buffer, at local offset %lld (length %lld)\n",
-                  copied, remain);
+                    copied, remain);
+
+              // peer gets the return-code from lseek()
+              NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, handle->stream_pos, NULL) );
               continue;
            }
 
            off_t rc = lseek(fd, handle->seek_pos, SEEK_SET);
            neDBG("lseek returned: %lld\n", (ssize_t)rc);
-           if (eof && (rc != (off_t)-1) && (rc != handle->stream_pos)) {
+           if (file_eof && (rc != (off_t)-1) && (rc != handle->stream_pos)) {
               neDBG("SEEK after EOF, ready for more reading at %lld\n",
-                  handle->seek_pos);
-              eof = 0;           // more file-reading to do
+                    handle->seek_pos);
+              file_eof = 0;     // more file-reading to do
            }
            handle->stream_pos = handle->seek_pos;
 
            // peer gets the return-code from lseek()
            NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RETURN, rc, NULL) );
            NEED( rc != (off_t)-1 );
-           read_count = 0;       // don't add read_count to bytes_moved
+           read_count = 0;      // don't increment bytes_moved
            break;
         }
         else if (handle->flags & HNDL_PEER_EOF) {
            neDBG("write failed due to peer EOF\n");
            peer_eof = 1;
+           read_count = 0;      // don't increment bytes_moved
            break;
         }
 
         neERR("write failed: moved: %llu, read_ct: %lld, remain: %llu, flags: 0x%04x\n",
-            bytes_moved, read_count, remain, handle->flags);
+              bytes_moved, read_count, remain, handle->flags);
         return -1;
       }
 
@@ -974,7 +1033,6 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
 
   return bytes_moved;
 }
-
 
 
 
