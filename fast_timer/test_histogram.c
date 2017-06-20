@@ -76,24 +76,32 @@ int main(int argc, char* argv[]) {
 
    // add some synthetic durations to the histogram.
 
-#  define HISTO_EVENT(CONST)                                            \
+#  define HISTO(TYPE, CONST)                                            \
    do { uint64_t c = (uint64_t)(CONST);                                 \
-        demo.start.v64 = 0;                                             \
-        demo.stop.v64 = c;                                              \
-        int bin = log_histo_event(&hist, &demo, 0);                     \
-        printf("adding fake histogram event with duration: 0x%016lx  -> bin[%2d]\n", c, bin); \
+      demo.start.v64 = 0;   /* for TYPE = interval */                   \
+      demo.stop.v64 = c;    /* for TYPE = interval */                   \
+      demo.accum = c;       /* for TYPE = accum */                      \
+      int bin = log_histo_add_##TYPE(&hist, &demo);                     \
+      printf("adding fake histogram %8s with duration: 0x%016lx  -> bin[%2d]\n", #TYPE, c, bin); \
    } while (0)
 
-   HISTO_EVENT(0x8000000000000000);
-   HISTO_EVENT(0x4000000000000000);
-   //            0123456701234567
-   HISTO_EVENT(0x0000000100000000);
-   HISTO_EVENT(0x0000000100000001);
-   HISTO_EVENT(0x00000001ffffffff);
-   HISTO_EVENT(0x00000000ffffffff);
+   //                0123456701234567
+   HISTO(interval, 0x8000000000000000);
+   HISTO(interval, 0x4000000000000000);
 
-   HISTO_EVENT(0x0000000000000001);
-   HISTO_EVENT(0x0000000000000000);
+   HISTO(interval, 0x0000000100000000);
+   HISTO(interval, 0x0000000100000001);
+   HISTO(interval, 0x00000001ffffffff);
+   HISTO(interval, 0x00000000ffffffff);
+
+   HISTO(interval, 0x0000000000000001);
+   HISTO(interval, 0x0000000000000000);
+   printf("\n");
+
+   HISTO(accum,    0x0000000000010000);
+   HISTO(accum,    0x0000000000010101);
+   HISTO(accum,    0x0000000000018000);
+   HISTO(accum,    0x0000000000011111);
    printf("\n");
 
 

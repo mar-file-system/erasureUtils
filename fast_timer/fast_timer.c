@@ -391,16 +391,15 @@ int log_histo_reset(LogHisto* hist) {
 //       of the most-recent fast_timer_stop() - faster_timer_start().
 //
 __attribute__((always_inline))
-int log_histo_event(LogHisto* hist, FastTimer* ft) {
+int log_histo_add(LogHisto* hist, uint64_t timer_value) {
    
    int i;
 
-   uint64_t interval = ft->stop.v64 - ft->start.v64;
-   //   printf(" interval:  %016lx\n", interval);
+   //   printf(" value:     %016lx\n", timer_value);
 
 #if 0
    // assert all bits below the highest-order asserted bit 
-   uint64_t mask  = interval;
+   uint64_t mask  = timer_value;
    int      shift = 1;
    for (i=0; i<6; ++i) {
       mask |= mask >> shift;
@@ -437,7 +436,7 @@ int log_histo_event(LogHisto* hist, FastTimer* ft) {
    // TBD: vectorize this, for speed
    uint64_t bit = (uint64_t)1 << 63;
    for (i=64; i; --i) {
-      if (interval & bit)
+      if (timer_value & bit)
          break;
       bit >>= 1;
    }
@@ -454,6 +453,19 @@ int log_histo_event(LogHisto* hist, FastTimer* ft) {
 
    return i;                    /* return bin-number */
 }
+
+
+__attribute__((always_inline))
+int log_histo_add_interval(LogHisto* hist, FastTimer* ft) {
+   return log_histo_add(hist, (ft->stop.v64 - ft->start.v64));
+}
+
+
+__attribute__((always_inline))
+int log_histo_add_accum(LogHisto* hist, FastTimer* ft) {
+   return log_histo_add(hist, ft->accum);
+}
+
 
 
 

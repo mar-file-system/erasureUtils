@@ -115,7 +115,7 @@ int main(int argc, char* argv[]) {
       fast_timer_stop(&timer);
 
       // record duration of this interval.
-      log_histo_event(&hist, &timer, 0);
+      log_histo_add_interval(&hist, &timer);
    }
 
    // show stats
@@ -185,7 +185,7 @@ int main(int argc, char* argv[]) {
    //       but we're just interested in performance.
    fast_timer_start(&no_ops);
    for (i=0; i<no_op_ct; ++i) {
-      log_histo_event(&hist, &no_ops, 0);
+      log_histo_add_interval(&hist, &timer);
    }
    fast_timer_stop(&no_ops);
 

@@ -167,8 +167,13 @@ typedef struct {
 } LogHisto;
 
 
-// <bias> is the number of least-significant bits to shift away.
-__attribute__((always_inline)) int log_histo_add(LogHisto* hist, FastTimer* ft);
+// increment the bin matching the current timer interval
+// NOTE: This is (ft->stop - ft->start), not the accumulator.
+__attribute__((always_inline)) int log_histo_add_interval(LogHisto* hist, FastTimer* ft);
+
+// increment the bin corresponding to ft->accum.
+// (e.g. if multiple intervals were required to accumulate the quantity to be binned)
+__attribute__((always_inline)) int log_histo_add_accum(LogHisto* hist, FastTimer* ft);
 
 
 
