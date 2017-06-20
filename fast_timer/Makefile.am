@@ -75,7 +75,10 @@ libft_a_SOURCES = fast_timer.c fast_timer.h
 
 
 
-bin_PROGRAMS = test_fast_timer
+bin_PROGRAMS = test_fast_timer test_histogram
 
 test_fast_timer_SOURCES = test_fast_timer.c
 test_fast_timer_LDADD = libft.a
+
+test_histogram_SOURCES = test_histogram.c
+test_histogram_LDADD = libft.a

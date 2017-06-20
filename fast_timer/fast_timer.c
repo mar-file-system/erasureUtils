@@ -67,6 +67,13 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "fast_timer.h"
 
 
+#ifdef __GNUC__
+#  define likely(x)      __builtin_expect(!!(x), 1)
+#  define unlikely(x)    __builtin_expect(!!(x), 0)
+#else
+#  define likely(x)      (x)
+#  define unlikely(x)    (x)
+#endif
 
 
 
@@ -222,29 +229,75 @@ __attribute__((always_inline))
 int fast_timer_stop(FastTimer* ft) {
    int a, d, c;
 
-   __asm__ volatile("rdtscp"
-                    : "=a" (a), "=d" (d), "=c" (c));
+   asm volatile("RDTSCP\n"
+                "mov %%edx, %0\n"
+                "mov %%eax, %1\n"
+                "mov %%ecx, %2\n"
+                "CPUID\n"
+                :  "=r" (ft->stop.v32[HI]), "=r" (ft->stop.v32[LO]), "=r" (c)
+                :: "%rax", "%rbx", "%rcx", "%rdx");
 
-   int chip1 = (c & 0xFFF000)>>12;
-   int core1 = c & 0xFFF;
+   int chip = (c & 0xFFF000)>>12;
+   int core = c & 0xFFF;
 
-   if ((chip1 != ft->chip)
-       || (core1 != ft->core)) {
+   if (unlikely((chip != ft->chip)
+                || (core != ft->core))) {
+
       ++ ft->migrations;
+      ft->chip = chip;
+      ft->core = core;
+
+      ft->stop.v64 = ft->start.v64; /* so LogHisto sees elapsed == 0 */
       return -1;
    }
-   else {
-      TimerValue stop;
-      asm volatile("RDTSCP\n"
-                   "mov %%edx, %0\n"
-                   "mov %%eax, %1\n"
-                   "CPUID\n"
-                   :  "=r" (stop.v32[HI]), "=r" (stop.v32[LO])
-                   :: "%rax", "%rbx", "%rcx", "%rdx");
 
-      // printf("stop: %llx = %08lx %08lx\n", stop.v64, stop.v32[HI], stop.v32[LO]);
-      ft->accum += stop.v64 - ft->start.v64;
+   // printf("stop: %llx = %08lx %08lx\n", stop.v64, stop.v32[HI], stop.v32[LO]);
+   ft->accum += ft->stop.v64 - ft->start.v64;
+   return 0;
+}
+
+
+
+// stop previous interval, and begin a new one
+
+__attribute__((always_inline))
+int fast_timer_stop_start(FastTimer* ft) {
+   int a, d, c;
+
+   asm volatile("RDTSCP\n"
+                "mov %%edx, %0\n"
+                "mov %%eax, %1\n"
+                "mov %%ecx, %2\n"
+                "CPUID\n"
+                "RDTSCP\n"
+                "mov %%edx, %3\n"
+                "mov %%eax, %4\n"
+                :  "=r" (ft->stop.v32[HI]), "=r" (ft->stop.v32[LO]),
+                   "=r" (c),
+                   "=r" (d), "=r" (a)
+                :: "%rax", "%rbx", "%rcx", "%rdx");
+
+   int chip = (c & 0xFFF000)>>12;
+   int core = c & 0xFFF;
+
+   if (unlikely((chip != ft->chip)
+                || (core != ft->core))) {
+
+      ++ ft->migrations;
+      ft->chip = chip;
+      ft->core = core;
+
+      ft->stop.v64 = ft->start.v64; /* so LogHisto sees elapsed == 0 */
+      return -1;
    }
+
+   // printf("stop: %llx = %08lx %08lx\n", stop.v64, stop.v32[HI], stop.v32[LO]);
+   ft->accum += ft->stop.v64 - ft->start.v64;
+
+   /* start next iteration */
+   ft->start.v32[HI] = d;
+   ft->start.v32[LO] = a;
+
    return 0;
 }
 
@@ -253,6 +306,9 @@ int fast_timer_stop(FastTimer* ft) {
 
 double fast_timer_sec(FastTimer* ft) {
    return ((double)ft->accum / ticks_per_sec);
+}
+double fast_timer_usec(FastTimer* ft) {
+   return ((double)ft->accum / ticks_per_sec) * M;
 }
 double fast_timer_nsec(FastTimer* ft) {
    return ((double)ft->accum / ticks_per_sec) * G;
@@ -263,10 +319,23 @@ int fast_timer_show(FastTimer* ft, const char* str) {
    if (str)
       printf("%s\n", str);
 
-   printf("  start:   %llu\n", ft->start);
-   printf("  accum:   %llu\n", ft->accum);
-   printf("  elapsed: %7.5f  sec\n", fast_timer_sec(ft));
-   printf("           %3.1f nsec\n", fast_timer_nsec(ft));
+   printf("  start:   %016lx\n", ft->start);
+   printf("  accum:   %016lx\n", ft->accum);
+
+   //   // resolve into nearset units
+   //   const char* units[] = { "ns", "us", "ms", NULL };
+   //   double      ticks   = fast_timer_nsec(ft);
+   //
+   //   int i;
+   //   for (i=0; (units[i] && ticks > 1000.0); ++i) {
+   //      ticks /= 1000.0;
+   //   }
+   //   printf("  elapsed: %7.5f  %s\n", ticks, (units[i] ? units[i] : "sec"));
+
+   printf("  elapsed: ");
+   printf("%7.5f sec, ", fast_timer_sec(ft));
+   printf("%7.5f usec, ", fast_timer_usec(ft));
+   printf("%7.5f nsec\n", fast_timer_nsec(ft));
 
    return 0;
 }
@@ -283,4 +352,129 @@ int fast_timer_show_details(FastTimer* ft, const char* str) {
    printf("\n");
 
    return 0;
+}
+
+
+
+
+
+// ---------------------------------------------------------------------------
+// log-histogram
+// ---------------------------------------------------------------------------
+
+int log_histo_reset(LogHisto* hist) {
+   memset(hist, 0, sizeof(LogHisto));
+   return 0;
+}
+
+
+// Add a tick to the bin matching the timer-accumulator.  Each bin
+// represents all values between two adjascent powers of 2.
+//
+//   bin[0] counts timer values that are exactly zero
+//
+//          These are special because they may represent the special case
+//          where an interval was thrown out, e.g. due to a core
+//          migration).
+//
+//   bin[n] counts timer-values in the range [ 2^(n-1), 2^n )
+//
+//          The remaining bin-numbers 1 through 64 match the
+//          most-significant-bit (1-based) of the timer-values that are
+//          counted there.
+//
+//
+// NOTE: In the event of a migration, the FT accumulator is unchanged.
+//       Such "zero events" are counted in bin 0
+//
+// NOTE: We don't change the timer accumulator.  We just look at the duration
+//       of the most-recent fast_timer_stop() - faster_timer_start().
+//
+__attribute__((always_inline))
+int log_histo_event(LogHisto* hist, FastTimer* ft) {
+   
+   int i;
+
+   uint64_t interval = ft->stop.v64 - ft->start.v64;
+   //   printf(" interval:  %016lx\n", interval);
+
+#if 0
+   // assert all bits below the highest-order asserted bit 
+   uint64_t mask  = interval;
+   int      shift = 1;
+   for (i=0; i<6; ++i) {
+      mask |= mask >> shift;
+      printf(" mask[%d]:   %016lx\n", i, mask);
+      shift <<= 1;
+   }
+   printf(" mask:      %016lx\n", mask);
+
+   // round up to nearest power of 2
+   // shift-right so our bin-index will be 0-based
+   // do the shift first, so we don't overflow
+   // 1-based bit-position is the bin-index
+   uint64_t  high_bit = (mask ? ((mask >> 1) +1) : 0);
+   printf(" mask>>1:   %016lx\n", (mask >>1));
+   printf(" mask>>1)+1 %016lx\n", (mask >>1)+1);
+   printf(" high_bit:  %016lx\n", high_bit);
+   
+   // select histogram bin
+   for (i=0; high_bit; ++i) {
+      high_bit >>= 1;
+   }
+
+   printf(" bin_no:    %d\n", i);
+   printf(" bin[%d]:    %hd (before)\n", i, hist->bin[i]);
+   hist->bin[i] += 1;
+   printf(" bin[%d]:    %hd (after)\n", i, hist->bin[i]);
+   printf("\n");
+
+#else
+   // (round up to nearest power of 2)
+   // find the 1-based bit-position of highest-bit
+   // 1-based bit-position is the bin-index
+   // select histogram bin
+   // TBD: vectorize this, for speed
+   uint64_t bit = (uint64_t)1 << 63;
+   for (i=64; i; --i) {
+      if (interval & bit)
+         break;
+      bit >>= 1;
+   }
+
+   //   printf(" bin_no:    %d\n", i);
+   //   printf(" bin[%d]:    %hd (before)\n", i, hist->bin[i]);
+
+   hist->bin[i] += 1;
+
+   //   printf(" bin[%d]:    %hd (after)\n", i, hist->bin[i]);
+   //   printf("\n");
+
+#endif
+
+   return i;                    /* return bin-number */
+}
+
+
+
+// NOTE: 65 bins.  bin[0] is special, then there are bins for each bit in
+//    the 64-bit timer.
+
+int log_histo_show_bins(LogHisto* hist) {
+   int i;
+
+   printf("\t");
+   for (i=0; i<65; ++i) {
+      if (i && !(i%4))
+         printf("  ");
+      if (i && !(i%16))
+         printf("\n\t");
+
+      if (hist->bin[64 - i])
+         printf("%2d ", hist->bin[64 - i]);
+      else
+         printf("-- ");
+   }
+   printf("\n");
+   printf("\n");
 }

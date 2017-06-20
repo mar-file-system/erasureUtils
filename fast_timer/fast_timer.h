@@ -85,8 +85,9 @@ typedef union {
 
 typedef struct {
    int            chip;         /* CPU chip on which timer was started */
-   int            core;
+   int            core;         /* CPU core "  "     "     "   "       */
    TimerValue     start;
+   TimerValue     stop;
    uint32_t       migrations;   /* n chip/core migrations during timing */
    uint32_t       MHz;          /* nominal CPU freq (see NOTE above) */
    uint64_t       accum;
@@ -109,9 +110,13 @@ __attribute__((always_inline)) int fast_timer_start(FastTimer* ft);
 
 __attribute__((always_inline)) int fast_timer_stop(FastTimer* ft);
 
+__attribute__((always_inline)) int fast_timer_stop_start(FastTimer* ft);
+
+
 
 // convert the TSC ticks in ft->accum to elapsed time
 double fast_timer_sec(FastTimer* ft);
+double fast_timer_usec(FastTimer* ft);
 double fast_timer_nsec(FastTimer* ft);
 
 
@@ -127,6 +132,43 @@ __attribute__((always_inline)) int fast_timer_reset(FastTimer* ft);
 __attribute__((always_inline)) int fast_timer_start(FastTimer* ft);
 
 __attribute__((always_inline)) int fast_timer_stop(FastTimer* ft);
+
+
+
+
+// ---------------------------------------------------------------------------
+// LogHisto
+//
+// To allow speedy collection of diagnostics, we support maintenance of
+// "log-scaled histograms".  The idea is that you take a (64-bit) timer
+// value, effeciently round it up to the highest power-of-two, and add 1 to
+// the bin corresponding to that bit-position.
+//
+// Because it may incur some cost to update the bins (vector load/store),
+// and many of the low-order bits represent time-scales the might not be
+// expected to be relevant, we can reduce the total size ofthe vector of
+// bins by shifting out some of the least-significant bits in accumulated
+// timer values, and mask off some of the remaining most-significant bits.
+// ---------------------------------------------------------------------------
+
+// #ifdef __SSE2__
+// #  include <x86intrin.h>
+//#endif
+
+// bin[0] holds number of events where timer->accum == 0    [e.g. migration event]
+// bin[1] holds number of events where timer->accum <  0x00...01
+// bin[2] holds number of events where timer->accum <  0x00...02  (and >= 0x00...01)
+// bin[3] holds number of events where timer->accum <  0x00...04  (and >= 0x00...02)
+// etc ...
+
+typedef struct {
+   // __m128i      bin[6];        // 48 16-bit bins
+   uint16_t        bin[65];     // bin[0] special + 64 bins representing timer-bits
+} LogHisto;
+
+
+// <bias> is the number of least-significant bits to shift away.
+__attribute__((always_inline)) int log_histo_add(LogHisto* hist, FastTimer* ft);
 
 
 

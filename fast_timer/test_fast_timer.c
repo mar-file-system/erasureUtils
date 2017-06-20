@@ -82,6 +82,11 @@ int main(int argc, char* argv[]) {
    const int sleep_sec = 5;
    const int no_op_ct  = 1000000;
 
+   LogHisto  hist;
+
+   log_histo_reset(&hist);
+
+
    FastTimer overall;
    FastTimer timer;
    FastTimer no_ops;
@@ -95,42 +100,115 @@ int main(int argc, char* argv[]) {
 
    // perform various timings
    fast_timer_start(&overall);
+   printf("\n");
 
+
+
+
+
+   // time each of five 1-second sleeps
    printf("performing %d 1-second sleeps\n", sleep_sec);
    int i;
    for (i=0; i<sleep_sec; ++i) {
       fast_timer_start(&timer);
       sleep(1);
       fast_timer_stop(&timer);
+
+      // record duration of this interval.
+      log_histo_event(&hist, &timer, 0);
    }
 
+   // show stats
+   fast_timer_show(&timer, "-- loop with sleeps");
+   printf("\n");
+
+   fast_timer_show_details(&timer, NULL);
+   printf("\n");
+
+   // show log-histogram bins
+   // (run test_histogram, to show details of bin-values, etc)
+   printf("histogram bins (most-significant first):\n");
+   log_histo_show_bins(&hist);
+   printf("\n");
+
+
+
+
+   // measure the cost of timer start/stop operations
    printf("performing %d empty timer start/stops\n", no_op_ct);
    for (i=0; i<no_op_ct; ++i) {
       fast_timer_start(&no_ops);
       fast_timer_stop(&no_ops);
    }
 
-   fast_timer_stop(&overall);
-
-
-
    // show stats
-   fast_timer_show(&timer, "-- loop with sleeps");
-   printf("\n");
-   fast_timer_show_details(&timer, NULL);
-   printf("\n");
-
-
    fast_timer_show(&no_ops, "-- loop with empty start/stops");
    printf("\n");
-   fast_timer_show_details(&timer, NULL);
-   printf("\n");
 
+   fast_timer_show_details(&timer, NULL);
    printf("  * avg cost of timer start + stop: %5.3f nsec\n",
           fast_timer_nsec(&no_ops) / (double)no_op_ct);
    printf("\n");
+   printf("\n");
 
 
+
+
+   // Q: is it any faster to fuse stop and start?
+   // A: No.
+   printf("performing %d empty timer fused-start/stops\n", no_op_ct);
+   fast_timer_reset(&no_ops);
+   fast_timer_start(&no_ops);
+   for (i=0; i<no_op_ct; ++i) {
+      fast_timer_stop_start(&no_ops);
+   }
+   fast_timer_stop(&no_ops);
+
+   // show stats
+   fast_timer_show(&no_ops, "-- loop with empty fused-start/stops");
+   printf("\n");
+
+   fast_timer_show_details(&timer, NULL);
+   printf("  * avg cost of timer fused start + stop: %5.3f nsec\n",
+          fast_timer_nsec(&no_ops) / (double)no_op_ct);
+   printf("\n");
+   printf("\n");
+
+
+
+
+   // measure cost of histogram inserts
+   fast_timer_reset(&no_ops);
+   log_histo_reset(&hist);
+
+   // NOTE: with 16-bit bins, this will overflow,
+   //       but we're just interested in performance.
+   fast_timer_start(&no_ops);
+   for (i=0; i<no_op_ct; ++i) {
+      log_histo_event(&hist, &no_ops, 0);
+   }
+   fast_timer_stop(&no_ops);
+
+   // show stats
+   fast_timer_show(&no_ops, "-- loop with empty log-histogram inserts");
+   printf("\n");
+
+   fast_timer_show_details(&no_ops, NULL);
+   printf("  * avg cost of log-histo insert: %5.3f nsec\n",
+          fast_timer_nsec(&no_ops) / (double)no_op_ct);
+   printf("\n");
+   printf("\n");
+
+
+
+
+
+
+
+   // overall timing for this entire test
+   fast_timer_stop(&overall);
+
+   // show stats
    fast_timer_show(&overall, "-- overall (including printing)");
    printf("\n");
    fast_timer_show_details(&timer, NULL);
