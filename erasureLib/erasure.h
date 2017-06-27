@@ -143,14 +143,15 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 #ifndef HAVE_LIBISAL
-#define crc32_ieee(...)     crc32_ieee_base(__VA_ARGS__)
-#define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
+#  define crc32_ieee(...)     crc32_ieee_base(__VA_ARGS__)
+#  define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
 #endif
 
 #define UNSAFE(HANDLE) ((HANDLE)->nerr > (HANDLE)->E - MIN_PROTECTION)
 
 typedef uint32_t u32;
 typedef uint64_t u64;
+
 typedef enum {
   NE_RDONLY = 0,
   NE_WRONLY,
@@ -199,6 +200,41 @@ typedef struct ne_stat_struct {
    unsigned int bsz;
    u64 totsz;
 } *ne_stat;
+
+
+// One of these for each channel.
+// A channel that is opened O_WRONLY still does "reads"
+// to fill its buffers.
+#include "fast_timer.h"
+typedef struct {
+   FastTimer   thread;
+   FastTimer   open;
+
+   FastTimer   read;
+   LogHisto    read_h;
+
+   FastTimer   write;
+   LogHisto    write_h;
+
+   FastTimer   close;
+   FastTimer   rename;
+
+   FastTimer   crc;
+   LogHisto    crc_h;
+} BenchStats;
+
+
+typedef enum {
+   SF_OPEN    =  0x0001,
+   SF_RW      =  0x0002,    /* each individual read/write, in given stream */
+   SF_CLOSE   =  0x0004,    /* cost of close */
+   SF_RENAME  =  0x0008,
+   SF_CRC     =  0x0010,
+   SF_ERASURE =  0x0020,
+   SF_THREAD  =  0x0040,    /* from beginning to end  */
+   SF_HANDLE  =  0x0080,    /* from start/stop, all threads, in 1 handle */
+   SF_GLOBAL  =  0x0100,    /* cost across all handles */
+} StatFlags;
 
 
 // This allows ne_open() and other functions to perform arbitrary
@@ -264,10 +300,19 @@ typedef struct handle {
    /* path-printing technique provided by caller */
    SnprintfFunc   snprintf;
    void*          state;        // caller-data to be provided to <snprintf>
+
+   /* optional timing/benchmarking */
+   int            stat_flags;        /* initialized at build-time */
+   BenchStats     stats[ MAXPARTS ]; /* ops w/in each thread */
+   BenchStats     agg_stats;         /* ops across "threads", O_RDONLY */
+   FastTimer      handle_timer;      /* pre-open to post-close, all threads complete */
+   FastTimer      erasure_timer;
+   LogHisto       erasure_h;
+
 } *ne_handle;
 
 
-/* Erasure Utility Functions taking a raw path argument */
+/* Erasure utility-functions taking a raw path argument */
 ne_handle ne_open1  ( SnprintfFunc func, void* state, SktAuth auth, char *path, ne_mode mode, ... );
 int       ne_delete1( SnprintfFunc func, void* state, SktAuth auth, char *path, int width );
 ne_stat   ne_status1( SnprintfFunc func, void* state, SktAuth auth, char *path );
@@ -279,7 +324,7 @@ int       ne_delete( char* path, int width );
 ne_stat   ne_status( char* path);
 
 
-/* Erause Utility functions taking a <handle> argument */
+/* Erasure utility-functions taking a <handle> argument */
 ssize_t   ne_read ( ne_handle handle, void       *buffer, size_t nbytes, off_t offset );
 ssize_t   ne_write( ne_handle handle, const void *buffer, size_t nbytes );
 int       ne_close( ne_handle handle );

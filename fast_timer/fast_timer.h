@@ -167,6 +167,8 @@ typedef struct {
 } LogHisto;
 
 
+__attribute__((always_inline)) int log_histo_add_value(LogHisto* hist, uint64_t value);
+
 // increment the bin matching the current timer interval
 // NOTE: This is (ft->stop - ft->start), not the accumulator.
 __attribute__((always_inline)) int log_histo_add_interval(LogHisto* hist, FastTimer* ft);
@@ -174,6 +176,13 @@ __attribute__((always_inline)) int log_histo_add_interval(LogHisto* hist, FastTi
 // increment the bin corresponding to ft->accum.
 // (e.g. if multiple intervals were required to accumulate the quantity to be binned)
 __attribute__((always_inline)) int log_histo_add_accum(LogHisto* hist, FastTimer* ft);
+
+
+// accumulate counts from one histo into another.
+__attribute__((always_inline))  int log_histo_add(LogHisto* dest, LogHisto* src);
+
+
+int log_histo_show_bins(LogHisto* hist, const char* str);
 
 
 

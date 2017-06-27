@@ -374,6 +374,11 @@ void *bq_writer(void *arg) {
   const int write_size = bq->buffer_size;
 #endif
 
+  if (handle->stat_flags & SF_THREAD)
+     fast_timer_start(&handle->stats[bq->block_number].thread);
+  if (handle->stat_flags & SF_OPEN)
+     fast_timer_start(&handle->stats[bq->block_number].open);
+  
   // debugging, assure we see thread entry/exit, even via cancellation
   PRINTout("entering thread for block %d, in %s\n", bq->block_number, bq->path);
   pthread_cleanup_push(bq_writer_finis, bq);
@@ -382,6 +387,8 @@ void *bq_writer(void *arg) {
   OPEN(bq->file, handle->auth, bq->path, O_WRONLY|O_CREAT, 0666);
 
   if(pthread_mutex_lock(&bq->qlock) != 0) {
+    if (handle->stat_flags & SF_THREAD)
+       fast_timer_stop(&handle->stats[bq->block_number].thread);
     exit(-1); // XXX: is this the appropriate response??
   }
   if(FD(bq->file) == -1) {
@@ -394,6 +401,11 @@ void *bq_writer(void *arg) {
   pthread_mutex_unlock(&bq->qlock);
 
   PRINTout("opened file %d\n", bq->block_number);
+  if (handle->stat_flags & SF_OPEN)
+     fast_timer_stop(&handle->stats[bq->block_number].open);
+  if (handle->stat_flags & SF_RW)
+     fast_timer_start(&handle->stats[bq->block_number].read);
+
   
   while(1) {
 
@@ -401,22 +413,37 @@ void *bq_writer(void *arg) {
     if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
       PRINTerr("failed to lock queue lock: %s\n", strerror(error));
       // XXX: This is a FATAL error
+      if (handle->stat_flags & SF_THREAD)
+         fast_timer_stop(&handle->stats[bq->block_number].thread);
       return (void *)-1;
     }
-    while(bq->qdepth == 0 && !(bq->flags & BQ_FINISHED) || bq->flags & BQ_ABORT) {
+    while(bq->qdepth == 0 && !((bq->flags & BQ_FINISHED) || (bq->flags & BQ_ABORT))) {
       PRINTout("bq_writer[%d]: waiting for signal from ne_write\n", bq->block_number);
       pthread_cond_wait(&bq->full, &bq->qlock);
+    }
+
+    if (handle->stat_flags & SF_RW) {
+       fast_timer_stop(&handle->stats[bq->block_number].read);
+       log_histo_add_interval(&handle->stats[bq->block_number].read_h,
+                              &handle->stats[bq->block_number].read);
     }
 
     // check for flags that might tell us to quit
     if(bq->flags & BQ_ABORT) {
       PRINTerr("aborting buffer queue\n");
+      if (handle->stat_flags & SF_CLOSE)
+         fast_timer_start(&handle->stats[bq->block_number].close);
+
       if(HNDLOP(close, bq->file) == 0) {
          PATHOP(unlink, handle->auth, bq->path); // try to clean up after ourselves.
       }
       pthread_mutex_unlock(&bq->qlock);
+
+      if (handle->stat_flags & SF_CLOSE)
+         fast_timer_stop(&handle->stats[bq->block_number].close);
       return NULL;
     }
+
     if((bq->qdepth == 0) && (bq->flags & BQ_FINISHED)) {       // then we are done.
       // // TBD: ?
       // PRINTerr("closing buffer queue\n");
@@ -427,12 +454,18 @@ void *bq_writer(void *arg) {
       break;
     }
     
+
     if(!(bq->flags & BQ_ERROR)) {
+
+      if (handle->stat_flags & SF_RW)
+         fast_timer_start(&handle->stats[bq->block_number].write);
+
       pthread_mutex_unlock(&bq->qlock);
       if(written >= SYNC_SIZE) {
          HNDLOP(fsync, bq->file);
         written = 0;
       }
+
       PRINTout("Writing block %d\n", bq->block_number);
       u32 crc   = crc32_ieee(TEST_SEED, bq->buffers[bq->head], bq->buffer_size);
       error     = write_all(&bq->file, bq->buffers[bq->head], bq->buffer_size);
@@ -453,9 +486,18 @@ void *bq_writer(void *arg) {
       written += error;
     }
     PRINTout("write done for block %d\n", bq->block_number);
+    if (handle->stat_flags & SF_RW) {
+       fast_timer_stop(&handle->stats[bq->block_number].write);
+       log_histo_add_interval(&handle->stats[bq->block_number].write_h,
+                              &handle->stats[bq->block_number].write);
+    }
+
     // even if there was an error, say we wrote the block and move on.
     // the producer thread is responsible for checking the error flag
     // and killing us if needed.
+    if (handle->stat_flags & SF_RW)
+       fast_timer_start(&handle->stats[bq->block_number].read);
+
     bq->head = (bq->head + 1) % MAX_QDEPTH;
     bq->qdepth--;
 
@@ -464,10 +506,17 @@ void *bq_writer(void *arg) {
   }
   pthread_mutex_unlock(&bq->qlock);
 
+
+
   // close the file
+  if (handle->stat_flags & SF_CLOSE)
+     fast_timer_start(&handle->stats[bq->block_number].close);
+
   if(HNDLOP(close, bq->file)) {
     bq->flags |= BQ_ERROR;
     PRINTerr("error closing block %d\n", bq->block_number);
+    if (handle->stat_flags & SF_THREAD)
+       fast_timer_stop(&handle->stats[bq->block_number].thread);
     return NULL; // don't bother trying to rename
   }
 
@@ -476,10 +525,18 @@ void *bq_writer(void *arg) {
     bq->flags |= BQ_ERROR;
     // if we failed to set the xattr, don't bother with the rename.
     PRINTerr("error setting xattr for block %d\n", bq->block_number);
+    if (handle->stat_flags & SF_THREAD)
+       fast_timer_stop(&handle->stats[bq->block_number].thread);
     return NULL;
   }
+  if (handle->stat_flags & SF_CLOSE)
+     fast_timer_stop(&handle->stats[bq->block_number].close);
+
 
   // rename
+  if (handle->stat_flags & SF_RENAME)
+     fast_timer_start(&handle->stats[bq->block_number].rename);
+
   char block_file_path[2048];
   //  sprintf( block_file_path, handle->path,
   //           (bq->block_number+handle->erasure_offset)%(handle->N+handle->E) );
@@ -501,6 +558,10 @@ void *bq_writer(void *arg) {
   }
 #endif
 
+  if (handle->stat_flags & SF_RENAME)
+     fast_timer_stop(&handle->stats[bq->block_number].rename);
+  if (handle->stat_flags & SF_THREAD)
+     fast_timer_stop(&handle->stats[bq->block_number].thread);
 
   pthread_cleanup_pop(1);
   return NULL;
@@ -636,6 +697,29 @@ int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
 }
 
 
+// unused.  These all devolve to memset(0), which is already done on all
+// the BenchStats in a handle, when the handle is initialized
+int init_bench_stats(BenchStats* stats) {
+
+   fast_timer_reset(&stats->thread);
+   fast_timer_reset(&stats->open);
+
+   fast_timer_reset(&stats->read);
+   log_histo_reset(&stats->read_h);
+
+   fast_timer_reset(&stats->write);
+   log_histo_reset(&stats->write_h);
+
+   fast_timer_reset(&stats->close);
+   fast_timer_reset(&stats->rename);
+
+   fast_timer_reset(&stats->crc);
+   log_histo_reset(&stats->crc_h);
+
+   return 0;
+}
+
+
 // This might work, if you have an NFS Multi-Component implementation, and
 // your block-directories are named something like /path/to/block%d/more/path/filename
 //
@@ -663,6 +747,7 @@ int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, 
  *
  * @return ne_handle : The new handle for the opened erasure striping
  */
+
 
 ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, char *path, ne_mode mode, va_list ap )
 {
@@ -757,6 +842,15 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, char *path, n
    handle->state    = state;
    handle->auth     = auth;
 
+   // configuration provides flags that are tested at runtime
+   handle->stat_flags = NE_STAT_FLAGS;
+   fast_timer_inits();
+   //   // redundant with memset() on handle
+   //   if (handle->stat_flags)
+   //      init_bench_stats(&handle->agg_stats);
+   if (handle->stat_flags & SF_HANDLE)
+      fast_timer_start(&handle->handle_timer); /* start overall timer for handle */
+
    char* nfile = malloc( strlen(path) + 1 );
    strncpy( nfile, path, strlen(path) + 1 );
    handle->path = nfile;
@@ -812,7 +906,9 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, char *path, n
        }
      }
    }
+
    else { // for non-writes, initialize the buffers in the old way.
+
    /* allocate a big buffer for all the N chunks plus a bit extra for reading in crcs */
 #ifdef INT_CRC
      crccount = 1;
@@ -858,6 +954,9 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, char *path, n
       bzero( file, MAXNAME );
       u32 blk_i = (counter+erasure_offset)%(N+E); // absolute index of block to be written, within pod
 
+      if (handle->stat_flags & SF_OPEN)
+         fast_timer_start(&handle->stats[counter].open);
+
       handle->snprintf(file, MAXNAME, path, blk_i, handle->state);
 
 #ifdef INT_CRC
@@ -871,6 +970,9 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, char *path, n
 #else
        handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
 #endif
+
+       if (handle->stat_flags & SF_OPEN)
+          fast_timer_start(&handle->stats[counter].open);
 
       if( mode == NE_WRONLY ) {
          PRINTout( "   opening %s%s for write\n", file, WRITE_SFX );
@@ -886,6 +988,9 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, char *path, n
          PRINTout( "   opening %s for read\n", file );
          OPEN(handle->FDArray[counter], handle->auth, file, O_RDONLY );
       }
+
+      if (handle->stat_flags & SF_OPEN)
+         fast_timer_stop(&handle->stats[counter].open);
 
       if ( FD(handle->FDArray[counter]) == -1  &&  handle->src_in_err[counter] == 0 ) {
          PRINTerr( "   failed to open file %s!!!!\n", file );
@@ -1111,6 +1216,7 @@ read:
    /**** set seek positions for initial reading ****/
    if (startpart > maxNerr  ||  endchunk < minNerr ) {  //if not reading from corrupted chunks, we can just set these normally
       for ( counter = 0; counter <= stop; counter++ ) {
+
 #ifdef INT_CRC
          seekamt = startstripe * ( bsz+sizeof(u32) ); 
          if (counter < startpart) {
@@ -1125,6 +1231,11 @@ read:
             seekamt += startoffset; 
          }
 #endif
+
+         if (handle->stat_flags & SF_RW)
+            fast_timer_stop(&handle->stats[counter].read);
+
+
          if( handle->src_in_err[counter] == 0 ) {
             if ( counter >= N ) {
 #ifdef INT_CRC
@@ -1139,6 +1250,7 @@ read:
                PRINTout("seeking input file %d to %zd, as there is no error in this stripe\n",counter, seekamt);
             }
 
+
             tmp = HNDLOP(lseek, handle->FDArray[counter], seekamt, SEEK_SET);
 
             //if we hit an error here, seek positions are wrong and we must restart
@@ -1150,20 +1262,38 @@ read:
                handle->nerr++;
                nsrcerr++;
                handle->e_ready = 0; //indicate that erasure structs require re-initialization
+
+               if (handle->stat_flags & SF_RW) {
+                  fast_timer_stop(&handle->stats[counter].read);
+                  log_histo_add_interval(&handle->stats[counter].read_h,
+                                         &handle->stats[counter].read);
+               }
+
                goto read; //if another error is encountered, start over
             }
+         }
 
+         if (handle->stat_flags & SF_RW) {
+            fast_timer_stop(&handle->stats[counter].read);
+            log_histo_add_interval(&handle->stats[counter].read_h,
+                                   &handle->stats[counter].read);
          }
       }
       tmpchunk = startpart;
       tmpoffset = startoffset;
       error_in_stripe = 0;
    }
+
+
    else {  //if not, we will require the entire stripe for rebuild
 
       PRINTout("startpart = %d, endchunk = %d\n   This stripe contains corrupted blocks...\n", startpart, endchunk);
       while (counter < mtot) {
+
          if( handle->src_in_err[counter] == 0 ) {
+
+            if (handle->stat_flags & SF_RW)
+               fast_timer_start(&handle->stats[counter].read);
 
 #ifdef INT_CRC
             tmp = HNDLOP(lseek, handle->FDArray[counter], (startstripe*( bsz+sizeof(u32) )), SEEK_SET);
@@ -1181,6 +1311,12 @@ read:
                nsrcerr++;
                handle->e_ready = 0; //indicate that erasure structs require re-initialization
                counter++;
+
+               if (handle->stat_flags & SF_RW) {
+                  fast_timer_stop(&handle->stats[counter].read);
+                  log_histo_add_interval(&handle->stats[counter].read_h,
+                                         &handle->stats[counter].read);
+               }
                continue;
             }
 #ifdef INT_CRC
@@ -1188,7 +1324,14 @@ read:
 #else
             PRINTout("seek input file %d to %lu, to read entire stripe\n",counter, (unsigned long)(startstripe*bsz));
 #endif
+
+            if (handle->stat_flags & SF_RW) {
+               fast_timer_stop(&handle->stats[counter].read);
+               log_histo_add_interval(&handle->stats[counter].read_h,
+                                      &handle->stats[counter].read);
+            }
          }
+
          counter++;
       }
 
@@ -1241,6 +1384,9 @@ read:
       /**** read data into buffers ****/
       for( counter=tmpchunk; counter < N; counter++ ) {
 
+         if (handle->stat_flags & SF_RW)
+            fast_timer_start(&handle->stats[counter].read);
+
          if ( llcounter == nbytes  &&  error_in_stripe == 0 ) {
             PRINTout( "ne_read: data reads complete\n");
             break;
@@ -1262,7 +1408,9 @@ read:
                }
             }
             else if ( counter == startpart ) {
-               llcounter += (readsize - (startoffset-tmpoffset) < (nbytes-llcounter) ) ? readsize-(startoffset-tmpoffset) : (nbytes-llcounter);
+               llcounter += (( readsize - (startoffset - tmpoffset) < (nbytes - llcounter) )
+                             ? readsize - (startoffset - tmpoffset)
+                             : (nbytes - llcounter));
                datasz[counter] = llcounter - out_off;
                firstchunk = 0;
             }
@@ -1284,6 +1432,11 @@ read:
             // ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], readsize);
             ret_in = read_all(&handle->FDArray[counter], handle->buffs[counter], readsize);
 #endif
+            if (handle->stat_flags & SF_RW) {
+               fast_timer_stop(&handle->stats[counter].read);
+               log_histo_add_interval(&handle->stats[counter].read_h,
+                                      &handle->stats[counter].read);
+            }
 
             //check for a read error
             if ( ret_in < readsize ) {
@@ -1320,6 +1473,8 @@ read:
                bzero(handle->buffs[counter]+ret_in,bsz-ret_in);
 
             }
+
+
 #ifdef INT_CRC
             else {
                //calculate and verify crc
@@ -1382,9 +1537,20 @@ read:
 #endif
 
          if ( handle->src_in_err[counter] == 0 ) {
+
             PRINTout("ne_read: reading %d from erasure %d\n",readsize,counter);
+            if (handle->stat_flags & SF_RW)
+               fast_timer_start(&handle->stats[counter].read);
+
             // ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], readsize);
             ret_in = read_all(&handle->FDArray[counter], handle->buffs[counter], readsize);
+
+            if (handle->stat_flags & SF_RW) {
+               fast_timer_stop(&handle->stats[counter].read);
+               log_histo_add_interval(&handle->stats[counter].read_h,
+                                      &handle->stats[counter].read);
+            }
+
             if ( ret_in < readsize ) {
                if ( ret_in < 0 ) {
                   ret_in = 0;
@@ -1405,8 +1571,19 @@ read:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
+               if (handle->stat_flags & SF_CRC)
+                  fast_timer_start(&handle->stats[counter].crc);
+
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
-               if ( memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) ) != 0 ){
+               int cmp = memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) );
+
+               if (handle->stat_flags & SF_CRC) {
+                  fast_timer_stop(&handle->stats[counter].crc);
+                  log_histo_add_interval(&handle->stats[counter].crc_h,
+                                         &handle->stats[counter].crc);
+               }
+
+               if ( cmp != 0 ){
                   PRINTerr("ne_read: mismatch of int-crc for file %d (erasure)\n", counter);
                   if ( counter > maxNerr )  maxNerr = counter;
                   if ( counter < minNerr )  minNerr = counter;
@@ -1428,6 +1605,9 @@ read:
 
       /**** regenerate from erasure ****/
       if ( error_in_stripe == 1 ) {
+
+         if (handle->stat_flags & SF_ERASURE)
+            fast_timer_start(&handle->erasure_timer);
 
          /* If necessary, initialize the erasure structures */
          if ( handle->e_ready == 0 ) {
@@ -1451,6 +1631,11 @@ read:
                for ( counter = 0; counter < temp_buffs_alloc; counter++ )
                   free(temp_buffs[counter]);
 
+               if (handle->stat_flags & SF_ERASURE) {
+                  fast_timer_stop(&handle->erasure_timer);
+                  log_histo_add_interval(&handle->erasure_h,
+                                         &handle->erasure_timer);
+               }
                return -1;
             }
 
@@ -1466,11 +1651,21 @@ read:
          PRINTout( "ne_read: performing regeneration from erasure...\n" );
 
          ec_encode_data(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
+
+         if (handle->stat_flags & SF_ERASURE) {
+            fast_timer_stop(&handle->erasure_timer);
+            log_histo_add_interval(&handle->erasure_h,
+                                   &handle->erasure_timer);
+         }
+
       }
 
       /**** write appropriate data out ****/
       for( counter=startpart, tmp=0; counter <= endchunk; counter++ ) {
          readsize = datasz[counter];
+
+         if (handle->stat_flags & SF_RW)
+            fast_timer_start(&handle->stats[counter].write);
 
 #if DEBUG_NE
          if ( readsize+out_off > llcounter ) {
@@ -1527,6 +1722,12 @@ read:
          } //end of src_in_err = true block
 
          out_off += readsize;
+
+         if (handle->stat_flags & SF_RW) {
+            fast_timer_stop(&handle->stats[counter].write);
+            log_histo_add_interval(&handle->stats[counter].write_h,
+                                   &handle->stats[counter].write);
+         }
 
       } //end of output loop for stipe data
 
@@ -1665,6 +1866,8 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
 
       counter = handle->buff_rem / bsz;
       /* loop over the parts and write the parts, sum and count bytes per part etc. */
+      // NOTE: regarding benchmark timers, this routine just hands off work asynchronously to
+      // bq_writer threads.  We let each individual thread maintain its own stats.
       while (counter < N) {
 
          writesize = ( handle->buff_rem % bsz ); // ? amount being written to block (block size - already written).
@@ -1732,6 +1935,9 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
 
 
       /* calculate and write erasure */
+      if (handle->stat_flags & SF_ERASURE)
+         fast_timer_start(&handle->erasure_timer);
+
       if ( handle->e_ready == 0 ) {
          PRINTout( "ne_write: initializing erasure matricies...\n");
          // Generate encode matrix encode_matrix
@@ -1766,9 +1972,16 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
           assert(buffer_index == bq->tail);
         }
       }
+
       ec_encode_data(bsz, N, E, handle->g_tbls,
                      (unsigned char **)handle->block_buffs[buffer_index],
                      (unsigned char **)&(handle->block_buffs[buffer_index][N]));
+
+      if (handle->stat_flags & SF_ERASURE) {
+         fast_timer_stop(&handle->erasure_timer);
+         log_histo_add_interval(&handle->erasure_h,
+                                &handle->erasure_timer);
+      }
 
       for(i = N; i < handle->N + handle->E; i++) {
         BufferQueue *bq = &handle->blocks[i];
@@ -1803,6 +2016,47 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
    }
 }
 
+
+
+int show_handle_stats(ne_handle handle) {
+
+   if (! handle->stat_flags)
+      printf("No stats\n");
+
+   else {
+      fast_timer_show(&handle->handle_timer,    "handle: ");
+      fast_timer_show(&handle->erasure_timer,   "erasure: ");
+      printf("\n");
+         
+      int i;
+      int N = handle->N;
+      int E = handle->E;
+      for (i=0; i<N+E; ++i) {
+         printf("-- block %d\n", i);
+
+         fast_timer_show(&handle->stats[i].thread, "thread: ");
+         fast_timer_show(&handle->stats[i].open,   "open:   ");
+
+         fast_timer_show(&handle->stats[i].read,   "read:   ");
+         log_histo_show_bins(&handle->stats[i].read_h, "\tread\n");
+         printf("\n");
+
+         fast_timer_show(&handle->stats[i].write,  "write:  ");
+         log_histo_show_bins(&handle->stats[i].write_h, "\twrite\n");
+         printf("\n");
+
+         fast_timer_show(&handle->stats[i].close,  "close:  ");
+         fast_timer_show(&handle->stats[i].rename, "rename:  ");
+
+         fast_timer_show(&handle->stats[i].crc,    "CRC:    ");
+         log_histo_show_bins(&handle->stats[i].crc_h, "\tCRC\n");
+         printf("\n");
+      }
+   }
+
+   return 0;
+}
+
 /**
  * Closes the erasure striping indicated by the provided handle and flushes
  * the handle buffer, if necessary.
@@ -1811,17 +2065,17 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
  *
  * @return int : Status code.  Success is indicated by 0, and failure by -1.
  *               A positive value indicates that the operation was
- *               sucessful, but that errors were encountered in the stipe.
- *               The Least-Significant Bit of the return code corresponds
- *               to the first of the N data stripe files, while each
- *               subsequent bit corresponds to the next N files and then
- *               the E files.  A 1 in these positions indicates that an
- *               error was encountered while acessing that specific file.
- *               Note, this code does not account for the offset of the
- *               stripe.  The code will be relative to the file names only.
- *               (i.e. an error in "<output_path>1<output_path>" would be
- *               encoded in the second bit of the output, a decimal value
- *               of 2)
+ *               successful, but that errors were encountered in the
+ *               stripe.  The Least-Significant Bit of the return code
+ *               corresponds to the first of the N data stripe files, while
+ *               each subsequent bit corresponds to the next N files and
+ *               then the E files.  A 1 in these positions indicates that
+ *               an error was encountered while acessing that specific
+ *               file.  Note, this code does not account for the offset of
+ *               the stripe.  The code will be relative to the file names
+ *               only.  (i.e. an error in "<output_path>1<output_path>"
+ *               would be encoded in the second bit of the output, a
+ *               decimal value of 2)
  */
 int ne_close( ne_handle handle ) 
 {
@@ -1968,6 +2222,11 @@ int ne_close( ne_handle handle )
      free(handle->buffer);
    }
 
+   if (handle->stat_flags) {
+      fast_timer_stop(&handle->handle_timer);
+      show_handle_stats(handle);
+   }
+
    if( (UNSAFE(handle) && handle->mode == NE_WRONLY) || (handle->nerr > handle->E) /* for non-writes */) {
      ret = -1;
    }
@@ -1992,6 +2251,9 @@ int ne_close( ne_handle handle )
    free(handle->g_tbls);
    free(handle);
    
+   if (handle->stat_flags & SF_HANDLE)
+      fast_timer_stop(&handle->handle_timer); /* overall cost of this op */
+
    return ret;
 }
 
@@ -2806,8 +3068,12 @@ int ne_rebuild( ne_handle handle ) {
 
 /**
  * Flushes the handle buffer of the given striping, zero filling the remainder of the stripe data.
- *     Note, at present and paradoxically, this SHOULD NOT be called before the completeion of a series of reads to a file.
- *     Performing a write after a call to ne_flush WILL result in zero fill remaining within the erasure striping.
+ *
+ *     Note, at present and paradoxically, this SHOULD NOT be called before
+ *     the completion of a series of reads to a file.  Performing a write
+ *     after a call to ne_flush WILL result in zero fill remaining within
+ *     the erasure striping.
+ *
  * @param ne_handle handle : Handle for the erasure striping to be flushed
  * @return int : 0 on success and -1 on failure
  */

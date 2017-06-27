@@ -116,7 +116,7 @@ int show_cpuid() {
       __cpuid(i, a, b, c, d);
       printf("cpuid[%02x]: a=0x%08x, b=0x%08x, c=0x%08x, d=0x%08x   ", i, a, b, c, d);
       REV(a); REV(b); REV(c); REV(d);
-      printf("|  (reversed w/in each byte)\n");
+      printf("|  (reversed w/in each word)\n");
    }
 
    return  0;
@@ -124,6 +124,7 @@ int show_cpuid() {
 
 
 static double ticks_per_sec = -1;
+static int    invariant_TSC = 0;
 
 // call this once, from a single-thread, before any threads try to call
 // fast_timer_sec().  Initializes ticks_per_sec.  Returns 0 for success,
@@ -181,6 +182,19 @@ int fast_timer_inits() {
    ticks_per_sec = normed * mult;
    //   printf("freq:   %f\n", ticks_per_sec);
 
+
+
+   // --- "invariant TSC" means thread-migration across cores do not make
+   //     the TSC invalid.  (Also means the rate
+   __cpuid(0x80000007, a, b, c, d);
+   invariant_TSC = (d & 0x100) >> 8;
+
+   if (! invariant_TSC) {
+      fprintf(stderr, "This processor doesn't have an 'invariant' TSC.\n");
+      exit(-1);                 // see fast_timer_stop()
+   }
+
+
    return 0;
 }
 
@@ -198,6 +212,7 @@ int fast_timer_start(FastTimer* ft) {
    unsigned long int x;
    unsigned a, d, c;
 
+#ifdef MAYBE_TSC_NOT_INVARIANT
    // note current chip/core
    // https://software.intel.com/en-us/forums/intel-open-source-openmp-runtime-library/topic/507598
    //   __asm__ volatile("rdtscp"
@@ -207,6 +222,7 @@ int fast_timer_start(FastTimer* ft) {
 
    ft->chip = (c & 0xFFF000)>>12;
    ft->core = c & 0xFFF;
+#endif
 
    asm volatile("CPUID\n"
                 "RDTSC\n"
@@ -240,8 +256,15 @@ int fast_timer_stop(FastTimer* ft) {
    int chip = (c & 0xFFF000)>>12;
    int core = c & 0xFFF;
 
-   if (unlikely((chip != ft->chip)
-                || (core != ft->core))) {
+   // The current code never defines this.  We assume invariant TSC.
+   // Currently, fast_timer_init() will abort, if it discovers we're
+   // running on a non-invariant TSC.  This code path has been tested;
+   // chip/core migrations are detected, histo ignores them, etc.
+   // 
+#ifdef MAYBE_TSC_NOT_INVARIANT
+   if (unlikely((invariant_TSC == 0)
+                && ((chip != ft->chip)
+                    || (core != ft->core)))) {
 
       ++ ft->migrations;
       ft->chip = chip;
@@ -250,6 +273,7 @@ int fast_timer_stop(FastTimer* ft) {
       ft->stop.v64 = ft->start.v64; /* so LogHisto sees elapsed == 0 */
       return -1;
    }
+#endif
 
    // printf("stop: %llx = %08lx %08lx\n", stop.v64, stop.v32[HI], stop.v32[LO]);
    ft->accum += ft->stop.v64 - ft->start.v64;
@@ -320,7 +344,12 @@ int fast_timer_show(FastTimer* ft, const char* str) {
       printf("%s\n", str);
 
    printf("  start:   %016lx\n", ft->start);
-   printf("  accum:   %016lx\n", ft->accum);
+   printf("  stop:    %016lx\n", ft->stop);
+
+   printf("  accum:   %016lx", ft->accum);
+   if (ft->migrations)
+      printf("  (%d)", ft->migrations);
+   printf("\n");
 
    //   // resolve into nearset units
    //   const char* units[] = { "ns", "us", "ms", NULL };
@@ -391,7 +420,7 @@ int log_histo_reset(LogHisto* hist) {
 //       of the most-recent fast_timer_stop() - faster_timer_start().
 //
 __attribute__((always_inline))
-int log_histo_add(LogHisto* hist, uint64_t timer_value) {
+int log_histo_add_value(LogHisto* hist, uint64_t timer_value) {
    
    int i;
 
@@ -457,23 +486,37 @@ int log_histo_add(LogHisto* hist, uint64_t timer_value) {
 
 __attribute__((always_inline))
 int log_histo_add_interval(LogHisto* hist, FastTimer* ft) {
-   return log_histo_add(hist, (ft->stop.v64 - ft->start.v64));
+   return log_histo_add_value(hist, (ft->stop.v64 - ft->start.v64));
 }
 
 
 __attribute__((always_inline))
 int log_histo_add_accum(LogHisto* hist, FastTimer* ft) {
-   return log_histo_add(hist, ft->accum);
+   return log_histo_add_value(hist, ft->accum);
 }
 
+
+// dest += src
+// TBD: Drop LogHisto to 64 elements, aligned appropriately, and do this with SIMD intrinsics.
+__attribute__((always_inline))
+int log_histo_add(LogHisto* dest, LogHisto* src) {
+   int i;
+   for (i=0; i<65; ++i) {
+      dest->bin[i] += src->bin[i];
+   }
+   return 0;
+}
 
 
 
 // NOTE: 65 bins.  bin[0] is special, then there are bins for each bit in
 //    the 64-bit timer.
 
-int log_histo_show_bins(LogHisto* hist) {
+int log_histo_show_bins(LogHisto* hist, const char* str) {
    int i;
+
+   if (str)
+      printf(str);
 
    printf("\t");
    for (i=0; i<65; ++i) {

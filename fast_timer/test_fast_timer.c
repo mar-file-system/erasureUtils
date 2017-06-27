@@ -128,7 +128,7 @@ int main(int argc, char* argv[]) {
    // show log-histogram bins
    // (run test_histogram, to show details of bin-values, etc)
    printf("histogram bins (most-significant first):\n");
-   log_histo_show_bins(&hist);
+   log_histo_show_bins(&hist, NULL);
    printf("\n");
 
 

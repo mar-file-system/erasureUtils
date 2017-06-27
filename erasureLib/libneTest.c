@@ -79,14 +79,29 @@ int crc_status();
 
 
 #ifdef SOCKETS
-// see marfs/fuse/src/dal.c
-//
+
 // <dest> is the buffer to receive the snprintf'ed path
 // <size> is the size of that buffer
 // <format> is a path template.  For sockets, on the VLE,
 //           it might look like 192.168.0.%d:/zfs/exports/repo10+2/pod1/block%d/my_file
-// <block> is the current block-number (from libne)
+// <block> is the current 0-based block-number (from libne)
 // <state> is whatever state was passed into ne_open1()
+//
+//
+// WARNING: When MarFS calls libne on behalf of RMDA-sockets-based repos,
+//     it also passes in an snprintf function, plus an argument that
+//     contains parts of the parsed MarFS configuration, which are used by
+//     that snprintf function to compute the proper values for host-number
+//     and block-number in the partially-rehydrated path-template (i.e. it
+//     already has scatter-dir and cap-unit filled in), using information
+//     from the configuration.
+// 
+//     Here, we don't have that.  Instead, this is just hardwired to match
+//     the latest config on the VLE testbed.  If the testbed changes, and
+//     you change your MARFSCONFIGRC ... this hardwired thing will still be
+//     broken.
+//
+//     see marfs/fuse/src/dal.c
 //
 int snprintf_for_vle(char*       dest,
                      size_t      size,
@@ -94,12 +109,13 @@ int snprintf_for_vle(char*       dest,
                      uint32_t    block,
                      void*       state) {
 
-  int pod_offset = 0;
-  int host_offset = 1 + (block / 2);
-  int block_offset = 1 + block;
+  int pod_offset   = 0;
+  int host_offset  = 1 + (block / 2);
+  int block_offset = 0;
+
   return snprintf(dest, size, format,
                   pod_offset + host_offset,  // "192.168.0.%d"
-                  block_offset);             // "block%d"
+                  block_offset + block);             // "block%d"
 }
 #endif
 
@@ -128,6 +144,9 @@ void usage(const char* prog_name, const char* op) {
 
    PRINTerr("\n");
 }
+
+
+
 
 
 int main( int argc, const char* argv[] ) 
@@ -285,6 +304,9 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
+      //      // if stat-flags were set, show collected stats
+      //      show_handle_stats(handle);
+
       free(buff);
       close(filefd);
       PRINTout("libneTest: all writes completed\n");
@@ -349,6 +371,10 @@ int main( int argc, const char* argv[] )
 
       free(buff); 
       close(filefd);
+
+      //      // if stat-flags were set, show collected stats
+      //      show_handle_stats(handle);
+
       PRINTout("libneTest: all reads completed\n");
       PRINTout("libneTest: total read = %llu\n", totdone );
    }

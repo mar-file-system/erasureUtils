@@ -617,7 +617,6 @@ const char* command_str(SocketCommand command) {
 }
 
 
-// for now, this is only used by client
 // NOTE: We take care of network-byte-order conversions
 int write_pseudo_packet(int fd, SocketCommand command, size_t size, void* buf) {
   ssize_t write_count;
@@ -649,7 +648,6 @@ int write_pseudo_packet(int fd, SocketCommand command, size_t size, void* buf) {
   return 0;
 }
 
-// for now, this is only used by server
 // NOTE: We take care of network-byte-order conversions
 int read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr, int peek) {
   static const char*  peek_indicator = " *";
