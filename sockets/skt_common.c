@@ -2298,7 +2298,7 @@ int skt_close(SocketHandle* handle) {
    // I'm not sure whether this can create trouble for client-side reads,
    // in the event of some server-side crash, e.g. during a GET.  The
    // client-side doesn't expect NOP.
-   else {
+   else if (handle->flags & HNDL_CONNECTED) {
       // server spun up a listener-thread.  Let it exit gracefully
       jNEED_0( write_pseudo_packet(handle->peer_fd, CMD_NOP, 0, NULL) );
    }
