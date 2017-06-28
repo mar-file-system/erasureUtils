@@ -1,0 +1,60 @@
+#!/bin/bash
+
+# see fast_timer/README.txt
+#
+# This script generates heat-map data that looks like this:
+#
+#    run 0 block  0 close 0.595950
+#    run 0 block  1 close 0.523730
+#    run 0 block  2 close 0.478360
+#    run 0 block  3 close 2.724290
+#    run 0 block  4 close 0.472590
+#    run 0 block  5 close 0.461620
+#    run 0 block  6 close 0.526810
+#    run 0 block  7 close 0.444180
+#    run 0 block  8 close 0.452270
+#    run 0 block  9 close 0.458100
+#    run 0 block 10 close 0.432450
+#    run 0 block 11 close 0.538520
+#    
+#    run 1 block  0 close 0.234320
+#    run 1 block  1 close 0.794930
+#    [...]
+#
+#
+# you can pipe the output to:  | gnuplot heat_map.gnuplot 
+
+
+
+
+if (( $# != 3 )); then
+   echo "Usage: $0  <count> <stats_fname_prefix> <stats_field>"
+   exit 1
+fi
+
+
+
+# <FNAME> is the fname prefix, for output of runs (e.g. foo.libneTest.write.1G.stats)
+# <FIELD> could be one of open, close, read, write
+
+COUNT=$1
+FNAME=$2
+FIELD=$3
+
+# these will be read into the title by gnuplot
+echo $COUNT > foo.count
+echo $FNAME > foo.fname
+echo $FIELD | tr '[:lower:]' '[:upper:]' > foo.op
+
+
+for i in `seq 0 $(( COUNT -1 ))`; do
+    (echo run $i && cat $FNAME.$i) \
+    | awk "/run/{run=\$2}  \
+           /-- block/{b=\$3; cl=0} \
+           /^${FIELD}:/{cl=1} \
+           /elapsed/ {if (cl) { \
+                       time=\$2; cl=0; printf(\"run %d block %2d $FIELD %f\\n\", run, b, time)} }"
+
+    # gnuplot needs this
+    echo
+done
