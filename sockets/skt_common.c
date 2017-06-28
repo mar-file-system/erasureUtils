@@ -347,7 +347,7 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
    rc = 0;
    for (sec=0; (rc>=0 && sec<RD_TIMEOUT); ++sec) {
 
-#if 0
+#if 1
       // --- wait for the fd to have data
       //    (see comment about race-condition)
       if (sec) {
@@ -424,7 +424,7 @@ int write_raw(int fd, char* buf, size_t size) {
    rc = 0;
    for (sec=0; (rc>=0 && sec<WR_TIMEOUT); ++sec) {
 
-#if 0
+#if 1
       // --- wait for the fd to have room
       //    (see comment about race-condition)
       if (sec) {
