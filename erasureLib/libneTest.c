@@ -132,7 +132,7 @@ void usage(const char* prog_name, const char* op) {
 
    PRINTerr("Usage: %s <op> [args ...]\n", prog_name);
    PRINTerr("  where <op> and args are one of the following\n");
-   PRINTerr("  <stat_flags> could be e.g. 0xff\n");
+   PRINTerr("  To represent hex-values for <stat_flags> use e.g. $(( 0xff ))\n");
    PRINTerr("\n");
 
    USAGE("write",      "input_file  output_path  N E start_file             [stat_flags] [input_size]");
@@ -148,6 +148,30 @@ void usage(const char* prog_name, const char* op) {
 
 
 
+int
+parse_flags(StatFlagsValue* flags, const char* str) {
+   if (! str)
+      *flags = 0;
+
+   else if (!strncmp("0x", str, 2)) {
+      errno = 0;
+      *flags = (StatFlagsValue)strtol(str+2, NULL, 16);
+      if (errno) {
+         PRINTerr("couldn't parse flags from '%s'\n", str);
+         return -1;
+      }
+   }
+   else {
+      errno = 0;
+      *flags = (StatFlagsValue)strtol(str, NULL, 10);
+      if (errno) {
+         PRINTerr("couldn't parse flags from '%s'\n", str);
+         return -1;
+      }
+   }
+
+   return 0;
+}
 
 
 int main( int argc, const char* argv[] ) 
@@ -236,20 +260,26 @@ int main( int argc, const char* argv[] )
       totbytes = N * 64 * 1024;   // default
 
 
+   int parse_err = 0;
    if (wr == 0) {
       if ( argc == 9 )          // optional <stat_flags> for read
-         stat_flags = (StatFlagsValue)strtol(argv[8],NULL,10); 
+         parse_err = parse_flags(&stat_flags, argv[8]);
    }
    else if (wr == 1) {
       if ( argc == 8 )          // optional <stat_flags> for write
-         stat_flags = (StatFlagsValue)strtol(argv[7],NULL,10); 
+         parse_err = parse_flags(&stat_flags, argv[7]);
 
       if ( argc == 9 )          // optional <input_size> for write
-         totbytes = strtoll(argv[8],NULL,10); 
+         totbytes = strtoll(argv[8],NULL,10);
    }
    else if (wr == 2) {
       if ( argc == 7 )          // optional <stat_flags> for read
-         stat_flags = (StatFlagsValue)strtol(argv[6],NULL,10); 
+         parse_err = parse_flags(&stat_flags, argv[6]);
+   }
+
+   if (parse_err) {
+      usage(argv[0], argv[1]);
+      return -1;
    }
 
  

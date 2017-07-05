@@ -1890,7 +1890,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
          // offset in the generated erasure data, not including the user's data,
          // and the "write offset" is the logical position in the total output,
          // not including the 4-bytes-per-block of CRC data.
-         PRINTerr( "ne_write: reading input for %lu bytes with offset of %llu "
+         PRINTout( "ne_write: reading input for %lu bytes with offset of %llu "
                    "and writing to offset of %lu in handle buffer\n",
                    (unsigned long)readsize, totsize, handle->buff_rem );
          //memcpy ( handle->buffer + handle->buff_rem, buffer+totsize, readsize);
