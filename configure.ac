@@ -180,18 +180,22 @@ AM_CONDITIONAL([SUPPRESS_FILE_IO],  [test "$enable_file_io" != yes])
 
 
 
-# option enables collection of stats
-# (This value goes right into the code.  e.g. --enable-stats=0x30)
-# For now, this is the only way to set stat flags, so stat-gathering will be
-# useless overhead if you don't add the GLOBAL flag.  Later, it may be possible
-# set flags on a per-handle basis.
-AC_ARG_ENABLE([stats],
-              AS_HELP_STRING([--enable-stats],
-                             [bitmask: 0x80=HNDL, 0x40=THR, 0x20=ERAS, 0x10=CRC, 8=REN, 4=CLOSE, 2=RW, 1=OPEN]),
-              [enable_stats=${enableval}],
-              [enable_stats=0])
-
-AC_SUBST([enable_stats], [${enable_stats}])
+# Delete me.  These flags are now installed at run-time, via ne_open1() or
+# ne_open1_vl().  MarFS does this installation through the DAL, at
+# open-time.
+#
+# # option enables collection of stats
+# # (This value goes right into the code.  e.g. --enable-stats=0x30)
+# # For now, this is the only way to set stat flags, so stat-gathering will be
+# # useless overhead if you don't add the GLOBAL flag.  Later, it may be possible
+# # set flags on a per-handle basis.
+# AC_ARG_ENABLE([stats],
+#               AS_HELP_STRING([--enable-stats],
+#                              [bitmask: 0x80=HNDL, 0x40=THR, 0x20=ERAS, 0x10=CRC, 8=REN, 4=CLOSE, 2=RW, 1=OPEN]),
+#               [enable_stats=${enableval}],
+#               [enable_stats=0])
+# 
+# AC_SUBST([enable_stats], [${enable_stats}])
 
 
 

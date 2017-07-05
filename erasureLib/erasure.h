@@ -233,8 +233,10 @@ typedef enum {
    SF_ERASURE =  0x0020,
    SF_THREAD  =  0x0040,    /* from beginning to end  */
    SF_HANDLE  =  0x0080,    /* from start/stop, all threads, in 1 handle */
-   SF_GLOBAL  =  0x0100,    /* cost across all handles */
+   // SF_GLOBAL  =  0x0100,    /* cost across all handles */
 } StatFlags;
+
+typedef  uint16_t  StatFlagsValue;
 
 
 // This allows ne_open() and other functions to perform arbitrary
@@ -313,7 +315,7 @@ typedef struct handle {
 
 
 /* Erasure utility-functions taking a raw path argument */
-ne_handle ne_open1  ( SnprintfFunc func, void* state, SktAuth auth, char *path, ne_mode mode, ... );
+ne_handle ne_open1  ( SnprintfFunc func, void* state, SktAuth auth, StatFlagsValue flags, char *path, ne_mode mode, ... );
 int       ne_delete1( SnprintfFunc func, void* state, SktAuth auth, char *path, int width );
 ne_stat   ne_status1( SnprintfFunc func, void* state, SktAuth auth, char *path );
 

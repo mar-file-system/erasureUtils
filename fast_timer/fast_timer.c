@@ -67,14 +67,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "fast_timer.h"
 
 
-#ifdef __GNUC__
-#  define likely(x)      __builtin_expect(!!(x), 1)
-#  define unlikely(x)    __builtin_expect(!!(x), 0)
-#else
-#  define likely(x)      (x)
-#  define unlikely(x)    (x)
-#endif
-
 
 
 // having problems with <cpuid.h> ...
@@ -124,7 +116,7 @@ int show_cpuid() {
 
 
 static double ticks_per_sec = -1;
-static int    invariant_TSC = 0;
+int           invariant_TSC = 0;
 
 // call this once, from a single-thread, before any threads try to call
 // fast_timer_sec().  Initializes ticks_per_sec.  Returns 0 for success,
@@ -189,141 +181,18 @@ int fast_timer_inits() {
    __cpuid(0x80000007, a, b, c, d);
    invariant_TSC = (d & 0x100) >> 8;
 
+#ifndef ALLOW_VARIABLE_TSC
    if (! invariant_TSC) {
       fprintf(stderr, "This processor doesn't have an 'invariant' TSC.\n");
       exit(-1);                 // see fast_timer_stop()
    }
-
-
-   return 0;
-}
-
-
-
-// reset a specific timer.
-
-__attribute__((always_inline))
-int fast_timer_reset(FastTimer* ft) {
-   memset(ft, 0, sizeof(FastTimer));
-}
-
-__attribute__((always_inline))
-int fast_timer_start(FastTimer* ft) {
-   unsigned long int x;
-   unsigned a, d, c;
-
-#ifdef MAYBE_TSC_NOT_INVARIANT
-   // note current chip/core
-   // https://software.intel.com/en-us/forums/intel-open-source-openmp-runtime-library/topic/507598
-   //   __asm__ volatile("rdtscp"
-   //                    : "=a" (a), "=d" (d), "=c" (c));
-   __asm__ volatile("rdtscp"
-                    : "=c" (c));
-
-   ft->chip = (c & 0xFFF000)>>12;
-   ft->core = c & 0xFFF;
 #endif
 
-   asm volatile("CPUID\n"
-                "RDTSC\n"
-                "mov %%edx, %0\n"
-                "mov %%eax, %1\n"
-                : "=r" (ft->start.v32[HI]),
-                  "=r" (ft->start.v32[LO])
-                :: "%rax", "%rbx", "%rcx", "%rdx");
-
-   // printf("strt: %llx = %08lx %08lx\n", ft->start.v64, ft->start.v32[HI], ft->start.v32[LO]);
-   return 0;
-}
-
-
-// if chip/core has changed during the interval between start and stop, the
-// TSC difference won't be meaningful.  In this case we record a
-// "migration" but the elapsed time is not added into the accumulator.
-
-__attribute__((always_inline))
-int fast_timer_stop(FastTimer* ft) {
-   int a, d, c;
-
-   asm volatile("RDTSCP\n"
-                "mov %%edx, %0\n"
-                "mov %%eax, %1\n"
-                "mov %%ecx, %2\n"
-                "CPUID\n"
-                :  "=r" (ft->stop.v32[HI]), "=r" (ft->stop.v32[LO]), "=r" (c)
-                :: "%rax", "%rbx", "%rcx", "%rdx");
-
-   int chip = (c & 0xFFF000)>>12;
-   int core = c & 0xFFF;
-
-   // The current code never defines this.  We assume invariant TSC.
-   // Currently, fast_timer_init() will abort, if it discovers we're
-   // running on a non-invariant TSC.  This code path has been tested;
-   // chip/core migrations are detected, histo ignores them, etc.
-   // 
-#ifdef MAYBE_TSC_NOT_INVARIANT
-   if (unlikely((invariant_TSC == 0)
-                && ((chip != ft->chip)
-                    || (core != ft->core)))) {
-
-      ++ ft->migrations;
-      ft->chip = chip;
-      ft->core = core;
-
-      ft->stop.v64 = ft->start.v64; /* so LogHisto sees elapsed == 0 */
-      return -1;
-   }
-#endif
-
-   // printf("stop: %llx = %08lx %08lx\n", stop.v64, stop.v32[HI], stop.v32[LO]);
-   ft->accum += ft->stop.v64 - ft->start.v64;
    return 0;
 }
 
 
 
-// stop previous interval, and begin a new one
-
-__attribute__((always_inline))
-int fast_timer_stop_start(FastTimer* ft) {
-   int a, d, c;
-
-   asm volatile("RDTSCP\n"
-                "mov %%edx, %0\n"
-                "mov %%eax, %1\n"
-                "mov %%ecx, %2\n"
-                "CPUID\n"
-                "RDTSCP\n"
-                "mov %%edx, %3\n"
-                "mov %%eax, %4\n"
-                :  "=r" (ft->stop.v32[HI]), "=r" (ft->stop.v32[LO]),
-                   "=r" (c),
-                   "=r" (d), "=r" (a)
-                :: "%rax", "%rbx", "%rcx", "%rdx");
-
-   int chip = (c & 0xFFF000)>>12;
-   int core = c & 0xFFF;
-
-   if (unlikely((chip != ft->chip)
-                || (core != ft->core))) {
-
-      ++ ft->migrations;
-      ft->chip = chip;
-      ft->core = core;
-
-      ft->stop.v64 = ft->start.v64; /* so LogHisto sees elapsed == 0 */
-      return -1;
-   }
-
-   // printf("stop: %llx = %08lx %08lx\n", stop.v64, stop.v32[HI], stop.v32[LO]);
-   ft->accum += ft->stop.v64 - ft->start.v64;
-
-   /* start next iteration */
-   ft->start.v32[HI] = d;
-   ft->start.v32[LO] = a;
-
-   return 0;
-}
 
 
 // convert the value in ft->accum to seconds or nsec
@@ -393,117 +262,6 @@ int fast_timer_show_details(FastTimer* ft, const char* str) {
 
 int log_histo_reset(LogHisto* hist) {
    memset(hist, 0, sizeof(LogHisto));
-   return 0;
-}
-
-
-// Add a tick to the bin matching the timer-accumulator.  Each bin
-// represents all values between two adjascent powers of 2.
-//
-//   bin[0] counts timer values that are exactly zero
-//
-//          These are special because they may represent the special case
-//          where an interval was thrown out, e.g. due to a core
-//          migration).
-//
-//   bin[n] counts timer-values in the range [ 2^(n-1), 2^n )
-//
-//          The remaining bin-numbers 1 through 64 match the
-//          most-significant-bit (1-based) of the timer-values that are
-//          counted there.
-//
-//
-// NOTE: In the event of a migration, the FT accumulator is unchanged.
-//       Such "zero events" are counted in bin 0
-//
-// NOTE: We don't change the timer accumulator.  We just look at the duration
-//       of the most-recent fast_timer_stop() - faster_timer_start().
-//
-__attribute__((always_inline))
-int log_histo_add_value(LogHisto* hist, uint64_t timer_value) {
-   
-   int i;
-
-   //   printf(" value:     %016lx\n", timer_value);
-
-#if 0
-   // assert all bits below the highest-order asserted bit 
-   uint64_t mask  = timer_value;
-   int      shift = 1;
-   for (i=0; i<6; ++i) {
-      mask |= mask >> shift;
-      printf(" mask[%d]:   %016lx\n", i, mask);
-      shift <<= 1;
-   }
-   printf(" mask:      %016lx\n", mask);
-
-   // round up to nearest power of 2
-   // shift-right so our bin-index will be 0-based
-   // do the shift first, so we don't overflow
-   // 1-based bit-position is the bin-index
-   uint64_t  high_bit = (mask ? ((mask >> 1) +1) : 0);
-   printf(" mask>>1:   %016lx\n", (mask >>1));
-   printf(" mask>>1)+1 %016lx\n", (mask >>1)+1);
-   printf(" high_bit:  %016lx\n", high_bit);
-   
-   // select histogram bin
-   for (i=0; high_bit; ++i) {
-      high_bit >>= 1;
-   }
-
-   printf(" bin_no:    %d\n", i);
-   printf(" bin[%d]:    %hd (before)\n", i, hist->bin[i]);
-   hist->bin[i] += 1;
-   printf(" bin[%d]:    %hd (after)\n", i, hist->bin[i]);
-   printf("\n");
-
-#else
-   // (round up to nearest power of 2)
-   // find the 1-based bit-position of highest-bit
-   // 1-based bit-position is the bin-index
-   // select histogram bin
-   // TBD: vectorize this, for speed
-   uint64_t bit = (uint64_t)1 << 63;
-   for (i=64; i; --i) {
-      if (timer_value & bit)
-         break;
-      bit >>= 1;
-   }
-
-   //   printf(" bin_no:    %d\n", i);
-   //   printf(" bin[%d]:    %hd (before)\n", i, hist->bin[i]);
-
-   hist->bin[i] += 1;
-
-   //   printf(" bin[%d]:    %hd (after)\n", i, hist->bin[i]);
-   //   printf("\n");
-
-#endif
-
-   return i;                    /* return bin-number */
-}
-
-
-__attribute__((always_inline))
-int log_histo_add_interval(LogHisto* hist, FastTimer* ft) {
-   return log_histo_add_value(hist, (ft->stop.v64 - ft->start.v64));
-}
-
-
-__attribute__((always_inline))
-int log_histo_add_accum(LogHisto* hist, FastTimer* ft) {
-   return log_histo_add_value(hist, ft->accum);
-}
-
-
-// dest += src
-// TBD: Drop LogHisto to 64 elements, aligned appropriately, and do this with SIMD intrinsics.
-__attribute__((always_inline))
-int log_histo_add(LogHisto* dest, LogHisto* src) {
-   int i;
-   for (i=0; i<65; ++i) {
-      dest->bin[i] += src->bin[i];
-   }
    return 0;
 }
 

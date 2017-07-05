@@ -132,11 +132,12 @@ void usage(const char* prog_name, const char* op) {
 
    PRINTerr("Usage: %s <op> [args ...]\n", prog_name);
    PRINTerr("  where <op> and args are one of the following\n");
+   PRINTerr("  <stat_flags> could be e.g. 0xff\n");
    PRINTerr("\n");
 
-   USAGE("write",      "input_file output_path N E start_file [input_size]");
-   USAGE("read",       "output_file erasure_path N E start_file total_bytes");
-   USAGE("rebuild",    "erasure_path N E start_file");
+   USAGE("write",      "input_file  output_path  N E start_file             [stat_flags] [input_size]");
+   USAGE("read",       "output_file erasure_path N E start_file total_bytes [stat_flags]");
+   USAGE("rebuild",    "erasure_path             N E start_file             [stat_flags]");
    USAGE("status",     "erasure_path");
    USAGE("delete",     "erasure_path stripe_width");
    USAGE("crc_status", "");
@@ -156,12 +157,13 @@ int main( int argc, const char* argv[] )
    unsigned long long toread;
    unsigned long long totdone = 0;
    int start;
-   char wr;
+   char wr = -1;
    int filefd;
    int N;
    int E;
    int tmp;
    unsigned long long totbytes;
+   StatFlagsValue     stat_flags = 0;
 
    LOG_INIT();
 
@@ -219,29 +221,43 @@ int main( int argc, const char* argv[] )
 
 
    // --- command-specific extra args
-   if ( wr < 2 ) {
+   if ( wr < 2 ) {              // read or write
       N = atoi(argv[4]);
       E = atoi(argv[5]);
       start = atoi(argv[6]);
    }
-   else if ( wr < 3 ) {
+   else if ( wr < 3 ) {         // i.e. rebuild
       N = atoi(argv[3]);
       E = atoi(argv[4]);
       start = atoi(argv[5]);
    }
 
-   if ( argc == 8 ) {
-      totbytes = strtoll(argv[7],NULL,10); 
+   if (wr >= 0)
+      totbytes = N * 64 * 1024;   // default
+
+
+   if (wr == 0) {
+      if ( argc == 9 )          // optional <stat_flags> for read
+         stat_flags = (StatFlagsValue)strtol(argv[8],NULL,10); 
    }
-   else {
-      totbytes = N * 64 * 1024;
+   else if (wr == 1) {
+      if ( argc == 8 )          // optional <stat_flags> for write
+         stat_flags = (StatFlagsValue)strtol(argv[7],NULL,10); 
+
+      if ( argc == 9 )          // optional <input_size> for write
+         totbytes = strtoll(argv[8],NULL,10); 
    }
+   else if (wr == 2) {
+      if ( argc == 7 )          // optional <stat_flags> for read
+         stat_flags = (StatFlagsValue)strtol(argv[6],NULL,10); 
+   }
+
  
 #ifdef SOCKETS
    SktAuth  auth;
    skt_auth_init(SKT_S3_USER, &auth); /* this is safe, whether built with S3_AUTH, or not */
 
-#  define NE_OPEN(PATH, MODE, ...)   ne_open1  (snprintf_for_vle, NULL, auth, (PATH), (MODE), ##__VA_ARGS__ )
+#  define NE_OPEN(PATH, MODE, ...)   ne_open1  (snprintf_for_vle, NULL, auth, stat_flags, (PATH), (MODE), ##__VA_ARGS__ )
 #  define NE_STATUS(PATH)            ne_status1(snprintf_for_vle, NULL, auth, (PATH))
 
 #else

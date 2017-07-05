@@ -749,7 +749,8 @@ int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, 
  */
 
 
-ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, char *path, ne_mode mode, va_list ap )
+ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValue stat_flags,
+                       char *path, ne_mode mode, va_list ap )
 {
    char file[MAXNAME];       /* array name of files */
    int counter;
@@ -842,12 +843,14 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, char *path, n
    handle->state    = state;
    handle->auth     = auth;
 
-   // configuration provides flags that are tested at runtime
-   handle->stat_flags = NE_STAT_FLAGS;
-   fast_timer_inits();
-   //   // redundant with memset() on handle
-   //   if (handle->stat_flags)
-   //      init_bench_stats(&handle->agg_stats);
+   // flags control collection of timing stats
+   handle->stat_flags = stat_flags;
+   if (handle->stat_flags) {
+      fast_timer_inits();
+
+      // // redundant with memset() on handle
+      // init_bench_stats(&handle->agg_stats);
+   }
    if (handle->stat_flags & SF_HANDLE)
       fast_timer_start(&handle->handle_timer); /* start overall timer for handle */
 
@@ -1021,11 +1024,13 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, char *path, n
 }
 
 // caller (e.g. MC-sockets DAL) specifies SprintfFunc, stat, and SktAuth
-ne_handle ne_open1( SnprintfFunc fn, void* state, SktAuth auth, char *path, ne_mode mode, ... ) {
+// New: caller also provides flags that control whether stats are collected
+ne_handle ne_open1( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValue stat_flags,
+                    char *path, ne_mode mode, ... ) {
 
    va_list vl;
    va_start(vl, mode);
-   return ne_open1_vl(fn, state, auth, path, mode, vl);
+   return ne_open1_vl(fn, state, auth, stat_flags, path, mode, vl);
    va_end(vl);
 }
 
@@ -1046,7 +1051,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
 
    va_list vl;
    va_start(vl, mode);
-   return ne_open1_vl(ne_default_snprintf, NULL, auth, path, mode, vl);
+   return ne_open1_vl(ne_default_snprintf, NULL, auth, 0, path, mode, vl);
    va_end(vl);
 }
 
