@@ -132,7 +132,7 @@ void usage(const char* prog_name, const char* op) {
 
    PRINTerr("Usage: %s <op> [args ...]\n", prog_name);
    PRINTerr("  where <op> and args are one of the following\n");
-   PRINTerr("  To represent hex-values for <stat_flags> use e.g. $(( 0xff ))\n");
+   PRINTerr("  <stat_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
    PRINTerr("\n");
 
    USAGE("write",      "input_file  output_path  N E start_file             [stat_flags] [input_size]");
@@ -188,6 +188,9 @@ int main( int argc, const char* argv[] )
    int tmp;
    unsigned long long totbytes;
    StatFlagsValue     stat_flags = 0;
+   int                parse_err = 0;
+   const char*        size_arg = NULL;
+
 
    LOG_INIT();
 
@@ -197,26 +200,39 @@ int main( int argc, const char* argv[] )
    }
 
    if ( strncmp( argv[1], "write", strlen(argv[1]) ) == 0 ) {
-      if ( argc < 7 ) { 
+      if ( argc < 7 ) {
          usage( argv[0], argv[1] ); 
          return -1;
       }
+      if ( argc >= 8 )          // optional <stat_flags> for write
+         parse_err = parse_flags(&stat_flags, argv[7]);
+
+      if ( argc >= 9)
+         size_arg = argv[8];
+
       wr = 1;
    }
    else if ( strncmp( argv[1], "read", strlen(argv[1]) ) == 0 ) {
-      if ( argc < 8 ) { 
+      if ( argc < 8 ) {
          usage( argv[0], argv[1] ); 
          return -1;
       }
+      if ( argc == 9 )          // optional <stat_flags> for read
+         parse_err = parse_flags(&stat_flags, argv[8]);
+
       wr = 0;
    }
    else if ( strncmp( argv[1], "rebuild", strlen(argv[1]) ) == 0 ) {
-      if ( argc != 6 ) { 
+      if ( argc < 6 ) {
          usage( argv[0], argv[1] ); 
          return -1;
       }
+      if ( argc == 7 )          // optional <stat_flags> for read
+         parse_err = parse_flags(&stat_flags, argv[6]);
+
       wr = 2;
    }
+
    else if ( strncmp( argv[1], "status", strlen(argv[1]) ) == 0 ) {
       if ( argc != 3 ) { 
          usage( argv[0], argv[1] ); 
@@ -256,31 +272,15 @@ int main( int argc, const char* argv[] )
       start = atoi(argv[5]);
    }
 
-   if (wr >= 0)
-      totbytes = N * 64 * 1024;   // default
-
-
-   int parse_err = 0;
-   if (wr == 0) {
-      if ( argc == 9 )          // optional <stat_flags> for read
-         parse_err = parse_flags(&stat_flags, argv[8]);
-   }
-   else if (wr == 1) {
-      if ( argc == 8 )          // optional <stat_flags> for write
-         parse_err = parse_flags(&stat_flags, argv[7]);
-
-      if ( argc == 9 )          // optional <input_size> for write
-         totbytes = strtoll(argv[8],NULL,10);
-   }
-   else if (wr == 2) {
-      if ( argc == 7 )          // optional <stat_flags> for read
-         parse_err = parse_flags(&stat_flags, argv[6]);
-   }
-
    if (parse_err) {
       usage(argv[0], argv[1]);
       return -1;
    }
+
+   if (size_arg)                // optional <input_size> for write
+      totbytes = strtoll(size_arg, NULL, 10);
+   else
+      totbytes = N * 64 * 1024; // default
 
  
 #ifdef SOCKETS
@@ -334,7 +334,7 @@ int main( int argc, const char* argv[] )
          }
          PRINTout("libneTest: write successful\n" );
 
-         if ( argc == 8 ) {
+         if (size_arg) {
             totbytes -= nread;
          }
          else if (toread != 0  &&  nread == 0) {
