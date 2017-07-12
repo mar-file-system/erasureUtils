@@ -54,12 +54,9 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-# Allow automake to figure out what "+=" means
-SOCKET_DEFS =
 
-# This is the pitiful approach required to avoid "already defined" warnings
-# from automake, if you were to try to re-assign SOCKET_DEFS to the thing
-# you wanted based on two different conditions
+# Here's how to get automake to do an assignment based on two conditions
+SOCKET_DEFS =
 if RDMA_SOCKETS
   SOCKET_DEFS += -DSOCKETS=RDMA
   SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
@@ -91,7 +88,7 @@ endif
 
 
 TIMER_CPPFLAGS = -I${top_srcdir}/fast_timer
-TIMER_DEFS     = -DNE_STAT_FLAGS=@enable_stats@
+# TIMER_DEFS   = -DNE_STAT_FLAGS=@enable_stats@
 TIMER_LIBS     = ../fast_timer/libft.a
 # TIMER_LD     = -lft
 
@@ -108,11 +105,11 @@ AM_CPPFLAGS = $(SOCKET_CPPFLAGS) $(TIMER_CPPFLAGS)   $(SOCKET_DEFS) $(TIMER_DEFS
 
 
 
-include_HEADERS = erasure.h ne_logging.h
+include_HEADERS = erasure.h ne_logging.h fs_impl.h
 
 
 lib_LIBRARIES = libne.a
-libne_a_SOURCES = erasure.c erasure.h
+libne_a_SOURCES = erasure.c erasure.h fs_impl.c fs_impl.h
 libne_a_LIBADD = $(SOCKET_LIBS) $(TIMER_LIBS)
 
 

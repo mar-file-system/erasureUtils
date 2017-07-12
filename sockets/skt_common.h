@@ -181,12 +181,13 @@ typedef void(*jHandlerType)(void* arg);
 
 // These represent the max delay (in sec), waiting for tokens to/from
 // client/server.  When debugging, we typically want to be able to step
-// slowly through an exchange, without causing a timeout.
-#ifdef DEBUG_SOCKETS
-// #  define WR_TIMEOUT          10000
-// #  define RD_TIMEOUT          10000
-#  define WR_TIMEOUT          30
-#  define RD_TIMEOUT          30
+// slowly through an exchange, without causing a timeout.  Careful, though,
+// you might be debugging something that happens because of a timeout.
+// Also, note that when *not* debugging, DEBUG_SOCKETS is #define'd, but is 0.
+
+#if DEBUG_SOCKETS
+#  define WR_TIMEOUT          10000
+#  define RD_TIMEOUT          10000
 #else
 #  define WR_TIMEOUT             30
 #  define RD_TIMEOUT             30

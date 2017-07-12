@@ -126,24 +126,38 @@ int snprintf_for_vle(char*       dest,
 //
 void usage(const char* prog_name, const char* op) {
 
+   PRINTerr("Usage: %s <op> [args ...]\n", prog_name);
+   PRINTerr("  <op> and args are one of the following\n");
+   PRINTerr("\n");
+
 #define USAGE(CMD, ARGS)                                       \
    PRINTerr("  %2s %-10s %s\n",                                \
            (!strcmp(op, CMD) ? "->" : ""), (CMD), (ARGS))
 
-   PRINTerr("Usage: %s <op> [args ...]\n", prog_name);
-   PRINTerr("  where <op> and args are one of the following\n");
-   PRINTerr("  <stat_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
-   PRINTerr("\n");
-
-   USAGE("write",      "input_file  output_path  N E start_file             [stat_flags] [input_size]");
-   USAGE("read",       "output_file erasure_path N E start_file total_bytes [stat_flags]");
-   USAGE("rebuild",    "erasure_path             N E start_file             [stat_flags]");
+   USAGE("write",      "input_file  erasure_path N E start_file  [stat_flags] [input_size]");
+   USAGE("read",       "output_file erasure_path N E start_file  [stat_flags] [read_size]");
+   USAGE("rebuild",    "erasure_path             N E start_file  [stat_flags]");
    USAGE("status",     "erasure_path");
    USAGE("delete",     "erasure_path stripe_width");
    USAGE("crc_status", "");
    USAGE("help",       "");
-
    PRINTerr("\n");
+   PRINTerr("\n");
+
+   PRINTerr("     <stat_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
+   PRINTerr("\n");
+   PRINTerr("     <erasure_path> is one of the following\n");
+   PRINTerr("\n");
+   PRINTerr("       [RDMA] xx.xx.xx.%%d:pppp/local/blah/block%%d/.../fname\n");
+   PRINTerr("\n");
+   PRINTerr("               ('/local/blah' is some local path on all accessed storage nodes\n");
+   PRINTerr("\n");
+   PRINTerr("       [MC]   /NFS/blah/block%%d/.../fname\n");
+   PRINTerr("\n");
+   PRINTerr("               ('/NFS/blah/'  is some NFS path on the client nodes\n");
+   PRINTerr("\n");
+
+#undef USAGE
 }
 
 
@@ -172,6 +186,22 @@ parse_flags(StatFlagsValue* flags, const char* str) {
 
    return 0;
 }
+
+
+FSImplType
+select_impl(const char* path) {
+   return (strchr(path, ':')
+           ? FSI_SOCKETS
+           : FSI_POSIX);
+}
+
+SnprintfFunc
+select_snprintf(const char* path) {
+   return (strchr(path, ':')
+           ? snprintf_for_vle      // MC over RDMA-sockets
+           : ne_default_snprintf); // MC over NFS
+}
+
 
 
 int main( int argc, const char* argv[] ) 
@@ -213,12 +243,15 @@ int main( int argc, const char* argv[] )
       wr = 1;
    }
    else if ( strncmp( argv[1], "read", strlen(argv[1]) ) == 0 ) {
-      if ( argc < 8 ) {
+      if ( argc < 7 ) {
          usage( argv[0], argv[1] ); 
          return -1;
       }
-      if ( argc == 9 )          // optional <stat_flags> for read
+      if ( argc >= 8 )          // optional <stat_flags> for read
          parse_err = parse_flags(&stat_flags, argv[8]);
+
+      if ( argc >= 9)
+         size_arg = argv[8];
 
       wr = 0;
    }
@@ -257,7 +290,7 @@ int main( int argc, const char* argv[] )
       return -1;
    }
    
-   PRINTout("libneTest: command = '%s'\n", argv[2]);
+   PRINTout("libneTest: command = '%s'\n", argv[1]);
 
 
    // --- command-specific extra args
@@ -283,18 +316,19 @@ int main( int argc, const char* argv[] )
       totbytes = N * 64 * 1024; // default
 
  
-#ifdef SOCKETS
    SktAuth  auth;
    skt_auth_init(SKT_S3_USER, &auth); /* this is safe, whether built with S3_AUTH, or not */
 
-#  define NE_OPEN(PATH, MODE, ...)   ne_open1  (snprintf_for_vle, NULL, auth, stat_flags, (PATH), (MODE), ##__VA_ARGS__ )
-#  define NE_STATUS(PATH)            ne_status1(snprintf_for_vle, NULL, auth, (PATH))
+#  define NE_OPEN(PATH, MODE, ...)  ne_open1  (select_snprintf(PATH), NULL, auth, stat_flags, select_impl(PATH), \
+                                               (PATH), (MODE), ##__VA_ARGS__ )
 
-#else
-#  define NE_OPEN(PATH, MODE, ...)   ne_open((PATH), (MODE), ##__VA_ARGS__ )
-#  define NE_STATUS(PATH)            ne_status(PATH)
+#  define NE_DELETE(PATH, WIDTH)    ne_delete1(select_snprintf(PATH), NULL, auth, stat_flags, select_impl(PATH), \
+                                               (PATH), (WIDTH))
 
-#endif
+#  define NE_STATUS(PATH)           ne_status1(select_snprintf(PATH), NULL, auth, stat_flags, select_impl(PATH), \
+                                               (PATH))
+
+
 
    srand(time(NULL));
    ne_handle handle;
@@ -390,18 +424,18 @@ int main( int argc, const char* argv[] )
       }
       
       toread = (rand() % totbytes) + 1;
-      if ( toread > totbytes ) { exit(1000); }
       nread = 0;
 
       while ( totbytes > 0 ) {
          PRINTout("libneTest: preparing to read %llu from erasure files with offset %llu\n", toread, nread );
-         if ( toread > totbytes ) { exit(1000); }
+         if ( toread > totbytes ) {
+            PRINTerr("libneTest: toread (%llu) > totbytes (%llu)\n", toread, totbytes);
+            exit(EXIT_FAILURE);
+         }
 
          tmp = ne_read( handle, buff, toread, nread );
-
          if( toread != tmp ) {
-            PRINTerr("libneTest: unexpected # of bytes read by ne_read\n");
-            PRINTerr("libneTest:  got %d but expected %llu\n", tmp, toread );
+            PRINTerr("libneTest: ne_read got %d but expected %llu\n", tmp, toread );
             return -1;
          }
 
@@ -409,8 +443,9 @@ int main( int argc, const char* argv[] )
          write( filefd, buff, toread );
 
          totbytes -= toread;
-         nread += toread;
-         totdone += toread;
+         nread    += toread;
+         totdone  += toread;
+
          if ( totbytes != 0 )
             toread = ( rand() % totbytes ) + 1;
       }
@@ -479,7 +514,9 @@ int main( int argc, const char* argv[] )
       tmp=0;
       /* Encode any file errors into the return status */
       for( filefd = 0; filefd < stat->N+stat->E; filefd++ ) {
-         if ( stat->data_status[filefd] || stat->xattr_status[filefd] ) { tmp += ( 1 << ((filefd + stat->start) % (stat->N+stat->E)) ); }
+         if ( stat->data_status[filefd] || stat->xattr_status[filefd] ) {
+            tmp += ( 1 << ((filefd + stat->start) % (stat->N+stat->E)) );
+         }
       }
 
       printf("%d\n",tmp);
@@ -494,7 +531,7 @@ int main( int argc, const char* argv[] )
 
    else if ( wr == 4 ) {
       PRINTout("libneTest: deleting striping corresponding to path \"%s\" with width %d...\n", (char*)argv[2], N );
-      if ( ne_delete( (char*) argv[2], N ) ) {
+      if ( NE_DELETE( (char*) argv[2], N ) ) {
          PRINTerr("libneTest: deletion attempt indicates a failure for path \"%s\"\n", (char*)argv[2] );
          return -1;
       }

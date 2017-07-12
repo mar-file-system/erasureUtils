@@ -1,9 +1,6 @@
 #ifndef __NE_H__
 #define __NE_H__
 
-#ifndef __MARFS_COPYRIGHT_H__
-#define __MARFS_COPYRIGHT_H__
-
 /*
 Copyright (c) 2015, Los Alamos National Security, LLC
 All rights reserved.
@@ -64,8 +61,6 @@ LANL contributions is found at https://github.com/jti-lanl/aws4c.
 GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
-#endif // copyright
-
 
 #define INT_CRC
 #define META_FILES
@@ -78,14 +73,17 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 #define NE_LOG_PREFIX "libne"
-#ifdef SOCKETS
-#  include "skt_common.h"
-   typedef SocketHandle  FileDesc;
-#else
-#  include "ne_logging.h"
-   typedef int           FileDesc;
-   typedef void*         SktAuth;
-#endif
+
+// #ifdef SOCKETS
+// #  include "skt_common.h"
+//    typedef SocketHandle  FileDesc;
+// #else
+// #  include "ne_logging.h"
+//    typedef int           FileDesc;
+//    typedef void*         SktAuth;
+// #endif
+
+#include "fs_impl.h"
 
 
 
@@ -183,7 +181,7 @@ typedef struct buffer_queue {
   int                qdepth;             /* number of elements in the queue */
   int                head;               /* next full position */  
   int                tail;               /* next empty position */
-  FileDesc           file;               /* file descriptor */
+  struct GenericFD   file;               /* file descriptor */
   char               path[2048];         /* path to the file */
   int                block_number;
   struct handle     *handle;
@@ -252,7 +250,10 @@ typedef  int (*SnprintfFunc)(char* dest, size_t size, const char* format, u32 bl
 int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, void* state);
 
 
-typedef struct handle {
+struct FileSysImpl; // fwd-decl  (fs_impl.h)
+struct GenericFD;   // fwd-decl  (fs_impl.h)
+
+struct handle {
    /* Erasure Info */
    int N;
    int E;
@@ -266,8 +267,7 @@ typedef struct handle {
    unsigned char *buffs[ MAXPARTS ];
    unsigned long buff_rem;
    off_t buff_offset;
-   FileDesc FDArray[ MAXPARTS ];
-   SktAuth  auth;               /* pass-through to RDMA/sockets impl */
+   GenericFD FDArray[ MAXPARTS ];
 
    /* Threading fields */
    void *buffer_list[MAX_QDEPTH];
@@ -303,6 +303,12 @@ typedef struct handle {
    SnprintfFunc   snprintf;
    void*          state;        // caller-data to be provided to <snprintf>
 
+   /* pass-through to RDMA/sockets impl */
+   SktAuth        auth;
+
+   /* run-time dispatch of sockets versus file implementation */
+   const FileSysImpl*   impl;
+
    /* optional timing/benchmarking */
    int            stat_flags;        /* initialized at build-time */
    BenchStats     stats[ MAXPARTS ]; /* ops w/in each thread */
@@ -310,14 +316,22 @@ typedef struct handle {
    FastTimer      handle_timer;      /* pre-open to post-close, all threads complete */
    FastTimer      erasure_timer;
    LogHisto       erasure_h;
+};
+typedef struct handle* ne_handle;
 
-} *ne_handle;
 
 
 /* Erasure utility-functions taking a raw path argument */
-ne_handle ne_open1  ( SnprintfFunc func, void* state, SktAuth auth, StatFlagsValue flags, char *path, ne_mode mode, ... );
-int       ne_delete1( SnprintfFunc func, void* state, SktAuth auth, char *path, int width );
-ne_stat   ne_status1( SnprintfFunc func, void* state, SktAuth auth, char *path );
+ne_handle ne_open1  ( SnprintfFunc func, void* state, SktAuth auth,
+                      StatFlagsValue flags, FSImplType itype,
+                      char *path, ne_mode mode, ... );
+
+int       ne_delete1( SnprintfFunc func, void* state, SktAuth auth,
+                      StatFlagsValue flags, FSImplType itype,
+                      char *path, int width );
+
+ne_stat   ne_status1( SnprintfFunc func, void* state, SktAuth auth,
+                      StatFlagsValue flags, FSImplType itype, char *path );
 
 // these interfaces provide a default SnprintfFunc, which supports the
 // expectations of the default MarFS multi-component implementation

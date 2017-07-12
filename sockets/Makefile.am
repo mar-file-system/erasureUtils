@@ -77,7 +77,6 @@ AM_CPPFLAGS += -I${top_srcdir}/erasureLib
 AM_CPPFLAGS += -I${top_srcdir}/fast_timer
 
 
-
 if RDMA_SOCKETS
   DEFS        += -DRDMA_SOCKETS -DUSE_RIOWRITE
   LIBS        += -lrdmacm

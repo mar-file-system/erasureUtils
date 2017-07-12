@@ -874,6 +874,10 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
         NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 1) );
      }
 
+     // remove peeked packet-header
+     NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 0) );
+
+
     // --- read from file
     //     got a non-SEEK pseudo-packet
     //     (read-after-seek might be re-using buffer from previous read)
@@ -1254,6 +1258,12 @@ int client_s3_authenticate_internal(SocketHandle* handle, int command) {
 // try to read from ~/.awsAuth to find the credential at run-time.  We'll
 // try that.
 //
+// NOTE: Because the DAL credentials are never freed (and used only once
+//     per handle), in the case where we allocated a temporary credential
+//     (based on ~/.awwsAuth), we free that again, before returning.
+//     Either way, we pull the credential back out of the handle, because
+//     it has served its purpose.
+//
 int client_s3_authenticate(SocketHandle* handle, int command) {
 
    int needs_free = 0;
@@ -1308,7 +1318,7 @@ int client_s3_authenticate(SocketHandle* handle, int command) {
 // ---------------------------------------------------------------------------
 
 
-#define NO_IMPL()                                               \
+#define NO_IMPL()                                                 \
   neERR("%s not implemented\n", __FUNCTION__);                    \
   abort()
 
@@ -1860,11 +1870,15 @@ ssize_t skt_write_all(SocketHandle* handle, const void* buffer, size_t size) {
 // buffer that will be given to skt_read(), and skt_lseek() can't
 // return fake-success, because maybe the seek will fail.
 //
-// So, we now allow skt_read() to *change* the riomapping, if it gets
-// a buffer that differs from the previous one, recorded in the
-// handle.  This allows skt_read() to adjust dynamically to different
-// buffer sizes, and allows skt_lseek() to fake it by invoking a server-side
-// GET thread on its own, and providing a fake
+// So, we now allow skt_read() to *change* the riomapping, if it gets a
+// buffer that differs from the previous one, recorded in the handle.  This
+// allows skt_read() to adjust dynamically to different buffer sizes, and
+// allows skt_lseek() to fake it by invoking a server-side GET thread on
+// its own, providing an inital mapping, which can subsequently be
+// renegotiated by skt_read().
+//
+// We only support monotonically increasing the mapping size.
+//
 
 int riomap_reader(SocketHandle* handle, void* buf, size_t size) {
 

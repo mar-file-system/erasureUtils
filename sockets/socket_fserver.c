@@ -666,7 +666,7 @@ int server_s3_authenticate(ThreadContext* ctx, int client_fd, PseudoPacketHeader
          neLOG("auth failed: %s %s\n", command_str(HDR_CMD(hdr)), (fname ? fname : "<unknown_path>"));
    }
 
-   aws_context_release_r(&aws_ctx); // free strdup'ed name, password, etc
+   aws_context_release_r(&aws_ctx); // just frees strdup'ed name, password, etc
 
    // this response to client just concerns the authentication, not the
    // task that they are authenticating.  Both sides now move on to that.

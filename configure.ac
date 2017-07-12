@@ -119,19 +119,26 @@ AC_CHECK_LIB([isal],    [crc32_ieee],
 
 
 
+# RDMA/MC is now a run-time option, rather than a configure option.  (This
+# allows single build to access both types of repos).  However, someone may
+# still want to disable it, in order to allow builds in which they are
+# willing to forgo simultaneous access to both types of repo in order to
+# avoid the need to link with packages supporting RDMA.  Therefore, sockets
+# is now an implict-enable/explicit-disable option.
+ 
 # optional build uses RDMA-sockets
 # The server must be deployed on remote hosts (after building) to support this mode.
 AC_ARG_ENABLE([sockets],
               AS_HELP_STRING([--enable-sockets],
-                             [One of {rdma,ip,unix}.  File operations go to a server, via sockets.]),
+                             [One of {rdma,ip,unix,no}.  File operations go to a server, via sockets.  Default: rdma]),
               [case "${enableval}" in
                  rdma) enable_sockets=rdma ;;
                  # ip)   enable_sockets=ip ;;    # TBD
                  # unix) enable_sockets=unix ;;  # TBD
                  no)   enable_sockets=no ;;
-                 *)    AC_MSG_FAILURE([enable-sockets={rdma,ip,unix}. Currently, only rdma is supported]) ;;
+                 *)    AC_MSG_FAILURE([enable-sockets={rdma,ip,unix,no}. Currently, only rdma is supported]) ;;
                esac],
-              [enable_sockets=no])
+              [enable_sockets=rdma])
 
 AM_CONDITIONAL([ANY_SOCKETS],   [test "$enable_sockets" != no ])
 AM_CONDITIONAL([RDMA_SOCKETS],  [test "$enable_sockets"  = rdma])

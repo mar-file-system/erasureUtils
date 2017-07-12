@@ -161,52 +161,72 @@ static int           gf_gen_decode_matrix(unsigned char *encode_matrix,
                                           int nerrs, int nsrcerrs, int k, int m);
 //void dump(unsigned char *buf, int len);
 
+#include "fs_impl.h"
 
 
-// This allows more-ledgible selection of sockets versus file semantics
-#ifdef SOCKETS
-#  define FD(FDESC)                           (FDESC).peer_fd
-#  define OPEN(FDESC, AUTH, ...)              do{ skt_open(&(FDESC), ## __VA_ARGS__); \
-                                                  skt_fcntl(&(FDESC), SKT_F_SETAUTH, (AUTH)); } while(0)
-#  define HNDLOP(OP, FDESC, ...)              skt_##OP(&(FDESC), ## __VA_ARGS__)
-#  define pHNDLOP(OP, FDESC_PTR, ...)         skt_##OP((FDESC_PTR), ## __VA_ARGS__)
-#  define PATHOP(OP, AUTH, PATH, ...)         skt_##OP((AUTH), (PATH), ## __VA_ARGS__)
-#  define UMASK(FDESC, MASK)                  umask(MASK) /* TBD */
+
+#if 0
+
+    // Old compile-time selection of sockets versus file semantics
+    #ifdef SOCKETS
+    #  define FD(FDESC)                           (FDESC).peer_fd
+    #  define OPEN(FDESC, AUTH, ...)              do{ skt_open(&(FDESC), ## __VA_ARGS__); \
+                                                      skt_fcntl(&(FDESC), SKT_F_SETAUTH, (AUTH)); } while(0)
+    #  define HNDLOP(OP, FDESC, ...)              skt_##OP(&(FDESC), ## __VA_ARGS__)
+    #  define pHNDLOP(OP, FDESC_PTR, ...)         skt_##OP((FDESC_PTR), ## __VA_ARGS__)
+    #  define PATHOP(OP, AUTH, PATH, ...)         skt_##OP((AUTH), (PATH), ## __VA_ARGS__)
+    #  define UMASK(FDESC, MASK)                  umask(MASK) /* TBD */
+    #  define DEFAULT_AUTH_INIT(AUTH)             skt_auth_init(SKT_S3_USER, &(AUTH))
+    #  define AUTH_INSTALL(FD, AUTH)              skt_auth_install((FD), (AUTH))
+    
+    #else
+    #  define FD(FDESC)                           (FDESC)
+    #  define OPEN(FDESC, AUTH, ...)              ((FDESC) = open(__VA_ARGS__))
+    #  define HNDLOP(OP, FDESC, ...)              OP((FDESC), ## __VA_ARGS__)
+    #  define pHNDLOP(OP, FDESC_PTR, ...)         OP(*(FDESC_PTR), ## __VA_ARGS__)
+    #  define PATHOP(OP, AUTH, PATH, ...)         OP((PATH), ## __VA_ARGS__)
+    #  define UMASK(FDESC, MASK)                  umask(MASK)
+    #  define DEFAULT_AUTH_INIT(AUTH)             ((AUTH) = NULL)  /* just like a funcall returning zero */
+    #  define AUTH_INSTALL(FD, AUTH)
+    #endif
+
+#else
+
+// New run-time selection of sockets versus file semantics
+
+#  define FD_INIT(GFD, HANDLE)                (HANDLE)->impl->fd_init(&(GFD))
+#  define FD_ERR(GFD)                         (GFD).hndl->impl->fd_err(&(GFD))
+#  define FD_NUM(GFD)                         (GFD).hndl->impl->fd_num(&(GFD))
+
+// save the ne_handle into the GFD at open-time, so:
+// (a) we don't have to pass handle->auth to impls that don't need it
+// (b) write_all() can just take a GFD, and impls can still get auth if they need it
+#  define OPEN(GFD, HANDLE, ...)              do { (GFD).hndl = (HANDLE); \
+                                                   (HANDLE)->impl->open(&(GFD), ## __VA_ARGS__); } while(0)
+
+#  define pHNDLOP(OP, GFDp, ...)              (GFDp)->hndl->impl->OP((GFDp), ## __VA_ARGS__)
+#  define HNDLOP(OP, GFD, ...)                (GFD).hndl->impl->OP(&(GFD), ## __VA_ARGS__)
+
+#  define PATHOP(OP, IMPL, AUTH, PATH, ...)   (IMPL)->OP((AUTH), (PATH), ## __VA_ARGS__)
+#  define UMASK(GFD, MASK)                    umask(MASK) /* TBD */
 #  define DEFAULT_AUTH_INIT(AUTH)             skt_auth_init(SKT_S3_USER, &(AUTH))
 #  define AUTH_INSTALL(FD, AUTH)              skt_auth_install((FD), (AUTH))
 
-#else
-#  define FD(FDESC)                           (FDESC)
-#  define OPEN(FDESC, AUTH, ...)              ((FDESC) = open(__VA_ARGS__))
-#  define HNDLOP(OP, FDESC, ...)              OP((FDESC), ## __VA_ARGS__)
-#  define pHNDLOP(OP, FDESC_PTR, ...)         OP(*(FDESC_PTR), ## __VA_ARGS__)
-#  define PATHOP(OP, AUTH, PATH, ...)         OP((PATH), ## __VA_ARGS__)
-#  define UMASK(FDESC, MASK)                  umask(MASK)
-#  define DEFAULT_AUTH_INIT(AUTH)             ((AUTH) = NULL)  /* just like a funcall returning zero */
-#  define AUTH_INSTALL(FD, AUTH)
 #endif
-
-
-
-
-// int default_auth_init(SktAuth* auth) {
-//    *(auth) = NULL
-//    return 0;
-// }
 
 
 /**
  * write(2) may return less than the requested write-size, without there being any errors.
  * Call write() repeatedly until the buffer has been completely written, or an error has occurred.
  *
- * @param FileDesc fd: the file/socket to write to
+ * @param GenericFD fd: the file/socket to write to
  * @param void* buffer: buffer to be written
  * @param size_t nbytes: size of the buffer
  *
  * @return ssize_t: the amount written.  negative for errors.
  */
 
-static ssize_t write_all(FileDesc* fd, const void* buffer, size_t nbytes) {
+static ssize_t write_all(GenericFD* fd, const void* buffer, size_t nbytes) {
   ssize_t     result = 0;
   size_t      remain = nbytes;
   const char* buf    = buffer;  /* assure ourselves pointer arithmetic is by onezies  */
@@ -251,10 +271,11 @@ int bq_init(BufferQueue *bq, int block_number, void **buffers, ne_handle handle)
   bq->tail         = 0;
   bq->flags        = 0;
   bq->csum         = 0;
-  FD(bq->file)     = -1;
   bq->buffer_size  = handle->bsz;
   bq->handle       = handle;
   bq->offset       = 0;
+
+  FD_INIT(bq->file, handle);
 
   if(pthread_mutex_init(&bq->qlock, NULL)) {
     PRINTerr("failed to initialize mutex for qlock\n");
@@ -318,11 +339,11 @@ static int set_block_xattr(ne_handle handle, int block) {
   }
   strncat( meta_file, META_SFX, strlen(META_SFX) + 1 );
   mode_t mask = umask(0000);
-  FileDesc fd = {0};
+  GenericFD fd = {0};
 
-  OPEN(fd, handle->auth, meta_file, O_WRONLY | O_CREAT, 0666);
+  OPEN(fd, handle, meta_file, O_WRONLY | O_CREAT, 0666);
   umask(mask);
-  if ( FD(fd) < 0 ) { 
+  if ( FD_ERR(fd) ) { 
     PRINTerr("set_block_attr: failed to open file %s\n", meta_file);
     tmp = -1;
   }
@@ -338,7 +359,8 @@ static int set_block_xattr(ne_handle handle, int block) {
       tmp = HNDLOP( close, fd );
     }
   }
-  PATHOP(chown, handle->auth, meta_file, handle->owner, handle->group);
+
+  PATHOP(chown, handle->impl, handle->auth, meta_file, handle->owner, handle->group);
 
 #else
 
@@ -384,14 +406,14 @@ void *bq_writer(void *arg) {
   pthread_cleanup_push(bq_writer_finis, bq);
 
   // open the file.
-  OPEN(bq->file, handle->auth, bq->path, O_WRONLY|O_CREAT, 0666);
+  OPEN(bq->file, handle, bq->path, O_WRONLY|O_CREAT, 0666);
 
   if(pthread_mutex_lock(&bq->qlock) != 0) {
     if (handle->stat_flags & SF_THREAD)
        fast_timer_stop(&handle->stats[bq->block_number].thread);
     exit(-1); // XXX: is this the appropriate response??
   }
-  if(FD(bq->file) == -1) {
+  if(FD_ERR(bq->file)) {
     bq->flags |= BQ_ERROR;
   }
   else {
@@ -435,7 +457,7 @@ void *bq_writer(void *arg) {
          fast_timer_start(&handle->stats[bq->block_number].close);
 
       if(HNDLOP(close, bq->file) == 0) {
-         PATHOP(unlink, handle->auth, bq->path); // try to clean up after ourselves.
+         PATHOP(unlink, handle->impl, handle->auth, bq->path); // try to clean up after ourselves.
       }
       pthread_mutex_unlock(&bq->qlock);
 
@@ -543,7 +565,7 @@ void *bq_writer(void *arg) {
   handle->snprintf( block_file_path, 2048, handle->path,
                     (bq->block_number+handle->erasure_offset)%(handle->N+handle->E), handle->state );
 
-  if( PATHOP( rename, handle->auth, bq->path, block_file_path ) != 0 ) {
+  if( PATHOP( rename, handle->impl, handle->auth, bq->path, block_file_path ) != 0 ) {
     PRINTerr("bq_writer: failed to rename written file %s\n", bq->path );
     bq->flags |= BQ_ERROR;
   }
@@ -552,7 +574,7 @@ void *bq_writer(void *arg) {
   // rename the META file too
   strncat( bq->path, META_SFX, strlen(META_SFX)+1 );
   strncat( block_file_path, META_SFX, strlen(META_SFX)+1 );
-  if ( PATHOP( rename, handle->auth, bq->path, block_file_path ) != 0 ) {
+  if ( PATHOP( rename, handle->impl, handle->auth, bq->path, block_file_path ) != 0 ) {
     PRINTerr("bq_writer: failed to rename written meta file %s\n", bq->path );
     bq->flags |= BQ_ERROR;
   }
@@ -720,10 +742,15 @@ int init_bench_stats(BenchStats* stats) {
 }
 
 
-// This might work, if you have an NFS Multi-Component implementation, and
-// your block-directories are named something like /path/to/block%d/more/path/filename
+// This might work, if you have an NFS Multi-Component implementation,
+// and your block-directories are named something like /path/to/block%d/more/path/filename,
+// and the name of the block 0 dir is /path/to/block0
 //
-// default: ignore <state>
+// This is the default, for MC repos.  We ignore <state>
+//
+// There's an opportunity for MC repos to handle e.g. non-zero naming, etc, by extending the
+// the default marfs configuration for MC repos, something like is done for MC_SOCKETS,
+// and passing that in as <stat>, here.
 
 int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, void* state) {
   return snprintf(dest, size, format, block);
@@ -750,6 +777,7 @@ int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, 
 
 
 ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValue stat_flags,
+                       FSImplType itype,
                        char *path, ne_mode mode, va_list ap )
 {
    char file[MAXNAME];       /* array name of files */
@@ -842,6 +870,8 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
    handle->snprintf = fn;
    handle->state    = state;
    handle->auth     = auth;
+
+   handle->impl     = get_impl(itype);
 
    // flags control collection of timing stats
    handle->stat_flags = stat_flags;
@@ -979,23 +1009,23 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
 
       if( mode == NE_WRONLY ) {
          PRINTout( "   opening %s%s for write\n", file, WRITE_SFX );
-         OPEN(handle->FDArray[counter], handle->auth,
+         OPEN(handle->FDArray[counter], handle,
               strncat( file, WRITE_SFX, strlen(WRITE_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
       }
       else if ( mode == NE_REBUILD  &&  handle->src_in_err[counter] == 1 ) {
          PRINTout( "   opening %s%s for write\n", file, REBUILD_SFX );
-         OPEN(handle->FDArray[counter], handle->auth,
+         OPEN(handle->FDArray[counter], handle,
               strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
       }
       else {
          PRINTout( "   opening %s for read\n", file );
-         OPEN(handle->FDArray[counter], handle->auth, file, O_RDONLY );
+         OPEN(handle->FDArray[counter], handle, file, O_RDONLY );
       }
 
       if (handle->stat_flags & SF_OPEN)
          fast_timer_stop(&handle->stats[counter].open);
 
-      if ( FD(handle->FDArray[counter]) == -1  &&  handle->src_in_err[counter] == 0 ) {
+      if ( FD_ERR(handle->FDArray[counter])  &&  handle->src_in_err[counter] == 0 ) {
          PRINTerr( "   failed to open file %s!!!!\n", file );
          handle->src_err_list[handle->nerr] = counter;
          handle->nerr++;
@@ -1026,11 +1056,12 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
 // caller (e.g. MC-sockets DAL) specifies SprintfFunc, stat, and SktAuth
 // New: caller also provides flags that control whether stats are collected
 ne_handle ne_open1( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValue stat_flags,
+                    FSImplType itype,
                     char *path, ne_mode mode, ... ) {
 
    va_list vl;
    va_start(vl, mode);
-   return ne_open1_vl(fn, state, auth, stat_flags, path, mode, vl);
+   return ne_open1_vl(fn, state, auth, stat_flags, itype, path, mode, vl);
    va_end(vl);
 }
 
@@ -1051,7 +1082,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
 
    va_list vl;
    va_start(vl, mode);
-   return ne_open1_vl(ne_default_snprintf, NULL, auth, 0, path, mode, vl);
+   return ne_open1_vl(ne_default_snprintf, NULL, auth, 0, FSI_POSIX, path, mode, vl);
    va_end(vl);
 }
 
@@ -1063,14 +1094,14 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
  * read(2) may return less than the requested read-size, without there being any errors.
  * Call read() repeatedly until the buffer has been completely filled, or an error (or EOF) has occurred.
  *
- * @param FileDesc fd: the file/socket to read from
+ * @param GenericFD fd: the file/socket to read from
  * @param void* buffer: buffer to be filled
  * @param size_t nbytes: size of the buffer
  *
  * @return ssize_t: the amount read.  negative for errors.
  */
 
-ssize_t read_all(FileDesc* fd, void* buffer, size_t nbytes) {
+ssize_t read_all(GenericFD* fd, void* buffer, size_t nbytes) {
   ssize_t     result = 0;
   size_t      remain = nbytes;
   char*       buf    = buffer;  /* assure ourselves pointer arithmetic is by onezies  */
@@ -1165,7 +1196,8 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset )
    tmpoffset = 0;
 
    //check stripe cache
-   if ( offset >= handle->buff_offset  &&  offset < (handle->buff_offset + handle->buff_rem) ) {
+   if ( (offset >= handle->buff_offset)
+        &&  (offset < (handle->buff_offset + handle->buff_rem)) ) {
       seekamt = offset - handle->buff_offset;
       readsize = ( nbytes > (handle->buff_rem - seekamt) ) ? (handle->buff_rem - seekamt) : nbytes;
       PRINTout( "ne_read: filling request for first %lu bytes from cache with offset %zd in buffer...\n",
@@ -1795,8 +1827,8 @@ void sync_file(ne_handle handle, int block_index) {
 
   strcat(path, WRITE_SFX);
   HNDLOP(close, handle->FDArray[block_index]);
-  OPEN(handle->FDArray[block_index], handle->auth, path, O_WRONLY);
-  if(FD(handle->FDArray[block_index]) == -1) {
+  OPEN(handle->FDArray[block_index], handle, path, O_WRONLY);
+  if(FD_ERR(handle->FDArray[block_index])) {
     PRINTerr( "failed to reopen file\n");
     handle->src_in_err[block_index] = 1;
     handle->src_err_list[handle->nerr] = block_index;
@@ -2145,8 +2177,8 @@ int ne_close( ne_handle handle )
 
          if ( handle->e_ready == 1 ) {
 
-            PATHOP( chown, handle->auth, file, handle->owner, handle->group);
-            if ( PATHOP( rename, handle->auth, file, nfile ) != 0 ) {
+            PATHOP( chown, handle->impl, handle->auth, file, handle->owner, handle->group);
+            if ( PATHOP( rename, handle->impl, handle->auth, file, nfile ) != 0 ) {
                PRINTerr( "ne_close: failed to rename rebuilt file\n" );
                // rebuild should fail even if only one file can't be renamed
                ret = -1;
@@ -2157,7 +2189,7 @@ int ne_close( ne_handle handle )
             strncat( file,  META_SFX, strlen(META_SFX)+1 );
             strncat( nfile, META_SFX, strlen(META_SFX)+1 );
 
-            if ( PATHOP( rename, handle->auth, file, nfile ) != 0 ) {
+            if ( PATHOP( rename, handle->impl, handle->auth, file, nfile ) != 0 ) {
                PRINTerr( "ne_close: failed to rename rebuilt meta file\n" );
                // rebuild should fail even if only one file can't be renamed
                ret = -1;
@@ -2168,13 +2200,13 @@ int ne_close( ne_handle handle )
          else{
 
             PRINTerr( "ne_close: cleaning up file %s from failed rebuild\n", file );
-            PATHOP( unlink, handle->auth, file );
+            PATHOP( unlink, handle->impl, handle->auth, file );
 
 #ifdef META_FILES
             // corresponding "meta" file ...
             strncat( file, META_SFX, strlen(META_SFX)+1 );
             PRINTerr( "ne_close: cleaning up file %s from failed rebuild\n", file );
-            PATHOP( unlink, handle->auth, file );
+            PATHOP( unlink, handle->impl, handle->auth, file );
 #endif
 
          }
@@ -2182,7 +2214,7 @@ int ne_close( ne_handle handle )
       else if (handle->mode == NE_WRONLY ) {
         bq_close(&handle->blocks[counter]);
       }
-      else if (FD(handle->FDArray[counter]) != -1) {
+      else if (FD_ERR(handle->FDArray[counter])) {
 
          // RDMA leaves FDs open on the server until timeout or we close.
          // We don't currently have reader-threads (corresponding to
@@ -2246,19 +2278,18 @@ int ne_close( ne_handle handle )
       }
    }
 
-   if ( handle->path != NULL ) {
+   if ( handle->path != NULL )
       free(handle->path);
-   }
 
    free(handle->encode_matrix);
    free(handle->decode_matrix);
    free(handle->invert_matrix);
    free(handle->g_tbls);
-   free(handle);
    
    if (handle->stat_flags & SF_HANDLE)
       fast_timer_stop(&handle->handle_timer); /* overall cost of this op */
 
+   free(handle);
    return ret;
 }
 
@@ -2272,19 +2303,36 @@ int ne_close( ne_handle handle )
  * @param int width : Total width of the erasure striping (i.e. N+E)
  * @return int : 0 on success and -1 on failure
  */
-int ne_delete1( SnprintfFunc fn, void* state, SktAuth auth, char* path, int width ) {
+int ne_delete1( SnprintfFunc fn, void* state, SktAuth auth,
+                StatFlagsValue stat_flags, FSImplType itype,
+                char* path, int width ) {
    char  file[MAXNAME];       /* array name of files */
    int   counter;
    int   ret = 0;
 
+   const FileSysImpl* impl = get_impl(itype);
+
+   // flags control collection of timing stats
+   FastTimer  timer;            // we don't have an ne_handle
+   if (stat_flags & SF_HANDLE) {
+      fast_timer_inits();
+      fast_timer_start(&timer); /* start overall timer */
+   }
+
+
    for( counter=0; counter<width; counter++ ) {
       bzero( file, sizeof(file) );
       fn( file, MAXNAME, path, counter, state );
-      if ( PATHOP( unlink, auth, file ) ) ret = 1;
+      if ( PATHOP( unlink, impl, auth, file ) ) ret = 1;
 #ifdef META_FILES
       strncat( file, META_SFX, strlen(META_SFX)+1 );
-      if ( PATHOP( unlink, auth, file ) ) ret = 1;
+      if ( PATHOP( unlink, impl, auth, file ) ) ret = 1;
 #endif
+   }
+
+   if (stat_flags & SF_HANDLE) {
+      fast_timer_stop(&timer);
+      fast_timer_show(&timer,  "delete: ");
    }
 
    return ret;
@@ -2301,7 +2349,7 @@ int ne_delete(char* path, int width ) {
       return -1;
    }
 
-   return ne_delete1(ne_default_snprintf, NULL, auth, path, width);
+   return ne_delete1(ne_default_snprintf, NULL, auth, 0, FSI_POSIX, path, width);
 }
 
 
@@ -2367,14 +2415,14 @@ int xattr_check( ne_handle handle, char *path )
    lE = E;
 
 #ifdef META_FILES
-   FileDesc MetaFDArray[ MAXPARTS ];
+   GenericFD MetaFDArray[ MAXPARTS ];
    memset(MetaFDArray, 0, sizeof(MetaFDArray));
 #endif
 
    for ( counter = 0; counter < lN+lE; counter++ ) {
       bzero(file,sizeof(file));
       handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_offset)%(lN+lE), handle->state );
-      ret = PATHOP(stat, handle->auth, file, partstat);
+      ret = PATHOP(stat, handle->impl, handle->auth, file, partstat);
       PRINTout( "xattr_check: stat of file %s returns %d\n", file, ret );
       if ( ret != 0 ) {
          PRINTerr( "xattr_check: file %s: failure of stat\n", file );
@@ -2392,10 +2440,9 @@ int xattr_check( ne_handle handle, char *path )
       strncat( nfile, META_SFX, strlen(META_SFX)+1 );
       PRINTout("xattr_check: opening file %s\n", nfile);
 
-      FileDesc   meta_fd = {0};
-
-      OPEN(meta_fd, handle->auth, nfile, O_RDONLY);
-      if ( FD(meta_fd) < 0 ) {
+      GenericFD   meta_fd = {0};
+      OPEN(meta_fd, handle, nfile, O_RDONLY);
+      if ( FD_ERR(meta_fd) ) {
          ret = -1;
          PRINTerr("xattr_check: failed to open file %s\n", nfile);
       }
@@ -2723,7 +2770,7 @@ static int reopen_for_rebuild(ne_handle handle, int block) {
   HNDLOP(close, handle->FDArray[block]);
   PRINTout( "   opening %s for write\n", file );
 
-  OPEN(handle->FDArray[block], handle->auth,
+  OPEN(handle->FDArray[block], handle,
        strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ),
        O_WRONLY | O_CREAT, 0666 );
 
@@ -2839,10 +2886,10 @@ static int write_buffers(ne_handle handle, unsigned char *rebuild_buffs[]) {
       written = write_all(&handle->FDArray[handle->src_err_list[i]],
                           rebuild_buffs[handle->N+i], BUFFER_SIZE);
       if(written < BUFFER_SIZE) {
-        PRINTerr("failed to write %llu bytes to fd %d\n", BUFFER_SIZE, FD(handle->FDArray[handle->src_err_list[i]]));
+         PRINTerr("failed to write %llu bytes to fd %d\n", BUFFER_SIZE, FD_NUM(handle->FDArray[handle->src_err_list[i]]));
         return -1;
       }
-      PRINTout("wrote %llu bytes to fd %d\n", BUFFER_SIZE, FD(handle->FDArray[handle->src_err_list[i]]));
+      PRINTout("wrote %llu bytes to fd %d\n", BUFFER_SIZE, FD_NUM(handle->FDArray[handle->src_err_list[i]]));
     }
     handle->csum[handle->src_err_list[i]]    += crc;
     handle->nsz[handle->src_err_list[i]]     += handle->bsz;
@@ -3066,8 +3113,9 @@ int ne_rebuild( ne_handle handle ) {
    int rebuild_result = do_rebuild(handle);
    umask(mask);
 
-   return (handle->nerr <= handle->E) && (rebuild_result == 0) ?
-     handle->nerr : -1;
+   return ((handle->nerr <= handle->E) && (rebuild_result == 0)
+           ? handle->nerr
+           : -1);
 }
 
 
@@ -3340,8 +3388,11 @@ int ne_noxattr_rebuild(ne_handle handle) {
  *
  * ne_status(path) calls this with fn=ne_default_snprintf, and state=NULL
  *
- * @param SnprintfFunc : function takes block-number and <state> and produces per-block path from template.
- * @param state : optional state to be used by SnprintfFunc (e.g. configuration details)
+ * @param SnprintfFunc fn : function takes block-number and <state> and produces per-block path from template.
+ * @param void* state : optional state to be used by SnprintfFunc (e.g. configuration details)
+ * @param SktAuth auth : authentication may be required for RDMA FSImplTypes
+ * @param StatFlagsValue flags : flags control the collection of *statistics*.  (Confusing, in this particular function.)
+ * @param FSImplType itype : select the underlying file-system implementation (RDMA versus POSIX).
  * @param char* path : sprintf format-template for individual files of in each stripe.
  *
  * @return nestat : Status structure containing the encoded error
@@ -3350,7 +3401,9 @@ int ne_noxattr_rebuild(ne_handle handle) {
  *                  parts (E), and blocksize (bsz) for the stripe.
  */
 
-ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth, char *path )
+ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth,
+                    StatFlagsValue timer_flags, FSImplType itype,
+                    char *path )
 {
    char file[MAXNAME];       /* array name of files */
    int counter;
@@ -3368,6 +3421,21 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth, char *path )
       PRINTerr( "ne_status: failed to allocate stat/handle structures!\n" );
       return NULL;
    }
+   memset(handle, 0, sizeof(struct handle));
+
+   handle->impl = get_impl(itype);
+
+   // flags control collection of timing stats
+   handle->stat_flags = timer_flags;
+   if (timer_flags) {
+      fast_timer_inits();
+
+      // // redundant with memset() on handle
+      // init_bench_stats(&handle->agg_stats);
+   }
+   if (handle->stat_flags & SF_HANDLE)
+      fast_timer_start(&handle->handle_timer); /* start overall timer for handle */
+
 
    /* initialize stored info */
    for ( counter=0; counter < MAXPARTS; counter++ ) {
@@ -3471,9 +3539,9 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth, char *path )
 #endif
 
       PRINTout( "ne_status:    opening %s for read\n", file );
-      OPEN(handle->FDArray[counter], handle->auth, file, O_RDONLY);
+      OPEN(handle->FDArray[counter], handle, file, O_RDONLY);
 
-      if ( FD(handle->FDArray[counter]) == -1  &&  handle->src_in_err[counter] == 0 ) {
+      if ( FD_ERR(handle->FDArray[counter])  &&  handle->src_in_err[counter] == 0 ) {
          PRINTerr( "ne_status:    failed to open file %s!!!!\n", file );
          handle->src_err_list[handle->nerr] = counter;
          handle->nerr++;
@@ -3502,18 +3570,22 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth, char *path )
    counter = 0;
    while (counter < (handle->N+handle->E) ) {
 
-      if ( handle->src_in_err[counter] == 0  &&  FD(handle->FDArray[counter]) != -1 ) {
+      if ( handle->src_in_err[counter] == 0  &&  FD_ERR(handle->FDArray[counter]) ) {
         HNDLOP(close, handle->FDArray[counter]);
       }
 
       counter++;
    }
    free(handle->buffer);
-  
    free(handle->encode_matrix);
    free(handle->decode_matrix);
    free(handle->invert_matrix);
    free(handle->g_tbls);
+
+   if (timer_flags & SF_HANDLE) {
+      fast_timer_stop(&handle->handle_timer);
+      show_handle_stats(handle);
+   }
    free(handle);
 
    return stat;
@@ -3532,5 +3604,5 @@ ne_stat ne_status(char *path) {
       return NULL;
    }
 
-   return ne_status1(ne_default_snprintf, NULL, auth, path);
+   return ne_status1(ne_default_snprintf, NULL, auth, 0, FSI_POSIX, path);
 }

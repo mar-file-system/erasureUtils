@@ -81,7 +81,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 #include <string.h>             // memset()
-
+#include <stdlib.h>
 
 #ifdef __GNUC__
 #  define ft_likely(x)      __builtin_expect(!!(x), 1)
