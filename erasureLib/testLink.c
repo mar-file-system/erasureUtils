@@ -42,5 +42,24 @@ int main(int argc, char **argv) {
    assert(h != NULL);
    ne_close(h);
 
+   // test making a link to the link.
+   for(i = 0; i < 12; i++) {
+      char path[512];
+      char link_path[512];
+      sprintf(path, new_path, i);
+      strcpy(link_path, path);
+      strcat(link_path, "new");
+      assert(ne_link_block(link_path, path) == 0);
+   }
+
+   // should fail
+   assert(ne_open(new_path, NE_RDONLY, 10, 10, 2) == NULL);
+
+   // should succeed
+   strcat(new_path, "new");
+   h = ne_open(new_path, NE_RDONLY, 10, 10, 2);
+   assert(h != NULL);
+   ne_close(h);
+
    system("rm testLink_file.*");
 }

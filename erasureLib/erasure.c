@@ -113,7 +113,6 @@ extern unsigned char gf_mul(unsigned char a, unsigned char b);
 extern int gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);
 
 int xattr_check( ne_handle handle, char *path );
-void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls);
 static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 				unsigned char *decode_matrix,
 				unsigned char *invert_matrix,
@@ -2519,18 +2518,6 @@ int ne_flush( ne_handle handle ) {
 }
 
 
-void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls)
-{
-        int i, j;
-
-        for (i = 0; i < rows; i++) {
-                for (j = 0; j < k; j++) {
-                        gf_vect_mul_init(*a++, g_tbls);
-                        g_tbls += 32;
-                }
-        }
-}
-
 //void dump(unsigned char *buf, int len)
 //{
 //        int i;
@@ -2829,10 +2816,11 @@ int ne_delete_block(const char *path) {
 }
 
 /**
- * Make a symlink to an existing block
+ * Make a symlink to an existing block.
  */
 int ne_link_block(const char *link_path, const char *target) {
-   int ret = symlink(target, link_path);
+   struct stat target_stat;
+   int         ret;
 #ifdef META_FILES
    char meta_path[2048];
    char meta_path_target[2048];
@@ -2840,6 +2828,60 @@ int ne_link_block(const char *link_path, const char *target) {
    strcpy(meta_path_target, target);
    strcat(meta_path, META_SFX);
    strcat(meta_path_target, META_SFX);
+#endif // META_FILES
+
+   // stat the target.
+   if(lstat(target, &target_stat) == -1) {
+      return -1;
+   }
+   // if it is a symlink, then move it,
+   if(S_ISLNK(target_stat.st_mode)) {
+      // check that the meta file has a symlink here too, If not then
+      // abort without doing anything. If it does, then proceed with
+      // making symlinks.
+      if(lstat(meta_path_target, &target_stat) == -1) {
+         return -1;
+      }
+      if(!S_ISLNK(target_stat.st_mode)) {
+         return -1;
+      }
+      char tp[2048];
+      char tp_meta[2048];
+      size_t link_size;
+      if((link_size = readlink(target, tp, 2048)) != -1) {
+         tp[link_size] = '\0';
+      }
+      else {
+         return -1;
+      }
+#ifdef META_FILES
+      if((link_size = readlink(meta_path_target, tp_meta, 2048)) != -1) {
+         tp_meta[link_size] = '\0';
+      }
+      else {
+         return -1;
+      }
+#endif
+      // make the new links.
+      ret = symlink(tp, link_path);
+#ifdef META_FILES
+      if(ret == 0) {
+         ret = symlink(tp_meta, meta_path);
+      }
+#endif
+      // remove the old links.
+      ret = unlink(target);
+#ifdef META_FILES
+      if(ret == 0) {
+         unlink(meta_path_target);
+      }
+#endif
+      return ret;
+   }
+
+   // if not, then create the link.
+   ret = symlink(target, link_path);
+#ifdef META_FILES
    if(ret == 0) {
       ret = symlink(meta_path_target, meta_path);
    }
