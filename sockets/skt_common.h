@@ -531,6 +531,9 @@ int ntoh_generic(char* dst, char* src, size_t src_size);
 
 
 // --- low-level tools
+int      read_raw(int fd, char* buf, size_t size, int peek_p);
+int      write_raw(int fd, char* buf, size_t size);
+
 int      write_pseudo_packet(int fd, SocketCommand command, size_t size, void* buff);
 int      read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr, int peek);
 

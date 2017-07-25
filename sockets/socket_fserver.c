@@ -480,7 +480,7 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    neDBG("data-size:  %lld\n", size);
 
    // read authentication info
-   NEED_0( read_raw(client_fd, s3_data, size) );
+   NEED_0( read_raw(client_fd, s3_data, size, 0) );
    s3_data[size -1] = 0;        // <size> includes terminal-null on signature
 
    size_t      ptr_remain = size;
@@ -698,7 +698,7 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
   }
 
   // read fname from the peer
-  NEED_0( read_raw(peer_fd, fname, fname_size) );
+  NEED_0( read_raw(peer_fd, fname, fname_size, 0) );
   if (!fname[0] || fname[fname_size -1]) {
     neERR("bad fname\n");
     return -1;
@@ -993,12 +993,12 @@ int server_chown(ThreadContext* ctx) {
 
   // read UID
   uint64_t uid_buf;
-  NEED_0( read_raw(client_fd, (char*)&uid_buf, sizeof(uid_buf)) );
+  NEED_0( read_raw(client_fd, (char*)&uid_buf, sizeof(uid_buf), 0) );
   uid_t uid = ntoh64(uid_buf);
 
   // read GID
   uint64_t gid_buf;
-  NEED_0( read_raw(client_fd, (char*)&gid_buf, sizeof(gid_buf)) );
+  NEED_0( read_raw(client_fd, (char*)&gid_buf, sizeof(gid_buf), 0) );
   gid_t gid = ntoh64(gid_buf);
 
   // perform op
@@ -1032,7 +1032,7 @@ int server_rename(ThreadContext* ctx) {
 
   // read new-fname length (incl terminal NULL)
   uint64_t len;
-  NEED_0( read_raw(client_fd, (char*)&len, sizeof(len)) );
+  NEED_0( read_raw(client_fd, (char*)&len, sizeof(len), 0) );
   len = ntoh64(len);
   NEED( len <= FNAME_SIZE );
 
