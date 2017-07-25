@@ -874,8 +874,12 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
         NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 1) );
      }
 
-     // remove peeked packet-header
-     NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 0) );
+     // Don't remove the peeked header!  This is probably the ACK that is
+     // sent by skt_read() from the client-side.  Our skt_write(), below,
+     // will expect to see that ACK as part of the handshake for its send.
+     //
+     //     // remove peeked packet-header
+     //     NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 0) );
 
 
     // --- read from file
