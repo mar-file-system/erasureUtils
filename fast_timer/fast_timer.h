@@ -123,7 +123,7 @@ typedef struct {
 int show_cpuid();
 
 
-int invariant_TSC;
+extern int invariant_TSC;
 
 // call this once, before any threads try to call fast_timer_sec().
 // Returns 0 for success, negative for failure.
