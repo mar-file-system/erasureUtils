@@ -98,16 +98,6 @@ extern void ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,u
 extern uint32_t crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len);
 extern int xor_check_base(int, int, void*);  /* assembler routine to use sse to calc p */
 extern void xor_gen_base(int, int, void*);  /* assembler routine to use sse to calc p */
-#endif
-extern void pq_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p and q */
-extern int pq_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern void gf_gen_rs_matrix(unsigned char *a, int m, int k);
-extern void gf_vect_mul_init(unsigned char c, unsigned char *tbl);
-extern unsigned char gf_mul(unsigned char a, unsigned char b);
-extern int gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);
-
-typedef uint32_t u32;
-
 void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls)
 {
         int i, j;
@@ -119,6 +109,17 @@ void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls)
                 }
         }
 }
+#endif
+
+extern void pq_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p and q */
+extern int pq_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
+extern void gf_gen_rs_matrix(unsigned char *a, int m, int k);
+extern void gf_vect_mul_init(unsigned char c, unsigned char *tbl);
+extern unsigned char gf_mul(unsigned char a, unsigned char b);
+extern int gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);
+
+typedef uint32_t u32;
+
 
 void dump(unsigned char *buf, int len)
 {

@@ -131,6 +131,14 @@ int main( int argc, const char* argv[] )
       printf("MAX-N: %d   MAX-E: %d\n", MAXN, MAXE);
       return crc_status();
    }
+   else if ( strncmp( argv[1], "sizeof", strlen(argv[1]) ) == 0 ) {
+      if ( argc != 5 ) {
+         fprintf( stderr, "libneTest: inappropriate arguments for a sizeof operation\nlibneTest: expected \'%s %s erasure_path quorum stripe_width\'\n", argv[0], argv[1] );
+         return -1;
+      }
+      printf( "Size of \"%s\" -- %zd\n", argv[2], ne_size( argv[2], atoi(argv[3]), atoi(argv[4]) ) );
+      return 0;
+   }
    else {
       fprintf( stderr, "libneTest: argument 1 not recognized, expecting \"read\" or \"write\"\n" );
       return -1;
@@ -283,21 +291,24 @@ int main( int argc, const char* argv[] )
       fprintf( stdout, "libneTest: rebuild complete\n" );
    }
    else if ( wr == 3 ) { //status
-      fprintf( stdout, "libneTest: retrieving status of erasure striping with path \"%s\"\n", (char *)argv[2] );
       ne_stat stat = ne_status( (char *)argv[2] );
       if ( stat == NULL ) {
          fprintf( stderr, "libneTest: ne_status failed!\n" );
          return -1;
       }
+      int nerr = 0;
       printf( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\nExtended Attribute Errors : ", stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
       for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
          printf( "%d ", stat->xattr_status[tmp] );
       }
-      printf( "\nData/Erasure Errors : " );
+      printf( "\nData/Erasure Errors :       " );
       for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
+         if( stat->data_status[tmp] ) nerr++;
          printf( "%d ", stat->data_status[tmp] );
       }
       printf( "\n" );
+      if( nerr > stat->E ) { fprintf( stderr, "WARNING: the data appears to be unrecoverable!\n" ); }
+      else if ( nerr > 0 ) { fprintf( stderr, "WARNING: errors were found, be sure to rebuild this object before data loss occurs!\n" ); }
       free(stat);
 
       tmp=0;
