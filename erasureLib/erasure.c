@@ -113,7 +113,6 @@ extern unsigned char gf_mul(unsigned char a, unsigned char b);
 extern int gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);
 
 int xattr_check( ne_handle handle, char *path );
-void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls);
 static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 				unsigned char *decode_matrix,
 				unsigned char *invert_matrix,
@@ -209,6 +208,82 @@ void bq_abort(BufferQueue *bq) {
   bq_signal(bq, BQ_ABORT);
 }
 
+int ne_set_xattr(const char *path, const char *xattrval, size_t len) {
+   int tmp = -1;
+#ifdef META_FILES
+   char meta_file[2048];
+   strcpy( meta_file, path );
+   strncat( meta_file, META_SFX, strlen(META_SFX) + 1 );
+   mode_t mask = umask(0000);
+   int fd = open( meta_file, O_WRONLY | O_CREAT, 0666 );
+   umask(mask);
+   if ( fd < 0 ) { 
+      DBG_FPRINTF(stderr, "ne_close: failed to open file %s\n", meta_file);
+      tmp = -1;
+   }
+   else {
+      int val = write( fd, xattrval, strlen(xattrval) + 1 );
+      if ( val != strlen(xattrval) + 1 ) {
+         DBG_FPRINTF(stderr, "ne_close: failed to write to file %s\n",
+                     meta_file);
+         tmp = -1;
+         close( fd );
+      }
+      else {
+         tmp = close( fd );
+      }
+   }
+   //   chown(meta_file, handle->owner, handle->group);
+#else
+
+#warn "xattr metadata is not functional with new thread model"
+#if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
+   tmp = fsetxattr(path, XATTRKEY, xattrval,
+      strlen(xattrval), 0);
+#else
+   tmp = fsetxattr(path, XATTRKEY, xattrval,
+                strlen(xattrval), 0, 0);
+#endif
+
+#endif //META_FILES
+   return tmp;
+}
+
+int ne_get_xattr(const char *path, char *xattrval, size_t len) {
+   int ret = 0;
+#ifdef META_FILES
+   char meta_file_path[2048];
+   strncpy(meta_file_path, path, 2048);
+   strncat(meta_file_path, META_SFX, strlen(META_SFX)+1);
+   int meta_fd = open( meta_file_path, O_RDONLY );
+   if ( meta_fd >= 0 ) {
+      ret = read( meta_fd, xattrval, len );
+      if ( ret < 0 ) {
+         DBG_FPRINTF(stderr,"ne_get_xattr: failed to read from file %s\n", meta_file_path);
+      }
+      else if(ret == 0) {
+         DBG_FPRINTF(stderr, "ne_get_xattr: read 0 bytes from metadata file %s\n", meta_file_path);
+         ret = -1;
+      }
+      ret = close( meta_fd );
+      if ( ret < 0 ) {
+         DBG_FPRINTF(stderr,"ne_get_xattr: failed to close file %s\n",meta_file_path);
+      }
+   }
+   else {
+      ret = -1;
+      DBG_FPRINTF(stderr,"xattr_check: failed to open file %s\n",meta_file_path);
+   }
+#else
+#   if (AXATTR_GET_FUNC == 4)
+   ret = getxattr(file,XATTRKEY,&xattrval[0],len;
+#   else
+   ret = getxattr(file,XATTRKEY,&xattrval[0],len,0,0);
+#   endif
+#endif
+   return ret;
+}
+
 static int set_block_xattr(ne_handle handle, int block) {
   int tmp = 0;
   char xattrval[1024];
@@ -219,51 +294,16 @@ static int set_block_xattr(ne_handle handle, int block) {
           (unsigned long long)handle->totsz);
   DBG_FPRINTF( stdout, "ne_close: setting file %d xattr = \"%s\"\n",
                block, xattrval );
-
-#ifdef META_FILES
-  char meta_file[2048];
-  sprintf( meta_file, handle->path,
-           (block+handle->erasure_offset)%(handle->N+handle->E) );
-  if ( handle->mode == NE_REBUILD ) {
-    strncat( meta_file, REBUILD_SFX, strlen(REBUILD_SFX)+1 );
-  }
-  else if ( handle->mode == NE_WRONLY ) {
-    strncat( meta_file, WRITE_SFX, strlen(WRITE_SFX)+1 );
-  }
-  strncat( meta_file, META_SFX, strlen(META_SFX) + 1 );
-  mode_t mask = umask(0000);
-  int fd = open( meta_file, O_WRONLY | O_CREAT, 0666 );
-  umask(mask);
-  if ( fd < 0 ) { 
-    DBG_FPRINTF(stderr, "ne_close: failed to open file %s\n", meta_file);
-    tmp = -1;
-  }
-  else {
-    int val = write( fd, xattrval, strlen(xattrval) + 1 );
-    if ( val != strlen(xattrval) + 1 ) {
-      DBG_FPRINTF(stderr, "ne_close: failed to write to file %s\n",
-                  meta_file);
-      tmp = -1;
-      close( fd );
-    }
-    else {
-      tmp = close( fd );
-    }
-  }
-  chown(meta_file, handle->owner, handle->group);
-#else
-
-#warn "xattr metadata is not functional with new thread model"
-#if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
-  tmp = fsetxattr(handle->FDArray[counter], XATTRKEY, xattrval,
-                  strlen(xattrval), 0);
-#else
-  tmp = fsetxattr(handle->FDArray[counter], XATTRKEY, xattrval,
-                  strlen(xattrval), 0, 0);
-#endif
-
-#endif //META_FILES
-  return tmp;
+  char block_file_path[2048];
+  sprintf(block_file_path, handle->path, (block+handle->erasure_offset)%(handle->N+handle->E));
+   if ( handle->mode == NE_REBUILD ) {
+      strncat( block_file_path, REBUILD_SFX, strlen(REBUILD_SFX)+1 );
+   }
+   else if ( handle->mode == NE_WRONLY ) {
+      strncat( block_file_path, WRITE_SFX, strlen(WRITE_SFX)+1 );
+   }
+   
+   return ne_set_xattr(block_file_path, xattrval, strlen(xattrval));
 }
 
 void *bq_writer(void *arg) {
@@ -1729,19 +1769,14 @@ int ne_delete( char* path, int width ) {
       parent_missing = -2;
       bzero( file, sizeof(file) );
       sprintf( file, path, counter );
+
       sprintf( partial, path, counter );
       strncat( partial, WRITE_SFX, MAXNAME );
       // unlink the file or the unfinished file.  If both fail, check if the parent directory exists.  If not, indicate an error.
-      if ( ( unlink( file )  &&  unlink( partial ) )  &&  (parent_missing = parent_dir_missing(file, MAXNAME)) ) ret = -1;
-#ifdef META_FILES
-      strncat( file, META_SFX, MAXNAME );
-      strncat( partial, META_SFX, MAXNAME );
-      // same as the above, but only stat the parent dir if we haven't already verified that it exists
-      if ( unlink( file )  &&  unlink( partial ) ) {
-         if( parent_missing == -2 ) parent_missing = parent_dir_missing(file, MAXNAME);
-         if( parent_missing ) ret = -1;
+      if ( ( ne_delete_block( file )  &&  unlink( partial ) )
+           &&  (parent_missing = parent_dir_missing(file, MAXNAME)) ) {
+         ret = -1;
       }
-#endif
    }
 
    return ret;
@@ -1911,42 +1946,7 @@ int xattr_check( ne_handle handle, char *path )
       handle->group = partstat->st_gid;
       bzero(xattrval,sizeof(xattrval));
 
-#ifdef META_FILES
-
-      sprintf( nfile, handle->path, (counter+handle->erasure_offset)%(N+E) );
-      strncat( nfile, META_SFX, strlen(META_SFX)+1 );
-      DBG_FPRINTF(stdout,"xattr_check: opening file %s\n",nfile);
-      int meta_fd = open( nfile, O_RDONLY );
-      if ( meta_fd >= 0 ) {
-         tmp = read( meta_fd, &xattrval[0], sizeof(xattrval) );
-         if ( tmp < 0 ) {
-            DBG_FPRINTF(stderr,"xattr_check: failed to read from file %s\n",nfile);
-            ret = tmp;
-         }
-         else if(tmp == 0) {
-           DBG_FPRINTF(stderr, "xattr_check: read 0 bytes from metadata file %s\n", nfile);
-           ret = -1;
-         }
-         tmp = close( meta_fd );
-         if ( tmp < 0 ) {
-            DBG_FPRINTF(stderr,"xattr_check: failed to close file %s\n",nfile);
-            ret = tmp;
-         }
-      }
-      else {
-         ret = -1;
-         DBG_FPRINTF(stderr,"xattr_check: failed to open file %s\n",nfile);
-      }
-
-#else
-
-#if (AXATTR_GET_FUNC == 4)
-      ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval));
-#else
-      ret = getxattr(file,XATTRKEY,&xattrval[0],sizeof(xattrval),0,0);
-#endif
-
-#endif //META_FILES
+      ret = ne_get_xattr(file, xattrval, sizeof(xattrval));
 
       if (ret < 0) {
          DBG_FPRINTF(stderr, "xattr_check: failure of xattr retrieval for file %s\n", file);
@@ -2988,5 +2988,94 @@ ne_stat ne_status( char *path )
 
    return stat;
 
+}
+
+int ne_delete_block(const char *path) {
+   // unlink a single block, including the manifest file (if
+   // META_FILES is defined).
+   int ret = unlink(path);
+#ifdef META_FILE
+   char meta_path[2048];
+   strncpy(meta_path, path, 2048);
+   strcat(meta_path, META_SFX);
+   if(ret == 0) {
+      ret = unlink(meta_path);
+   }
+#endif
+   return ret;
+}
+
+/**
+ * Make a symlink to an existing block.
+ */
+int ne_link_block(const char *link_path, const char *target) {
+   struct stat target_stat;
+   int         ret;
+#ifdef META_FILES
+   char meta_path[2048];
+   char meta_path_target[2048];
+   strcpy(meta_path, link_path);
+   strcpy(meta_path_target, target);
+   strcat(meta_path, META_SFX);
+   strcat(meta_path_target, META_SFX);
+#endif // META_FILES
+
+   // stat the target.
+   if(lstat(target, &target_stat) == -1) {
+      return -1;
+   }
+   // if it is a symlink, then move it,
+   if(S_ISLNK(target_stat.st_mode)) {
+      // check that the meta file has a symlink here too, If not then
+      // abort without doing anything. If it does, then proceed with
+      // making symlinks.
+      if(lstat(meta_path_target, &target_stat) == -1) {
+         return -1;
+      }
+      if(!S_ISLNK(target_stat.st_mode)) {
+         return -1;
+      }
+      char tp[2048];
+      char tp_meta[2048];
+      size_t link_size;
+      if((link_size = readlink(target, tp, 2048)) != -1) {
+         tp[link_size] = '\0';
+      }
+      else {
+         return -1;
+      }
+#ifdef META_FILES
+      if((link_size = readlink(meta_path_target, tp_meta, 2048)) != -1) {
+         tp_meta[link_size] = '\0';
+      }
+      else {
+         return -1;
+      }
+#endif
+      // make the new links.
+      ret = symlink(tp, link_path);
+#ifdef META_FILES
+      if(ret == 0) {
+         ret = symlink(tp_meta, meta_path);
+      }
+#endif
+      // remove the old links.
+      ret = unlink(target);
+#ifdef META_FILES
+      if(ret == 0) {
+         unlink(meta_path_target);
+      }
+#endif
+      return ret;
+   }
+
+   // if not, then create the link.
+   ret = symlink(target, link_path);
+#ifdef META_FILES
+   if(ret == 0) {
+      ret = symlink(meta_path_target, meta_path);
+   }
+#endif
+   return ret;
 }
 
