@@ -134,12 +134,12 @@ int fast_timer_inits();
 // You must do this before using a given timer.  Do it again, anytime the
 // timer is not running, to reset the accumulator, and the migrations-count
 
-static __attribute__((always_inline))
+static __attribute__((always_inline)) inline
 int fast_timer_reset(FastTimer* ft) {
    memset(ft, 0, sizeof(FastTimer));
 }
 
-static __attribute__((always_inline))
+static __attribute__((always_inline)) inline
 int fast_timer_start(FastTimer* ft) {
    unsigned long int x;
    unsigned a, d, c;
@@ -173,7 +173,7 @@ int fast_timer_start(FastTimer* ft) {
 // TSC difference won't be meaningful.  In this case we record a
 // "migration" but the elapsed time is not added into the accumulator.
 
-static __attribute__((always_inline))
+static __attribute__((always_inline)) inline
 int fast_timer_stop(FastTimer* ft) {
    int a, d, c;
 
@@ -214,7 +214,7 @@ int fast_timer_stop(FastTimer* ft) {
 
 // stop previous interval, and begin a new one
 
-static __attribute__((always_inline))
+static __attribute__((always_inline)) inline
 int fast_timer_stop_start(FastTimer* ft) {
    int a, d, c;
 
@@ -323,7 +323,7 @@ typedef struct {
 // NOTE: We don't change the timer accumulator.  We just look at the duration
 //       of the most-recent fast_timer_stop() - faster_timer_start().
 //
-static __attribute__((always_inline))
+static __attribute__((always_inline)) inline
 int log_histo_add_value(LogHisto* hist, uint64_t timer_value) {
    
    int i;
@@ -390,7 +390,7 @@ int log_histo_add_value(LogHisto* hist, uint64_t timer_value) {
 
 // increment the bin matching the current timer interval
 // NOTE: This is (ft->stop - ft->start), not the accumulator.
-static __attribute__((always_inline))
+static __attribute__((always_inline)) inline
 int log_histo_add_interval(LogHisto* hist, FastTimer* ft) {
    return log_histo_add_value(hist, (ft->stop.v64 - ft->start.v64));
 }
@@ -399,7 +399,7 @@ int log_histo_add_interval(LogHisto* hist, FastTimer* ft) {
 
 // increment the bin corresponding to ft->accum.
 // (e.g. if multiple intervals were required to accumulate the quantity to be binned)
-static __attribute__((always_inline))
+static __attribute__((always_inline)) inline
 int log_histo_add_accum(LogHisto* hist, FastTimer* ft) {
    return log_histo_add_value(hist, ft->accum);
 }
@@ -408,7 +408,7 @@ int log_histo_add_accum(LogHisto* hist, FastTimer* ft) {
 // accumulate counts from one histo into another.
 // dest += src
 // TBD: Drop LogHisto to 64 elements, aligned appropriately, and do this with SIMD intrinsics.
-static __attribute__((always_inline))
+static __attribute__((always_inline)) inline
 int log_histo_add(LogHisto* dest, LogHisto* src) {
    int i;
    for (i=0; i<65; ++i) {
