@@ -87,7 +87,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "skt_common.h"
 
 
-
+static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 
 // These are now only used in main_flags
@@ -245,7 +245,9 @@ shut_down_server() {
    // (stop receiving new connections)
    if (main_flags & MAIN_SOCKET_FD) {
       neDBG("closing socket_fd %d\n", socket_fd);
+      LOCK(&lock);
       CLOSE(socket_fd);
+      UNLOCK(&lock);     
    }
    if (main_flags & MAIN_BIND) {
       neDBG("unlinking '%s'\n", server_name);
@@ -358,11 +360,11 @@ int ne_push_user4(PerThreadContext* ctx,
    }
 
    // install the new egid, and save the current one
-   neLOG("gid %u(%u) -> (%u)\n", old_rgid, old_egid, new_egid);
+   neDBG("gid %u(%u) -> (%u)\n", old_rgid, old_egid, new_egid);
    rc = syscall(SYS_setresgid, -1, new_egid, old_egid);
    if (rc == -1) {
       if ((errno == EACCES) && ((new_egid == old_egid) || (new_egid == old_rgid))) {
-         neLOG("failed (but okay)\n"); /* okay [see NOTE] */
+         neDBG("failed (but okay)\n"); /* okay [see NOTE] */
       }
       else {
          neLOG("failed!\n");
@@ -377,17 +379,17 @@ int ne_push_user4(PerThreadContext* ctx,
 
    rc = syscall(SYS_getresuid, &old_ruid, &old_euid, &old_suid);
    if (rc) {
-      neLOG("getresuid() failed\n");
+      neDBG("getresuid() failed\n");
       // exit(EXIT_FAILURE);       // fuse should fail (?)
       return -1;
    }
 
    // install the new euid, and save the current one
-   neLOG("uid %u(%u) -> (%u)\n", old_ruid, old_euid, new_euid);
+   neDBG("uid %u(%u) -> (%u)\n", old_ruid, old_euid, new_euid);
    rc = syscall(SYS_setresuid, -1, new_euid, old_euid);
    if (rc == -1) {
       if ((errno == EACCES) && ((new_euid == old_ruid) || (new_euid == old_euid))) {
-         neLOG("failed (but okay)\n");
+         neDBG("failed (but okay)\n");
          return 0;              /* okay [see NOTE] */
       }
 
@@ -623,8 +625,14 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    neDBG("  sign [srv]: %s\n", srv_signature);
 
    int retval = ( 0 - (strcmp(signature, srv_signature) != 0) ); // 0:success, -1:fail
-   neLOG("-- AUTHENTICATION: %s for user=%s %s %s\n",
+#if DEBUG_SOCKETS
+   neDBG("-- AUTHENTICATION: %s for user=%s %s %s\n",
          (retval ? "FAIL" : "OK"), user_name, command_str(op), fname);
+#else
+   if (retval)
+      neLOG("-- AUTHENTICATION: %s for user=%s %s %s\n",
+            "FAIL", user_name, command_str(op), fname);
+#endif
 
    return retval;
 }
@@ -761,7 +769,7 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
       || (canon[dir_root_len] != '/')) {
 
     neERR("illegal path: '%s'  (canonicalized path: '%s' does not begin with '%s')\n",
-        fname, canon, dir_root);
+          fname, canon, dir_root);
     return -1;
   }
 
@@ -818,7 +826,7 @@ int fake_open(SocketHandle* handle, int flags, char* buf, size_t size) {
     // Early experiments seemed to show that the server-side can't set
     // RDMA_IOMAPSIZE on the fd we get from raccept(), but must
     // instead do it on the socket fd we get from rsocket(), which
-    // then applies to all the raccpet() sockets.
+    // then applies to all the raccept() sockets.
     //
     // if it turns out we do need this, then instead of having it
     // here, move it from skt_open() to write_init(), and everybody
@@ -981,6 +989,39 @@ int server_del(ThreadContext* ctx) {
 
 
 
+// int server_chown(ThreadContext* ctx) {
+// 
+//   SocketHandle*      handle    = &ctx->handle;
+//   char*              fname     = ctx->fname;
+//   int                client_fd = handle->peer_fd;
+//   PseudoPacketHeader header = {0};
+// 
+//   // we only use the control-channel
+//   NEED_0( fake_open_basic(handle, O_RDONLY) );
+// 
+//   // read UID
+//   uint64_t uid_buf;
+//   NEED_0( read_raw(client_fd, (char*)&uid_buf, sizeof(uid_buf), 0) );
+//   uid_t uid = ntoh64(uid_buf);
+// 
+//   // read GID
+//   uint64_t gid_buf;
+//   NEED_0( read_raw(client_fd, (char*)&gid_buf, sizeof(gid_buf), 0) );
+//   gid_t gid = ntoh64(gid_buf);
+// 
+//   // perform op
+//   int rc = lchown(fname, uid, gid);
+//   neDBG("result: %d %s\n", rc, (rc ? strerror(errno) : ""));
+// 
+//   // send RETURN with return-code
+//   NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
+// 
+//   // close transaction with client
+//   NEED_0( skt_close(handle) );
+//  
+//   return rc;
+// }
+
 int server_chown(ThreadContext* ctx) {
 
   SocketHandle*      handle    = &ctx->handle;
@@ -988,13 +1029,16 @@ int server_chown(ThreadContext* ctx) {
   int                client_fd = handle->peer_fd;
   PseudoPacketHeader header = {0};
 
-  // we only use the control-channel
-  NEED_0( fake_open_basic(handle, O_RDONLY) );
+  // this version uses RDMA to read into this buffer
+  uint64_t dummy;
+  NEED_0( fake_open(handle, O_RDONLY, (char*)&dummy, sizeof(dummy)) );
 
   // read UID
-  uint64_t uid_buf;
-  NEED_0( read_raw(client_fd, (char*)&uid_buf, sizeof(uid_buf), 0) );
-  uid_t uid = ntoh64(uid_buf);
+  // uint64_t uid_buf;
+  //  NEED_0( read_raw(client_fd, (char*)&uid_buf, sizeof(uid_buf), 0) );
+  NEED( skt_read(handle, (char*)&dummy, sizeof(dummy)) == sizeof(dummy) );
+  // uid_t uid = ntoh64(uid_buf);
+  uid_t uid = ntoh64(dummy);
 
   // read GID
   uint64_t gid_buf;
@@ -1008,16 +1052,51 @@ int server_chown(ThreadContext* ctx) {
   // send RETURN with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
 
-  //  // skt_chown() will call skt_close(), so send an ACK 0, like
-  //  // we were closing a normal handle.
-  //  NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
-
   // close transaction with client
   NEED_0( skt_close(handle) );
  
   return rc;
 }
 
+
+
+
+
+// int server_rename(ThreadContext* ctx) {
+// 
+//   SocketHandle*      handle    = &ctx->handle;
+//   char*              fname     = ctx->fname;
+//   int                client_fd = handle->peer_fd;
+//   PseudoPacketHeader header = {0};
+// 
+// 
+//   // we only use the control-channel
+//   NEED_0( fake_open_basic(handle, O_RDONLY) );
+// 
+//   // read new-fname length (incl terminal NULL)
+//   uint64_t len;
+//   NEED_0( read_raw(client_fd, (char*)&len, sizeof(len), 0) );
+//   len = ntoh64(len);
+//   NEED( len <= FNAME_SIZE );
+// 
+//   // read new-fname
+//   char new_fname[FNAME_SIZE];
+//   NEED_0( read_fname(client_fd, new_fname, len, FNAME_SIZE) );
+//   neDBG("got fname: %s\n", new_fname);
+// 
+// 
+//   // perform op
+//   int rc = rename(fname, new_fname);
+//   neDBG("rc: %d %s\n", rc, (rc ? strerror(errno) : ""));
+// 
+//   // send RETURN with return-code
+//   NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
+// 
+//   // finish transaction with client
+//   NEED_0( skt_close(handle) );
+// 
+//   return rc;
+// }
 
 int server_rename(ThreadContext* ctx) {
 
@@ -1026,19 +1105,22 @@ int server_rename(ThreadContext* ctx) {
   int                client_fd = handle->peer_fd;
   PseudoPacketHeader header = {0};
 
-
-  // we only use the control-channel
-  NEED_0( fake_open_basic(handle, O_RDONLY) );
+  // this version uses RDMA to read into this buffer
+  uint64_t len;
+  NEED_0( fake_open(handle, O_RDONLY, (char*)&len, sizeof(len)) );
 
   // read new-fname length (incl terminal NULL)
-  uint64_t len;
-  NEED_0( read_raw(client_fd, (char*)&len, sizeof(len), 0) );
+  // uint64_t len;
+  // NEED_0( read_raw(client_fd, (char*)&len, sizeof(len), 0) );
+  NEED( skt_read(handle, (char*)&len, sizeof(len)) == sizeof(len) );
+  neDBG("received len = %ld (host-byte-order: 0x%lx)\n", len, ntoh64(len));
   len = ntoh64(len);
   NEED( len <= FNAME_SIZE );
 
   // read new-fname
   char new_fname[FNAME_SIZE];
   NEED_0( read_fname(client_fd, new_fname, len, FNAME_SIZE) );
+  neDBG("got fname: %s\n", new_fname);
 
 
   // perform op
@@ -1047,10 +1129,6 @@ int server_rename(ThreadContext* ctx) {
 
   // send RETURN with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
-
-  //  // skt_rename() will call skt_close(), so send an ACK 0, like
-  //  // we were closing a normal handle.
-  //  NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
 
   // finish transaction with client
   NEED_0( skt_close(handle) );
@@ -1076,10 +1154,6 @@ int server_unlink(ThreadContext* ctx) {
 
   // send RETURN with return-code
   NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
-
-  //  // skt_unlink() will call skt_close(), so send an ACK 0, like
-  //  // we were closing a normal handle.
-  //  NEED_0( write_pseudo_packet(client_fd, CMD_ACK, 0, NULL) );
 
   // finish transaction with client
   NEED_0( skt_close(handle) );
@@ -1136,18 +1210,12 @@ int server_stat(ThreadContext* ctx) {
   neDBG("stat %s\n", fname);
 
 
-#if 1
   // open socket for writing (we write, client reads)
   //  fake_open(handle, O_WRONLY, buf, STAT_DATA_SIZE);
   fake_open_basic(handle, O_RDONLY);
 
   // jNEED() failures run this before exiting
   jHANDLER(jskt_close, handle);
-
-#else
-  // jNEED() failures run this before exiting
-  jHANDLER(jshut_down_handle, handle);
-#endif
 
   // stat local file
   // Failure doesn't mean the server-routine failed
@@ -1194,13 +1262,8 @@ int server_stat(ThreadContext* ctx) {
 
   }  
 
-#if 1
   // close
   EXPECT_0( skt_close(handle) );
-#else
-  // close
-  shut_down_handle(handle);
-#endif
 
   return 0;
 }
@@ -1285,11 +1348,11 @@ void* server_thread(void* arg) {
   }
 
   if (! rc) {
-    // always print command and arg for log
-     neLOG("server_thread (fd=%d): %s %s\n", client_fd, command_str(HDR_CMD(hdr)), fname);
+     // always print command and arg for log
+     neDBG("server_thread (fd=%d): %s %s\n", client_fd, command_str(HDR_CMD(hdr)), fname);
 
     // perform command
-     switch (HDR_CMD(hdr)) {
+    switch (HDR_CMD(hdr)) {
     case CMD_PUT:    rc = server_put(ctx);     break;
     case CMD_GET:    rc = server_get(ctx);     break;
     case CMD_DEL:    rc = server_del(ctx);     break;
@@ -1305,6 +1368,7 @@ void* server_thread(void* arg) {
     }
   }
 
+  neDBG("server_thread returned %d: %s %s\n", rc, command_str(HDR_CMD(hdr)), fname);
   if (rc)
     ctx->flags |= CTX_THREAD_ERR;
 
@@ -1583,9 +1647,10 @@ main(int argc, char* argv[]) {
 #endif
 
 
- // --- open socket as server, and wait for a client
+  // --- open socket as server, and wait for a client
+  LOCK(&lock);
   REQUIRE_GT0( socket_fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
-
+  UNLOCK(&lock);
 
   // --- When a server dies or exits, it leaves a connection in
   //     TIME_WAIT state, which is eventually cleaned up.  Meanwhile,
@@ -1640,7 +1705,10 @@ main(int argc, char* argv[]) {
     if (push_thread(client_fd)) {
       neERR("main: couldn't allocate thread, dropping fd=%d\n", client_fd);
       SHUTDOWN(client_fd, SHUT_RDWR);
+
+      LOCK(&lock);     
       CLOSE(client_fd);
+      UNLOCK(&lock);     
     }
   }
 

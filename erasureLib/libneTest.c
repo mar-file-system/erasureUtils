@@ -146,6 +146,15 @@ void usage(const char* prog_name, const char* op) {
 
    PRINTerr("     <stat_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
    PRINTerr("\n");
+   PRINTerr("        OPEN    =  0x0001\n");
+   PRINTerr("        RW      =  0x0002     /* each individual read/write, in given stream */\n");
+   PRINTerr("        CLOSE   =  0x0004     /* cost of close */\n");
+   PRINTerr("        RENAME  =  0x0008\n");
+   PRINTerr("        CRC     =  0x0010\n");
+   PRINTerr("        ERASURE =  0x0020\n");
+   PRINTerr("        THREAD  =  0x0040     /* from beginning to end  */\n");
+   PRINTerr("        HANDLE  =  0x0080     /* from start/stop, all threads, in 1 handle */\n");
+   PRINTerr("\n");
    PRINTerr("     <erasure_path> is one of the following\n");
    PRINTerr("\n");
    PRINTerr("       [RDMA] xx.xx.xx.%%d:pppp/local/blah/block%%d/.../fname\n");
@@ -273,6 +282,7 @@ int main( int argc, const char* argv[] )
       }
       wr = 3;
    }
+
    else if ( strncmp( argv[1], "delete", strlen(argv[1]) ) == 0 ) {
       if ( argc != 4 ) {
          usage( argv[0], argv[1] ); 
@@ -281,16 +291,19 @@ int main( int argc, const char* argv[] )
       N = atoi(argv[3]);
       wr = 4;
    }
+
    else if ( strncmp( argv[1], "crc-status", strlen(argv[1]) ) == 0 ) {
       printf("MAX-N: %d   MAX-E: %d\n", MAXN, MAXE);
       return crc_status();
    }
+
    else {
       usage( argv[0], "help" );
       return -1;
    }
    
    PRINTout("libneTest: command = '%s'\n", argv[1]);
+
 
 
    // --- command-specific extra args
@@ -328,6 +341,8 @@ int main( int argc, const char* argv[] )
 #  define NE_STATUS(PATH)           ne_status1(select_snprintf(PATH), NULL, auth, stat_flags, select_impl(PATH), \
                                                (PATH))
 
+#  define NE_CHOWN(PATH)            ne_chown(select_snprintf(PATH), NULL, auth, stat_flags, select_impl(PATH), \
+                                               (PATH))
 
 
    srand(time(NULL));

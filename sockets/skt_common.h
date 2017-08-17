@@ -97,54 +97,61 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  define neDBG(...)
 #endif
 
+#define DIAGNOSE(FMT,...)  FPRINTF(stderr,   FAIL_STR FMT, ##__VA_ARGS__)
 
 
 
 // Callers can suppress printing of successful tests, by choice of <PRINT>
 // All failures go to stderr.
-#define _TEST(EXPR, TEST, PRINT, RETURN)                                \
+#define _TEST(EXPR, TEST, PRINT, FAIL_PRINT, RETURN)                    \
    do {                                                                 \
       PRINT(#EXPR " " #TEST "  ?\n");                                   \
       if ((EXPR) TEST) {                                                \
          PRINT(#EXPR " " #TEST "\n");                                   \
       }                                                                 \
       else {                                                            \
-         /* neLOG(FAIL_STR #EXPR " " #TEST "%s%s\n",                    \
-            (errno ? ": " : ""),                                        \
-            (errno ? strerror(errno) : "")); */                         \
+         FAIL_PRINT(FAIL_STR #EXPR " " #TEST "%s%s\n",                  \
+                    (errno ? ": " : ""),                                \
+                    (errno ? strerror(errno) : ""));                    \
          RETURN;                                                        \
       }                                                                 \
    } while(0)
 
 
 // print warning, if expression doesn't have expected value
-#define EXPECT(EXPR)        _TEST(EXPR,    , neDBG,          )
-#define EXPECT_0(EXPR)      _TEST(EXPR, ==0, neDBG,          )
-#define EXPECT_GT0(EXPR)    _TEST(EXPR,  >0, neDBG,          )
+#define EXPECT(EXPR)        _TEST(EXPR,    , neDBG, neDBG,   /* nothing */)
+#define EXPECT_0(EXPR)      _TEST(EXPR, ==0, neDBG, neDBG,   /* nothing */)
+#define EXPECT_GT0(EXPR)    _TEST(EXPR,  >0, neDBG, neDBG,   /* nothing */)
+//#define EXPECT(EXPR)        _TEST(EXPR,    , neDBG, DIAGNOSE,   /* nothing */)
+//#define EXPECT_0(EXPR)      _TEST(EXPR, ==0, neDBG, DIAGNOSE,   /* nothing */)
+//#define EXPECT_GT0(EXPR)    _TEST(EXPR,  >0, neDBG, DIAGNOSE,   /* nothing */)
 
 // return -1, if expr doesn't have expected value
-#define NEED(EXPR)          _TEST(EXPR,    , neDBG,    return -1)
-#define NEED_0(EXPR)        _TEST(EXPR, ==0, neDBG,    return -1)
-#define NEED_GT0(EXPR)      _TEST(EXPR,  >0, neDBG,    return -1)
+#define NEED(EXPR)          _TEST(EXPR,    , neDBG, neDBG,   return -1)
+#define NEED_0(EXPR)        _TEST(EXPR, ==0, neDBG, neDBG,   return -1)
+#define NEED_GT0(EXPR)      _TEST(EXPR,  >0, neDBG, neDBG,   return -1)
+//#define NEED(EXPR)          _TEST(EXPR,    , neDBG, DIAGNOSE,   return -1)
+//#define NEED_0(EXPR)        _TEST(EXPR, ==0, neDBG, DIAGNOSE,   return -1)
+//#define NEED_GT0(EXPR)      _TEST(EXPR,  >0, neDBG, DIAGNOSE,   return -1)
 
-// // jump to cleanup-handler, if expr doesn't have expected value
-// #define jNEED(EXPR)         _TEST(EXPR,    , neDBG,    goto jCLEANUP)
-// #define jNEED_0(EXPR)       _TEST(EXPR, ==0, neDBG,    goto jCLEANUP)
-// #define jNEED_GT0(EXPR)     _TEST(EXPR,  >0, neDBG,    goto jCLEANUP)
 
 // call cleanup function before exiting, if expr doesn't return expected value
 // [put a "jHANDLER" invocation at the top of a function that uses jNEED() macros.]
 typedef void(*jHandlerType)(void* arg);
 #define jHANDLER(FN, ARG)   jHandlerType j_handler = &(FN); void* j_handler_arg = (ARG)
 
-#define jNEED(EXPR)         _TEST(EXPR,    , neDBG,    j_handler(j_handler_arg); return -1)
-#define jNEED_0(EXPR)       _TEST(EXPR, ==0, neDBG,    j_handler(j_handler_arg); return -1)
-#define jNEED_GT0(EXPR)     _TEST(EXPR,  >0, neDBG,    j_handler(j_handler_arg); return -1)
+#define jNEED(EXPR)         _TEST(EXPR,    , neDBG, neDBG,   j_handler(j_handler_arg); return -1)
+#define jNEED_0(EXPR)       _TEST(EXPR, ==0, neDBG, neDBG,   j_handler(j_handler_arg); return -1)
+#define jNEED_GT0(EXPR)     _TEST(EXPR,  >0, neDBG, neDBG,   j_handler(j_handler_arg); return -1)
+//#define jNEED(EXPR)         _TEST(EXPR,    , neDBG, DIAGNOSE,   abort() )
+//#define jNEED_0(EXPR)       _TEST(EXPR, ==0, neDBG, DIAGNOSE,   abort() )
+//#define jNEED_GT0(EXPR)     _TEST(EXPR,  >0, neDBG, DIAGNOSR,   abort() )
+
 
 // abort(), if expr doesn't have expected value
-#define REQUIRE(EXPR)       _TEST(EXPR,    , neDBG,    abort()  )
-#define REQUIRE_0(EXPR)     _TEST(EXPR, ==0, neDBG,    abort()  )
-#define REQUIRE_GT0(EXPR)   _TEST(EXPR,  >0, neDBG,    abort()  )
+#define REQUIRE(EXPR)       _TEST(EXPR,    , neDBG, DIAGNOSE,   abort()  )
+#define REQUIRE_0(EXPR)     _TEST(EXPR, ==0, neDBG, DIAGNOSE,   abort()  )
+#define REQUIRE_GT0(EXPR)   _TEST(EXPR,  >0, neDBG, DIAGNOSE,   abort()  )
 
 
 
@@ -189,8 +196,10 @@ typedef void(*jHandlerType)(void* arg);
 #  define WR_TIMEOUT          10000
 #  define RD_TIMEOUT          10000
 #else
-#  define WR_TIMEOUT             30
-#  define RD_TIMEOUT             30
+// #  define WR_TIMEOUT             30
+// #  define RD_TIMEOUT             30
+#  define WR_TIMEOUT             10000
+#  define RD_TIMEOUT             10000
 #endif
 
 
@@ -234,6 +243,9 @@ typedef struct sockaddr_un                   SockAddr;
 #  define RIOUNMAP(...)
 #  define RSETSOCKOPT(...)
 
+#  define LOCK(LOCK)
+#  define UNLOCK(LOCK)
+
 
 /* -----------------------------------
  * RDMA sockets
@@ -261,6 +273,14 @@ typedef struct rdma_addrinfo           SockAddr;
 #  define RIOUNMAP(...)         riounmap(__VA_ARGS__)
 #  define RSETSOCKOPT(...)      rsetsockopt(__VA_ARGS__)
 
+// see notes in skt_common.c re thread-safety in librdmacm.
+// All these LOCK/UNLOCKs should be removed, after our patch
+// to librdmacm is installed.
+// #  define LOCK(LOCK)            pthread_mutex_lock(LOCK);
+// #  define UNLOCK(LOCK)          pthread_mutex_unlock(LOCK);
+
+#  define LOCK(LOCK)
+#  define UNLOCK(LOCK)
 
 
 /* -----------------------------------
@@ -288,6 +308,8 @@ typedef struct sockaddr_in                   SockAddr;
 #  define RIOUNMAP(...)
 #  define RSETSOCKOPT(...)
 
+#  define LOCK(LOCK)
+#  define UNLOCK(LOCK)
 
 #endif
 
@@ -339,12 +361,17 @@ typedef enum {
   HNDL_GET         = 0x0100,
   HNDL_PUT         = 0x0200,
   HNDL_OP_INIT     = 0x0400,
-  HNDL_CLOSED      = 0x0800,
+  // HNDL_CLOSED      = 0x0800,
 
   HNDL_SEEK_SET    = 0x1000,    // skt_write() found SEEK (see SocketHandle.seek_pos)
   HNDL_PEER_EOF    = 0x2000,    // skt_write() found ACK 0
   HNDL_SENT_DATA0  = 0x4000,    // skt_write() sent DATA0 (see copy_file_to_socket())
   HNDL_FSYNC       = 0x8000,    // skt_read() found FSYNC
+
+  // currently unused for other purposes
+  HNDL_DBG1        = 0x0008,
+  HNDL_DBG2        = 0x0080,
+  HNDL_DBG3        = 0x0800,
 } SHFlags;
 
 
@@ -365,7 +392,7 @@ typedef struct {
   size_t             rio_size;    // reader saves riomapp'ed size, for riounmap()
   volatile size_t    stream_pos;  // ignore redundant skt_seek(), support reaper
   ssize_t            seek_pos;    // ignore, unless HNDL_SEEK_ABS
-  uint16_t           flags;       // SHFlags
+  SHFlags            flags;
   SktAuth            aws_ctx;     // S3_AUTH credentials (e.g. cached by DAL at init-time)
 } SocketHandle;
 
@@ -412,7 +439,7 @@ typedef enum {
 
 // These are blobs of control-data on the socket-stream, and allow OOB commands.
 // The buf can be reliably transmitted in a single send.
-// The sent buf contains a uint32_t, followed by a uint64_t, but they
+// The sent buf contains a uint64_t, followed by a uint32_t, and they
 // are received such that the 64-bit int is aligned to a 64-bit boundary.
 typedef struct {
   uint8_t            flags;

@@ -149,6 +149,7 @@ AM_COND_IF([ANY_SOCKETS],
 
 AM_COND_IF([RDMA_SOCKETS],
            [AC_CHECK_LIB([rdmacm], [rdma_getaddrinfo]) ])
+#           [AC_SEARCH_LIBS([rdma_getaddrinfo], [rdmacm :librdmacm.so.1]) ])
 
 
 

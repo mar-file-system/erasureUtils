@@ -326,9 +326,8 @@ static int set_block_xattr(ne_handle handle, int block) {
            block, xattrval );
 
 #ifdef META_FILES
-  char meta_file[2048];
-
-  handle->snprintf(meta_file, 2048, handle->path,
+  char meta_file[MAXNAME];
+  handle->snprintf(meta_file, MAXNAME, handle->path,
                    (block+handle->erasure_offset)%(handle->N+handle->E), handle->state);
 
   if ( handle->mode == NE_REBUILD ) {
@@ -559,10 +558,10 @@ void *bq_writer(void *arg) {
   if (handle->stat_flags & SF_RENAME)
      fast_timer_start(&handle->stats[bq->block_number].rename);
 
-  char block_file_path[2048];
+  char block_file_path[MAXNAME];
   //  sprintf( block_file_path, handle->path,
   //           (bq->block_number+handle->erasure_offset)%(handle->N+handle->E) );
-  handle->snprintf( block_file_path, 2048, handle->path,
+  handle->snprintf( block_file_path, MAXNAME, handle->path,
                     (bq->block_number+handle->erasure_offset)%(handle->N+handle->E), handle->state );
 
   if( PATHOP( rename, handle->impl, handle->auth, bq->path, block_file_path ) != 0 ) {
@@ -617,11 +616,12 @@ static int initialize_queues(ne_handle handle) {
   /* open files and initialize BufferQueues */
   for(i = 0; i < num_blocks; i++) {
     int error, file_descriptor;
-    char path[2048];
+    char path[MAXNAME];
     BufferQueue *bq = &handle->blocks[i];
     // generate the path
     // sprintf(bq->path, handle->path, (i + handle->erasure_offset) % num_blocks);
     handle->snprintf(bq->path, MAXNAME, handle->path, (i + handle->erasure_offset) % num_blocks, handle->state);
+
     strcat(bq->path, WRITE_SFX);
 
     // assign pointers into the memaligned buffers.
@@ -872,6 +872,11 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
    handle->auth     = auth;
 
    handle->impl     = get_impl(itype);
+   if (! handle->impl) {
+      PRINTerr( "ne_open: couldn't find implementation for itype %d\n", itype );
+      errno = EINVAL;
+      return NULL;
+   }
 
    // flags control collection of timing stats
    handle->stat_flags = stat_flags;
@@ -1821,11 +1826,11 @@ read:
 void sync_file(ne_handle handle, int block_index) {
 #if 0
   char path[MAXNAME];
-  int block_number = ((handle->erasure_offset + block_index)
-                      % (handle->N + handle->E));
+  int  block_number = ((handle->erasure_offset + block_index)
+                       % (handle->N + handle->E));
   handle->snprintf(path, MAXNAME, handle->path, block_number, handle->state);
-
   strcat(path, WRITE_SFX);
+
   HNDLOP(close, handle->FDArray[block_index]);
   OPEN(handle->FDArray[block_index], handle, path, O_WRONLY);
   if(FD_ERR(handle->FDArray[block_index])) {
@@ -2171,7 +2176,6 @@ int ne_close( ne_handle handle )
          }
          // sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
          handle->snprintf( file, MAXNAME, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
-
          strncpy( nfile, file, strlen(file) + 1);
          strncat( file, REBUILD_SFX, strlen(REBUILD_SFX) + 1 );
 
@@ -2422,6 +2426,7 @@ int xattr_check( ne_handle handle, char *path )
    for ( counter = 0; counter < lN+lE; counter++ ) {
       bzero(file,sizeof(file));
       handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_offset)%(lN+lE), handle->state );
+
       ret = PATHOP(stat, handle->impl, handle->auth, file, partstat);
       PRINTout( "xattr_check: stat of file %s returns %d\n", file, ret );
       if ( ret != 0 ) {

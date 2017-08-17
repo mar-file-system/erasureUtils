@@ -100,7 +100,6 @@ int     fsi_posix_open(GenericFD* gfd, const char* path, int flags, ...) {
       va_end(va);
 
       FD(gfd) = open(path, flags, mode);
-      
    }
    else
       FD(gfd) = open(path, flags);
@@ -221,9 +220,21 @@ const FileSysImpl* fs_impl_posix = &posix_impl;
 #define SKT(GFD)   (&(GFD)->fds.skt)
 
 
-int fsi_skt_fd_init(GenericFD* gfd) { SKT(gfd)->peer_fd = -1; return 0; }
 
-int fsi_skt_fd_err(GenericFD* gfd)  { return (SKT(gfd)->peer_fd < 0); }
+
+
+
+int fsi_skt_fd_init(GenericFD* gfd) {
+   memset(SKT(gfd), 0, sizeof(SocketHandle));
+   SKT(gfd)->peer_fd = -1;
+   return 0;
+}
+
+int fsi_skt_fd_err(GenericFD* gfd)  {
+   return ((SKT(gfd)->peer_fd < 0)
+           || (! SKT(gfd)->flags & HNDL_CONNECTED)
+           || (  SKT(gfd)->flags & HNDL_DBG2)); /* temporary: skt_open() given an open handle */
+}
 
 int fsi_skt_fd_num(GenericFD* gfd)  { return SKT(gfd)->peer_fd; }
 

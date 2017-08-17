@@ -190,7 +190,13 @@ int client_rename(const char* path) {
 
   char  new_fname[FNAME_SIZE];
   snprintf(new_fname, FNAME_SIZE, path);
-  strncat(new_fname, ".renamed", FNAME_SIZE - strlen(path));
+
+  // if it already has ".renamed", remove it, else add it
+  char* suffix = strstr(new_fname, ".renamed");
+  if (suffix)
+     *suffix = 0;
+  else
+     strncat(new_fname, ".renamed", FNAME_SIZE - strlen(path));
 
   NEED_0( skt_rename(aws_ctx, path, new_fname) );
 
@@ -593,10 +599,11 @@ enum {
    TC_OPEN         = 0x01,
    TC_OPEN2        = 0x02,
    TC_WRITE        = 0x04,
-   TC_CLOSE        = 0x08,
-   TC_SETEUID      = 0x10,
-   TC_SETEUID_SYS  = 0x20,
-   TC_DONE         = 0x40,
+   TC_RENAME       = 0x08,
+   TC_CLOSE        = 0x10,
+   TC_SETEUID      = 0x20,
+   TC_SETEUID_SYS  = 0x40,
+   TC_DONE         = 0x80,
 };
 
 const char* flag_name(int flag) {
@@ -604,6 +611,7 @@ const char* flag_name(int flag) {
    case TC_OPEN:        return "OPEN";
    case TC_OPEN2:       return "OPEN2";
    case TC_WRITE:       return "WRITE";
+   case TC_RENAME:      return "RENAME";
    case TC_CLOSE:       return "CLOSE";
    case TC_SETEUID:     return "SETEUID";
    case TC_SETEUID_SYS: return "SETEUID_SYS";
@@ -624,9 +632,9 @@ typedef struct {
 } ThreadContext;
 
 
-#define thrNEED(EXPR)          _TEST(EXPR,    , neDBG,    return (void*)-1)
-#define thrNEED_0(EXPR)        _TEST(EXPR, ==0, neDBG,    return (void*)-1)
-#define thrNEED_GT0(EXPR)      _TEST(EXPR,  >0, neDBG,    return (void*)-1)
+#define thrNEED(EXPR)          _TEST(EXPR,    , neDBG, neDBG,    return (void*)-1)
+#define thrNEED_0(EXPR)        _TEST(EXPR, ==0, neDBG, neDBG,    return (void*)-1)
+#define thrNEED_GT0(EXPR)      _TEST(EXPR,  >0, neDBG, neDBG,    return (void*)-1)
 
 
 
@@ -641,6 +649,7 @@ void* client_test3_thr(void* arg) {
    SocketHandle*  handle = &ctx->handle;
 
    char           thr_path[1024];
+   char           thr_path2[1024];
 
 # define          BUFSIZE  (64)
   char            buf[BUFSIZE] __attribute__ (( aligned(64) )); /* copy stdin to socket */
@@ -695,6 +704,7 @@ void* client_test3_thr(void* arg) {
   }
 
 
+
   // --- wait for other thread(s) to open their handle, as well.
   cLOG("thr%d: waiting on barrier 1\n", ctx->thr_no);
   pthread_barrier_wait(ctx->barrier);
@@ -710,6 +720,40 @@ void* client_test3_thr(void* arg) {
      thrNEED_GT0( skt_open(&fd,  thr_path,  (O_WRONLY|O_CREAT), 0666) );
      thrAUTH_INSTALL(&fd, aws_ctx);
   }
+  // --- rename is a "path op", it internally opens SocketHandle, and uses
+  //     that to send the rename command internally.  We're reproducing the
+  //     internals of skt_rename(), inside a thread, to see whether this is
+  //     why we're having some problems in pftool.  Each thread will be given
+  //     a unique path to rename.
+  if (ctx->flags & TC_RENAME) {
+
+     // ctx->path is a service_path.  skt_rename() strips host/port prefix
+     // from service_paths (if present), before sending to server.  Server
+     // expects a regular path, so that read_fname() can validate that
+     // parent-dir exists, etc.
+     PathSpec   path_spec;
+     thrNEED_0( parse_service_path(&path_spec, ctx->path) );
+     const char* new_fname = path_spec.fname;
+
+     sprintf(thr_path2, "%s.%d.renamed", new_fname, ctx->thr_no);
+     cLOG("thr%d: renaming to %s\n", ctx->thr_no, thr_path2);
+
+     cLOG("thr%d: basic_init(CMD_RNAME)\n", ctx->thr_no);
+     thrNEED_0( basic_init(handle, CMD_RENAME) );
+
+     // send new-fname
+     size_t len     = strlen(thr_path2) +1;
+     size_t len_buf = hton64(len);
+     thrNEED_0( write_raw(handle->peer_fd, (char*)&len_buf,  sizeof(len_buf)) );
+     thrNEED_0( write_raw(handle->peer_fd, (char*)thr_path2, len) );
+
+     // read RETURN, providing return-code from the remote rename().
+     PseudoPacketHeader hdr = {0};
+     thrNEED_0( read_pseudo_packet_header(handle->peer_fd, &hdr, 0) );
+     thrNEED(   (HDR_CMD(&hdr)  == CMD_RETURN) );
+     cLOG("thr%d: rename returned %ld\n", ctx->thr_no, HDR_SIZE(&hdr));
+     thrNEED(   (HDR_SIZE(&hdr) == 0) );
+  }
 
   // --- put
   if (ctx->flags & TC_WRITE) {
@@ -718,6 +762,7 @@ void* client_test3_thr(void* arg) {
      cLOG("thr%d: wrote   %lld bytes\n", ctx->thr_no, bytes_moved);
      thrNEED( bytes_moved == BUFSIZE );
   }
+
 
   // --- close
   if (ctx->flags & TC_CLOSE) {
@@ -1128,6 +1173,83 @@ int client_test4(const char* path, int do_seteuid) {
 }
 
 
+// ---------------------------------------------------------------------------
+// test5: threaded skt_rename()
+//
+// We use client_test3_thr, which has had TC_RENAME added for us.
+// ---------------------------------------------------------------------------
+
+// Calls from bq_writer threads, running from pftool, are sometimes
+// segfaulting inside the calls to skt_rename() and skt_chown(), where they
+// call skt_close -> shut_down_handle -> rclose.  These two functions are
+// both "path" ops, meaning they conjure a custom handle, used only
+// internally.  These handles shouldn't be having any issues with rsockets
+// thread-safety.  They should NOT!  But, maybe they are?  This is a test.
+
+ssize_t client_test5(const char* path) {
+
+   static const int  N_THR = 20;
+
+   int               i;
+   ssize_t           retval = 0;
+
+   pthread_barrier_t barrier;
+
+   pthread_t         thr[N_THR];
+   ThreadContext     ctx[N_THR];
+
+   pthread_barrier_init(&barrier, NULL, N_THR);
+
+
+   // create individual files to be renamed by each thread
+   SocketHandle handle = {0};
+   for (i=0; i<N_THR; ++i) {
+      char   fname[1024];
+      snprintf(fname, 1023, "%s.%d", path, i);
+      size_t fname_len = strlen(fname);
+
+      cLOG("creating file %s for thread %d\n", fname, i);
+      NEED_GT0( skt_open(&handle, fname, (O_WRONLY)) );
+
+      cLOG("writing contents for thread %d\n", i);
+      NEED(   skt_write(&handle, fname, fname_len) == fname_len );
+      NEED(   skt_write(&handle, "\n", 1) == 1 );
+
+      cLOG("closing file for thread %d\n", i);
+      NEED_0( skt_close(&handle) );
+   }
+
+   // create contexts for each thread
+   for (i=0; i<N_THR; ++i) {
+      ThreadContext ctx1 = { .flags   = (TC_OPEN|TC_RENAME|TC_CLOSE),
+                             .thr_no  = i,
+                             .path    = path,
+                             .handle  = {0},
+                             .barrier = &barrier };
+      ctx[i] = ctx1;
+   }
+
+
+   // --- launch threads
+   for (i=0; i<N_THR; ++i) {
+      cLOG("launching thr %d\n", i);
+      pthread_create(&thr[i], NULL, client_test3_thr, &ctx[i]);
+   }
+
+
+   // --- wait for threads to complete
+   for (i=0; i<N_THR; ++i) {
+      cLOG("waiting for thr %d\n", i);
+      void* rc0;
+      pthread_join(thr[i], &rc0);
+      cLOG("thr%d returned %lld\n", i, (ssize_t)rc0);
+      retval |= (ssize_t)rc0;
+   }
+
+   cLOG("done\n");
+   return retval;
+}
+
 
 
 
@@ -1167,7 +1289,7 @@ typedef enum {
 
 
 int usage(const char* prog) {
-  fprintf(stderr, "Usage: %s  [ <option> ... ] <operation>  <file_spec>\n", prog);
+  fprintf(stderr, "Usage: %s  [ <option> ... ] <operation>\n", prog);
   fprintf(stderr, "where:\n");
   fprintf(stderr, "\n");
   fprintf(stderr, "<option> is one of:\n");
@@ -1177,12 +1299,15 @@ int usage(const char* prog) {
   fprintf(stderr, "  -p <file>             PUT -- read from stdin, write to remote file\n");
   fprintf(stderr, "  -g <file>             GET -- read from remote file, write to stdout\n");
   fprintf(stderr, "  -s <file>             stat the remote file\n");
-  fprintf(stderr, "  -r <file>             rename to original + '.renamed'\n");
+  fprintf(stderr, "  -r <file>             rename to original + '.renamed' (or minus, if already there)\n");
   fprintf(stderr, "  -o <file>             chown to 99:99\n");
   fprintf(stderr, "  -R <file>             hold read-handle open, so reaper-thread will kill connection\n");
-  fprintf(stderr, "  -t <test_no> <file>   perform various unit-tests {1,1b,1c,2,3,3b}\n");
+  fprintf(stderr, "  -t <test_no> <file>   perform various unit-tests {1,1b,1c,2,2b,3,3b,3c,3d,3e,5}\n");
   fprintf(stderr, "\n");
-  fprintf(stderr, "<flie_spec> is <host>:<port>/<fname>\n");
+  fprintf(stderr, "<flie_spec> refers to a single object/file, on a single server:\n");
+  fprintf(stderr, "  <host>:<port>/<path>\n");
+  fprintf(stderr, "  xx.xx.xx.xx:12345/local/filesystem/dir/myfile\n");
+  fprintf(stderr, "\n");
 }
 
 int
@@ -1341,6 +1466,9 @@ main(int argc, char* argv[]) {
       bytes_moved = client_test3e(file_spec);
     //    else if (MATCH(test_no, "4"))
     //       bytes_moved = client_test4(file_spec);
+    else if (MATCH(test_no, "5"))
+      bytes_moved = client_test5(file_spec);
+
     else {
       neERR("unknown test: %s\n", test_no);
       return -1;

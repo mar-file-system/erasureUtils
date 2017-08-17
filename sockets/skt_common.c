@@ -54,6 +54,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 
+
 #include <stdio.h>
 #include <limits.h>
 #include <fcntl.h>
@@ -63,6 +64,66 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/select.h>
 
 #include "skt_common.h"
+
+
+// ...........................................................................
+// NOTE: librdmacm is not thread-safe:
+//
+// librdmacm performs locks around manipulations of its low-level <idm>
+// structure (i.e. when an rs is installed during opens, or removed during
+// closes), but this is not enough to make multi-threaded applications
+// thread-safe, even if they always do new opens and closes within a given
+// thread.  The problem is that surrounding code in rsocket() and rclose()
+// do not lock around the process of acquiring/releasing the underlying
+// file-descriptor. (The fd is acquired/released via open/close of
+// /dev/infiniband/rdma_cm).  This fd is used as an index into idm.  Thus,
+// the following scenario can happen:
+//
+//   (thread A) calls rclose(), which releases the rsocket fd before
+//              removing the rs from idm, where it is indexed via the fd.
+//
+//   (thread B) in rsocket(), acquires that same fd (as a result of a
+//              ligitimate new call to open()), and stores its own rs at
+//              the indexed position, overwriting thread A's rs.
+//
+//   (thread A) now gets around to removing the indexed rs, which is
+//              actually thread B's rs.
+//
+//   (thread B) is now hosed.  Its indexed rs is 0x0.  The following
+//              functions in librdmacm do not check the value they get from
+//              idm, therefore, thread B will now segfault inside librdmacm
+//              if it calls any of them:
+//
+//              rrecv
+//              rrecvfrom
+//              rsend
+//              rsendto
+//              rsendv
+//              riomap
+//              riounmap
+//              riowrite
+//
+// 
+// THEREFORE: we now provide our own locking around rsocket() and rclose().
+//
+// ...........................................................................
+
+// // use the "fastlock" defined in librdmacm
+// #define DEFINE_ATOMICS 1
+// #include <rdma/rdma_cma.h>
+// static fastlock_t  lock;
+//
+// called once, before anything else
+// void skt_lock_init() {
+//    fastlock_init(&lock);
+// }
+
+
+// static sem_t  sem;
+static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+
+
+
 
 
 
@@ -85,20 +146,10 @@ shut_down_handle(SocketHandle* handle) {
   if (handle->flags & HNDL_CONNECTED) {
     int dbg;                    // check return values
 
-    // Without doing our own riounmap, we get a segfault in the
-    // CLOSE() below, when rclose() calls riounmap() itself.
-    //
-    // It's okay if handle->rio_buf only has local scope, in server_put(),
-    // we're just unmapping the address here, not using it.
-    //
-    if (handle->flags & HNDL_RIOMAPPED) {
-      neDBG("peer_fd %3d: riounmap'ing\n", handle->peer_fd);
-      dbg = RIOUNMAP(handle->peer_fd, handle->rio_buf, handle->rio_size);
-      neDBG("peer_fd %3d: unmap = %d\n", handle->peer_fd, dbg);
-      handle->flags &= ~HNDL_RIOMAPPED;
-    }
-
 #if 0
+    // NOTE: As of librdmacm-1.0.21, which is installed in our TSS-2
+    //       RHEL6.9 machines) rclose() calls rshutdown(), if needed.
+    //       
     // Commented out because rshutdown() sometimes deadlocks.
     // The stacktrace isn't identical to the one reported here:
     //    https://github.com/ofiwg/librdmacm/issues/1
@@ -117,16 +168,44 @@ shut_down_handle(SocketHandle* handle) {
 
     neDBG("peer_fd %3d: shutdown\n", handle->peer_fd);
     dbg = SHUTDOWN(handle->peer_fd, SHUT_RDWR);
+    if (dbg)
+       handle->flags |= HNDL_DBG3;
     neDBG("peer_fd %3d: shutdown = %d\n", handle->peer_fd, dbg);
 #endif
 
+#if 1
+    // NOTE: As of librdmacm-1.0.21, which is installed in our TSS-2
+    //       RHEL6.9 machines) rclose() calls rs_free() ->
+    //       rs_free_iomappings() -> riounmap().
+    //
+    // Without doing our own riounmap, we get a segfault in the
+    // CLOSE() below, when rclose() calls riounmap() itself.
+    //
+    // It's okay if handle->rio_buf only has local scope, in server_put(),
+    // we're just unmapping the address here, not using it.
+    //
+    if (handle->flags & HNDL_RIOMAPPED) {
+      neDBG("peer_fd %3d: riounmap'ing\n", handle->peer_fd);
+      dbg = RIOUNMAP(handle->peer_fd, handle->rio_buf, handle->rio_size);
+      if (dbg)
+         handle->flags |= HNDL_DBG3;
+      neDBG("peer_fd %3d: unmap = %d\n", handle->peer_fd, dbg);
+      handle->flags &= ~HNDL_RIOMAPPED;
+    }
+#endif
+
     neDBG("peer_fd %3d: close\n", handle->peer_fd);
+    LOCK(&lock);
     dbg = CLOSE(handle->peer_fd);
+    UNLOCK(&lock);
+    if (dbg)
+       handle->flags |= HNDL_DBG3;
     neDBG("peer_fd %3d: close = %d\n", handle->peer_fd, dbg);
 
     handle->flags &= ~HNDL_CONNECTED;
   }
 
+  handle->flags = 0;
   neDBG("peer_fd %3d: done\n", handle->peer_fd);
 }
 
@@ -621,6 +700,8 @@ const char* command_str(SocketCommand command) {
 int write_pseudo_packet(int fd, SocketCommand command, size_t size, void* buf) {
   ssize_t write_count;
 
+  //  REQUIRE_0( rs_check(fd) ); // DEBUGGING (custom rsocket.h helper)
+
   // --- fill in buffer, for single send()
   PseudoPacketHeader  hdr;
 
@@ -653,6 +734,8 @@ int read_pseudo_packet_header(int fd, PseudoPacketHeader* hdr, int peek) {
   static const char*  peek_indicator = " *";
   ssize_t read_count;
   memset(hdr, 0, sizeof(PseudoPacketHeader));
+
+  //  REQUIRE_0( rs_check(fd) ); // DEBUGGING (custom rsocket.h helper)
 
   // --- read header in one go
   NEED_0( read_raw(fd, (char*)HDR_BUF(hdr), HDR_BUFSIZE, peek) );
@@ -818,9 +901,11 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
      PseudoPacketHeader header;
      NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 1) );
 
+     // process SEEKs now, so that we only read data from the file that is
+     // actually wanted by the socket peer.
      while (HDR_CMD(&header) == CMD_SEEK_SET) {
 
-        // remove peeked packet-header
+        // remove peeked SEEK packet-header
         NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 0) );
 
         neDBG("got SEEK %lld\n", HDR_SIZE(&header));
@@ -873,13 +958,6 @@ ssize_t copy_file_to_socket(int fd, SocketHandle* handle, char* buf, size_t size
         // peek again
         NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 1) );
      }
-
-     // Don't remove the peeked header!  This is probably the ACK that is
-     // sent by skt_read() from the client-side.  Our skt_write(), below,
-     // will expect to see that ACK as part of the handshake for its send.
-     //
-     //     // remove peeked packet-header
-     //     NEED_0( read_pseudo_packet_header(handle->peer_fd, &header, 0) );
 
 
     // --- read from file
@@ -1356,8 +1434,9 @@ int client_s3_authenticate(SocketHandle* handle, int command) {
 int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
   neDBG("skt_open(0x%llx (flags: 0x%x), '%s', %x, ...)\n", (size_t)handle, handle->flags, service_path, flags);
 
-  if (handle->flags && (! (handle->flags & HNDL_CLOSED))) {
+  if (handle->flags && (handle->flags & HNDL_CONNECTED)) {
     neERR("attempt to open handle that is not closed\n");
+    handle->flags |= HNDL_DBG2;
     return -1;
   }
   memset(handle, 0, sizeof(SocketHandle));
@@ -1464,8 +1543,12 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
   int fd;
 
   // open socket to server
+  LOCK(&lock);
   NEED_GT0( fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
+  UNLOCK(&lock);
   neDBG("fd = %d\n", fd);
+
+  //  REQUIRE_0( rs_check(fd) ); // DEBUGGING (custom rsocket.h helper)
 
   //  // don't do this on the PUT-client?
   //  int disable = 0;
@@ -1475,9 +1558,11 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
     unsigned mapsize = 1; // max number of riomap'ed buffers (on this fd ?)
     NEED_0( RSETSOCKOPT( fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
   }
+  //  REQUIRE_0( rs_check(fd) ); // DEBUGGING (custom rsocket.h helper)
 
   NEED_0( CONNECT(fd, s_addr_ptr, s_addr_len) );
   neDBG("skt_open: connected [%d] '%s'\n", fd, spec->fname);
+  //  REQUIRE_0( rs_check(fd) ); // DEBUGGING (custom rsocket.h helper)
 
   handle->peer_fd = fd;         // now peer_fd can be assigned
   handle->flags |= HNDL_CONNECTED;
@@ -1690,10 +1775,10 @@ int basic_init(SocketHandle* handle, SocketCommand cmd) {
     handle->flags |= HNDL_OP_INIT;
 
     if (cmd != CMD_NULL) {
-      PathSpec* spec = &handle->path_spec;
 #if S3_AUTH
       NEED_0( client_s3_authenticate(handle, cmd) );
 #else
+      PathSpec* spec = &handle->path_spec;
       NEED_0( write_pseudo_packet(handle->peer_fd, cmd, strlen(spec->fname)+1, spec->fname) );
 #endif
     }
@@ -1735,7 +1820,7 @@ int write_init(SocketHandle* handle, SocketCommand cmd) {
     }
     handle->rio_offset = HDR_SIZE(&header);
     neDBG("got riomap offset from peer: 0x%llx\n", HDR_SIZE(&header));
-#endif  
+#endif
 
   }
 
@@ -1898,7 +1983,11 @@ int riomap_reader(SocketHandle* handle, void* buf, size_t size) {
     neDBG("peer_fd %3d: Dropping old riomaping\n", handle->peer_fd);
     int dbg = RIOUNMAP(handle->peer_fd, handle->rio_buf, handle->rio_size);
     neDBG("peer_fd %3d: unmap = %d\n", handle->peer_fd, dbg);
-
+    if (dbg) {
+       neERR("unmap failed: %s\n", strerror(errno));
+       THREAD_CANCEL(ENABLE);
+       return -1;
+    }
     handle->flags &= ~HNDL_RIOMAPPED;
     THREAD_CANCEL(ENABLE);
   }
@@ -2155,8 +2244,8 @@ off_t skt_lseek(SocketHandle* handle, off_t offset, int whence) {
   // should be.  Going with (2).
 
   // perform deferred initial protocol, if needed
-  char  dummy[1];
-  NEED_0( read_init(handle, CMD_GET, dummy, 1) );
+  char  dummy[FNAME_SIZE];
+  NEED_0( read_init(handle, CMD_GET, dummy, FNAME_SIZE) );
 
   NEED_0( write_pseudo_packet(handle->peer_fd, CMD_SEEK_SET, seek_pos, NULL) );
 
@@ -2285,15 +2374,22 @@ int skt_close(SocketHandle* handle) {
             //       pseudo-packet we read will be the ACK for that write,
             //       rather than the ACK for the DATA 0 we just wrote.  Skip
             //       over the former to get to the latter.
-            PseudoPacketHeader hdr;
+            PseudoPacketHeader hdr = {0};
             EXPECT_0( read_pseudo_packet_header(handle->peer_fd, &hdr, 0) );
             EXPECT(   (HDR_CMD(&hdr) == CMD_ACK) );
+            if (HDR_CMD(&hdr) != CMD_ACK)
+                handle->flags |= HNDL_DBG1;
 
             if ((HDR_CMD(&hdr) == CMD_ACK) && HDR_SIZE(&hdr)) {
                EXPECT_0( read_pseudo_packet_header(handle->peer_fd, &hdr, 0) );
                EXPECT(   (HDR_CMD(&hdr) == CMD_ACK) );
+               if (HDR_CMD(&hdr) != CMD_ACK)
+                  handle->flags |= HNDL_DBG1;
             }
          }
+      }
+      else if (! (handle->flags & HNDL_GET)) {
+         abort();
       }
       else {
          // we were reading from this socket
@@ -2346,21 +2442,61 @@ int skt_close(SocketHandle* handle) {
 // pseudo-packet saying chown this file, etc.  But that's what we're
 // doing, for now.
 //
-// TBD: For the needs of libne, we could potentially "cheat" a little,
-//     and allow a socket that was opened for GET/PUT to be
-//     "pre-closed", or something, which would leave the socket in
-//     place, so we could send chown/chmod ops.  However, that gets a
-//     little ugly to do in an implementation-agnostic way, because
-//     the file-based version (i.e. as opposed to using this sockets
-//     library) will close first, then chown.
+// TBD: For the needs of libne, we could potentially "cheat" a little, and
+//     allow a socket that was opened for GET/PUT to be "pre-closed", or
+//     something, which would leave the socket that had been used for
+//     writing the data in place, so we could send chown/chmod ops on it.
+//     However, that gets a little ugly to do in an implementation-agnostic
+//     way, because the file-based version (i.e. as opposed to using this
+//     sockets library) will close first, then chown.
+//
+//
+// client/server:  [See FILE_OPS_USE_FULL_OPEN]
+//
+//     We forego establishing a "fully open" handle (with write_init()),
+//     which would allow us to send the new fname with skt_write(), instead
+//     of write_raw().  It would also add an extra the overhead of
+//     riomapping/unmapping, plus an extra phase of protocol, just for that
+//     one thing.  Instead, we'll just resort to write_raw(), and our
+//     cleanup devolves to shut_down_handle().
+//
+//     Using "full" open (i.e. with write_init(), rather than basic_init())
+//     doesn't work at the moment.  We want to avoid it anyhow (as the only
+//     thing it adds is that the read-side does riomapping of buffers).  It
+//     was thought maybe this was why we were seeing a segfault in
+//     rclose().
+//
+//     With full opens, we could chose to have client use skt_write() and
+//     server use skt_read() [or vice-versa, if we init with write_init(),
+//     etc], instead of using write_raw() / read_raw(), etc.
+//
+//
+//     We could just ignore the nice closing protocol.  After we've done
+//     the op, neither side needs to care about the other.  Both sides
+//     could just shut_down_handle(), I think.  But mutually closing seems
+//     more solid.  Doing it that way, for now, but we don't require a
+//     successful close, in order to declare the op successful.
+//
+//     If one side closes and the other just shuts-down, the closer will be
+//     stuck waiting for the other side to read her DATA 0, or to send an
+//     ACK, but will eventually time-out.  (See WR_TIMEOUT / RD_TIMEOUT.)
 //
 // ===========================================================================
+
+
+// NOTE: Adding full opens requires that the server-side also be doing
+//  "full" opens, (i.e. with fake_open(), rather than fake_open_basic()).
+
+#define FILE_OPS_USE_FULL_OPEN 1
+
 
 
 
 // ...........................................................................
 // UNLINK
 // ...........................................................................
+
+// see comments re "file-based ops"
 
 int skt_unlink(const void* aws_ctx, const char* service_path) {
   //  NO_IMPL();
@@ -2372,13 +2508,17 @@ int skt_unlink(const void* aws_ctx, const char* service_path) {
   NEED_GT0( skt_open(&handle, service_path, O_WRONLY) );
 
   // jNEED() macros will run this before exiting
-  jHANDLER( jshut_down_handle, &handle );
+  jHANDLER( jskt_close, &handle );
 
   // install authentication info that will be used in basic_init()
   jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
 
   // send UNLINK with pathname
+#if FILE_OPS_USE_FULL_OPEN
+  jNEED_0( write_init(&handle, CMD_UNLINK) );
+#else
   jNEED_0( basic_init(&handle, CMD_UNLINK) );
+#endif
 
   // read RETURN, providing return-code from the remote rename().
   jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr, 0) );
@@ -2386,15 +2526,63 @@ int skt_unlink(const void* aws_ctx, const char* service_path) {
   int rc =   (int)HDR_SIZE(&hdr);
 
   // close()
-  NEED_0( skt_close(&handle) );
+  // NEED_0( skt_close(&handle) );
+  skt_close(&handle);
 
   return rc;
 }
 
 
+
+
 // ...........................................................................
 // CHOWN
 // ...........................................................................
+
+// see comments re "file-based ops"
+
+// int  skt_chown (const void* aws_ctx, const char* service_path, uid_t uid, gid_t gid) {
+// 
+//   SocketHandle       handle = {0};
+//   PseudoPacketHeader hdr = {0};
+// 
+//   // This does NOT actually open() the server-side file
+//   NEED_GT0( skt_open(&handle, service_path, O_WRONLY) );
+// 
+//   // jNEED() macros will run this before exiting
+//   jHANDLER( jskt_close, &handle );
+// 
+//   // install authentication info that will be used in basic_init()
+//   jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
+// 
+//   // send CHOWN with pathname
+// #if FILE_OPS_USE_FULL_OPEN
+//   jNEED_0( write_init(&handle, CMD_CHOWN) );
+// #else
+//   jNEED_0( basic_init(&handle, CMD_CHOWN) );
+// #endif
+// 
+//   // write UID
+//   uint64_t uid_buf = hton64(uid);
+//   jNEED_0( write_raw(handle.peer_fd, (char*)&uid_buf, sizeof(uid_buf)) );
+// 
+//   // write GID
+//   uint64_t gid_buf = hton64(gid);
+//   jNEED_0( write_raw(handle.peer_fd, (char*)&gid_buf, sizeof(gid_buf)) );
+// 
+// 
+//   // read RETURN, providing return-code from the remote lchown().
+//   jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr, 0) );
+//   jNEED(   (HDR_CMD(&hdr) == CMD_RETURN) );
+//   int rc =   (int)HDR_SIZE(&hdr);
+// 
+//   // close()
+//   // jNEED_0( skt_close(&handle) );
+//   skt_close(&handle);
+// 
+//   return rc;
+// }
+
 
 int  skt_chown (const void* aws_ctx, const char* service_path, uid_t uid, gid_t gid) {
 
@@ -2405,17 +2593,22 @@ int  skt_chown (const void* aws_ctx, const char* service_path, uid_t uid, gid_t 
   NEED_GT0( skt_open(&handle, service_path, O_WRONLY) );
 
   // jNEED() macros will run this before exiting
-  jHANDLER( jshut_down_handle, &handle );
+  jHANDLER( jskt_close, &handle );
 
   // install authentication info that will be used in basic_init()
   jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
 
   // send CHOWN with pathname
+#if FILE_OPS_USE_FULL_OPEN
+  jNEED_0( write_init(&handle, CMD_CHOWN) );
+#else
   jNEED_0( basic_init(&handle, CMD_CHOWN) );
+#endif
 
   // write UID
   uint64_t uid_buf = hton64(uid);
-  jNEED_0( write_raw(handle.peer_fd, (char*)&uid_buf, sizeof(uid_buf)) );
+  //  jNEED_0( write_raw(handle.peer_fd, (char*)&uid_buf, sizeof(uid_buf)) );
+  jNEED( skt_write(&handle, (char*)&uid_buf, sizeof(uid_buf)) == sizeof(uid_buf) );
 
   // write GID
   uint64_t gid_buf = hton64(gid);
@@ -2428,7 +2621,8 @@ int  skt_chown (const void* aws_ctx, const char* service_path, uid_t uid, gid_t 
   int rc =   (int)HDR_SIZE(&hdr);
 
   // close()
-  jNEED_0( skt_close(&handle) );
+  // jNEED_0( skt_close(&handle) );
+  skt_close(&handle);
 
   return rc;
 }
@@ -2439,13 +2633,57 @@ int  skt_chown (const void* aws_ctx, const char* service_path, uid_t uid, gid_t 
 // RENAME
 // ...........................................................................
 
+// see comments re "file-based ops"
 
-// NOTE: As on the server-side, we forgo establishing an "open"
-//     handle, which would allow e.g. skt_write() of the new fname,
-//     instead of write_raw().  It would also add an extra layer of
-//     protocol, plus the overhead of riomapping/unmapping, just for
-//     that one thing.  Instead, we'll just resort to write_raw(), and
-//     our cleanup devolves to shut_down_handle().
+// int skt_rename (const void* aws_ctx, const char* service_path, const char* new_path) {
+//   neDBG("skt_rename from: %s\n", service_path);
+//   neDBG("skt_rename to:   %s\n", new_path);
+// 
+//   // if libne is calling, both paths are service_paths.
+//   // Strip off the host:port portion of the new_path
+//   const char* new_fname = new_path;
+//   PathSpec    new_spec;
+//   if (! parse_service_path(&new_spec, new_path) ) {
+//     new_fname = new_spec.fname;
+//     neDBG("skt_rename to2:  %s\n", new_fname);
+//   }
+// 
+//   SocketHandle       handle = {0};
+//   PseudoPacketHeader hdr = {0};
+// 
+//   // This does NOT actually open() the server-side file
+//   NEED_GT0( skt_open(&handle, service_path, O_WRONLY) );
+// 
+//   // jNEED() macros will run this before exiting
+//   jHANDLER( jskt_close, &handle );
+// 
+//   // install authentication info that will be used in basic_init()
+//   jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
+//   
+//   // send RENAME with orig-path
+// #if FILE_OPS_USE_FULL_OPEN
+//   jNEED_0( write_init(&handle, CMD_RENAME) );
+// #else
+//   jNEED_0( basic_init(&handle, CMD_RENAME) );
+// #endif
+// 
+//   // send new-fname
+//   size_t len     = strlen(new_fname) +1;
+//   size_t len_buf = hton64(len);
+//   jNEED_0( write_raw(handle.peer_fd, (char*)&len_buf,  sizeof(len_buf)) );
+//   jNEED_0( write_raw(handle.peer_fd, (char*)new_fname, len) );
+// 
+//   // read RETURN, providing return-code from the remote rename().
+//   jNEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr, 0) );
+//   jNEED(   (HDR_CMD(&hdr) == CMD_RETURN) );
+//   int rc =   (int)HDR_SIZE(&hdr);
+// 
+//   // close()
+//   // NEED_0( skt_close(&handle) );
+//   skt_close(&handle);
+// 
+//   return rc;
+// }
 
 int skt_rename (const void* aws_ctx, const char* service_path, const char* new_path) {
   neDBG("skt_rename from: %s\n", service_path);
@@ -2466,31 +2704,32 @@ int skt_rename (const void* aws_ctx, const char* service_path, const char* new_p
   // This does NOT actually open() the server-side file
   NEED_GT0( skt_open(&handle, service_path, O_WRONLY) );
 
-#if 0
+  //  REQUIRE_0( rs_check(handle.peer_fd) ); // DEBUGGING (custom rsocket.h helper)
+
   // jNEED() macros will run this before exiting
   jHANDLER( jskt_close, &handle );
+
+  //  REQUIRE_0( rs_check(handle.peer_fd) ); // DEBUGGING (custom rsocket.h helper)
 
   // install authentication info that will be used in basic_init()
   jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
   
-  // perform deferred initial protocol exchanges, and send fname
+  //  REQUIRE_0( rs_check(handle.peer_fd) ); // DEBUGGING (custom rsocket.h helper)
+
+  // send RENAME with orig-path
+#if FILE_OPS_USE_FULL_OPEN
   jNEED_0( write_init(&handle, CMD_RENAME) );
-
 #else
-  // jNEED() macros will run this before exiting
-  jHANDLER( jshut_down_handle, &handle );
-
-  // install authentication info that will be used in basic_init()
-  jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
-
-  // perform deferred initial protocol exchanges, and send fname
   jNEED_0( basic_init(&handle, CMD_RENAME) );
 #endif
 
   // send new-fname
   size_t len     = strlen(new_fname) +1;
   size_t len_buf = hton64(len);
-  jNEED_0( write_raw(handle.peer_fd, (char*)&len_buf,  sizeof(len_buf)) );
+  neDBG("sending len = %ld (net-byte-order: 0x%lx)\n", len, len_buf);
+  // jNEED_0( write_raw(handle.peer_fd, (char*)&len_buf,  sizeof(len_buf)) );
+  jNEED( skt_write(&handle, (char*)&len_buf,  sizeof(len_buf)) == sizeof(len_buf) );
+
   jNEED_0( write_raw(handle.peer_fd, (char*)new_fname, len) );
 
   // read RETURN, providing return-code from the remote rename().
@@ -2498,13 +2737,9 @@ int skt_rename (const void* aws_ctx, const char* service_path, const char* new_p
   jNEED(   (HDR_CMD(&hdr) == CMD_RETURN) );
   int rc =   (int)HDR_SIZE(&hdr);
 
-#if 1
   // close()
-  NEED_0( skt_close(&handle) );
-#else
-  // close()
-  shut_down_handle(&handle);
-#endif
+  // NEED_0( skt_close(&handle) );
+  skt_close(&handle);
 
   return rc;
 }
@@ -2520,18 +2755,19 @@ int skt_rename (const void* aws_ctx, const char* service_path, const char* new_p
 //
 // TBD: Server just translates successive struct members to
 //    network-byte-order (appropriately to their size) and sends them
-//    contiguously.  We're assuming that STAT_DATA_STRUCT size being
-//    the same on client and server means that all the fields also
-//    have the same size.  It might be better for the server to
-//    include some info that would allow us to validate that we agree
-//    on the size of the elements.
+//    contiguously.  We're assuming that STAT_DATA_STRUCT size being the
+//    same on client and server means that all the fields also have the
+//    same size.  It might be better for the server to include some info
+//    that would allow us to validate that we agree on the size of the
+//    elements.
 //
-// TBD: It would be even smarter for client to open send an endian
-//    argument, and maybe the server could just RDMA the struct
-//    contents straight to us without the need for translations to
-//    network-byte-order.
+// TBD: It would be even smarter for client to send an endian argument, and
+//    maybe the server could just RDMA the struct contents straight to us
+//    without the need for translations to network-byte-order.
 //
 // ...........................................................................
+
+// see comments re "file-based ops"
 
 int skt_stat(const void* aws_ctx, const char* service_path, struct stat* st) {
   SocketHandle   handle = {0};
@@ -2546,7 +2782,6 @@ int skt_stat(const void* aws_ctx, const char* service_path, struct stat* st) {
   // This does NOT actually open() the server-side file
   NEED_GT0( skt_open(&handle, service_path, (O_RDONLY)) );
 
-#if 0
   // jNEED() macros will run this before exiting
   jHANDLER( jskt_close, &handle );
 
@@ -2554,15 +2789,9 @@ int skt_stat(const void* aws_ctx, const char* service_path, struct stat* st) {
   jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
 
   // send STAT plus fname, and prepare for reading via skt_read()
+#if FILE_OPS_USE_FULL_OPEN
   jNEED_0( read_init(&handle, CMD_STAT, ptr, STAT_DATA_SIZE) );
 #else
-  // jNEED() macros will run this before exiting
-  jHANDLER( jshut_down_handle, &handle );
-
-  // install authentication info that will be used in basic_init()
-  jNEED_0( skt_fcntl(&handle, SKT_F_SETAUTH, aws_ctx) );
-
-  // send STAT plus fname, and prepare for reading via read_raw()
   jNEED_0( basic_init(&handle, CMD_STAT) );
 #endif
 
@@ -2606,13 +2835,9 @@ int skt_stat(const void* aws_ctx, const char* service_path, struct stat* st) {
   jRECV_VALUE(st->st_mtime, ptr);   /* time of last modification */
   jRECV_VALUE(st->st_ctime, ptr);   /* time of last status change */
 
-#if 0
-  // close RDMA stream
-  jNEED_0( skt_close(&handle) );
-#else
   // close
-  shut_down_handle(&handle);
-#endif
+  // jNEED_0( skt_close(&handle) );
+  skt_close(&handle);
 
   return 0;
 }
@@ -2621,6 +2846,8 @@ int skt_stat(const void* aws_ctx, const char* service_path, struct stat* st) {
 // ...........................................................................
 // GETXATTR
 // ...........................................................................
+
+// see comments re "file-based ops"
 
 int skt_getxattr(const void* aws_ctx, const char* service_path, const char* name, void* value, size_t size) {
   NO_IMPL();
