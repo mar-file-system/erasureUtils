@@ -273,14 +273,15 @@ typedef struct rdma_addrinfo           SockAddr;
 #  define RIOUNMAP(...)         riounmap(__VA_ARGS__)
 #  define RSETSOCKOPT(...)      rsetsockopt(__VA_ARGS__)
 
-// see notes in skt_common.c re thread-safety in librdmacm.
-// All these LOCK/UNLOCKs should be removed, after our patch
-// to librdmacm is installed.
-// #  define LOCK(LOCK)            pthread_mutex_lock(LOCK);
-// #  define UNLOCK(LOCK)          pthread_mutex_unlock(LOCK);
 
-#  define LOCK(LOCK)
-#  define UNLOCK(LOCK)
+// These LOCK/UNLOCKs should be removed, after our patch (5ac0576d51dd) to
+// librdmacm is installed.  This is a work-around for unpatched systems.
+
+#  define LOCK(LOCK)            pthread_mutex_lock(LOCK);
+#  define UNLOCK(LOCK)          pthread_mutex_unlock(LOCK);
+
+// #  define LOCK(LOCK)
+// #  define UNLOCK(LOCK)
 
 
 /* -----------------------------------

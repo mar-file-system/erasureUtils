@@ -67,44 +67,24 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 // ...........................................................................
-// NOTE: librdmacm is not thread-safe:
 //
-// librdmacm performs locks around manipulations of its low-level <idm>
-// structure (i.e. when an rs is installed during opens, or removed during
-// closes), but this is not enough to make multi-threaded applications
-// thread-safe, even if they always do new opens and closes within a given
-// thread.  The problem is that surrounding code in rsocket() and rclose()
-// do not lock around the process of acquiring/releasing the underlying
-// file-descriptor. (The fd is acquired/released via open/close of
-// /dev/infiniband/rdma_cm).  This fd is used as an index into idm.  Thus,
-// the following scenario can happen:
+// NOTE: librdmacm has a race-condition.  A patch is pending
+//       (5ac0576d51dd).
 //
-//   (thread A) calls rclose(), which releases the rsocket fd before
-//              removing the rs from idm, where it is indexed via the fd.
+// DETAILS: If rs_free() releases the fd before calling rs_remove(), a
+//       second thread in rsocket() may acquire the same fd and store its
+//       own rs in the corresponding index-element.  When the first thread
+//       then gets around to calling rs_remove() it ends up removing the rs
+//       of the second thread, and storing a NULL there.
 //
-//   (thread B) in rsocket(), acquires that same fd (as a result of a
-//              ligitimate new call to open()), and stores its own rs at
-//              the indexed position, overwriting thread A's rs.
-//
-//   (thread A) now gets around to removing the indexed rs, which is
-//              actually thread B's rs.
-//
-//   (thread B) is now hosed.  Its indexed rs is 0x0.  The following
-//              functions in librdmacm do not check the value they get from
-//              idm, therefore, thread B will now segfault inside librdmacm
-//              if it calls any of them:
-//
-//              rrecv
-//              rrecvfrom
-//              rsend
-//              rsendto
-//              rsendv
-//              riomap
-//              riounmap
-//              riowrite
-//
+//       Several functions still do not check for NULL after retrieving an
+//       rs from the index for an open rsocket.  Thus, the second thread
+//       would get a segfault in any of the following functions: rrecv,
+//       rrecvfrom, rsend, rsendto, rsendv, riomap, riounmap, riowrite.
 // 
-// THEREFORE: we now provide our own locking around rsocket() and rclose().
+// WORK_AROUND: Until the patch is integrated, we add per-process locking
+//       around rsocket() and rclose().  This locking becomes unnecessary,
+//       as soon as the patch is integrated into the library.
 //
 // ...........................................................................
 
