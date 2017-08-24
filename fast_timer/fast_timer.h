@@ -93,20 +93,30 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 
-// indices for TimerValue.v32[] elements
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+// HI/LO are indices for TimerValue.v32[] elements,
+// such that TimerValue.v64 can be used without further manipulation.
+#include <endian.h>
+
+#ifndef __BYTE_ORDER
+static uint16_t _one = 1;
+static char*    _one_ptr = (char*)&_one;
+#  define HI    (uint8_t)_one_ptr[0]; /* 0 for big-endian, 1 for little-endian */
+#  define LO    (uint8_t)_one_ptr[1]; /* 1 for big-endian, 0 for little-endian */
+
+#elif __BYTE_ORDER == __ORDER_BIG_ENDIAN
+#  define HI  0
+#  define LO  1
+
+#else
 #  define LO  0
 #  define HI  1
-#else
-#  define LO  1
-#  define HI  0
 #endif
-
 
 typedef union {
    uint64_t v64;
    uint32_t v32[2];             /* see HI/LO */
 } TimerValue;
+
 
 typedef struct {
    int            chip;         /* CPU chip on which timer was started */
@@ -188,10 +198,10 @@ int fast_timer_stop(FastTimer* ft) {
    int chip = (c & 0xFFF000)>>12;
    int core = c & 0xFFF;
 
+#ifdef ALLOW_VARIABLE_TSC
    // This code path has been tested; chip/core migrations are detected,
    // loghisto functions ignore them, etc.
-   // 
-#ifdef ALLOW_VARIABLE_TSC
+
    if (ft_unlikely((invariant_TSC == 0)
                    && ((chip != ft->chip)
                        || (core != ft->core)))) {
@@ -277,6 +287,11 @@ int fast_timer_show_details(FastTimer* ft, const char* str);
 // "log-scaled histograms".  The idea is that you take a (64-bit) timer
 // value, effeciently round it up to the highest power-of-two, and add 1 to
 // the bin corresponding to that bit-position.
+//
+// NOTE: bins are "little endian"
+//
+//       bin[i]  counts timers whose high-order bit was 2^(i-1)
+//       bin[0]  counts timers that were all-zero (or in error)
 //
 // Because it may incur some cost to update the bins (vector load/store),
 // and many of the low-order bits represent time-scales the might not be

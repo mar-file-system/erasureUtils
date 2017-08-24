@@ -269,6 +269,16 @@ int log_histo_reset(LogHisto* hist) {
 
 // NOTE: 65 bins.  bin[0] is special, then there are bins for each bit in
 //    the 64-bit timer.
+//
+// NOTE: As noted in fast_timer.c:
+//
+//    bin[i] represents timer with highest-order bit = 2^(i-1),
+//    bin[0] represents timer with all-zeros (or error).
+//
+//    Thus, the bins are "little endian".
+//
+//    However, we're printing them out in big-endian order (i.e. bin[64] first).
+//    Thus, the display shows bins in order descending by significance.
 
 int log_histo_show_bins(LogHisto* hist, const char* str) {
    int i;
@@ -278,6 +288,8 @@ int log_histo_show_bins(LogHisto* hist, const char* str) {
 
    printf("\t");
    for (i=0; i<65; ++i) {
+
+      // spacing and newlines
       if (i && !(i%4))
          printf("  ");
       if (i && !(i%16))
