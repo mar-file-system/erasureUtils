@@ -197,11 +197,11 @@ parse_flags(StatFlagsValue* flags, const char* str) {
 }
 
 
-FSImplType
+uDALType
 select_impl(const char* path) {
    return (strchr(path, ':')
-           ? FSI_SOCKETS
-           : FSI_POSIX);
+           ? UDAL_SOCKETS
+           : UDAL_POSIX);
 }
 
 SnprintfFunc
@@ -243,7 +243,7 @@ int main( int argc, const char* argv[] )
          usage( argv[0], argv[1] ); 
          return -1;
       }
-      if ( argc >= 8 )          // optional <stat_flags> for write
+      if ( argc >= 8 )          // optional <stat_flags>
          parse_err = parse_flags(&stat_flags, argv[7]);
 
       if ( argc >= 9)
@@ -256,7 +256,7 @@ int main( int argc, const char* argv[] )
          usage( argv[0], argv[1] ); 
          return -1;
       }
-      if ( argc >= 8 )          // optional <stat_flags> for read
+      if ( argc >= 8 )          // optional <stat_flags>
          parse_err = parse_flags(&stat_flags, argv[8]);
 
       if ( argc >= 9)
@@ -269,7 +269,7 @@ int main( int argc, const char* argv[] )
          usage( argv[0], argv[1] ); 
          return -1;
       }
-      if ( argc == 7 )          // optional <stat_flags> for read
+      if ( argc == 7 )          // optional <stat_flags>
          parse_err = parse_flags(&stat_flags, argv[6]);
 
       wr = 2;
@@ -375,7 +375,11 @@ int main( int argc, const char* argv[] )
       toread = rand() % (totbytes+1);
 
       while ( totbytes != 0 ) {
+
+         // read from input file
          nread = read( filefd, buff, toread );
+
+         // write to erasure stripes
          PRINTout("libneTest: preparing to write %llu to erasure files...\n", nread );
          if ( nread != ne_write( handle, buff, nread ) ) {
             PRINTerr("libneTest: unexpected # of bytes written by ne_write\n" );
@@ -383,12 +387,13 @@ int main( int argc, const char* argv[] )
          }
          PRINTout("libneTest: write successful\n" );
 
-         if (size_arg) {
+         // without a command-line <input_size> argument, copy from the
+         // input-file until we reach EOF
+         if (size_arg)
             totbytes -= nread;
-         }
-         else if (toread != 0  &&  nread == 0) {
+         else if (toread != 0  &&  nread == 0)
             totbytes = 0;
-         }
+
          totdone += nread;
 
          toread = rand() % (totbytes+1);
@@ -414,9 +419,13 @@ int main( int argc, const char* argv[] )
    // -----------------------------------------------------------------
 
    else if ( wr == 0 ) {
+
+      // if <size_arg> wasn't provided, read the whole thing
+      uint64_t           tbd_bytes;         // total data to be moved
+      uint64_t           totbytes_per_iter; // buf-size
+
       PRINTout("libneTest: reading %llu bytes from erasure striping "
                "(N=%d,E=%d,offset=%d) to file %s\n", totbytes, N, E, start, argv[2] );
-
       buff = malloc( sizeof(char) * totbytes );
       PRINTout("libneTest: allocated buffer of size %llu\n", sizeof(char) * totbytes );
 
@@ -426,43 +435,57 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
-      if ( N == 0 ) {
+      tbd_bytes = totbytes;
+      if ((N == 0) || (size_arg ==0)) {
          handle = NE_OPEN( (char *)argv[3], NE_RDONLY | NE_NOINFO );
+         if (! size_arg)
+            tbd_bytes = handle->totsz;
       }
-      else {
+      else
          handle = NE_OPEN( (char *)argv[3], NE_RDONLY, start, N, E );
-      }
 
       if ( handle == NULL ) {
          PRINTerr("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
          return -1;
       }
       
-      toread = (rand() % totbytes) + 1;
-      nread = 0;
+      // fill multiple buffers, if needed
+      totbytes_per_iter = totbytes;
+      while (totdone < tbd_bytes) {
 
-      while ( totbytes > 0 ) {
-         PRINTout("libneTest: preparing to read %llu from erasure files with offset %llu\n", toread, nread );
-         if ( toread > totbytes ) {
-            PRINTerr("libneTest: toread (%llu) > totbytes (%llu)\n", toread, totbytes);
-            exit(EXIT_FAILURE);
+         totbytes = totbytes_per_iter;
+         if ((totdone + totbytes) > tbd_bytes)
+            totbytes = tbd_bytes - totdone;
+         PRINTout("libneTest: performing buffer-loop to read %llu bytes, at %llu/%llu\n",
+                  totbytes, totdone, tbd_bytes );
+
+         // go through each buffers-worth of data as a series of reads of
+         // decreasing size, in order to exercise "corner cases".
+         toread = (rand() % totbytes) + 1;
+         while ( totbytes > 0 ) {
+
+            PRINTout("libneTest: preparing to read %llu from erasure files with offset %llu\n", toread, totdone );
+            if ( toread > totbytes ) {
+               PRINTerr("libneTest: toread (%llu) > totbytes (%llu)\n", toread, totbytes);
+               exit(EXIT_FAILURE);
+            }
+
+            tmp = ne_read( handle, buff, toread, totdone );
+            if ( toread != tmp ) {
+               // couldn't this happen without there being an error (?)
+               PRINTerr("libneTest: ne_read got %d but expected %llu\n", tmp, toread );
+               return -1;
+            }
+
+            PRINTout("libneTest: ...done.  Writing %llu to output file.\n", toread );
+            write( filefd, buff, toread );
+
+            totbytes -= toread;
+            totdone  += toread;
+
+            if ( totbytes != 0 )
+               toread = ( rand() % totbytes ) + 1;
          }
-
-         tmp = ne_read( handle, buff, toread, nread );
-         if( toread != tmp ) {
-            PRINTerr("libneTest: ne_read got %d but expected %llu\n", tmp, toread );
-            return -1;
-         }
-
-         PRINTout("libneTest: ...done.  Writing %llu to output file.\n", toread );
-         write( filefd, buff, toread );
-
-         totbytes -= toread;
-         nread    += toread;
-         totdone  += toread;
-
-         if ( totbytes != 0 )
-            toread = ( rand() % totbytes ) + 1;
       }
 
       free(buff); 
