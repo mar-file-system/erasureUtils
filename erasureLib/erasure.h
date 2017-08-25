@@ -83,7 +83,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 //    typedef void*         SktAuth;
 // #endif
 
-#include "fs_impl.h"
+#include "udal.h"
 
 
 
@@ -250,8 +250,8 @@ typedef  int (*SnprintfFunc)(char* dest, size_t size, const char* format, u32 bl
 int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, void* state);
 
 
-struct FileSysImpl; // fwd-decl  (fs_impl.h)
-struct GenericFD;   // fwd-decl  (fs_impl.h)
+struct FileSysImpl; // fwd-decl  (udal.h)
+struct GenericFD;   // fwd-decl  (udal.h)
 
 struct handle {
    /* Erasure Info */
@@ -307,7 +307,7 @@ struct handle {
    SktAuth        auth;
 
    /* run-time dispatch of sockets versus file implementation */
-   const FileSysImpl*   impl;
+   const uDAL*    impl;
 
    /* optional timing/benchmarking */
    int            stat_flags;        /* initialized at build-time */
@@ -323,15 +323,15 @@ typedef struct handle* ne_handle;
 
 /* Erasure utility-functions taking a raw path argument */
 ne_handle ne_open1  ( SnprintfFunc func, void* state, SktAuth auth,
-                      StatFlagsValue flags, FSImplType itype,
+                      StatFlagsValue flags, uDALType itype,
                       char *path, ne_mode mode, ... );
 
 int       ne_delete1( SnprintfFunc func, void* state, SktAuth auth,
-                      StatFlagsValue flags, FSImplType itype,
+                      StatFlagsValue flags, uDALType itype,
                       char *path, int width );
 
 ne_stat   ne_status1( SnprintfFunc func, void* state, SktAuth auth,
-                      StatFlagsValue flags, FSImplType itype, char *path );
+                      StatFlagsValue flags, uDALType itype, char *path );
 
 // these interfaces provide a default SnprintfFunc, which supports the
 // expectations of the default MarFS multi-component implementation

@@ -161,7 +161,7 @@ static int           gf_gen_decode_matrix(unsigned char *encode_matrix,
                                           int nerrs, int nsrcerrs, int k, int m);
 //void dump(unsigned char *buf, int len);
 
-#include "fs_impl.h"
+#include "udal.h"
 
 
 
@@ -777,7 +777,7 @@ int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, 
 
 
 ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValue stat_flags,
-                       FSImplType itype,
+                       uDALType itype,
                        char *path, ne_mode mode, va_list ap )
 {
    char file[MAXNAME];       /* array name of files */
@@ -845,7 +845,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
       }
    }
    if ( bsz < 0  ||  bsz > MAXBLKSZ ) {
-      PRINTerr( "ne_open: improper bsz arguement received - %d\n", bsz );
+      PRINTerr( "ne_open: improper bsz argument received - %d\n", bsz );
       errno = EINVAL;
       return NULL;
    }
@@ -896,13 +896,14 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
       ret = xattr_check(handle, path); //idenfity total data size of stripe
       if ( handle->mode == NE_STAT ) {
-         handle->mode = mode;
          PRINTout( "ne_open: resetting mode to %d\n", mode);
+         handle->mode = mode;
          while ( handle->nerr > 0 ) {
             handle->nerr--;
             handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
             handle->src_err_list[handle->nerr] = 0;
          }
+         PRINTout( "ne_open: checking xattrs\n");
          ret = xattr_check(handle, path); //perform the check again, identifying mismatched values
          if ( ret != 0 ) {
             PRINTerr( "ne_open: extended attribute check has failed\n" );
@@ -1061,7 +1062,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
 // caller (e.g. MC-sockets DAL) specifies SprintfFunc, stat, and SktAuth
 // New: caller also provides flags that control whether stats are collected
 ne_handle ne_open1( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValue stat_flags,
-                    FSImplType itype,
+                    uDALType itype,
                     char *path, ne_mode mode, ... ) {
 
    va_list vl;
@@ -1087,7 +1088,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
 
    va_list vl;
    va_start(vl, mode);
-   return ne_open1_vl(ne_default_snprintf, NULL, auth, 0, FSI_POSIX, path, mode, vl);
+   return ne_open1_vl(ne_default_snprintf, NULL, auth, 0, UDAL_POSIX, path, mode, vl);
    va_end(vl);
 }
 
@@ -2308,13 +2309,13 @@ int ne_close( ne_handle handle )
  * @return int : 0 on success and -1 on failure
  */
 int ne_delete1( SnprintfFunc fn, void* state, SktAuth auth,
-                StatFlagsValue stat_flags, FSImplType itype,
+                StatFlagsValue stat_flags, uDALType itype,
                 char* path, int width ) {
    char  file[MAXNAME];       /* array name of files */
    int   counter;
    int   ret = 0;
 
-   const FileSysImpl* impl = get_impl(itype);
+   const uDAL* impl = get_impl(itype);
 
    // flags control collection of timing stats
    FastTimer  timer;            // we don't have an ne_handle
@@ -2353,7 +2354,7 @@ int ne_delete(char* path, int width ) {
       return -1;
    }
 
-   return ne_delete1(ne_default_snprintf, NULL, auth, 0, FSI_POSIX, path, width);
+   return ne_delete1(ne_default_snprintf, NULL, auth, 0, UDAL_POSIX, path, width);
 }
 
 
@@ -3395,9 +3396,9 @@ int ne_noxattr_rebuild(ne_handle handle) {
  *
  * @param SnprintfFunc fn : function takes block-number and <state> and produces per-block path from template.
  * @param void* state : optional state to be used by SnprintfFunc (e.g. configuration details)
- * @param SktAuth auth : authentication may be required for RDMA FSImplTypes
+ * @param SktAuth auth : authentication may be required for RDMA uDALTypes
  * @param StatFlagsValue flags : flags control the collection of *statistics*.  (Confusing, in this particular function.)
- * @param FSImplType itype : select the underlying file-system implementation (RDMA versus POSIX).
+ * @param uDALType itype : select the underlying file-system implementation (RDMA versus POSIX).
  * @param char* path : sprintf format-template for individual files of in each stripe.
  *
  * @return nestat : Status structure containing the encoded error
@@ -3407,7 +3408,7 @@ int ne_noxattr_rebuild(ne_handle handle) {
  */
 
 ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth,
-                    StatFlagsValue timer_flags, FSImplType itype,
+                    StatFlagsValue timer_flags, uDALType itype,
                     char *path )
 {
    char file[MAXNAME];       /* array name of files */
@@ -3609,5 +3610,5 @@ ne_stat ne_status(char *path) {
       return NULL;
    }
 
-   return ne_status1(ne_default_snprintf, NULL, auth, 0, FSI_POSIX, path);
+   return ne_status1(ne_default_snprintf, NULL, auth, 0, UDAL_POSIX, path);
 }

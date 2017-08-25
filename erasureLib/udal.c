@@ -65,7 +65,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <errno.h>
 
 #include "erasure.h"
-//#include "fs_impl.h"
+//#include "udal.h"
 
 
 
@@ -81,18 +81,18 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define FD(GFD)   (GFD)->fds.fd
 
 
-int     fsi_posix_fd_init(GenericFD* gfd) { FD(gfd) = -1; }
+int     udal_posix_fd_init(GenericFD* gfd) { FD(gfd) = -1; }
 
-int     fsi_posix_fd_err(GenericFD* gfd) { return (FD(gfd) < 0); }
+int     udal_posix_fd_err(GenericFD* gfd) { return (FD(gfd) < 0); }
 
-int     fsi_posix_fd_num(GenericFD* gfd) { return FD(gfd); }
+int     udal_posix_fd_num(GenericFD* gfd) { return FD(gfd); }
 
 
-int     fsi_posix_auth_init(const char* user, SktAuth* auth) { return 0; }
+int     udal_posix_auth_init(const char* user, SktAuth* auth) { return 0; }
 
-int     fsi_posix_auth_install(GenericFD* gfd, SktAuth* auth) { return 0; }
+int     udal_posix_auth_install(GenericFD* gfd, SktAuth* auth) { return 0; }
 
-int     fsi_posix_open(GenericFD* gfd, const char* path, int flags, ...) {
+int     udal_posix_open(GenericFD* gfd, const char* path, int flags, ...) {
    if (flags & O_CREAT) {
       va_list va;
       va_start(va, flags);
@@ -108,48 +108,48 @@ int     fsi_posix_open(GenericFD* gfd, const char* path, int flags, ...) {
 }
 
 
-ssize_t fsi_posix_write(GenericFD* gfd, const void* buf, size_t count) {
+ssize_t udal_posix_write(GenericFD* gfd, const void* buf, size_t count) {
    return write(FD(gfd), buf, count);
 }
 
-ssize_t fsi_posix_read(GenericFD* gfd, void* buf, size_t count) {
+ssize_t udal_posix_read(GenericFD* gfd, void* buf, size_t count) {
    return read(FD(gfd), buf, count);
 }
 
-int     fsi_posix_close(GenericFD* gfd) {
+int     udal_posix_close(GenericFD* gfd) {
    return close(FD(gfd));
 }
 
 
 #if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
-int     fsi_posix_fsetxattr(GenericFD* gfd, const char* name, const void* value, size_t size, int flags) {
+int     udal_posix_fsetxattr(GenericFD* gfd, const char* name, const void* value, size_t size, int flags) {
    return fsetxattr(FD(gfd), name, value, size, flags);
 }
 
 #else
-int     fsi_posix_fsetxattr(GenericFD* gfd, const char *name, const void *value, size_t size, u_int32_t position, int options) {
+int     udal_posix_fsetxattr(GenericFD* gfd, const char *name, const void *value, size_t size, u_int32_t position, int options) {
    return fsetxattr(FD(gfd), name, value, size, position, options);
 }
 #endif
 
 
 // #if (AXATTR_GET_FUNC == 4)
-// ssize_t fsi_posix_fgetxattr(GenericFD* gfd, const char* name, void* value, size_t size) {
+// ssize_t udal_posix_fgetxattr(GenericFD* gfd, const char* name, void* value, size_t size) {
 //    return fgetxattr(FD(gfd), name, value, size);
 // }
 // 
 // #else
-// ssize_t fsi_posix_fgetxattr(GenericFD* gfd, const char *name, void *value, size_t size, u_int32_t position, int options) {
+// ssize_t udal_posix_fgetxattr(GenericFD* gfd, const char *name, void *value, size_t size, u_int32_t position, int options) {
 //    return fgetxattr(FD(gfd), name, value, size, position, options);
 // }
 // #endif
 
 
-int     fsi_posix_fsync(GenericFD* gfd) {
+int     udal_posix_fsync(GenericFD* gfd) {
    return fsync(FD(gfd));
 }
 
-off_t   fsi_posix_lseek(GenericFD* gfd, off_t offset, int whence) {
+off_t   udal_posix_lseek(GenericFD* gfd, off_t offset, int whence) {
    return lseek(FD(gfd), offset, whence);
 }
 
@@ -157,16 +157,16 @@ off_t   fsi_posix_lseek(GenericFD* gfd, off_t offset, int whence) {
 
 
 // PATHOP
-int     fsi_posix_chown(SktAuth* auth, const char* path, uid_t owner, gid_t group) {
+int     udal_posix_chown(SktAuth* auth, const char* path, uid_t owner, gid_t group) {
    return chown(path, owner, group);
 }
-int     fsi_posix_unlink(SktAuth* auth, const char* path) {
+int     udal_posix_unlink(SktAuth* auth, const char* path) {
    return unlink(path);
 }
-int     fsi_posix_rename(SktAuth* auth, const char* oldpath, const char* newpath) {
+int     udal_posix_rename(SktAuth* auth, const char* oldpath, const char* newpath) {
    return rename(oldpath, newpath);
 }
-int     fsi_posix_stat(SktAuth* auth, const char* path, struct stat* buff) {
+int     udal_posix_stat(SktAuth* auth, const char* path, struct stat* buff) {
    return stat(path, buff);
 }
 
@@ -174,32 +174,32 @@ int     fsi_posix_stat(SktAuth* auth, const char* path, struct stat* buff) {
 
 
 
-static const FileSysImpl posix_impl = {
-   .fd_init      = &fsi_posix_fd_init,
-   .fd_err       = &fsi_posix_fd_err,
-   .fd_num       = &fsi_posix_fd_num,
+static const uDAL posix_impl = {
+   .fd_init      = &udal_posix_fd_init,
+   .fd_err       = &udal_posix_fd_err,
+   .fd_num       = &udal_posix_fd_num,
 
-   .auth_init    = &fsi_posix_auth_init,
-   .auth_install = &fsi_posix_auth_install,
+   .auth_init    = &udal_posix_auth_init,
+   .auth_install = &udal_posix_auth_install,
 
-   .open         = &fsi_posix_open,
-   .write        = &fsi_posix_write,
-   .read         = &fsi_posix_read,
-   .close        = &fsi_posix_close,
-   .fsetxattr    = &fsi_posix_fsetxattr,
-   // .fgetxattr    = &fsi_posix_fgetxattr,
-   .fsync        = &fsi_posix_fsync,
-   .lseek        = &fsi_posix_lseek,
+   .open         = &udal_posix_open,
+   .write        = &udal_posix_write,
+   .read         = &udal_posix_read,
+   .close        = &udal_posix_close,
+   .fsetxattr    = &udal_posix_fsetxattr,
+   // .fgetxattr    = &udal_posix_fgetxattr,
+   .fsync        = &udal_posix_fsync,
+   .lseek        = &udal_posix_lseek,
 
    // path-ops
-   .chown        = &fsi_posix_chown,
-   .unlink       = &fsi_posix_unlink,
-   .rename       = &fsi_posix_rename,
-   .stat         = &fsi_posix_stat,
+   .chown        = &udal_posix_chown,
+   .unlink       = &udal_posix_unlink,
+   .rename       = &udal_posix_rename,
+   .stat         = &udal_posix_stat,
 };
 
 
-const FileSysImpl* fs_impl_posix = &posix_impl;
+const uDAL* udal_impl_posix = &posix_impl;
 
 
 
@@ -224,32 +224,32 @@ const FileSysImpl* fs_impl_posix = &posix_impl;
 
 
 
-int fsi_skt_fd_init(GenericFD* gfd) {
+int udal_skt_fd_init(GenericFD* gfd) {
    memset(SKT(gfd), 0, sizeof(SocketHandle));
    SKT(gfd)->peer_fd = -1;
    return 0;
 }
 
-int fsi_skt_fd_err(GenericFD* gfd)  {
+int udal_skt_fd_err(GenericFD* gfd)  {
    return ((SKT(gfd)->peer_fd < 0)
            || (! SKT(gfd)->flags & HNDL_CONNECTED)
            || (  SKT(gfd)->flags & HNDL_DBG2)); /* temporary: skt_open() given an open handle */
 }
 
-int fsi_skt_fd_num(GenericFD* gfd)  { return SKT(gfd)->peer_fd; }
+int udal_skt_fd_num(GenericFD* gfd)  { return SKT(gfd)->peer_fd; }
 
 
 
-int fsi_skt_auth_init(const char* user, SktAuth* auth) {
+int udal_skt_auth_init(const char* user, SktAuth* auth) {
    return skt_auth_init(user, auth);
 }
-int fsi_skt_auth_install(GenericFD* gfd, SktAuth* auth) {
+int udal_skt_auth_install(GenericFD* gfd, SktAuth* auth) {
    return skt_auth_install(SKT(gfd), auth);
 }
 
 
 
-int fsi_skt_open(GenericFD* gfd, const char* path, int flags, ...) {
+int udal_skt_open(GenericFD* gfd, const char* path, int flags, ...) {
 
    SocketHandle* skt = SKT(gfd);
 
@@ -277,48 +277,48 @@ int fsi_skt_open(GenericFD* gfd, const char* path, int flags, ...) {
 }
 
 
-ssize_t fsi_skt_write(GenericFD* gfd, const void* buf, size_t count) {
+ssize_t udal_skt_write(GenericFD* gfd, const void* buf, size_t count) {
    return skt_write(SKT(gfd), buf, count);
 }
 
-ssize_t fsi_skt_read(GenericFD* gfd, void* buf, size_t count) {
+ssize_t udal_skt_read(GenericFD* gfd, void* buf, size_t count) {
    return skt_read(SKT(gfd), buf, count);
 }
 
-int     fsi_skt_close(GenericFD* gfd) {
+int     udal_skt_close(GenericFD* gfd) {
    return skt_close(SKT(gfd));
 }
 
 
 #if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
-int     fsi_skt_fsetxattr(GenericFD* gfd, const char* name, const void* value, size_t size, int flags) {
+int     udal_skt_fsetxattr(GenericFD* gfd, const char* name, const void* value, size_t size, int flags) {
    return skt_fsetxattr(SKT(gfd), name, value, size, flags);
 }
 
 #else
-int     fsi_skt_fsetxattr(GenericFD* gfd, const char *name, const void *value, size_t size, u_int32_t position, int options) {
+int     udal_skt_fsetxattr(GenericFD* gfd, const char *name, const void *value, size_t size, u_int32_t position, int options) {
    return skt_fsetxattr(SKT(gfd), name, value, size, position, options);
 }
 #endif
 
 
 // #if (AXATTR_GET_FUNC == 4)
-// ssize_t fsi_skt_fgetxattr(GenericFD* gfd, const char* name, void* value, size_t size) {
+// ssize_t udal_skt_fgetxattr(GenericFD* gfd, const char* name, void* value, size_t size) {
 //    return skt_fgetxattr(SKT(gfd), name, value, size);
 // }
 // 
 // #else
-// ssize_t fsi_skt_fgetxattr(GenericFD* gfd, const char *name, void *value, size_t size, u_int32_t position, int options) {
+// ssize_t udal_skt_fgetxattr(GenericFD* gfd, const char *name, void *value, size_t size, u_int32_t position, int options) {
 //    return skt_fgetxattr(SKT(gfd), name, value, size, position, options);
 // }
 // #endif
 
 
-int     fsi_skt_fsync(GenericFD* gfd) {
+int     udal_skt_fsync(GenericFD* gfd) {
    return skt_fsync(SKT(gfd));
 }
 
-off_t   fsi_skt_lseek(GenericFD* gfd, off_t offset, int whence) {
+off_t   udal_skt_lseek(GenericFD* gfd, off_t offset, int whence) {
    return skt_lseek(SKT(gfd), offset, whence);
 }
 
@@ -326,19 +326,19 @@ off_t   fsi_skt_lseek(GenericFD* gfd, off_t offset, int whence) {
 
 
 // PATHOP
-int     fsi_skt_chown(SktAuth* auth, const char* path, uid_t owner, gid_t group) {
+int     udal_skt_chown(SktAuth* auth, const char* path, uid_t owner, gid_t group) {
    return skt_chown(auth, path, owner, group);
 }
 
-int     fsi_skt_unlink(SktAuth* auth, const char* path) {
+int     udal_skt_unlink(SktAuth* auth, const char* path) {
    return skt_unlink(auth, path);
 }
 
-int     fsi_skt_rename(SktAuth* auth, const char* oldpath, const char* newpath) {
+int     udal_skt_rename(SktAuth* auth, const char* oldpath, const char* newpath) {
    return skt_rename(auth, oldpath, newpath);
 }
 
-int     fsi_skt_stat(SktAuth* auth, const char* path, struct stat* buff) {
+int     udal_skt_stat(SktAuth* auth, const char* path, struct stat* buff) {
    return skt_stat(auth, path, buff);
 }
 
@@ -346,33 +346,33 @@ int     fsi_skt_stat(SktAuth* auth, const char* path, struct stat* buff) {
 
 
 
-static const FileSysImpl sockets_impl = {
-   .fd_init      = &fsi_skt_fd_init,
-   .fd_err       = &fsi_skt_fd_err,
-   .fd_num       = &fsi_skt_fd_num,
+static const uDAL sockets_impl = {
+   .fd_init      = &udal_skt_fd_init,
+   .fd_err       = &udal_skt_fd_err,
+   .fd_num       = &udal_skt_fd_num,
 
-   .auth_init    = &fsi_skt_auth_init,
-   .auth_install = &fsi_skt_auth_install,
+   .auth_init    = &udal_skt_auth_init,
+   .auth_install = &udal_skt_auth_install,
 
-   .open         = &fsi_skt_open,
-   .write        = &fsi_skt_write,
-   .read         = &fsi_skt_read,
-   .close        = &fsi_skt_close,
-   .fsetxattr    = &fsi_skt_fsetxattr,
-   // .fgetxattr    = &fsi_skt_fgetxattr,
-   .fsync        = &fsi_skt_fsync,
-   .lseek        = &fsi_skt_lseek,
+   .open         = &udal_skt_open,
+   .write        = &udal_skt_write,
+   .read         = &udal_skt_read,
+   .close        = &udal_skt_close,
+   .fsetxattr    = &udal_skt_fsetxattr,
+   // .fgetxattr    = &udal_skt_fgetxattr,
+   .fsync        = &udal_skt_fsync,
+   .lseek        = &udal_skt_lseek,
 
    // path-ops
-   .chown        = &fsi_skt_chown,
-   .unlink       = &fsi_skt_unlink,
-   .rename       = &fsi_skt_rename,
-   .stat         = &fsi_skt_stat,
+   .chown        = &udal_skt_chown,
+   .unlink       = &udal_skt_unlink,
+   .rename       = &udal_skt_rename,
+   .stat         = &udal_skt_stat,
    
 };
 
 
-const FileSysImpl*  fs_impl_sockets = &sockets_impl;
+const uDAL*  udal_impl_sockets = &sockets_impl;
 
 
 
@@ -380,15 +380,15 @@ const FileSysImpl*  fs_impl_sockets = &sockets_impl;
 // generic
 // ---------------------------------------------------------------------------
 
-const FileSysImpl*
-get_impl(FSImplType itype) {
+const uDAL*
+get_impl(uDALType itype) {
 
-   if (itype == FSI_POSIX)
-      return fs_impl_posix;
-   else if (itype == FSI_SOCKETS)
-      return fs_impl_sockets;
+   if (itype == UDAL_POSIX)
+      return udal_impl_posix;
+   else if (itype == UDAL_SOCKETS)
+      return udal_impl_sockets;
    else {
-      PRINTerr( "ne_open: invalid FileSysImpl arg - %d\n", itype);
+      PRINTerr( "ne_open: invalid uDAL arg - %d\n", itype);
       errno = EINVAL;
       return NULL;
    }

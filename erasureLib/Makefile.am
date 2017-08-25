@@ -105,11 +105,11 @@ AM_CPPFLAGS = $(SOCKET_CPPFLAGS) $(TIMER_CPPFLAGS)   $(SOCKET_DEFS) $(TIMER_DEFS
 
 
 
-include_HEADERS = erasure.h ne_logging.h fs_impl.h
+include_HEADERS = erasure.h ne_logging.h udal.h
 
 
 lib_LIBRARIES = libne.a
-libne_a_SOURCES = erasure.c erasure.h fs_impl.c fs_impl.h
+libne_a_SOURCES = erasure.c erasure.h udal.c udal.h
 libne_a_LIBADD = $(SOCKET_LIBS) $(TIMER_LIBS)
 
 

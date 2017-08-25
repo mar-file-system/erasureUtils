@@ -78,7 +78,7 @@ struct handle;
 #include "skt_common.h"
 
 
-// ne_handle stores these, which can be used by any FSImpl
+// ne_handle stores these, which can be used by any uDAL implementation
 typedef struct GenericFD {
    // ne_handle      hndl;      // pointer back to ne_handle
    struct handle*    hndl;      // pointer back to ne_handle
@@ -89,116 +89,115 @@ typedef struct GenericFD {
 } GenericFD;
 
 
-// // Generic extractor function, redefined by each FSImpl.  This is called to
-// // transform a GenericFD into the thing needed by an FSImpl function.
+// // Generic extractor function, redefined by each uDAL implementation.  This is called to
+// // transform a GenericFD into the thing needed by a uDAL function.
 // typedef void* (*FDExtractor)(GenericFD* gfd);
 // 
-// // these will be cast to FDExtractor, for storage in FSImpl
+// // these will be cast to FDExtractor, for storage in uDAL
 // static inline int           extract_fd_posix(GenericFD* gfd)   { return gfd->fds.fd; }
 // static inline SocketHandle* extract_fd_sockets(GenericFD* gfd) { return &gfd->fds.skt; }
 
 
-// FileSystem Implementation
+// micro Data Abstraction Layer (uDAL)
 //
 // This abstraction allows callers to select the file-system implementation
 // (RDMA-sockets or POSIX) at open-time, on a per-file-handle basis.  This
-// means both the MC and RDMA MarFS DALs can be accessed at the same time.
+// means both the MC and RDMA MarFS DALs can be accessed with the same code.
 // Previously, we were doing a build-time configuration of libne, which
 // supported only one type of access.
 //
 // TBD: Perhaps this should just be defined within the MarFS DAL, and
-//     passed in to libne?  Probably.  (The FSImpl might also be a natural
+//     passed in to libne?  Probably.  (The uDAL might also be a natural
 //     place to keep the snprintf() function, config-state for snprintf,
 //     SktAuth pointer, etc).  Meanwhile, realize that this is distinct
 //     from the DAL, because we are defining how the individual block-files
 //     are accessed, whereas the DAL depends on libne to perform a
 //     transparent layer of erasure-coding.  Also, we're setting libne up
-//     to be deeply dependent on the FSImpl, so it makes some sense that it
+//     to be deeply dependent on the uDAL, so it makes some sense that it
 //     would be defined and ... implemented, in libne.
 
 
-typedef int     (*fsi_fd_init)(GenericFD* gfd);  // assign obviously-illegitimate value (e.g. -1)
-typedef int     (*fsi_fd_err) (GenericFD* gfd);  // GFD state is "error" ?
-typedef int     (*fsi_fd_num) (GenericFD* gfd);  // GFD "number" for diagnostics (e.g. fd value)
+typedef int     (*udal_fd_init)(GenericFD* gfd);  // assign obviously-illegitimate value (e.g. -1)
+typedef int     (*udal_fd_err) (GenericFD* gfd);  // GFD state is "error" ?
+typedef int     (*udal_fd_num) (GenericFD* gfd);  // GFD "number" for diagnostics (e.g. fd value)
 
-typedef int     (*fsi_auth_init)(const char* user, SktAuth* auth); // init <auth> for <user>
-typedef int     (*fsi_auth_install)(GenericFD* gfd, SktAuth* auth);
+typedef int     (*udal_auth_init)(const char* user, SktAuth* auth); // init <auth> for <user>
+typedef int     (*udal_auth_install)(GenericFD* gfd, SktAuth* auth);
 
-typedef int     (*fsi_open)(GenericFD* gfd, const char* path, int flags, ...);
+typedef int     (*udal_open)(GenericFD* gfd, const char* path, int flags, ...);
 
-typedef ssize_t (*fsi_write)(GenericFD* gfd, const void *buf, size_t count);
-typedef ssize_t (*fsi_read) (GenericFD* gfd, void *buf, size_t count);
-typedef int     (*fsi_close)(GenericFD* gfd);
+typedef ssize_t (*udal_write)(GenericFD* gfd, const void *buf, size_t count);
+typedef ssize_t (*udal_read) (GenericFD* gfd, void *buf, size_t count);
+typedef int     (*udal_close)(GenericFD* gfd);
 
 #if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
-typedef int     (*fsi_fsetxattr) (GenericFD* gfd, const char *name, const void *value, size_t size, int flags);
+typedef int     (*udal_fsetxattr) (GenericFD* gfd, const char *name, const void *value, size_t size, int flags);
 #else
-typedef int     (*fsi_fsetxattr) (GenericFD* gfd, const char *name, const void *value, size_t size, u_int32_t position, int options);
+typedef int     (*udal_fsetxattr) (GenericFD* gfd, const char *name, const void *value, size_t size, u_int32_t position, int options);
 #endif
 
 // #if (AXATTR_GET_FUNC == 4)
-// typedef ssize_t (*fsi_fgetxattr) (GenericFD* gfd, const char *name, void *value, size_t size);
+// typedef ssize_t (*udal_fgetxattr) (GenericFD* gfd, const char *name, void *value, size_t size);
 // #else
-// typedef ssize_t (*fsi_fgetxattr) (GenericFD* gfd, const char *name, void *value, size_t size, u_int32_t position, int options);
+// typedef ssize_t (*udal_fgetxattr) (GenericFD* gfd, const char *name, void *value, size_t size, u_int32_t position, int options);
 // #endif
 
-typedef int     (*fsi_fsync) (GenericFD* gfd);
-typedef off_t   (*fsi_lseek) (GenericFD* gfd, off_t offset, int whence);
+typedef int     (*udal_fsync) (GenericFD* gfd);
+typedef off_t   (*udal_lseek) (GenericFD* gfd, off_t offset, int whence);
 
 
 
    // PATHOP
-typedef int     (*fsi_chown) (SktAuth* auth, const char *path, uid_t owner, gid_t group);
-typedef int     (*fsi_unlink)(SktAuth* auth, const char* path);
-typedef int     (*fsi_rename)(SktAuth* auth, const char* oldpath, const char* newpath);
-typedef int     (*fsi_stat)  (SktAuth* auth, const char* path, struct stat* buff);
+typedef int     (*udal_chown) (SktAuth* auth, const char *path, uid_t owner, gid_t group);
+typedef int     (*udal_unlink)(SktAuth* auth, const char* path);
+typedef int     (*udal_rename)(SktAuth* auth, const char* oldpath, const char* newpath);
+typedef int     (*udal_stat)  (SktAuth* auth, const char* path, struct stat* buff);
 
 
 
 
 
 // FileDescriptors in ne_handle will be either SocketHandle* or int.
-// Different FSImpls will choose how to extract their own FD.
-typedef struct FileSysImpl {
-   //   FDExtractor   fd_extractor;  // extract fd to be passed to FSImpl functions
+// Different uDAL implementations will choose how to extract their own FD.
+typedef struct uDALImpl {
+   //   FDExtractor   fd_extractor;  // extract fd to be passed to uDAL functions
 
-   fsi_fd_init      fd_init;
-   fsi_fd_err       fd_err;
-   fsi_fd_num       fd_num;
+   udal_fd_init      fd_init;
+   udal_fd_err       fd_err;
+   udal_fd_num       fd_num;
 
-   fsi_open         open;
-   fsi_write        write;
-   fsi_read         read;
-   fsi_close        close;
-   fsi_fsetxattr    fsetxattr;
-   // fsi_fgetxattr    fgetxattr;
-   fsi_fsync        fsync;
-   fsi_lseek        lseek;
+   udal_open         open;
+   udal_write        write;
+   udal_read         read;
+   udal_close        close;
+   udal_fsetxattr    fsetxattr;
+   // udal_fgetxattr    fgetxattr;
+   udal_fsync        fsync;
+   udal_lseek        lseek;
 
-   fsi_chown        chown;
-   fsi_unlink       unlink;
-   fsi_rename       rename;
-   fsi_stat         stat;
+   udal_chown        chown;
+   udal_unlink       unlink;
+   udal_rename       rename;
+   udal_stat         stat;
 
-   fsi_auth_init    auth_init;
-   fsi_auth_install auth_install;
+   udal_auth_init    auth_init;
+   udal_auth_install auth_install;
    
-}  FileSysImpl,
-   FSImpl;
+} uDAL;
 
 
-extern const FileSysImpl*  fs_impl_posix;
-extern const FileSysImpl*  fs_impl_sockets;
+extern const uDAL*  udal_posix;
+extern const uDAL*  udal_sockets;
 
 
-// select FileSysImpl
+// select uDAL implementation
 typedef enum {
-   FSI_POSIX = 1,               // POSX-type FSImpl
-   FSI_SOCKETS
-} FSImplType;
+   UDAL_POSIX = 1,               // POSX-type uDAL
+   UDAL_SOCKETS
+} uDALType;
 
 
-const FileSysImpl*  get_impl(FSImplType itype);
+const uDAL*  get_impl(uDALType itype);
 
 
 
