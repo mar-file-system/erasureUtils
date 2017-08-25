@@ -139,11 +139,13 @@ void usage(const char* prog_name, const char* op) {
    USAGE("rebuild",    "erasure_path             N E start_file  [stat_flags]");
    USAGE("status",     "erasure_path");
    USAGE("delete",     "erasure_path stripe_width");
+   USAGE("sizeof",     "erasure_path quorum stripe_width");
+
    USAGE("crc_status", "");
    USAGE("help",       "");
-   PRINTerr("\n");
-   PRINTerr("\n");
 
+   PRINTerr("\n");
+   PRINTerr("\n");
    PRINTerr("     <stat_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
    PRINTerr("\n");
    PRINTerr("        OPEN    =  0x0001\n");
@@ -295,6 +297,17 @@ int main( int argc, const char* argv[] )
    else if ( strncmp( argv[1], "crc-status", strlen(argv[1]) ) == 0 ) {
       printf("MAX-N: %d   MAX-E: %d\n", MAXN, MAXE);
       return crc_status();
+   }
+
+   else if ( strncmp( argv[1], "sizeof", strlen(argv[1]) ) == 0 ) {
+      if ( argc != 5 ) {
+         usage( argv[0], argv[1] );
+         return -1;
+      }
+      printf( "Size of \"%s\" -- %zd\n",
+              argv[2],
+              ne_size( argv[2], atoi(argv[3]), atoi(argv[4]) ) );
+      return 0;
    }
 
    else {
@@ -537,16 +550,28 @@ int main( int argc, const char* argv[] )
          PRINTerr("libneTest: ne_status failed!\n" );
          return -1;
       }
+
       printf( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\nExtended Attribute Errors : ",
               stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
       for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
          printf( "%d ", stat->xattr_status[tmp] );
       }
-      printf( "\nData/Erasure Errors : " );
+      printf( "\n" );
+
+      printf( "Data/Erasure Errors :       " );
+      int nerr = 0;
       for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
+         if( stat->data_status[tmp] )
+            nerr++;
          printf( "%d ", stat->data_status[tmp] );
       }
       printf( "\n" );
+
+      if( nerr > stat->E )
+         fprintf( stderr, "WARNING: the data appears to be unrecoverable!\n" );
+      else if ( nerr > 0 )
+         fprintf( stderr, "WARNING: errors were found, be sure to rebuild this object before data loss occurs!\n" );
+
       free(stat);
 
       tmp=0;

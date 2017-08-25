@@ -125,6 +125,5 @@ test_read_offset_SOURCES = test_read_offset.c
 test_read_offset_LDADD = libne.a
 test_read_offset_LDFLAGS = -lisal
 
-
 TESTS=erasureTest test_read_offset
 

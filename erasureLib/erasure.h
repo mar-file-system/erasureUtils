@@ -104,6 +104,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define SYNC_SIZE (34 * 1024 * 1024) /* number of MB between close/reopen */
 
 #define XATTRKEY "user.n.e.offset.bsz.nsz.ncompsz.ncrcsum.totsz"
+#define XATTRLEN 125
 #define WRITE_SFX ".partial"
 #define REBUILD_SFX ".rebuild"
 #define META_SFX ".meta"
@@ -347,6 +348,7 @@ int       ne_close( ne_handle handle );
 int       ne_rebuild( ne_handle handle );
 int       ne_noxattr_rebuild( ne_handle handle );
 int       ne_flush( ne_handle handle );
+off_t     ne_size( const char *path, int quorum, int max_stripe_width );
 
 #endif
 

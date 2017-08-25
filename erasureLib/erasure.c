@@ -1,6 +1,3 @@
-#ifndef __MARFS_COPYRIGHT_H__
-#define __MARFS_COPYRIGHT_H__
-
 /*
 Copyright (c) 2015, Los Alamos National Security, LLC
 All rights reserved.
@@ -61,7 +58,8 @@ LANL contributions is found at https://github.com/jti-lanl/aws4c.
 GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
-#endif  // copyright
+
+
  
 
 /* ---------------------------------------------------------------------------
@@ -107,22 +105,24 @@ underlying skt_etc() functions.
 --------------------------------------------------------------------------- */
 
 
-#include <erasure.h>
+#include "erasure.h"
+#include "udal.h"
 
 #include <stdio.h>
+#include <string.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <limits.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <errno.h>
-#include <string.h>
 
 #if (AXATTR_RES == 2)
 #  include <attr/xattr.h>
 #else
 #  include <sys/xattr.h>
 #endif
+
 #include <assert.h>
 #include <pthread.h>
 
@@ -160,9 +160,6 @@ static int           gf_gen_decode_matrix(unsigned char *encode_matrix,
                                           unsigned char *src_in_err,
                                           int nerrs, int nsrcerrs, int k, int m);
 //void dump(unsigned char *buf, int len);
-
-#include "udal.h"
-
 
 
 #if 0
@@ -250,6 +247,34 @@ static ssize_t write_all(GenericFD* fd, const void* buffer, size_t nbytes) {
   return result;
 }
 
+
+
+// check for an incomplete write of an object
+int incomplete_write( ne_handle handle ) {
+   char fname[MAXNAME];
+   int i;
+   int err_cnt = 0;
+
+   for( i = 0; i < handle->nerr; i++ ) {
+      int block = handle->src_err_list[i];
+      snprintf( fname, MAXNAME, handle->path, (handle->erasure_offset + block) % ( (handle->N) ? (handle->N + handle->E) : MAXPARTS ) );
+      strcat( fname, WRITE_SFX );
+      
+      struct stat st;
+      // check for a partial data-file
+      if( stat( fname, &st ) == 0 ) {
+         return 1;
+      }
+      else {
+         //check for a partial meta-file
+         strcat( fname, META_SFX );
+         if( stat( fname, &st ) == 0 ) return 1;
+         err_cnt++;
+      }
+   }
+
+   return 0;
+}
 
 
 void bq_destroy(BufferQueue *bq) {
@@ -528,13 +553,12 @@ void *bq_writer(void *arg) {
   pthread_mutex_unlock(&bq->qlock);
 
 
-
-  // close the file
+  // close the file and terminate if any errors were encountered
   if (handle->stat_flags & SF_CLOSE)
      fast_timer_start(&handle->stats[bq->block_number].close);
 
-  if(HNDLOP(close, bq->file)) {
-    bq->flags |= BQ_ERROR;
+  if ( HNDLOP(close, bq->file) || (bq->flags & BQ_ERROR) ) {
+    bq->flags |= BQ_ERROR;      // ensure the error was noted
     PRINTerr("error closing block %d\n", bq->block_number);
     if (handle->stat_flags & SF_THREAD)
        fast_timer_stop(&handle->stats[bq->block_number].thread);
@@ -792,12 +816,12 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
    int bsz = BLKSZ;
 
    counter = 3;
-   if ( mode >= NE_SETBSZ ) {
+   if ( mode & NE_SETBSZ ) {
       counter++;
       mode -= NE_SETBSZ;
       PRINTout( "ne_open: NE_SETBSZ flag detected\n");
    }
-   if ( mode >= NE_NOINFO ) {
+   if ( mode & NE_NOINFO ) {
       counter -= 3;
       mode -= NE_NOINFO;
       PRINTout( "ne_open: NE_NOINFO flag detected\n");
@@ -894,8 +918,8 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
    handle->path = nfile;
 
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
-      ret = xattr_check(handle, path); //idenfity total data size of stripe
-      if ( handle->mode == NE_STAT ) {
+      ret = xattr_check(handle, path); // identify total data size of stripe
+      if ((ret == 0) && (handle->mode == NE_STAT)) {
          PRINTout( "ne_open: resetting mode to %d\n", mode);
          handle->mode = mode;
          while ( handle->nerr > 0 ) {
@@ -903,17 +927,17 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
             handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
             handle->src_err_list[handle->nerr] = 0;
          }
-         PRINTout( "ne_open: checking xattrs\n");
-         ret = xattr_check(handle, path); //perform the check again, identifying mismatched values
-         if ( ret != 0 ) {
-            PRINTerr( "ne_open: extended attribute check has failed\n" );
-            free( handle );
-            return NULL;
-         }
+         ret = xattr_check(handle,path); //perform the check again, identifying mismatched values
       }
-      else if(ret == -1) {
-        PRINTerr( "ne_open: failed xattr_check\n");
-        return NULL;
+      PRINTout("ne_open: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d, TotSz = %llu\n",
+               handle->nerr, handle->N, handle->E, handle->erasure_offset, handle->totsz );
+
+      if ( ret != 0 ) {
+         if( incomplete_write( handle ) ) { errno = ENOENT; return NULL; }
+         PRINTerr( "ne_open: extended attribute check has failed\n" );
+         free( handle );
+         errno = ENODATA;
+         return NULL;
       }
 
    }
@@ -934,6 +958,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
      if(initialize_queues(handle) < 0) {
        // all destruction/cleanup should be handled in initialize_queues()
        free(handle);
+       errno = ENOMEM;
        return NULL;
      }
      if( UNSAFE(handle) ) {
@@ -951,53 +976,37 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
    /* allocate a big buffer for all the N chunks plus a bit extra for reading in crcs */
 #ifdef INT_CRC
      crccount = 1;
-     if ( E > 0 ) { crccount = E; }
+     if ( E > 0 )
+        crccount = E;
 
      ret = posix_memalign( &(handle->buffer), 64, ((N+E)*bsz) + (sizeof(u32)*crccount) ); //add space for intermediate checksum
+     PRINTout("ne_open: Allocated handle buffer of size %zd for bsz=%d, N=%d, E=%d\n",
+              ((N+E)*bsz) + (sizeof(u32)*crccount), bsz, N, E);
 #else
      ret = posix_memalign( &(handle->buffer), 64, ((N+E)*bsz) );
+     PRINTout("ne_open: Allocated handle buffer of size %zd for bsz=%d, N=%d, E=%d\n",
+              (N+E)*bsz, bsz, N, E);
 #endif
 
-   if ( ret != 0 ) {
-      PRINTerr( "ne_open: failed to allocate handle buffer\n" );
-      errno = ret;
-      return NULL;
-   }
-   PRINTout("ne_open: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n", ret, bsz, N, E);
+     if ( ret != 0 ) {
+       PRINTerr( "ne_open: failed to allocate handle buffer\n" );
+       errno = ENOMEM;
+       return NULL;
+     }
 
+        /* loop through and open up all the output files and initilize per part info and allocate buffers */
+     counter = 0;
+     PRINTout( "opening file descriptors...\n" );
+     mode_t mask = umask(0000);
+     while ( counter < N+E ) {
 
-   /* allocate matrices */
-   handle->encode_matrix = malloc(MAXPARTS * MAXPARTS);
-   handle->decode_matrix = malloc(MAXPARTS * MAXPARTS);
-   handle->invert_matrix = malloc(MAXPARTS * MAXPARTS);
-   handle->g_tbls        = malloc(MAXPARTS * MAXPARTS * 32);
+       if (handle->stat_flags & SF_OPEN)
+           fast_timer_start(&handle->stats[counter].open);
 
-   if (! (handle->encode_matrix
-          && handle->decode_matrix
-          && handle->invert_matrix
-          && handle->g_tbls)) {
-      PRINTerr( "ne_open: failed to allocate one or more matrices\n" );
-      errno = ENOMEM;
-      return NULL;
-   }
-
-
-
-   /* loop through and open up all the output files and initilize per part info and allocate buffers */
-   counter = 0;
-   PRINTout( "opening file descriptors...\n" );
-
-   mode_t mask = umask(0000);
-
-   while ( counter < N+E ) {
-      bzero( file, MAXNAME );
-      u32 blk_i = (counter+erasure_offset)%(N+E); // absolute index of block to be written, within pod
-
-      if (handle->stat_flags & SF_OPEN)
-         fast_timer_start(&handle->stats[counter].open);
-
-      handle->snprintf(file, MAXNAME, path, blk_i, handle->state);
-
+       bzero( file, MAXNAME );
+       u32 blk_i = (counter+erasure_offset)%(N+E); // absolute index of block to be written, within pod
+       handle->snprintf(file, MAXNAME, path, blk_i, handle->state);
+       
 #ifdef INT_CRC
        if ( counter > N ) {
          crccount = counter - N;
@@ -1037,6 +1046,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
          handle->nerr++;
          handle->src_in_err[counter] = 1;
          if ( handle->nerr > E ) { //if errors are unrecoverable, terminate
+           errno = ENODATA;
            return NULL;
          }
          if ( mode != NE_REBUILD ) { counter++; }
@@ -2043,11 +2053,6 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
 
    // If the errors exceed the minimum protection threshold number of
    // errrors then fail the write.
-   //
-   // XXX: How do I handle this with the threads? need a loop to check the
-   //      bq->flags for error in each BQ, or have a return code from
-   //      bq_enqueue?
-   //      Ignoring it for now.
    if( UNSAFE(handle) ) {
      PRINTerr("ne_write: errors exceed minimum protection level (%d)\n",
               MIN_PROTECTION);
@@ -2123,7 +2128,7 @@ int show_handle_stats(ne_handle handle) {
 int ne_close( ne_handle handle ) 
 {
    int counter;
-   char xattrval[strlen(XATTRKEY)+80];
+   char xattrval[XATTRLEN];
    char file[MAXNAME];       /* array name of files */
    char nfile[MAXNAME];       /* array name of files */
    int N;
@@ -2216,10 +2221,11 @@ int ne_close( ne_handle handle )
 
          }
       }
-      else if (handle->mode == NE_WRONLY ) {
+
+      if (handle->mode == NE_WRONLY )
         bq_close(&handle->blocks[counter]);
-      }
-      else if (FD_ERR(handle->FDArray[counter])) {
+
+      else if (! FD_ERR(handle->FDArray[counter])) {
 
          // RDMA leaves FDs open on the server until timeout or we close.
          // We don't currently have reader-threads (corresponding to
@@ -2300,6 +2306,35 @@ int ne_close( ne_handle handle )
 
 
 /**
+ * Determines whether the parent directory of the given file exists
+ * @param char* path : Character string to be searched
+ * @param int max_length : Maximum length of the character string to be scanned
+ * @return int : 0 if the parent directory does exist and -1 if not
+ */
+int parent_dir_missing( char* path, int max_length ) {
+   char* tmp = path;
+   int len = 0;
+   int index = -1;
+   struct stat status;
+   int res;
+
+   while ( len < max_length  &&  *tmp != '\0' ) {
+      if( *tmp == '/' ) index = len;
+      len++;
+      tmp++;
+   }
+   
+   tmp = path;
+   *(tmp + index) = '\0';
+   res = stat( tmp, &status );
+   PRINTout( "parent_dir_missing: stat of \"%s\" returned %d\n", path, res );
+   *(tmp + index) = '/';
+
+   return res;
+}
+
+
+/**
  * Deletes the erasure striping of the specified width with the specified path format
  *
  * ne_delete(path, width)  calls this with fn=ne_default_snprintf, and state=NULL
@@ -2308,12 +2343,14 @@ int ne_close( ne_handle handle )
  * @param int width : Total width of the erasure striping (i.e. N+E)
  * @return int : 0 on success and -1 on failure
  */
-int ne_delete1( SnprintfFunc fn, void* state, SktAuth auth,
+int ne_delete1( SnprintfFunc snprintf_fn, void* state, SktAuth auth,
                 StatFlagsValue stat_flags, uDALType itype,
                 char* path, int width ) {
    char  file[MAXNAME];       /* array name of files */
+   char  partial[MAXNAME];
    int   counter;
    int   ret = 0;
+   int   parent_missing;
 
    const uDAL* impl = get_impl(itype);
 
@@ -2324,15 +2361,42 @@ int ne_delete1( SnprintfFunc fn, void* state, SktAuth auth,
       fast_timer_start(&timer); /* start overall timer */
    }
 
-
    for( counter=0; counter<width; counter++ ) {
+      parent_missing = -2;
       bzero( file, sizeof(file) );
-      fn( file, MAXNAME, path, counter, state );
-      if ( PATHOP( unlink, impl, auth, file ) ) ret = 1;
+
+      snprintf_fn( file,    MAXNAME, path, counter, state );
+
+      snprintf_fn( partial, MAXNAME, path, counter, state );
+      strncat( partial, WRITE_SFX, MAXNAME - strlen(partial) );
+
+      // unlink the file or the unfinished file.  If both fail, check
+      // whether the parent directory exists.  If not, indicate an error.
+      if ( PATHOP( unlink, impl, auth, file )
+           &&  PATHOP( unlink, impl, auth, partial ) ) {
+
+         parent_missing = parent_dir_missing(file, MAXNAME);
+         if (parent_missing)
+            ret = -1;
+      }
+
 #ifdef META_FILES
-      strncat( file, META_SFX, strlen(META_SFX)+1 );
-      if ( PATHOP( unlink, impl, auth, file ) ) ret = 1;
+      strncat( file, META_SFX, MAXNAME );
+      strncat( partial, META_SFX, MAXNAME );
+
+      // same as the above, but only stat the parent dir if we haven't
+      // already verified that it exists
+      if ( PATHOP( unlink, impl, auth, file )
+           &&  PATHOP( unlink, impl, auth, partial ) ) {
+
+         if ( parent_missing == -2 )
+            parent_missing = parent_dir_missing(file, MAXNAME);
+
+         if ( parent_missing )
+            ret = -1;
+      }
 #endif
+
    }
 
    if (stat_flags & SF_HANDLE) {
@@ -2358,6 +2422,91 @@ int ne_delete(char* path, int width ) {
 }
 
 
+off_t ne_size( const char* path, int quorum, int max_stripe_width ) {
+   char ptemplate[MAXNAME];
+   char file[MAXNAME];
+   char xattrval[XATTRLEN];
+
+   if( max_stripe_width < 1 ) max_stripe_width = MAXPARTS;
+   if( quorum < 1 ) quorum = max_stripe_width;
+   if( quorum > max_stripe_width ) {
+      PRINTerr( "ne_size: received a quorum value greater than the max_stripe_width\n" );
+      errno = EINVAL;
+      return -1;
+   }
+
+   strncpy( ptemplate, path, MAXNAME );
+
+#ifdef META_FILES
+   strncat( ptemplate, META_SFX, strlen(META_SFX)+1 );
+#endif
+
+   int match = 0;
+   off_t sizes_reported[max_stripe_width];
+   off_t prev_size = -1;
+   int i;
+   for( i = 0; i < max_stripe_width  &&  match < quorum; i++ ) {
+      sprintf( file, ptemplate, i );
+
+#ifdef META_FILES
+
+      PRINTout("ne_size: opening file %s\n", file);
+      int meta_fd = open( file, O_RDONLY );
+      if ( meta_fd >= 0 ) {
+         int tmp = read( meta_fd, &xattrval[0], XATTRLEN );
+         if ( tmp < 0 ) {
+            PRINTerr("ne_size: failed to read from file %s\n", file);
+            continue;
+         }
+         else if(tmp == 0) {
+            PRINTerr( "ne_size: read 0 bytes from metadata file %s\n", file);
+            continue;
+         }
+         tmp = close( meta_fd );
+         if ( tmp < 0 ) {
+            PRINTerr("ne_size: failed to close file %s\n", file);
+            continue;
+         }
+      }
+      else {
+         PRINTerr("ne_size: failed to open file %s\n", file);
+         continue;
+      }
+
+#else
+
+#if (AXATTR_GET_FUNC == 4)
+      if( getxattr(file,XATTRKEY,&xattrval[0],XATTRLEN) ) continue;
+#else
+      if( getxattr(file,XATTRKEY,&xattrval[0],XATTRLEN,0,0) ) continue;
+#endif
+
+#endif //META_FILES
+
+      PRINTout( "ne_size: file %s xattr returned %s\n", file, xattrval );
+      
+      sscanf( xattrval, "%*s %*s %*s %*s %*s %*s %*s %zd", &sizes_reported[i] );
+
+      if ( prev_size == -1  ||  sizes_reported[i] == prev_size ) {
+         match++;
+      }
+      else { 
+         match = 1;
+         int k;
+         for( k = 0; k < i; k++ ) {
+            if( sizes_reported[k] == sizes_reported[i] ) match++;
+         }
+      }
+
+      prev_size = sizes_reported[i];
+   }
+
+   if( prev_size == -1 ) { errno = ENOENT; return -1; }
+   if( match < quorum ) { errno = ENODATA; return -1; }
+   return prev_size;
+}
+
+
 /**
  * Internal helper function intended to access xattrs for the purpose of validating/identifying handle information
  * @param ne_handle handle : The handle for the current erasure striping
@@ -2375,7 +2524,7 @@ int xattr_check( ne_handle handle, char *path )
    int ret;
    int tmp;
    int filefd;
-   char xattrval[strlen(XATTRKEY)+80];
+   char xattrval[XATTRLEN];
    char xattrchunks[20];       /* char array to get n parts from xattr */
    char xattrchunksizek[20];   /* char array to get chunksize from xattr */
    char xattrnsize[20];        /* char array to get total size from xattr */
@@ -2397,16 +2546,17 @@ int xattr_check( ne_handle handle, char *path )
    unsigned int blocks;
    u32 crc;
 #endif
-   int N_list[ MAXE ] = { 0 };
-   int E_list[ MAXE ] = { 0 };
-   int O_list[ MAXE ] = { -1 };
-   unsigned int bsz_list[ MAXE ] = { 0 };
-   u64 totsz_list[ MAXE ] = { 0 };
-   int N_match[ MAXE ] = { 0 };
-   int E_match[ MAXE ] = { 0 };
-   int O_match[ MAXE ] = { 0 };
-   int bsz_match[ MAXE ] = { 0 };
-   int totsz_match[ MAXE ] = { 0 };
+   int N_list[ MAXPARTS ] = { 0 };
+   int E_list[ MAXPARTS ] = { 0 };
+   int O_list[ MAXPARTS ] = { -1 };
+   unsigned int bsz_list[ MAXPARTS ] = { 0 };
+   u64 totsz_list[ MAXPARTS ] = { 0 };
+   int N_match[ MAXPARTS ] = { 0 };
+   int E_match[ MAXPARTS ] = { 0 };
+   int O_match[ MAXPARTS ] = { 0 };
+   int bsz_match[ MAXPARTS ] = { 0 };
+   int totsz_match[ MAXPARTS ] = { 0 };
+
    struct stat* partstat = malloc (sizeof(struct stat));
    int lN;
    int lE;
@@ -2430,6 +2580,7 @@ int xattr_check( ne_handle handle, char *path )
 
       ret = PATHOP(stat, handle->impl, handle->auth, file, partstat);
       PRINTout( "xattr_check: stat of file %s returns %d\n", file, ret );
+      handle->csum[counter]=0; //reset csum to make results clearer
       if ( ret != 0 ) {
          PRINTerr( "xattr_check: file %s: failure of stat\n", file );
          handle->src_in_err[counter] = 1;
@@ -2484,9 +2635,18 @@ int xattr_check( ne_handle handle, char *path )
          handle->nerr++;
          continue;
       }
-      PRINTout("xattr_check: file %s xattr returned %s\n",file,xattrval);
+      PRINTout("xattr_check: file %d (%s) xattr returned \"%s\"\n",counter,file,xattrval);
 
-      sscanf(xattrval,"%s %s %s %s %s %s %s %s",xattrchunks,xattrerasure,xattroffset,xattrchunksizek,xattrnsize,xattrncompsize,xattrnsum,xattrtotsize);
+      sscanf(xattrval,"%s %s %s %s %s %s %s %s",
+             xattrchunks,
+             xattrerasure,
+             xattroffset,
+             xattrchunksizek,
+             xattrnsize,
+             xattrncompsize,
+             xattrnsum,
+             xattrtotsize);
+
       N = atoi(xattrchunks);
       E = atoi(xattrerasure);
       erasure_offset = atoi(xattroffset);
@@ -2585,13 +2745,14 @@ int xattr_check( ne_handle handle, char *path )
          PRINTout( "setting csum for file %d to %llu\n", counter, (unsigned long long)csum);
          handle->csum[counter] = csum;
          if ( handle->mode == NE_RDONLY ) {
-            handle->totsz = totsz;
+            if( ! handle->totsz ) handle->totsz = totsz; //only set the file size if it is not already set (i.e. by a call with mode=NE_STAT)
             break;
          }
 
          // This bundle of spaghetti acts to individually verify each "important" xattr value and count matches amongst all files
          char nc = 1, ec = 1, of = 1, bc = 1, tc = 1;
-         for ( bcounter = 0; ( nc || ec || bc || tc || of )  &&  bcounter < MAXE; bcounter++ ) {
+         if ( handle->mode != NE_STAT ) { nc = 0; ec = 0; of = 0; bc = 0; } //if these values are already initialized, skip setting them
+         for ( bcounter = 0; ( nc || ec || bc || tc || of )  &&  bcounter < MAXPARTS; bcounter++ ) {
             if ( nc ) {
                if ( N_list[bcounter] == N ) {
                   N_match[bcounter]++;
@@ -2662,95 +2823,113 @@ int xattr_check( ne_handle handle, char *path )
    ret = 0;
 
    if ( handle->mode != NE_RDONLY ) { //if the handle is uninitialized, store the necessary info
+
+      //loop through the counts of matching xattr values and identify the most prevalent match
       int maxmatch=0;
       int match=-1;
-      //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
-         if ( N_match[bcounter] > maxmatch ) { maxmatch = N_match[bcounter]; match = bcounter; }
-         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
+      for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
+         if ( totsz_match[bcounter] > maxmatch ) {
+            maxmatch = totsz_match[bcounter];
+            match = bcounter;
+         }
+         if ( bcounter > 0 && N_match[bcounter] > 0 )
+            ret = 1;
       }
-
-      if ( match != -1 ) {
-         handle->N = N_list[match];
-      }
-      else {
-         PRINTerr( "xattr_check: number of mismatched N xattr vals exceeds erasure limits\n" );
-         errno = ENODATA;
-         return -1;
-      }
-
-      maxmatch=0;
-      match=-1;
-      //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
-         if ( E_match[bcounter] > maxmatch ) { maxmatch = E_match[bcounter]; match = bcounter; }
-         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
-      }
-
-      if ( match != -1 ) {
-         handle->E = E_list[match];
-      }
-      else {
-         PRINTerr( "xattr_check: number of mismatched E xattr vals exceeds erasure limits\n" );
-         errno = ENODATA;
-         return -1;
-      }
-
-      maxmatch=0;
-      match=-1;
-      //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
-         if ( O_match[bcounter] > maxmatch ) { maxmatch = O_match[bcounter]; match = bcounter; }
-         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
-      }
-
-      if ( match != -1 ) {
-         handle->erasure_offset = O_list[match];
-      }
-      else {
-         PRINTerr( "xattr_check: number of mismatched offset xattr vals exceeds erasure limits\n" );
-         errno = ENODATA;
-         return -1;
-      }
-
-      maxmatch=0;
-      match=-1;
-      //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
-         if ( bsz_match[bcounter] > maxmatch ) { maxmatch = bsz_match[bcounter]; match = bcounter; }
-         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
-      }
-
-      if ( match != -1 ) {
-         handle->bsz = bsz_list[match];
-      }
-      else {
-         PRINTerr( "xattr_check: number of mismatched bsz xattr vals exceeds erasure limits\n" );
-         errno = ENODATA;
-         return -1;
-      }
-
-      maxmatch=0;
-      match=-1;
-      //loop through the counts of matching xattr values and identify the most prevalent match
-      for ( bcounter = 0; bcounter < MAXE; bcounter++ ) {
-         if ( totsz_match[bcounter] > maxmatch ) { maxmatch = totsz_match[bcounter]; match = bcounter; }
-         if ( bcounter > 0 && N_match[bcounter] > 0 ) { ret = 1; }
-      }
-
-      if ( match != -1 ) {
+      if ( match != -1 )
          handle->totsz = totsz_list[match];
-      }
       else {
-         PRINTerr( "xattr_check: number of mismatched totsz xattr vals exceeds erasure limits\n" );
+         PRINTerr( "xattr_check: failed to locate any matching totsz xattr vals!\n" );
          errno = ENODATA;
          return -1;
       }
 
+
+      if ( handle->mode == NE_STAT ) {
+
+         //loop through the counts of matching xattr values and identify the most prevalent match
+         maxmatch=0;
+         match=-1;
+         for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
+            if ( N_match[bcounter] > maxmatch ) {
+               maxmatch = N_match[bcounter];
+               match = bcounter;
+            }
+            if ( bcounter > 0 && N_match[bcounter] > 0 )
+               ret = 1;
+         }
+         if ( match != -1 )
+            handle->N = N_list[match];
+         else {
+            PRINTerr( "xattr_check: failed to locate any matching N xattr vals!\n" );
+            errno = ENODATA;
+            return -1;
+         }
+
+
+         //loop through the counts of matching xattr values and identify the most prevalent match
+         maxmatch=0;
+         match=-1;
+         for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
+            if ( E_match[bcounter] > maxmatch ) {
+               maxmatch = E_match[bcounter];
+               match = bcounter;
+            }
+            if ( bcounter > 0 && N_match[bcounter] > 0 )
+               ret = 1;
+         }
+         if ( match != -1 )
+            handle->E = E_list[match];
+         else {
+            PRINTerr( "xattr_check: failed to locate any matching E xattr vals!\n" );
+            errno = ENODATA;
+            return -1;
+         }
+
+
+         //loop through the counts of matching xattr values and identify the most prevalent match
+         maxmatch=0;
+         match=-1;
+         for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
+            if ( O_match[bcounter] > maxmatch ) {
+               maxmatch = O_match[bcounter];
+               match = bcounter;
+            }
+            if ( bcounter > 0 && N_match[bcounter] > 0 )
+               ret = 1;
+         }
+         if ( match != -1 )
+            handle->erasure_offset = O_list[match];
+         else {
+            PRINTerr( "xattr_check: failed to locate any matching offset xattr vals!\n" );
+            errno = ENODATA;
+            return -1;
+         }
+
+
+         //loop through the counts of matching xattr values and identify the most prevalent match
+         maxmatch=0;
+         match=-1;
+         for ( bcounter = 0; bcounter < MAXPARTS; bcounter++ ) {
+            if ( bsz_match[bcounter] > maxmatch ) {
+               maxmatch = bsz_match[bcounter];
+               match = bcounter;
+            }
+            if ( bcounter > 0 && N_match[bcounter] > 0 )
+               ret = 1;
+         }
+         if ( match != -1 )
+            handle->bsz = bsz_list[match];
+         else {
+            PRINTerr( "xattr_check: failed to locate any matching bsz xattr vals!\n" );
+            errno = ENODATA;
+            return -1;
+         }
+
+      } //end of NE_STAT exclusive checks
    }
 
    /* If no usable file was located or the number of errors is too great, notify of failure */
-   if ( handle->nerr > handle->E ) {
+   if ( handle->mode != NE_STAT  &&  handle->nerr > handle->E ) {
       errno = ENODATA;
       return -1;
    }
@@ -2776,9 +2955,16 @@ static int reopen_for_rebuild(ne_handle handle, int block) {
   HNDLOP(close, handle->FDArray[block]);
   PRINTout( "   opening %s for write\n", file );
 
-  OPEN(handle->FDArray[block], handle,
-       strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ),
-       O_WRONLY | O_CREAT, 0666 );
+  if( handle->mode == NE_STAT ) {
+     PRINTout( "   setting FD %d to -1\n", block );
+    FD_INIT(handle->FDArray[block], handle);
+  }
+  else {
+     PRINTout( "   opening %s for write\n", file );
+    OPEN(handle->FDArray[block], handle,
+         strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ),
+         O_WRONLY | O_CREAT, 0666 );
+  }
 
   //ensure that sources are listed in order
   int i, tmp;
@@ -2818,6 +3004,7 @@ static int reset_blocks(ne_handle handle) {
           return -1;
         }
         else {
+           PRINTerr( "ne_rebuild: encountered error while seeking file %d\n", block_index );
           reopen_for_rebuild(handle, block_index);
           return 1;
         }
@@ -3215,9 +3402,10 @@ int ne_flush( ne_handle handle ) {
 }
 
 
-#if 0
+#ifndef HAVE_LIBISAL
 // This replicates the function defined in libisal.  If we define it here,
-// and do static linking, the linker will complain
+// and do static linking with libisal, the linker will complain.
+
 void ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls)
 {
         int i, j;
@@ -3453,16 +3641,16 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth,
       stat->data_status[counter] = 0;
       stat->xattr_status[counter] = 0;
    }
-   handle->nerr = 0;
-   handle->totsz = 0;
-   handle->N = 0;
-   handle->E = 0;
-   handle->bsz = 0;
+   handle->nerr           = 0;
+   handle->totsz          = 0;
+   handle->N              = 0;
+   handle->E              = 0;
+   handle->bsz            = 0;
    handle->erasure_offset = 0;
-   handle->mode = NE_STAT;
-   handle->e_ready = 0;
-   handle->buff_offset = 0;
-   handle->buff_rem = 0;
+   handle->mode           = NE_STAT;
+   handle->e_ready        = 0;
+   handle->buff_offset    = 0;
+   handle->buff_rem       = 0;
 
    handle->snprintf = fn;
    handle->state    = state;
@@ -3472,18 +3660,30 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth,
    strncpy( nfile, path, strlen(path) + 1 );
    handle->path = nfile;
 
-   ret = xattr_check(handle, path); //idenfity total data size of stripe
+   ret = xattr_check(handle, path); // identify total data size of stripe
+   if( ret == -1 ) {
+      PRINTerr( "ne_status: extended attribute check has failed\n" );
+      free( handle );
+      return NULL;
+   }
+
    while ( handle->nerr > 0 ) {
       handle->nerr--;
       handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
       handle->src_err_list[handle->nerr] = 0;
    }
+
+   handle->mode = NE_REBUILD;
    ret = xattr_check(handle, path); //verify the stripe, now that values have been established
-   if ( ret != 0 ) {
+   if ( ret == -1 ) {
       PRINTerr( "ne_status: extended attribute check has failed\n" );
       free( handle );
       return NULL;
    }
+   handle->mode = NE_STAT;
+
+   PRINTout( "ne_status: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d, TotSz = %llu\n",
+             handle->nerr, handle->N, handle->E, handle->erasure_offset, handle->totsz );
 
    stat->N = handle->N;
    stat->E = handle->E;
@@ -3504,19 +3704,26 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth,
    /* allocate a big buffer for all the N chunks plus a bit extra for reading in crcs */
 #ifdef INT_CRC
    crccount = 1;
-   if ( handle->E > 0 ) { crccount = handle->E; }
+   if ( handle->E > 0 )
+      crccount = handle->E;
 
-   ret = posix_memalign( &(handle->buffer), 64, ((handle->N+handle->E)*bsz) + (sizeof(u32)*crccount) ); //add space for intermediate checksum
+   // add space for intermediate checksum
+   ret = posix_memalign( &(handle->buffer), 64,
+                         ((handle->N+handle->E)*bsz) + (sizeof(u32)*crccount) );
+   PRINTout("ne_stat: Allocated handle buffer of size %zd for bsz=%d, N=%d, E=%d\n",
+            ((handle->N+handle->E)*bsz) + (sizeof(u32)*crccount),
+            handle->bsz, handle->N, handle->E);
 #else
-   ret = posix_memalign( &(handle->buffer), 64, ((handle->N+handle->E)*bsz) );
+   ret = posix_memalign( &(handle->buffer), 64,
+                         ((handle->N+handle->E)*bsz) );
+   PRINTout("ne_stat: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n",
+            (handle->N+handle->E)*bsz, handle->bsz, handle->N, handle->E);
 #endif
    if ( ret != 0 ) {
       PRINTerr( "ne_status: failed to allocate handle buffer\n" );
       errno = ret;
       return NULL;
    }
-
-   PRINTout("ne_stat: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n", (handle->N+handle->E)*handle->bsz, handle->bsz, handle->N, handle->E);
 
    /* allocate matrices */
    handle->encode_matrix = malloc(MAXPARTS * MAXPARTS);
@@ -3559,8 +3766,6 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth,
 
       counter++;
    }
-
-   handle->path = NULL;
 
    if ( ne_rebuild( handle ) < 0 ) {
       PRINTerr( "ne_status: rebuild indicates that data is unrecoverable\n" );
