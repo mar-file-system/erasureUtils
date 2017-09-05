@@ -127,6 +127,10 @@ underlying skt_etc() functions.
 #include <pthread.h>
 
 
+static int set_block_xattr(ne_handle handle, int block);
+
+
+
 // #defines, macros, external functions, etc, that we don't want exported
 // for users of the library some are also used in libneTest.c
 //
@@ -141,24 +145,14 @@ extern uint32_t      crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len)
 extern void          ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 #endif
 
-extern void          pq_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p and q */
-extern void          xor_gen_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern int           pq_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern int           xor_check_sse(int, int, void*);  /* assembler routine to use sse to calc p */
-extern void          gf_gen_rs_matrix(unsigned char *a, int m, int k);
-extern void          gf_vect_mul_init(unsigned char c, unsigned char *tbl);
-extern unsigned char gf_mul(unsigned char a, unsigned char b);
-extern int           gf_invert_matrix(unsigned char *in_mat, unsigned char *out_mat, const int n);
-
-int                  xattr_check( ne_handle handle, char *path );
-void                 ec_init_tables(int k, int rows, unsigned char *a, unsigned char *g_tbls);
-static int           gf_gen_decode_matrix(unsigned char *encode_matrix,
-                                          unsigned char *decode_matrix,
-                                          unsigned char *invert_matrix,
-                                          unsigned int *decode_index,
-                                          unsigned char *src_err_list,
-                                          unsigned char *src_in_err,
-                                          int nerrs, int nsrcerrs, int k, int m);
+int xattr_check( ne_handle handle, char *path );
+static int gf_gen_decode_matrix(unsigned char *encode_matrix,
+                                unsigned char *decode_matrix,
+                                unsigned char *invert_matrix,
+                                unsigned int *decode_index,
+                                unsigned char *src_err_list,
+                                unsigned char *src_in_err,
+                                int nerrs, int nsrcerrs, int k, int m);
 //void dump(unsigned char *buf, int len);
 
 
@@ -195,9 +189,20 @@ static int           gf_gen_decode_matrix(unsigned char *encode_matrix,
 #  define FD_ERR(GFD)                         (GFD).hndl->impl->fd_err(&(GFD))
 #  define FD_NUM(GFD)                         (GFD).hndl->impl->fd_num(&(GFD))
 
-// save the ne_handle into the GFD at open-time, so:
+// This is opening a file (not a handle), using the impl in the handle.
+// Save the ne_handle into the GFD at open-time, so:
 // (a) we don't have to pass handle->auth to impls that don't need it
 // (b) write_all() can just take a GFD, and impls can still get auth if they need it
+//
+// TBD: It's awkward for some of the new functions to create a dummy
+//      handle, just so they can OPEN() a GFD.  Better would be to just
+//      have OPEN() take impl and auth, and store just those onto the gfd.
+//      The only UDAL op that cares is udal_skt_open() which only needs the
+//      auth.  [p]HNDLOP() could then just use the impl directly from the
+//      gfd.  The handle is never really needed.  Callers of OPEN() that
+//      are currently using a "fake" handle just to use OPEN() include
+//      ne_size(), and ne_set_attr1().
+//
 #  define OPEN(GFD, HANDLE, ...)              do { (GFD).hndl = (HANDLE); \
                                                    (HANDLE)->impl->open(&(GFD), ## __VA_ARGS__); } while(0)
 
@@ -257,7 +262,9 @@ int incomplete_write( ne_handle handle ) {
 
    for( i = 0; i < handle->nerr; i++ ) {
       int block = handle->src_err_list[i];
-      snprintf( fname, MAXNAME, handle->path, (handle->erasure_offset + block) % ( (handle->N) ? (handle->N + handle->E) : MAXPARTS ) );
+      handle->snprintf( fname, MAXNAME, handle->path,
+                        (handle->erasure_offset + block) % ( (handle->N) ? (handle->N + handle->E) : MAXPARTS ),
+                        NULL);
       strcat( fname, WRITE_SFX );
       
       struct stat st;
@@ -324,7 +331,7 @@ int bq_init(BufferQueue *bq, int block_number, void **buffers, ne_handle handle)
 
 void bq_signal(BufferQueue*bq, BufferQueue_Flags sig) {
   pthread_mutex_lock(&bq->qlock);
-  PRINTout("signalling 0x%x to block %d\n", (uint32_t)sig, bq->block_number);
+  PRINTdbg("signalling 0x%x to block %d\n", (uint32_t)sig, bq->block_number);
   bq->flags |= sig;
   pthread_cond_signal(&bq->full);
   pthread_mutex_unlock(&bq->qlock);  
@@ -338,73 +345,10 @@ void bq_abort(BufferQueue *bq) {
   bq_signal(bq, BQ_ABORT);
 }
 
-static int set_block_xattr(ne_handle handle, int block) {
-  int  tmp = 0;
-  char xattrval[1024];
-  sprintf(xattrval,"%d %d %d %d %lu %lu %llu %llu",
-          handle->N, handle->E, handle->erasure_offset,
-          handle->bsz, handle->nsz[block],
-          handle->ncompsz[block], (unsigned long long)handle->csum[block],
-          (unsigned long long)handle->totsz);
-
-  PRINTout("set_block_attr: setting file %d xattr = \"%s\"\n",
-           block, xattrval );
-
-#ifdef META_FILES
-  char meta_file[MAXNAME];
-  handle->snprintf(meta_file, MAXNAME, handle->path,
-                   (block+handle->erasure_offset)%(handle->N+handle->E), handle->state);
-
-  if ( handle->mode == NE_REBUILD ) {
-    strncat( meta_file, REBUILD_SFX, strlen(REBUILD_SFX)+1 );
-  }
-  else if ( handle->mode == NE_WRONLY ) {
-    strncat( meta_file, WRITE_SFX, strlen(WRITE_SFX)+1 );
-  }
-  strncat( meta_file, META_SFX, strlen(META_SFX) + 1 );
-  mode_t mask = umask(0000);
-  GenericFD fd = {0};
-
-  OPEN(fd, handle, meta_file, O_WRONLY | O_CREAT, 0666);
-  umask(mask);
-  if ( FD_ERR(fd) ) { 
-    PRINTerr("set_block_attr: failed to open file %s\n", meta_file);
-    tmp = -1;
-  }
-  else {
-    // int val = HNDLOP( write, fd, xattrval, strlen(xattrval) + 1 );
-    int val = write_all(&fd, xattrval, strlen(xattrval) +1);
-    if ( val != strlen(xattrval) + 1 ) {
-      PRINTerr("set_block_attr: failed to write to file %s\n", meta_file);
-      tmp = -1;
-      HNDLOP(close, fd);
-    }
-    else {
-      tmp = HNDLOP( close, fd );
-    }
-  }
-
-  PATHOP(chown, handle->impl, handle->auth, meta_file, handle->owner, handle->group);
-
-#else
-
-#  warn "xattr metadata is not functional with new thread model"
-#  if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
-   tmp = HNDLOP(fsetxattr, handle->FDArray[counter], XATTRKEY, xattrval, strlen(xattrval), 0); 
-#  else
-   tmp = HNDLOP(fsetxattr, handle->FDArray[counter], XATTRKEY, xattrval, strlen(xattrval), 0, 0); 
-#  endif
-
-#endif //META_FILES
-
-  return tmp;
-}
-
-
 
 void bq_writer_finis(void* arg) {
   BufferQueue *bq = (BufferQueue *)arg;
-  PRINTout("exiting thread for block %d, in %s\n", bq->block_number, bq->path);
+  PRINTdbg("exiting thread for block %d, in %s\n", bq->block_number, bq->path);
 }
 
 
@@ -426,7 +370,7 @@ void *bq_writer(void *arg) {
      fast_timer_start(&handle->stats[bq->block_number].open);
   
   // debugging, assure we see thread entry/exit, even via cancellation
-  PRINTout("entering thread for block %d, in %s\n", bq->block_number, bq->path);
+  PRINTdbg("entering thread for block %d, in %s\n", bq->block_number, bq->path);
   pthread_cleanup_push(bq_writer_finis, bq);
 
   // open the file.
@@ -446,7 +390,7 @@ void *bq_writer(void *arg) {
   pthread_cond_signal(&bq->empty);
   pthread_mutex_unlock(&bq->qlock);
 
-  PRINTout("opened file %d\n", bq->block_number);
+  PRINTdbg("opened file %d\n", bq->block_number);
   if (handle->stat_flags & SF_OPEN)
      fast_timer_stop(&handle->stats[bq->block_number].open);
   if (handle->stat_flags & SF_RW)
@@ -464,7 +408,7 @@ void *bq_writer(void *arg) {
       return (void *)-1;
     }
     while(bq->qdepth == 0 && !((bq->flags & BQ_FINISHED) || (bq->flags & BQ_ABORT))) {
-      PRINTout("bq_writer[%d]: waiting for signal from ne_write\n", bq->block_number);
+      PRINTdbg("bq_writer[%d]: waiting for signal from ne_write\n", bq->block_number);
       pthread_cond_wait(&bq->full, &bq->qlock);
     }
 
@@ -496,7 +440,7 @@ void *bq_writer(void *arg) {
       // HNDLOP(close, bq->file);
       // pthread_mutex_unlock(&bq->qlock);
 
-      PRINTout("BQ finished\n");
+      PRINTdbg("BQ finished\n");
       break;
     }
     
@@ -512,11 +456,12 @@ void *bq_writer(void *arg) {
         written = 0;
       }
 
-      PRINTout("Writing block %d\n", bq->block_number);
+      PRINTdbg("Writing block %d\n", bq->block_number);
       u32 crc   = crc32_ieee(TEST_SEED, bq->buffers[bq->head], bq->buffer_size);
       error     = write_all(&bq->file, bq->buffers[bq->head], bq->buffer_size);
 #ifdef INT_CRC
-      error    += write_all(&bq->file, &crc, sizeof(u32)); // XXX: super small write... could degrade performance
+      if (error == bq->buffer_size)
+         error += write_all(&bq->file, &crc, sizeof(u32)); // XXX: super small write... could degrade performance
 #endif
       bq->csum += crc;
       pthread_mutex_lock(&bq->qlock);
@@ -531,7 +476,8 @@ void *bq_writer(void *arg) {
     else {
       written += error;
     }
-    PRINTout("write done for block %d\n", bq->block_number);
+
+    PRINTdbg("write done for block %d\n", bq->block_number);
     if (handle->stat_flags & SF_RW) {
        fast_timer_stop(&handle->stats[bq->block_number].write);
        log_histo_add_interval(&handle->stats[bq->block_number].write_h,
@@ -680,7 +626,7 @@ static int initialize_queues(ne_handle handle) {
 
   // check for errors on open...
   for(i = 0; i < num_blocks; i++) {
-    PRINTout("Checking for error opening block %d\n", i);
+    PRINTdbg("Checking for error opening block %d\n", i);
 
     BufferQueue *bq = &handle->blocks[i];
     pthread_mutex_lock(&bq->qlock);
@@ -724,7 +670,7 @@ int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
 
   if(size+bq->offset < bq->buffer_size) {
     // then this is not a complete block.
-    PRINTout("saved incomplete buffer for block %d\n", bq->block_number);
+    PRINTdbg("saved incomplete buffer for block %d\n", bq->block_number);
     bq->offset += size;
   }
   else {
@@ -734,7 +680,7 @@ int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
     if(bq->flags & BQ_ERROR) {
       ret = 1;
     }
-    PRINTout("queued complete buffer for block %d\n", bq->block_number);
+    PRINTdbg("queued complete buffer for block %d\n", bq->block_number);
     pthread_cond_signal(&bq->full);
   }
   pthread_mutex_unlock(&bq->qlock);
@@ -800,8 +746,8 @@ int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, 
  */
 
 
-ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValue stat_flags,
-                       uDALType itype,
+ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
+                       uDALType itype, SktAuth auth, StatFlagsValue stat_flags,
                        char *path, ne_mode mode, va_list ap )
 {
    char file[MAXNAME];       /* array name of files */
@@ -819,12 +765,12 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
    if ( mode & NE_SETBSZ ) {
       counter++;
       mode -= NE_SETBSZ;
-      PRINTout( "ne_open: NE_SETBSZ flag detected\n");
+      PRINTdbg( "ne_open: NE_SETBSZ flag detected\n");
    }
    if ( mode & NE_NOINFO ) {
       counter -= 3;
       mode -= NE_NOINFO;
-      PRINTout( "ne_open: NE_NOINFO flag detected\n");
+      PRINTdbg( "ne_open: NE_NOINFO flag detected\n");
    }
 
    // Parse variadic arguments
@@ -885,7 +831,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
 
    if ( counter < 2 ) {
       handle->mode = NE_STAT;
-      PRINTout( "ne_open: temporarily setting mode to NE_STAT\n");
+      PRINTdbg( "ne_open: temporarily setting mode to NE_STAT\n");
    }
    else {
       handle->mode = mode;
@@ -894,8 +840,8 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
    handle->snprintf = fn;
    handle->state    = state;
    handle->auth     = auth;
-
    handle->impl     = get_impl(itype);
+
    if (! handle->impl) {
       PRINTerr( "ne_open: couldn't find implementation for itype %d\n", itype );
       errno = EINVAL;
@@ -920,7 +866,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
       ret = xattr_check(handle, path); // identify total data size of stripe
       if ((ret == 0) && (handle->mode == NE_STAT)) {
-         PRINTout( "ne_open: resetting mode to %d\n", mode);
+         PRINTdbg( "ne_open: resetting mode to %d\n", mode);
          handle->mode = mode;
          while ( handle->nerr > 0 ) {
             handle->nerr--;
@@ -929,7 +875,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
          }
          ret = xattr_check(handle,path); //perform the check again, identifying mismatched values
       }
-      PRINTout("ne_open: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d, TotSz = %llu\n",
+      PRINTdbg("ne_open: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d, TotSz = %llu\n",
                handle->nerr, handle->N, handle->E, handle->erasure_offset, handle->totsz );
 
       if ( ret != 0 ) {
@@ -952,7 +898,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
    E = handle->E;
    bsz = handle->bsz;
    erasure_offset = handle->erasure_offset;
-   PRINTout( "ne_open: using stripe values (N=%d,E=%d,bsz=%d,offset=%d)\n", N,E,bsz,erasure_offset);
+   PRINTdbg( "ne_open: using stripe values (N=%d,E=%d,bsz=%d,offset=%d)\n", N,E,bsz,erasure_offset);
 
    if(handle->mode == NE_WRONLY) { // first cut: mutlti-threading only for writes.
      if(initialize_queues(handle) < 0) {
@@ -980,11 +926,11 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
         crccount = E;
 
      ret = posix_memalign( &(handle->buffer), 64, ((N+E)*bsz) + (sizeof(u32)*crccount) ); //add space for intermediate checksum
-     PRINTout("ne_open: Allocated handle buffer of size %zd for bsz=%d, N=%d, E=%d\n",
+     PRINTdbg("ne_open: Allocated handle buffer of size %zd for bsz=%d, N=%d, E=%d\n",
               ((N+E)*bsz) + (sizeof(u32)*crccount), bsz, N, E);
 #else
      ret = posix_memalign( &(handle->buffer), 64, ((N+E)*bsz) );
-     PRINTout("ne_open: Allocated handle buffer of size %zd for bsz=%d, N=%d, E=%d\n",
+     PRINTdbg("ne_open: Allocated handle buffer of size %zd for bsz=%d, N=%d, E=%d\n",
               (N+E)*bsz, bsz, N, E);
 #endif
 
@@ -996,7 +942,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
 
         /* loop through and open up all the output files and initilize per part info and allocate buffers */
      counter = 0;
-     PRINTout( "opening file descriptors...\n" );
+     PRINTdbg( "opening file descriptors...\n" );
      mode_t mask = umask(0000);
      while ( counter < N+E ) {
 
@@ -1023,17 +969,17 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
           fast_timer_start(&handle->stats[counter].open);
 
       if( mode == NE_WRONLY ) {
-         PRINTout( "   opening %s%s for write\n", file, WRITE_SFX );
+         PRINTdbg( "   opening %s%s for write\n", file, WRITE_SFX );
          OPEN(handle->FDArray[counter], handle,
               strncat( file, WRITE_SFX, strlen(WRITE_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
       }
       else if ( mode == NE_REBUILD  &&  handle->src_in_err[counter] == 1 ) {
-         PRINTout( "   opening %s%s for write\n", file, REBUILD_SFX );
+         PRINTdbg( "   opening %s%s for write\n", file, REBUILD_SFX );
          OPEN(handle->FDArray[counter], handle,
               strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
       }
       else {
-         PRINTout( "   opening %s for read\n", file );
+         PRINTdbg( "   opening %s for read\n", file );
          OPEN(handle->FDArray[counter], handle, file, O_RDONLY );
       }
 
@@ -1071,13 +1017,13 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValu
 
 // caller (e.g. MC-sockets DAL) specifies SprintfFunc, stat, and SktAuth
 // New: caller also provides flags that control whether stats are collected
-ne_handle ne_open1( SnprintfFunc fn, void* state, SktAuth auth, StatFlagsValue stat_flags,
-                    uDALType itype,
+ne_handle ne_open1( SnprintfFunc fn, void* state,
+                    uDALType itype, SktAuth auth, StatFlagsValue stat_flags,
                     char *path, ne_mode mode, ... ) {
 
    va_list vl;
    va_start(vl, mode);
-   return ne_open1_vl(fn, state, auth, stat_flags, itype, path, mode, vl);
+   return ne_open1_vl(fn, state, itype, auth, stat_flags, path, mode, vl);
    va_end(vl);
 }
 
@@ -1098,7 +1044,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
 
    va_list vl;
    va_start(vl, mode);
-   return ne_open1_vl(ne_default_snprintf, NULL, auth, 0, UDAL_POSIX, path, mode, vl);
+   return ne_open1_vl(ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, path, mode, vl);
    va_end(vl);
 }
 
@@ -1200,11 +1146,12 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset )
    }
 
    if ( (offset + nbytes) > handle->totsz ) {
-      PRINTout("ne_read: read would extend beyond EOF, resizing read request...\n");
+      PRINTdbg("ne_read: read would extend beyond EOF, resizing read request...\n");
       nbytes = handle->totsz - offset;
       if ( nbytes <= 0 ) {
          PRINTerr( "ne_read: offset is beyond filesize\n" );
-         return 0;
+         // return -1;             /* pread() would just return 0 in this case */
+         return 0;             /* EOF */
       }
    }
 
@@ -1216,7 +1163,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset )
         &&  (offset < (handle->buff_offset + handle->buff_rem)) ) {
       seekamt = offset - handle->buff_offset;
       readsize = ( nbytes > (handle->buff_rem - seekamt) ) ? (handle->buff_rem - seekamt) : nbytes;
-      PRINTout( "ne_read: filling request for first %lu bytes from cache with offset %zd in buffer...\n",
+      PRINTdbg( "ne_read: filling request for first %lu bytes from cache with offset %zd in buffer...\n",
                 (unsigned long) readsize, seekamt );
       memcpy( buffer, handle->buffer + seekamt, readsize );
       llcounter += readsize;
@@ -1253,7 +1200,7 @@ read:
    startpart = (offset + llcounter - (startstripe*bsz*N))/bsz;
    startoffset = offset+llcounter - (startstripe*bsz*N) - (startpart*bsz);
 
-   PRINTout("ne_read: read with rebuild from startstripe %d startpart %d and startoffset %d for nbytes %d\n",
+   PRINTdbg("ne_read: read with rebuild from startstripe %d startpart %d and startoffset %d for nbytes %d\n",
            startstripe, startpart, startoffset, nbytes);
 
    counter = 0;
@@ -1297,10 +1244,10 @@ read:
                seekamt += bsz;
 #endif
 
-               PRINTout("seeking erasure file e%d to %zd, as we will be reading from the next stripe\n",counter-N, seekamt);
+               PRINTdbg("seeking erasure file e%d to %zd, as we will be reading from the next stripe\n",counter-N, seekamt);
             }
             else {
-               PRINTout("seeking input file %d to %zd, as there is no error in this stripe\n",counter, seekamt);
+               PRINTdbg("seeking input file %d to %zd, as there is no error in this stripe\n",counter, seekamt);
             }
 
 
@@ -1340,7 +1287,7 @@ read:
 
    else {  //if not, we will require the entire stripe for rebuild
 
-      PRINTout("startpart = %d, endchunk = %d\n   This stripe contains corrupted blocks...\n", startpart, endchunk);
+      PRINTdbg("startpart = %d, endchunk = %d\n   This stripe contains corrupted blocks...\n", startpart, endchunk);
       while (counter < mtot) {
 
          if( handle->src_in_err[counter] == 0 ) {
@@ -1373,9 +1320,9 @@ read:
                continue;
             }
 #ifdef INT_CRC
-            PRINTout("seek input file %d to %lu, to read entire stripe\n",counter, (unsigned long)(startstripe*( bsz+sizeof(u32) )));
+            PRINTdbg("seek input file %d to %lu, to read entire stripe\n",counter, (unsigned long)(startstripe*( bsz+sizeof(u32) )));
 #else
-            PRINTout("seek input file %d to %lu, to read entire stripe\n",counter, (unsigned long)(startstripe*bsz));
+            PRINTdbg("seek input file %d to %lu, to read entire stripe\n",counter, (unsigned long)(startstripe*bsz));
 #endif
 
             if (handle->stat_flags & SF_RW) {
@@ -1414,6 +1361,12 @@ read:
    /**** output each data stipe, regenerating as necessary ****/
    while ( llcounter < nbytes ) {
 
+      if( handle->nerr > handle->E ) {
+         PRINTerr("ne_read: errors exceed erasure limits\n");
+         errno=ENODATA;
+         return llcounter;
+      }
+
       handle->buff_offset = (offset+llcounter);
       handle->buff_rem = 0;
 
@@ -1423,14 +1376,14 @@ read:
 
       endchunk = ((long)(offset+nbytes) - (long)( (offset + llcounter) - ((offset+llcounter)%(N*bsz)) ) ) / bsz;
 
-      PRINTout( "ne_read: endchunk unadjusted - %d\n", endchunk );
+      PRINTdbg( "ne_read: endchunk unadjusted - %d\n", endchunk );
       if ( endchunk >= N ) {
          endchunk = N - 1;
       }
 
-      PRINTout("ne_read: endchunk adjusted - %d\n", endchunk);
+      PRINTdbg("ne_read: endchunk adjusted - %d\n", endchunk);
       if ( endchunk < minNerr ) {
-         PRINTout( "ne_read: there is no error in this stripe\n");
+         PRINTdbg( "ne_read: there is no error in this stripe\n");
          error_in_stripe = 0;
       }
 
@@ -1441,14 +1394,14 @@ read:
             fast_timer_start(&handle->stats[counter].read);
 
          if ( llcounter == nbytes  &&  error_in_stripe == 0 ) {
-            PRINTout( "ne_read: data reads complete\n");
+            PRINTdbg( "ne_read: data reads complete\n");
             break;
          }
 
          readsize = bsz-tmpoffset;
 
          if ( handle->src_in_err[counter] == 1 ) {  //this data chunk is invalid
-            PRINTout("ne_read: ignoring data for faulty chunk %d\n",counter);
+            PRINTdbg("ne_read: ignoring data for faulty chunk %d\n",counter);
             if ( firstchunk == 0 ) {
                llcounter += readsize;
 
@@ -1476,12 +1429,12 @@ read:
                readsize = nbytes-llcounter;
 
 #ifdef INT_CRC
-            PRINTout("ne_read: read %lu from datafile %d\n", bsz+sizeof(crc), counter);
+            PRINTdbg("ne_read: read %lu from datafile %d\n", bsz+sizeof(crc), counter);
             // ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], bsz+sizeof(crc));
             ret_in = read_all(&handle->FDArray[counter], handle->buffs[counter], bsz+sizeof(crc));
             ret_in -= (sizeof(u32)+tmpoffset);
 #else
-            PRINTout("ne_read: read %d from datafile %d\n", readsize, counter);
+            PRINTdbg("ne_read: read %d from datafile %d\n", readsize, counter);
             // ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], readsize);
             ret_in = read_all(&handle->FDArray[counter], handle->buffs[counter], readsize);
 #endif
@@ -1494,37 +1447,29 @@ read:
             //check for a read error
             if ( ret_in < readsize ) {
 
-               if ( ret_in < 0  ||  handle->nerr < handle->E ) {
-                  PRINTerr( "ne_read: error encountered while reading data file %d\n", counter);
-                  if ( counter > maxNerr )  maxNerr = counter;
-                  if ( counter < minNerr )  minNerr = counter;
-                  handle->src_in_err[counter] = 1;
-                  handle->src_err_list[handle->nerr] = counter;
-                  handle->nerr++;
-                  nsrcerr++;
-                  handle->e_ready = 0; //indicate that erasure structs require re-initialization
-                  ret_in = 0;
-                  counter--;
-                  //if this is the first encountered error for the stripe, we must start over
-                  if ( error_in_stripe == 0 ) {
-                     for( tmp = counter; tmp >=0; tmp-- ) {
-                        llcounter -= datasz[tmp];
-                     }
-                     PRINTout( "ne_read: restarting stripe read, reset total read to %lu\n", (unsigned long)llcounter);
-                     goto read;
+               PRINTerr( "ne_read: error encountered while reading data file %d "
+                         "(expected %d but received %d)\n",
+                         counter, readsize, ret_in);
+               if ( counter > maxNerr )  maxNerr = counter;
+               if ( counter < minNerr )  minNerr = counter;
+               handle->src_in_err[counter] = 1;
+               handle->src_err_list[handle->nerr] = counter;
+               handle->nerr++;
+               nsrcerr++;
+               handle->e_ready = 0; //indicate that erasure structs require re-initialization
+               ret_in = 0;
+               counter--;
+
+               //if this is the first encountered error for the stripe, we must start over
+               if ( error_in_stripe == 0 ) {
+                  for( tmp = counter; tmp >=0; tmp-- ) {
+                     llcounter -= datasz[tmp];
                   }
-                  continue;
-               }
-               else {
-                  nbytes = llcounter + ret_in;
-                  PRINTerr( "ne_read: inputs exhausted, limiting read to %d bytes\n",nbytes);
+                  PRINTdbg( "ne_read: restarting stripe read, reset total read to %lu\n", (unsigned long)llcounter);
+                  goto read;
                }
 
-               PRINTerr( "ne_read: failed to read all requested data from file %d\n", counter);
-               PRINTout("ne_read: zeroing missing data for %d from %lu to %d\n",counter,ret_in,bsz);
-
-               bzero(handle->buffs[counter]+ret_in,bsz-ret_in);
-
+               continue;
             }
 
 
@@ -1548,7 +1493,7 @@ read:
                      for( tmp = counter; tmp >=0; tmp-- ) {
                         llcounter -= datasz[tmp];
                      }
-                     PRINTout( "ne_read: restarting stripe read, reset total read to %lu\n", (unsigned long)llcounter);
+                     PRINTdbg( "ne_read: restarting stripe read, reset total read to %lu\n", (unsigned long)llcounter);
                      goto read;
                   }
                   continue;
@@ -1591,7 +1536,7 @@ read:
 
          if ( handle->src_in_err[counter] == 0 ) {
 
-            PRINTout("ne_read: reading %d from erasure %d\n",readsize,counter);
+            PRINTdbg("ne_read: reading %d from erasure %d\n",readsize,counter);
             if (handle->stat_flags & SF_RW)
                fast_timer_start(&handle->stats[counter].read);
 
@@ -1615,11 +1560,11 @@ read:
                handle->e_ready = 0; //indicate that erasure structs require re-initialization
                error_in_stripe = 1;
                PRINTerr("ne_read: failed to read all erasure data in file %d\n", counter);
-               PRINTout("ne_read: zeroing data for faulty erasure %d from %lu to %d\n",counter,ret_in,bsz);
+               PRINTerr("ne_read: zeroing data for faulty erasure %d from %lu to %d\n",counter,ret_in,bsz);
                bzero(handle->buffs[counter]+ret_in,bsz-ret_in);
-               PRINTout("ne_read: zeroing temp_data for faulty erasure %d\n",counter);
+               PRINTdbg("ne_read: zeroing temp_data for faulty erasure %d\n",counter);
                bzero(temp_buffs[counter],bsz);
-               PRINTout("ne_read: done zeroing %d\n",counter);
+               PRINTdbg("ne_read: done zeroing %d\n",counter);
             }
 #ifdef INT_CRC
             else {
@@ -1651,7 +1596,7 @@ read:
 #endif
          }
          else {
-            PRINTout( "ne_read: ignoring data for faulty erasure %d\n", counter );
+            PRINTdbg( "ne_read: ignoring data for faulty erasure %d\n", counter );
          }
          counter++;
       }
@@ -1667,7 +1612,7 @@ read:
             // Generate encode matrix encode_matrix
             // The matrix generated by gf_gen_rs_matrix
             // is not always invertable.
-            PRINTout("ne_read: initializing erasure structs...\n");
+            PRINTdbg("ne_read: initializing erasure structs...\n");
             gf_gen_rs_matrix(handle->encode_matrix, mtot, N);
 
             // Generate g_tbls from encode matrix encode_matrix
@@ -1696,12 +1641,12 @@ read:
                handle->recov[tmp] = handle->buffs[decode_index[tmp]];
             }
 
-            PRINTout( "ne_read: init erasure tables nsrcerr = %d e_ready = %d...\n", nsrcerr, handle->e_ready );
+            PRINTdbg( "ne_read: init erasure tables nsrcerr = %d e_ready = %d...\n", nsrcerr, handle->e_ready );
             ec_init_tables(N, handle->nerr, handle->decode_matrix, handle->g_tbls);
 
             handle->e_ready = 1; //indicate that rebuild structures are initialized
          }
-         PRINTout( "ne_read: performing regeneration from erasure...\n" );
+         PRINTdbg( "ne_read: performing regeneration from erasure...\n" );
 
          ec_encode_data(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
 
@@ -1732,7 +1677,7 @@ read:
 #endif
 
          if ( handle->src_in_err[counter] == 0 ) {
-            PRINTout( "ne_read: performing write of %d from chunk %d data\n", readsize, counter );
+            PRINTdbg( "ne_read: performing write of %d from chunk %d data\n", readsize, counter );
 
 #ifdef INT_CRC
             if ( firststripe  &&  counter == startpart )
@@ -1740,7 +1685,7 @@ read:
             if ( firststripe  &&  counter == startpart  &&  error_in_stripe )
 #endif
             {
-               PRINTout( "ne_read:   with offset of %d\n", startoffset );
+               PRINTdbg( "ne_read:   with offset of %d\n", startoffset );
                memcpy( buffer+out_off, (handle->buffs[counter])+startoffset, readsize );
             }
             else {
@@ -1762,12 +1707,12 @@ read:
             }
 
             if ( firststripe == 0  ||  counter != startpart ) {
-               PRINTout( "ne_read: performing write of %d from regenerated chunk %d data, src_err = %d\n",
+               PRINTdbg( "ne_read: performing write of %d from regenerated chunk %d data, src_err = %d\n",
                             readsize, counter, handle->src_err_list[tmp] );
                memcpy( buffer+out_off, temp_buffs[N+tmp], readsize );
             }
             else {
-               PRINTout( "ne_read: performing write of %d from regenerated chunk %d data with offset %d, src_err = %d\n",
+               PRINTdbg( "ne_read: performing write of %d from regenerated chunk %d data with offset %d, src_err = %d\n",
                             readsize, counter, startoffset, handle->src_err_list[tmp] );
                memcpy( buffer+out_off, (temp_buffs[N+tmp])+startoffset, readsize );
             }
@@ -1816,7 +1761,7 @@ read:
                   break;
                }
             }
-            PRINTout( "ne_read: caching %d from regenerated chunk %d data, src_err = %d\n", bsz, counter, handle->src_err_list[tmp] );
+            PRINTdbg( "ne_read: caching %d from regenerated chunk %d data, src_err = %d\n", bsz, counter, handle->src_err_list[tmp] );
             memcpy( handle->buffs[counter], temp_buffs[N+tmp], bsz );
          }
          handle->buff_rem += bsz;
@@ -1829,7 +1774,7 @@ read:
    for ( counter = 0; counter < temp_buffs_alloc; counter++ )
       free(temp_buffs[counter]);
 
-   PRINTout( "ne_read: cached %lu bytes from stripe at offset %zd\n", handle->buff_rem, handle->buff_offset );
+   PRINTdbg( "ne_read: cached %lu bytes from stripe at offset %zd\n", handle->buff_rem, handle->buff_offset );
 
    return llcounter; 
 }
@@ -1930,7 +1875,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
          if ( totsize + readsize > nbytes ) { readsize = nbytes-totsize; }
 
          if ( readsize < 1 ) {
-            PRINTout("ne_write: reading of input is now complete\n");
+            PRINTdbg("ne_write: reading of input is now complete\n");
             break;
          }
 
@@ -1938,7 +1883,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
          // offset in the generated erasure data, not including the user's data,
          // and the "write offset" is the logical position in the total output,
          // not including the 4-bytes-per-block of CRC data.
-         PRINTout( "ne_write: reading input for %lu bytes with offset of %llu "
+         PRINTdbg( "ne_write: reading input for %lu bytes with offset of %llu "
                    "and writing to offset of %lu in handle buffer\n",
                    (unsigned long)readsize, totsize, handle->buff_rem );
          //memcpy ( handle->buffer + handle->buff_rem, buffer+totsize, readsize);
@@ -1953,14 +1898,14 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
            handle->nerr++;
          }
          
-         PRINTout( "ne_write:   ...copy complete.\n");
+         PRINTdbg( "ne_write:   ...copy complete.\n");
 
          totsize += readsize;
          writesize = readsize + ( handle->buff_rem % bsz );
          handle->buff_rem += readsize;
 
          if ( writesize < bsz ) {  //if there is not enough data to write a full block, stash it in the handle buffer
-            PRINTout("ne_write: reading of input is complete, stashed %lu bytes in handle buffer\n", (unsigned long)readsize);
+            PRINTdbg("ne_write: reading of input is complete, stashed %lu bytes in handle buffer\n", (unsigned long)readsize);
             break;
          }
 
@@ -1992,7 +1937,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
          fast_timer_start(&handle->erasure_timer);
 
       if ( handle->e_ready == 0 ) {
-         PRINTout( "ne_write: initializing erasure matricies...\n");
+         PRINTdbg( "ne_write: initializing erasure matricies...\n");
          // Generate encode matrix encode_matrix
          // The matrix generated by gf_gen_rs_matrix]
          // is not always invertable.
@@ -2003,7 +1948,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
          handle->e_ready = 1;
       }
 
-      PRINTout( "ne_write: calculating %d recovery blocks from %d data blocks\n",E,N);
+      PRINTdbg( "ne_write: calculating %d recovery blocks from %d data blocks\n",E,N);
       // Perform matrix dot_prod for EC encoding
       // using g_tbls from encode matrix encode_matrix
       // Need to lock the two buffers here.
@@ -2151,7 +2096,7 @@ int ne_close( ne_handle handle )
 
    /* flush the handle buffer if necessary */
    if ( handle->mode == NE_WRONLY  &&  handle->buff_rem != 0 ) {
-      PRINTout( "ne_close: flushing handle buffer...\n" );
+      PRINTdbg( "ne_close: flushing handle buffer...\n" );
       //zero the buffer to the end of the stripe
       tmp = (N*bsz) - handle->buff_rem;
       zero_buff = malloc(sizeof(char) * tmp);
@@ -2232,7 +2177,7 @@ int ne_close( ne_handle handle )
          // bq_writer), so instead of signalling a reader thread to close
          // its connection with the corresponding server, we'll just do it
          // ourselves, right here.
-         PRINTout( "ne_close: closing read-only block %d\n", counter);
+         PRINTdbg( "ne_close: closing read-only block %d\n", counter);
 
          if ((HNDLOP(close, handle->FDArray[counter]) != 0)
              && (handle->src_in_err[counter] == 0)) {
@@ -2280,7 +2225,7 @@ int ne_close( ne_handle handle )
    }
 
    if ( ret == 0 ) {
-      PRINTout( "ne_close: encoding error pattern in return value...\n" );
+      PRINTdbg( "ne_close: encoding error pattern in return value...\n" );
       /* Encode any file errors into the return status */
       for( counter = 0; counter < N+E; counter++ ) {
          if ( handle->src_in_err[counter] ) {
@@ -2311,23 +2256,26 @@ int ne_close( ne_handle handle )
  * @param int max_length : Maximum length of the character string to be scanned
  * @return int : 0 if the parent directory does exist and -1 if not
  */
-int parent_dir_missing( char* path, int max_length ) {
-   char* tmp = path;
-   int len = 0;
-   int index = -1;
-   struct stat status;
-   int res;
+int parent_dir_missing(uDALType itype, SktAuth auth, char* path, int max_length ) {
+   char*       tmp   = path;
+   int         len   = 0;
+   int         index = -1;
+   const uDAL* impl  = get_impl(itype);
 
-   while ( len < max_length  &&  *tmp != '\0' ) {
-      if( *tmp == '/' ) index = len;
+   struct stat status;
+   int         res;
+
+   while ( (len < max_length) &&  (*tmp != '\0') ) {
+      if( *tmp == '/' )
+         index = len;
       len++;
       tmp++;
    }
    
    tmp = path;
    *(tmp + index) = '\0';
-   res = stat( tmp, &status );
-   PRINTout( "parent_dir_missing: stat of \"%s\" returned %d\n", path, res );
+   res = PATHOP(stat, impl, auth, tmp, &status );
+   PRINTdbg( "parent_dir_missing: stat of \"%s\" returned %d\n", path, res );
    *(tmp + index) = '/';
 
    return res;
@@ -2343,9 +2291,10 @@ int parent_dir_missing( char* path, int max_length ) {
  * @param int width : Total width of the erasure striping (i.e. N+E)
  * @return int : 0 on success and -1 on failure
  */
-int ne_delete1( SnprintfFunc snprintf_fn, void* state, SktAuth auth,
-                StatFlagsValue stat_flags, uDALType itype,
+int ne_delete1( SnprintfFunc snprintf_fn, void* state,
+                uDALType itype, SktAuth auth, StatFlagsValue stat_flags,
                 char* path, int width ) {
+
    char  file[MAXNAME];       /* array name of files */
    char  partial[MAXNAME];
    int   counter;
@@ -2372,31 +2321,12 @@ int ne_delete1( SnprintfFunc snprintf_fn, void* state, SktAuth auth,
 
       // unlink the file or the unfinished file.  If both fail, check
       // whether the parent directory exists.  If not, indicate an error.
-      if ( PATHOP( unlink, impl, auth, file )
-           &&  PATHOP( unlink, impl, auth, partial ) ) {
+      if ( ne_delete_block1(impl, auth, file)
+           &&  PATHOP(unlink, impl, auth, partial )
+           &&  (parent_missing = parent_dir_missing(itype, auth, file, MAXNAME)) ) {
 
-         parent_missing = parent_dir_missing(file, MAXNAME);
-         if (parent_missing)
-            ret = -1;
+         ret = -1;
       }
-
-#ifdef META_FILES
-      strncat( file, META_SFX, MAXNAME );
-      strncat( partial, META_SFX, MAXNAME );
-
-      // same as the above, but only stat the parent dir if we haven't
-      // already verified that it exists
-      if ( PATHOP( unlink, impl, auth, file )
-           &&  PATHOP( unlink, impl, auth, partial ) ) {
-
-         if ( parent_missing == -2 )
-            parent_missing = parent_dir_missing(file, MAXNAME);
-
-         if ( parent_missing )
-            ret = -1;
-      }
-#endif
-
    }
 
    if (stat_flags & SF_HANDLE) {
@@ -2409,7 +2339,7 @@ int ne_delete1( SnprintfFunc snprintf_fn, void* state, SktAuth auth,
 
 int ne_delete(char* path, int width ) {
 
-   // this is safe for builds with/without sockets and/or socket-authentication enabled
+   // This is safe for builds with/without sockets and/or socket-authentication enabled.
    // However, if you do build with socket-authentication, this will require a read
    // from a file (~/.awsAuth) that should probably only be accessible if ~ is /root.
    SktAuth  auth;
@@ -2418,73 +2348,103 @@ int ne_delete(char* path, int width ) {
       return -1;
    }
 
-   return ne_delete1(ne_default_snprintf, NULL, auth, 0, UDAL_POSIX, path, width);
+   return ne_delete1(ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, path, width);
 }
 
 
-off_t ne_size( const char* path, int quorum, int max_stripe_width ) {
-   char ptemplate[MAXNAME];
+
+// This is only used from libneTest?  (Maybe this was developed to give
+// libneTest an easy way to determin the size of a striped object, so that
+// that size could then be provided on a subsequent command-line, to do a
+// "read" of the whole file?  If so, you can now just skip providing the
+// size on the command-line for a "read", and libneTest will just read the
+// whole thing.)
+//
+// Tweaked: Instead of expecting a template pattern for the path, and then
+// adding ".meta", to generate our local template, we expect the caller to
+// provide the appropriate template as the path, including ".meta", if they
+// want meta.  libneTest will do this.
+
+off_t ne_size1( SnprintfFunc snprintf_fn, void* state,
+                uDALType itype, SktAuth auth, StatFlagsValue flags,
+                const char* ptemplate, int quorum, int max_stripe_width ) {
+
    char file[MAXNAME];
    char xattrval[XATTRLEN];
 
-   if( max_stripe_width < 1 ) max_stripe_width = MAXPARTS;
-   if( quorum < 1 ) quorum = max_stripe_width;
+   if( max_stripe_width < 1 )
+      max_stripe_width = MAXPARTS;
+   if( quorum < 1 )
+      quorum = max_stripe_width;
    if( quorum > max_stripe_width ) {
       PRINTerr( "ne_size: received a quorum value greater than the max_stripe_width\n" );
       errno = EINVAL;
       return -1;
    }
 
-   strncpy( ptemplate, path, MAXNAME );
+   // see comments above OPEN() defn
+   GenericFD      fd   = {0};
+   struct handle  hndl = {0};
+   ne_handle      handle = &hndl;
 
-#ifdef META_FILES
-   strncat( ptemplate, META_SFX, strlen(META_SFX)+1 );
-#endif
+   handle->impl = get_impl(itype);
+   handle->auth = auth;
+   if (! handle->impl) {
+      PRINTerr( "ne_size: couldn't find implementation for itype %d\n", itype );
+      errno = EINVAL;
+      return -1;
+   }
 
-   int match = 0;
+
    off_t sizes_reported[max_stripe_width];
+   int   match     = 0;
    off_t prev_size = -1;
-   int i;
+   int   i;
+
    for( i = 0; i < max_stripe_width  &&  match < quorum; i++ ) {
-      sprintf( file, ptemplate, i );
+      snprintf_fn( file, MAXNAME, ptemplate, i, state );
+
+      PRINTdbg("ne_size: opening file %s\n", file);
+      OPEN( fd, handle, file, O_RDONLY );
+      if ( FD_ERR(fd) ) { 
+         PRINTerr("ne_size: failed to open file %s\n", file);
+         continue;
+      }
 
 #ifdef META_FILES
 
-      PRINTout("ne_size: opening file %s\n", file);
-      int meta_fd = open( file, O_RDONLY );
-      if ( meta_fd >= 0 ) {
-         int tmp = read( meta_fd, &xattrval[0], XATTRLEN );
-         if ( tmp < 0 ) {
-            PRINTerr("ne_size: failed to read from file %s\n", file);
-            continue;
-         }
-         else if(tmp == 0) {
-            PRINTerr( "ne_size: read 0 bytes from metadata file %s\n", file);
-            continue;
-         }
-         tmp = close( meta_fd );
-         if ( tmp < 0 ) {
-            PRINTerr("ne_size: failed to close file %s\n", file);
-            continue;
-         }
+      int tmp = HNDLOP(read, fd, &xattrval[0], XATTRLEN );
+      if ( tmp < 0 ) {
+         PRINTerr("ne_size: failed to read from file %s\n", file);
+         HNDLOP( close, fd );
+         continue;
       }
-      else {
-         PRINTerr("ne_size: failed to open file %s\n", file);
+      else if(tmp == 0) {
+         PRINTerr( "ne_size: read 0 bytes from metadata file %s\n", file);
+         HNDLOP( close, fd );
          continue;
       }
 
 #else
 
-#if (AXATTR_GET_FUNC == 4)
-      if( getxattr(file,XATTRKEY,&xattrval[0],XATTRLEN) ) continue;
-#else
-      if( getxattr(file,XATTRKEY,&xattrval[0],XATTRLEN,0,0) ) continue;
-#endif
+#  if (AXATTR_GET_FUNC == 4)
+      if( HNDLOP(fgetxattr, file, XATTRKEY, &xattrval[0], XATTRLEN) )
+         continue;
+#  else
+      if( HNDLOP(fgetxattr, file, XATTRKEY, &xattrval[0], XATTRLEN, 0, 0) )
+         continue;
+#  endif
 
 #endif //META_FILES
 
-      PRINTout( "ne_size: file %s xattr returned %s\n", file, xattrval );
-      
+      tmp = HNDLOP( close, fd );
+      if ( tmp < 0 ) {
+         PRINTerr("ne_size: failed to close file %s\n", file);
+         continue;
+      }
+
+      PRINTdbg( "ne_size: file %s xattr returned %s\n", file, xattrval );
+
       sscanf( xattrval, "%*s %*s %*s %*s %*s %*s %*s %zd", &sizes_reported[i] );
 
       if ( prev_size == -1  ||  sizes_reported[i] == prev_size ) {
@@ -2501,10 +2461,32 @@ off_t ne_size( const char* path, int quorum, int max_stripe_width ) {
       prev_size = sizes_reported[i];
    }
 
-   if( prev_size == -1 ) { errno = ENOENT; return -1; }
-   if( match < quorum ) { errno = ENODATA; return -1; }
+   if( prev_size == -1 ) {
+      errno = ENOENT;
+      return -1;
+   }
+   if( match < quorum ) {
+      errno = ENODATA;
+      return -1;
+   }
+
    return prev_size;
 }
+
+off_t ne_size( const char* path, int quorum, int max_stripe_width ) {
+
+   // This is safe for builds with/without sockets and/or socket-authentication enabled.
+   // However, if you do build with socket-authentication, this will require a read
+   // from a file (~/.awsAuth) that should probably only be accessible if ~ is /root.
+   SktAuth  auth;
+   if (DEFAULT_AUTH_INIT(auth)) {
+      PRINTerr("failed to initialize default socket-authentication credentials\n");
+      return -1;
+   }
+
+   return ne_size1(ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, path, quorum, max_stripe_width);
+}
+
 
 
 /**
@@ -2579,7 +2561,7 @@ int xattr_check( ne_handle handle, char *path )
       handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_offset)%(lN+lE), handle->state );
 
       ret = PATHOP(stat, handle->impl, handle->auth, file, partstat);
-      PRINTout( "xattr_check: stat of file %s returns %d\n", file, ret );
+      PRINTdbg( "xattr_check: stat of file %s returns %d\n", file, ret );
       handle->csum[counter]=0; //reset csum to make results clearer
       if ( ret != 0 ) {
          PRINTerr( "xattr_check: file %s: failure of stat\n", file );
@@ -2592,42 +2574,7 @@ int xattr_check( ne_handle handle, char *path )
       handle->group = partstat->st_gid;
       bzero(xattrval,sizeof(xattrval));
 
-#ifdef META_FILES
-      handle->snprintf( nfile, MAXNAME, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
-      strncat( nfile, META_SFX, strlen(META_SFX)+1 );
-      PRINTout("xattr_check: opening file %s\n", nfile);
-
-      GenericFD   meta_fd = {0};
-      OPEN(meta_fd, handle, nfile, O_RDONLY);
-      if ( FD_ERR(meta_fd) ) {
-         ret = -1;
-         PRINTerr("xattr_check: failed to open file %s\n", nfile);
-      }
-      else {
-         // tmp = HNDLOP(read, meta_fd, &xattrval[0], sizeof(xattrval));
-         tmp = read_all(&meta_fd, &xattrval[0], sizeof(xattrval));
-         if ( tmp < 0 ) {
-            PRINTerr("xattr_check: failed to read from file %s\n", nfile);
-            ret = tmp;
-         }
-         else if(tmp == 0) {
-           PRINTerr( "xattr_check: read 0 bytes from metadata file %s\n", nfile);
-           ret = -1;
-         }
-         tmp = HNDLOP(close, meta_fd);
-         if ( tmp < 0 ) {
-            PRINTerr("xattr_check: failed to close file %s\n", nfile);
-            ret = tmp;
-         }
-      }
-#else
-#  if (AXATTR_GET_FUNC == 4)
-      ret = FILEOP(getxattr, handle->auth, file, XATTRKEY, &xattrval[0], sizeof(xattrval));
-#  else
-      ret = FILEOP(getxattr, handle->auth, file, XATTRKEY, &xattrval[0], sizeof(xattrval), 0, 0);
-#  endif
-#endif //META_FILES
-
+      ret = ne_get_xattr1(handle->impl, handle->auth, file, xattrval, sizeof(xattrval));
       if (ret < 0) {
          PRINTerr( "xattr_check: failure of xattr retrieval for file %s\n", file);
          handle->src_in_err[counter] = 1;
@@ -2635,17 +2582,24 @@ int xattr_check( ne_handle handle, char *path )
          handle->nerr++;
          continue;
       }
-      PRINTout("xattr_check: file %d (%s) xattr returned \"%s\"\n",counter,file,xattrval);
+      PRINTdbg("xattr_check: file %d (%s) xattr returned \"%s\"\n",counter,file,xattrval);
 
-      sscanf(xattrval,"%s %s %s %s %s %s %s %s",
-             xattrchunks,
-             xattrerasure,
-             xattroffset,
-             xattrchunksizek,
-             xattrnsize,
-             xattrncompsize,
-             xattrnsum,
-             xattrtotsize);
+      ret = sscanf(xattrval,"%s %s %s %s %s %s %s %s",
+                   xattrchunks,
+                   xattrerasure,
+                   xattroffset,
+                   xattrchunksizek,
+                   xattrnsize,
+                   xattrncompsize,
+                   xattrnsum,
+                   xattrtotsize);
+      if (ret != 8) {
+         PRINTerr( "xattr_check: sscanf parsed only %d values in MD from '%s'\n", ret, file);
+         handle->src_in_err[counter] = 1;
+         handle->src_err_list[handle->nerr] = counter;
+         handle->nerr++;
+         continue;
+      }
 
       N = atoi(xattrchunks);
       E = atoi(xattrerasure);
@@ -2660,7 +2614,7 @@ int xattr_check( ne_handle handle, char *path )
       blocks = nsz / bsz;
 #endif
 
-      if ( handle->mode != NE_STAT ) { //branch skips checks involving uninitialized handle values (i.e. for stat)
+      if ( handle->mode != NE_STAT ) { // for 'stat' these handle values will be uninitialized
 
          /* verify xattr */
          if ( N != handle->N ) {
@@ -2742,17 +2696,23 @@ int xattr_check( ne_handle handle, char *path )
          continue;
       }
       else {
-         PRINTout( "setting csum for file %d to %llu\n", counter, (unsigned long long)csum);
+         PRINTdbg( "setting csum for file %d to %llu\n", counter, (unsigned long long)csum);
          handle->csum[counter] = csum;
          if ( handle->mode == NE_RDONLY ) {
-            if( ! handle->totsz ) handle->totsz = totsz; //only set the file size if it is not already set (i.e. by a call with mode=NE_STAT)
+
+            //only set the file size if it is not already set (i.e. by a call with mode=NE_STAT)
+            if( ! handle->totsz )
+               handle->totsz = totsz;
             break;
          }
 
          // This bundle of spaghetti acts to individually verify each "important" xattr value and count matches amongst all files
          char nc = 1, ec = 1, of = 1, bc = 1, tc = 1;
          if ( handle->mode != NE_STAT ) { nc = 0; ec = 0; of = 0; bc = 0; } //if these values are already initialized, skip setting them
-         for ( bcounter = 0; ( nc || ec || bc || tc || of )  &&  bcounter < MAXPARTS; bcounter++ ) {
+         for ( bcounter = 0;
+               (( nc || ec || bc || tc || of )  &&  (bcounter < MAXPARTS));
+               bcounter++ ) {
+
             if ( nc ) {
                if ( N_list[bcounter] == N ) {
                   N_match[bcounter]++;
@@ -2813,6 +2773,32 @@ int xattr_check( ne_handle handle, char *path )
                }
             }
          } //end of value-check loop
+
+
+
+         // After we've found some minimum number of metadata values, which
+         // all agree on the values of N+E, let's believe that we only need
+         // to stat N+E metadata files.
+
+         if ((   lN == MAXN)
+             && (lE == MAXE)
+             && ((! MIN_MD_CONSENSUS)
+                 || (counter >= (MIN_MD_CONSENSUS -1)))) {
+
+            PRINTdbg( "xattr_check: testing for consensus on iteration %d\n", counter);
+            if ((     N_match[0] == 0 )     || ( N_match[0] >= MIN_MD_CONSENSUS)
+                && (( E_match[0] == 0 )     || ( E_match[0] >= MIN_MD_CONSENSUS))
+                && (( O_match[0] == 0 )     || ( O_match[0] >= MIN_MD_CONSENSUS))
+                && (( bsz_match[0] == 0 )   || ( bsz_match[0] >= MIN_MD_CONSENSUS))
+                && (( totsz_match[0] == 0 ) || ( totsz_match[0] >= MIN_MD_CONSENSUS))) {
+
+               PRINTdbg( "xattr_check: consensus achieved N=%d, E=%d\n", N, E);
+               lN = N;
+               lE = E;
+            }
+         }
+             
+
 
       } //end of else at end of xattr checks
 
@@ -2951,19 +2937,19 @@ static int reopen_for_rebuild(ne_handle handle, int block) {
                    (block+handle->erasure_offset)%(handle->N+handle->E),
                    handle->state);
 
-  PRINTout( "   closing %s\n", file );
+  PRINTdbg( "   closing %s\n", file );
   HNDLOP(close, handle->FDArray[block]);
-  PRINTout( "   opening %s for write\n", file );
+  PRINTdbg( "   opening %s for write\n", file );
 
   if( handle->mode == NE_STAT ) {
-     PRINTout( "   setting FD %d to -1\n", block );
-    FD_INIT(handle->FDArray[block], handle);
+     PRINTdbg( "   setting FD %d to -1\n", block );
+     FD_INIT(handle->FDArray[block], handle);
   }
   else {
-     PRINTout( "   opening %s for write\n", file );
-    OPEN(handle->FDArray[block], handle,
-         strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ),
-         O_WRONLY | O_CREAT, 0666 );
+     PRINTdbg( "   opening %s for write\n", file );
+     OPEN(handle->FDArray[block], handle,
+          strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ),
+          O_WRONLY | O_CREAT, 0666 );
   }
 
   //ensure that sources are listed in order
@@ -2996,7 +2982,7 @@ static int reset_blocks(ne_handle handle) {
   for(block_index = 0; block_index < handle->N + handle->E; block_index++) {
 
     if(handle->mode != NE_STAT || handle->src_in_err[block_index] == 0) {
-      PRINTout( "ne_rebuild: performing seek to offset 0 for file %d\n",
+      PRINTdbg( "ne_rebuild: performing seek to offset 0 for file %d\n",
                 block_index);
       if (HNDLOP(lseek, handle->FDArray[block_index], 0, SEEK_SET) == -1) {
         if(handle->src_in_err[block_index] == 1) {
@@ -3082,7 +3068,7 @@ static int write_buffers(ne_handle handle, unsigned char *rebuild_buffs[]) {
          PRINTerr("failed to write %llu bytes to fd %d\n", BUFFER_SIZE, FD_NUM(handle->FDArray[handle->src_err_list[i]]));
         return -1;
       }
-      PRINTout("wrote %llu bytes to fd %d\n", BUFFER_SIZE, FD_NUM(handle->FDArray[handle->src_err_list[i]]));
+      PRINTdbg("wrote %llu bytes to fd %d\n", BUFFER_SIZE, FD_NUM(handle->FDArray[handle->src_err_list[i]]));
     }
     handle->csum[handle->src_err_list[i]]    += crc;
     handle->nsz[handle->src_err_list[i]]     += handle->bsz;
@@ -3127,7 +3113,7 @@ int do_rebuild(ne_handle handle) {
     }
   }
 
-  PRINTout( "ne_rebuild: initiating rebuild operation...\n" );
+  PRINTdbg( "ne_rebuild: initiating rebuild operation...\n" );
 
   // loop over all the data to complete the rebuild.
   while(rebuilt_size < handle->totsz) {
@@ -3161,7 +3147,7 @@ int do_rebuild(ne_handle handle) {
     for(block_index = 0; block_index < ERASURE_WIDTH; block_index++) {
       if(handle->src_in_err[block_index]) {
         // Zero buffers for faulty blocks
-        PRINTout( "ne_rebuild: zeroing data for faulty_file %d\n",
+        PRINTdbg( "ne_rebuild: zeroing data for faulty_file %d\n",
                    block_index);
         if(block_index < handle->N) { nsrcerr++; }
         // XXX: Do these account for INT_CRC????
@@ -3194,7 +3180,7 @@ int do_rebuild(ne_handle handle) {
     if(handle->e_ready == 0) {
       // Generate encode matrix encode_matrix. The matrix generated by
       // gf_gen_rs_matrix is not always invertable.
-      PRINTout("ne_rebuild: initializing erasure structs...\n");
+      PRINTdbg("ne_rebuild: initializing erasure structs...\n");
       gf_gen_rs_matrix(handle->encode_matrix, handle->N + handle->E,
                        handle->N);
 
@@ -3225,13 +3211,13 @@ int do_rebuild(ne_handle handle) {
         handle->recov[i] = handle->buffs[decode_index[i]];
       }
 
-      PRINTout( "ne_rebuild: init erasure tables nsrcerr = %d...\n");
+      PRINTdbg( "ne_rebuild: init erasure tables nsrcerr = %d...\n");
       ec_init_tables(handle->N, handle->nerr,
                      handle->decode_matrix, handle->g_tbls);
       handle->e_ready = 1; // indicate that rebuild structures are initialized
     }
 
-    PRINTout("ne_rebuild: performing regeneration from erasure...\n" );
+    PRINTdbg("ne_rebuild: performing regeneration from erasure...\n" );
 
     ec_encode_data(handle->bsz, handle->N, handle->nerr,
                    handle->g_tbls, handle->recov, &rebuild_buffs[handle->N]);
@@ -3350,7 +3336,7 @@ int ne_flush( ne_handle handle ) {
    bsz = handle->bsz;
 
    if ( handle->buff_rem == 0 ) {
-      PRINTout( "ne_flush: handle buffer is empty, nothing to be done.\n" );
+      PRINTdbg( "ne_flush: handle buffer is empty, nothing to be done.\n" );
       return ret;
    }
 
@@ -3373,7 +3359,7 @@ int ne_flush( ne_handle handle ) {
 //   }
 
 
-   PRINTout( "ne_flush: flusing handle buffer...\n" );
+   PRINTdbg( "ne_flush: flusing handle buffer...\n" );
    //zero the buffer to the end of the stripe
    tmp = (N*bsz) - handle->buff_rem;
    zero_buff = malloc(sizeof(char) * tmp);
@@ -3595,8 +3581,8 @@ int ne_noxattr_rebuild(ne_handle handle) {
  *                  parts (E), and blocksize (bsz) for the stripe.
  */
 
-ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth,
-                    StatFlagsValue timer_flags, uDALType itype,
+ne_stat ne_status1( SnprintfFunc fn, void* state,
+                    uDALType itype, SktAuth auth, StatFlagsValue timer_flags,
                     char *path )
 {
    char file[MAXNAME];       /* array name of files */
@@ -3682,7 +3668,7 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth,
    }
    handle->mode = NE_STAT;
 
-   PRINTout( "ne_status: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d, TotSz = %llu\n",
+   PRINTdbg( "ne_status: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d, TotSz = %llu\n",
              handle->nerr, handle->N, handle->E, handle->erasure_offset, handle->totsz );
 
    stat->N = handle->N;
@@ -3710,13 +3696,13 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth,
    // add space for intermediate checksum
    ret = posix_memalign( &(handle->buffer), 64,
                          ((handle->N+handle->E)*bsz) + (sizeof(u32)*crccount) );
-   PRINTout("ne_stat: Allocated handle buffer of size %zd for bsz=%d, N=%d, E=%d\n",
+   PRINTdbg("ne_stat: Allocated handle buffer of size %zd for bsz=%d, N=%d, E=%d\n",
             ((handle->N+handle->E)*bsz) + (sizeof(u32)*crccount),
             handle->bsz, handle->N, handle->E);
 #else
    ret = posix_memalign( &(handle->buffer), 64,
                          ((handle->N+handle->E)*bsz) );
-   PRINTout("ne_stat: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n",
+   PRINTdbg("ne_stat: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n",
             (handle->N+handle->E)*bsz, handle->bsz, handle->N, handle->E);
 #endif
    if ( ret != 0 ) {
@@ -3734,7 +3720,7 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth,
 
    /* loop through and open up all the output files, initilize per part info, and allocate buffers */
    counter = 0;
-   PRINTout( "ne_status: opening file descriptors...\n" );
+   PRINTdbg( "ne_status: opening file descriptors...\n" );
    while ( counter < (handle->N+handle->E) ) {
       bzero( file, MAXNAME );
       handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_offset)%(handle->N+handle->E), handle->state );
@@ -3751,7 +3737,7 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth,
       handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
 #endif
 
-      PRINTout( "ne_status:    opening %s for read\n", file );
+      PRINTdbg( "ne_status:    opening %s for read\n", file );
       OPEN(handle->FDArray[counter], handle, file, O_RDONLY);
 
       if ( FD_ERR(handle->FDArray[counter])  &&  handle->src_in_err[counter] == 0 ) {
@@ -3803,7 +3789,6 @@ ne_stat ne_status1( SnprintfFunc fn, void* state, SktAuth auth,
 
 }
 
-
 ne_stat ne_status(char *path) {
 
    // this is safe for builds with/without sockets and/or socket-authentication enabled
@@ -3815,5 +3800,381 @@ ne_stat ne_status(char *path) {
       return NULL;
    }
 
-   return ne_status1(ne_default_snprintf, NULL, auth, 0, UDAL_POSIX, path);
+   return ne_status1(ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, path);
+}
+
+
+
+
+// ---------------------------------------------------------------------------
+// per-block functions
+//
+// These functions operate on a single block-file.  They are called both
+// from (a) administrative applications which run on the server-side, and
+// (b) from client-side applications (like the MarFS run-time).  With the
+// advent of the uDAL, the second case requires wrapping in
+// uDAL-implementation sensitive code.  See comments above
+// ne_delete_block() for details.
+// ---------------------------------------------------------------------------
+
+
+
+
+int ne_set_xattr1(const uDAL* impl, SktAuth auth,
+                  const char *path, const char *xattrval, size_t len) {
+   int ret = -1;
+
+   // see comments above OPEN() defn
+   GenericFD      fd   = {0};
+   struct handle  hndl = {0};
+   ne_handle      handle = &hndl;
+
+   handle->impl = impl;
+   handle->auth = auth;
+   if (! handle->impl) {
+      PRINTerr( "ne_set_xattr1: implementation is NULL\n");
+      errno = EINVAL;
+      return -1;
+   }
+
+
+#ifdef META_FILES
+   char meta_file[2048];
+   strcpy( meta_file, path );
+   strncat( meta_file, META_SFX, strlen(META_SFX) + 1 );
+
+   mode_t mask = umask(0000);
+   OPEN( fd, handle, meta_file, O_WRONLY | O_CREAT, 0666 );
+   umask(mask);
+
+   if ( FD_ERR(fd) < 0 ) { 
+      PRINTerr( "ne_close: failed to open file %s\n", meta_file);
+      ret = -1;
+   }
+   else {
+      // int val = HNDLOP( write, fd, xattrval, strlen(xattrval) + 1 );
+      int val = write_all(&fd, xattrval, strlen(xattrval) + 1 );
+      if ( val != strlen(xattrval) + 1 ) {
+         PRINTerr( "ne_close: failed to write to file %s\n", meta_file);
+         ret = -1;
+         HNDLOP(close, fd);
+      }
+      else {
+         ret = HNDLOP(close, fd);
+      }
+   }
+
+   // PATHOP(chown, handle->impl, handle->auth, meta_file, handle->owner, handle->group);
+
+#else
+   // looks like the stuff below might conceivably work with threads.
+   // The problem is that fgetxattr/fsetxattr are not yet implemented.
+#   error "xattr metadata is not functional with new thread model"
+
+   OPEN( fd, handle, path, O_RDONLY );
+   if ( FD_ERR(fd) ) { 
+      PRINTerr("ne_set_xattr: failed to open file %s\n", path);
+      ret = -1;
+   }
+   else {
+
+#   if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
+      ret = HNDLOP(fsetxattr, fd, XATTRKEY, xattrval, strlen(xattrval), 0);
+#   else
+      ret = HNDLOP(fsetxattr, fd, XATTRKEY, xattrval, strlen(xattrval), 0, 0);
+#   endif
+   }
+
+   if (HNDLOP(close, fd) < 0) {
+      PRINTerr("ne_set_xattr: failed to close file %s\n", path);
+      ret = -1;
+   }
+#endif //META_FILES
+
+   return ret;
+}
+
+int ne_set_xattr( const char *path, const char *xattrval, size_t len) {
+
+   // this is safe for builds with/without sockets enabled
+   // and with/without socket-authentication enabled
+   // However, if you do build with socket-authentication, this will require a read
+   // from a file (~/.awsAuth) that should probably only be accessible if ~ is /root.
+   SktAuth  auth;
+   if (DEFAULT_AUTH_INIT(auth)) {
+      PRINTerr("failed to initialize default socket-authentication credentials\n");
+      return -1;
+   }
+
+   return ne_set_xattr1(get_impl(UDAL_POSIX), auth, path, xattrval, len);
+}
+
+
+
+int ne_get_xattr1( const uDAL* impl, SktAuth auth,
+                   const char *path, char *xattrval, size_t len) {
+   int ret = 0;
+
+   // see comments above OPEN() defn
+   GenericFD      fd   = {0};
+   struct handle  hndl = {0};
+   ne_handle      handle = &hndl;
+
+   handle->impl = impl;
+   handle->auth = auth;
+   if (! handle->impl) {
+      PRINTerr( "ne_get_xattr1: implementation is NULL\n" );
+      errno = EINVAL;
+      return -1;
+   }
+
+
+#ifdef META_FILES
+   char meta_file_path[2048];
+   strncpy(meta_file_path, path, 2048);
+   strncat(meta_file_path, META_SFX, strlen(META_SFX)+1);
+
+   OPEN( fd, handle, meta_file_path, O_RDONLY );
+   if (FD_ERR(fd)) {
+      ret = -1;
+      PRINTerr("ne_get_xattr: failed to open file %s\n", meta_file_path);
+   }
+   else {
+      // ssize_t size = HNDLOP( read, fd, xattrval, len );
+      ssize_t size = read_all(&fd, xattrval, len);
+      if ( size < 0 ) {
+         PRINTerr("ne_get_xattr: failed to read from file %s\n", meta_file_path);
+         ret = -1;
+      }
+      else if(size == 0) {
+         PRINTerr( "ne_get_xattr: read 0 bytes from metadata file %s\n", meta_file_path);
+         ret = -1;
+      }
+      else if (size == len) {
+         // This might mean that the read truncated results to fit into our buffer.
+         // Caller should give us a buffer that has more-than-enough room.
+         PRINTerr( "ne_get_xattr: read %d bytes from metadata file %s\n", size, meta_file_path);
+         ret = -1;
+      }
+
+      if (HNDLOP(close, fd) < 0) {
+         PRINTerr("ne_get_xattr: failed to close file %s\n", meta_file_path);
+         ret = -1;
+      }
+
+      ret = size;
+   }
+
+#else
+   // looks like the stuff below might conceivably work with threads.
+   // The problem is that fgetxattr/fsetxattr are not yet implemented.
+#   error "xattr metadata is not functional with new thread model"
+
+   OPEN( fd, handle, path, O_RDONLY );
+   if ( FD_ERR(fd) ) { 
+      PRINTerr("ne_get_xattr: failed to open file %s\n", path);
+      ret = -1;
+   }
+   else {
+
+#   if (AXATTR_GET_FUNC == 4)
+      ret = HNDLOP(fgetxattr, fd, XATTRKEY, &xattrval[0], len);
+#   else
+      ret = HNDLOP(fgetxattr, fd, XATTRKEY, &xattrval[0], len, 0, 0);
+#   endif
+   }
+
+   if (HNDLOP(close, fd) < 0) {
+      PRINTerr("ne_get_xattr: failed to close file %s\n", meta_file_path);
+      ret = -1;
+   }
+#endif
+
+   return ret;
+}
+
+int ne_get_xattr( const char *path, char *xattrval, size_t len) {
+
+   // this is safe for builds with/without sockets enabled
+   // and with/without socket-authentication enabled
+   // However, if you do build with socket-authentication, this will require a read
+   // from a file (~/.awsAuth) that should probably only be accessible if ~ is /root.
+   SktAuth  auth;
+   if (DEFAULT_AUTH_INIT(auth)) {
+      PRINTerr("failed to initialize default socket-authentication credentials\n");
+      return -1;
+   }
+
+   return ne_get_xattr1(get_impl(UDAL_POSIX), auth, path, xattrval, len);
+}
+
+static int set_block_xattr(ne_handle handle, int block) {
+  int tmp = 0;
+  char xattrval[1024];
+  sprintf(xattrval,"%d %d %d %d %lu %lu %llu %llu",
+          handle->N, handle->E, handle->erasure_offset,
+          handle->bsz, handle->nsz[block],
+          handle->ncompsz[block], (unsigned long long)handle->csum[block],
+          (unsigned long long)handle->totsz);
+
+  PRINTdbg( "ne_close: setting file %d xattr = \"%s\"\n",
+               block, xattrval );
+
+  char block_file_path[2048];
+  handle->snprintf(block_file_path, MAXNAME, handle->path,
+                   (block+handle->erasure_offset)%(handle->N+handle->E),
+                   handle->state);
+
+   if ( handle->mode == NE_REBUILD )
+      strncat( block_file_path, REBUILD_SFX, strlen(REBUILD_SFX)+1 );
+   else if ( handle->mode == NE_WRONLY )
+      strncat( block_file_path, WRITE_SFX, strlen(WRITE_SFX)+1 );
+   
+   return ne_set_xattr1(handle->impl, handle->auth, block_file_path, xattrval, strlen(xattrval));
+}
+
+
+// unlink a single block (including the manifest file, if
+// META_FILES is defined).  This is called from:
+//
+// (a) a commented-out function in the mc_ring.c MarFS utility ('ch'
+//     branch), where I think it would represent a fully-specified
+//     block-file on the server-side.  From the server-side, UDAL_POSIX
+//     will always work with such paths.
+//
+// (b) ne_delete1(), where it refers to a fully-specified block-file, but
+//     from the client-side.  Therefore, it may potentially need to go
+//     through a MarFS RDMA server, so it must acquire uDAL dressing, to
+//     allow selection of the appropriate uDAL implementation.
+
+
+int ne_delete_block1(const uDAL* impl, SktAuth auth, const char *path) {
+
+   int ret = PATHOP(unlink, impl, auth, path);
+
+#ifdef META_FILE
+   if(ret == 0) {
+      char meta_path[2048];
+      strncpy(meta_path, path, 2048);
+      strcat(meta_path, META_SFX);
+
+      ret = PATHOP(unlink, impl, auth, meta_path);
+   }
+#endif
+
+   return ret;
+}
+
+int ne_delete_block(const char *path) {
+
+   // this is safe for builds with/without sockets enabled
+   // and with/without socket-authentication enabled
+   // However, if you do build with socket-authentication, this will require a read
+   // from a file (~/.awsAuth) that should probably only be accessible if ~ is /root.
+   SktAuth  auth;
+   if (DEFAULT_AUTH_INIT(auth)) {
+      PRINTerr("failed to initialize default socket-authentication credentials\n");
+      return -1;
+   }
+
+   return ne_delete_block1(get_impl(UDAL_POSIX), auth, path);
+}
+
+
+
+
+/**
+ * Make a symlink to an existing block.
+ */
+int ne_link_block1(const uDAL* impl, SktAuth auth,
+                   const char *link_path, const char *target) {
+
+   struct stat target_stat;
+   int         ret;
+
+
+#ifdef META_FILES
+   char meta_path[2048];
+   char meta_path_target[2048];
+
+   strcpy(meta_path, link_path);
+   strcat(meta_path, META_SFX);
+
+   strcpy(meta_path_target, target);
+   strcat(meta_path_target, META_SFX);
+#endif // META_FILES
+
+   // stat the target.
+   if (PATHOP(stat, impl, auth, target, &target_stat) == -1) {
+      return -1;
+   }
+
+   // if it is a symlink, then move it,
+   if(S_ISLNK(target_stat.st_mode)) {
+      // check that the meta file has a symlink here too, If not then
+      // abort without doing anything. If it does, then proceed with
+      // making symlinks.
+      if(PATHOP(stat, impl, auth, meta_path_target, &target_stat) == -1) {
+         return -1;
+      }
+      if(!S_ISLNK(target_stat.st_mode)) {
+         return -1;
+      }
+      char   tp[2048];
+      char   tp_meta[2048];
+      size_t link_size;
+      if((link_size = PATHOP(readlink, impl, auth, target, tp, 2048)) != -1) {
+         tp[link_size] = '\0';
+      }
+      else {
+         return -1;
+      }
+#ifdef META_FILES
+      if((link_size = PATHOP(readlink, impl, auth, meta_path_target, tp_meta, 2048)) != -1) {
+         tp_meta[link_size] = '\0';
+      }
+      else {
+         return -1;
+      }
+#endif
+
+      // make the new links.
+      ret = PATHOP(symlink, impl, auth, tp, link_path);
+#ifdef META_FILES
+      if(ret == 0)
+         ret = PATHOP(symlink, impl, auth, tp_meta, meta_path);
+#endif
+
+      // remove the old links.
+      ret = PATHOP(unlink, impl, auth, target);
+#ifdef META_FILES
+      if(ret == 0)
+         PATHOP(unlink, impl, auth, meta_path_target);
+#endif
+      return ret;
+   }
+
+   // if not, then create the link.
+   ret = PATHOP(symlink, impl, auth, target, link_path);
+#ifdef META_FILES
+   if(ret == 0)
+      ret = PATHOP(symlink, impl, auth, meta_path_target, meta_path);
+#endif
+   return ret;
+}
+
+
+int ne_link_block(const char *link_path, const char *target) {
+
+   // this is safe for builds with/without sockets enabled
+   // and with/without socket-authentication enabled
+   // However, if you do build with socket-authentication, this will require a read
+   // from a file (~/.awsAuth) that should probably only be accessible if ~ is /root.
+   SktAuth  auth;
+   if (DEFAULT_AUTH_INIT(auth)) {
+      PRINTerr("failed to initialize default socket-authentication credentials\n");
+      return -1;
+   }
+
+   return ne_link_block1(get_impl(UDAL_POSIX), auth, link_path, target);
 }

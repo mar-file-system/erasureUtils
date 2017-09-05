@@ -93,6 +93,16 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
    fewer than n+MIN_PROTECTION blocks were written successfully, then
    the write will fail. */
 #define MIN_PROTECTION 1
+
+/* MIN_MD_CONSENSUS defines the minimum number of metadata files/xattrs we
+   have to look at, which are all in agreement about the values for N and
+   E, before ne_status1() will believe that it knows what N+E is.  In the
+   case of META_FILES being defined, this avoids doing (MAXN + MAXE) -
+   (N+E) failed stats for every ne_status(), ne_read(), etc. (In the case
+   of UDAL_SOCKETS, each of those failed "stats" results in an attempt to
+   connect to a non-existent server, which must then time out.  */
+#define MIN_MD_CONSENSUS  6
+
 #define MAXN 15
 #define MAXE 5
 #define MAXNAME 2048
@@ -124,19 +134,21 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #if (DEBUG_NE == 2)
 #  include <syslog.h>
-#  define PRINTout(...)   SYSLOG(LOG_DEBUG, ##__VA_ARGS__)
+#  define PRINTout(...)   SYSLOG(LOG_INFO,  ##__VA_ARGS__)
 #  define PRINTerr(...)   SYSLOG(LOG_ERR,   ##__VA_ARGS__)
+#  define PRINTdbg(...)   SYSLOG(LOG_DEBUG, ##__VA_ARGS__)
 #  define LOG_INIT()      openlog(NE_LOG_PREFIX, LOG_CONS|LOG_PID, LOG_USER)
 
 #elif (DEBUG_NE)
-// #  define PRINTout(...)   FPRINTF(stdout, ##__VA_ARGS__)
 #  define PRINTout(...)   FPRINTF(stderr, ##__VA_ARGS__) /* stderr for 'fuse -f ...' */
 #  define PRINTerr(...)   FPRINTF(stderr, ##__VA_ARGS__)
+#  define PRINTdbg(...)   FPRINTF(stderr, ##__VA_ARGS__)
 #  define LOG_INIT()
 
 #else
-#  define PRINTout(...)
+#  define PRINTout(...)   fprintf(stdout, ##__VA_ARGS__)
 #  define PRINTerr(...)   fprintf(stderr, ##__VA_ARGS__)
+#  define PRINTdbg(...)
 #  define LOG_INIT()
 #endif
 
@@ -323,22 +335,68 @@ typedef struct handle* ne_handle;
 
 
 /* Erasure utility-functions taking a raw path argument */
-ne_handle ne_open1  ( SnprintfFunc func, void* state, SktAuth auth,
-                      StatFlagsValue flags, uDALType itype,
+
+// NOTE: A function named like "foo1()" is the uDAL-sensitive version of
+//       the corresponding function "foo()".  Calling foo() will call
+//       foo1() supplying the current-default POSIX uDAL, whereas foo1()
+//       can be used by uDAL-savvy callers (like the MarFS RDMA DAL) that
+//       know which uDAL they want to use.  This allows utilities written
+//       for the NFS-based POSIX uDAL to continue to work over NFS in
+//       production, while we validate the functioning of the RDMA uDAL.
+//
+//       Ultimately, this allows repos using both kinds of uDALs to
+//       co-exist, and to be accessed with the same libne build.
+//       Theoretically (validated on small scale in practice), it is
+//       possible to access objects written with either uDAL, using either
+//       uDAL.  However, it seems a big step to drop this assumption into
+//       production, without first going through a phase in which old repos
+//       continue to be accessed with the NFS uDAL, while new experimental
+//       work can be done using the RDMA uDAL.
+
+ne_handle ne_open1  ( SnprintfFunc func, void* state,
+                      uDALType itype, SktAuth auth, StatFlagsValue flags,
                       char *path, ne_mode mode, ... );
 
-int       ne_delete1( SnprintfFunc func, void* state, SktAuth auth,
-                      StatFlagsValue flags, uDALType itype,
+int       ne_delete1( SnprintfFunc func, void* state,
+                      uDALType itype, SktAuth auth, StatFlagsValue flags, 
                       char *path, int width );
 
-ne_stat   ne_status1( SnprintfFunc func, void* state, SktAuth auth,
-                      StatFlagsValue flags, uDALType itype, char *path );
+ne_stat   ne_status1( SnprintfFunc func, void* state,
+                      uDALType itype, SktAuth auth, StatFlagsValue flags,
+                      char *path );
+
+off_t     ne_size1  ( SnprintfFunc func, void* state,
+                      uDALType itype, SktAuth auth, StatFlagsValue flags,
+                      const char* path, int quorum, int max_stripe_width );
+
+
+// per-block
+int       ne_set_xattr1   ( const uDAL* impl, SktAuth auth,
+                            const char *path, const char *xattrval, size_t len );
+
+int       ne_get_xattr1   ( const uDAL* impl, SktAuth auth,
+                            const char *path, char *xattrval, size_t len );
+
+int       ne_delete_block1( const uDAL* impl, SktAuth auth,
+                            const char *path );
+
+int       ne_link_block1  ( const uDAL* impl, SktAuth auth,
+                            const char *link_path, const char *target );
+
 
 // these interfaces provide a default SnprintfFunc, which supports the
-// expectations of the default MarFS multi-component implementation
+// expectations of the default MarFS NFS-based multi-component implementation
 ne_handle ne_open  ( char *path, ne_mode mode, ... );
 int       ne_delete( char* path, int width );
 ne_stat   ne_status( char* path);
+off_t     ne_size  ( const char* path, int quorum, int max_stripe_width );
+
+int       ne_set_xattr   ( const char *path, const char *xattrval, size_t len );
+int       ne_get_xattr   ( const char *path, char *xattrval, size_t len );
+int       ne_delete_block( const char *path );
+int       ne_link_block  ( const char *link_path, const char *target );
+
+
 
 
 /* Erasure utility-functions taking a <handle> argument */
@@ -348,7 +406,6 @@ int       ne_close( ne_handle handle );
 int       ne_rebuild( ne_handle handle );
 int       ne_noxattr_rebuild( ne_handle handle );
 int       ne_flush( ne_handle handle );
-off_t     ne_size( const char *path, int quorum, int max_stripe_width );
 
 #endif
 

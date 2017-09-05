@@ -169,12 +169,20 @@ int     udal_posix_rename(SktAuth* auth, const char* oldpath, const char* newpat
 int     udal_posix_stat(SktAuth* auth, const char* path, struct stat* buff) {
    return stat(path, buff);
 }
+ssize_t udal_posix_readlink(SktAuth* auth, const char* path, char* buff, size_t bufsize) {
+   return readlink(path, buff, bufsize);
+}
+int     udal_posix_symlink(SktAuth* auth, const char* oldpath, const char* newpath) {
+   return symlink(oldpath, newpath);
+}
 
 
 
 
 
 static const uDAL posix_impl = {
+   .itype        = UDAL_POSIX,
+
    .fd_init      = &udal_posix_fd_init,
    .fd_err       = &udal_posix_fd_err,
    .fd_num       = &udal_posix_fd_num,
@@ -196,6 +204,9 @@ static const uDAL posix_impl = {
    .unlink       = &udal_posix_unlink,
    .rename       = &udal_posix_rename,
    .stat         = &udal_posix_stat,
+
+   .readlink     = &udal_posix_readlink,
+   .symlink      = &udal_posix_symlink,
 };
 
 
@@ -341,12 +352,22 @@ int     udal_skt_rename(SktAuth* auth, const char* oldpath, const char* newpath)
 int     udal_skt_stat(SktAuth* auth, const char* path, struct stat* buff) {
    return skt_stat(auth, path, buff);
 }
+ssize_t udal_skt_readlink(SktAuth* auth, const char* path, char* buff, size_t bufsize) {
+   errno = ENOTSUP;
+   return -1;
+}
+int     udal_skt_symlink(SktAuth* auth, const char* old, const char* newpath) {
+   errno = ENOTSUP;
+   return -1;
+}
 
 
 
 
 
 static const uDAL sockets_impl = {
+   .itype        = UDAL_SOCKETS,
+
    .fd_init      = &udal_skt_fd_init,
    .fd_err       = &udal_skt_fd_err,
    .fd_num       = &udal_skt_fd_num,
@@ -368,7 +389,9 @@ static const uDAL sockets_impl = {
    .unlink       = &udal_skt_unlink,
    .rename       = &udal_skt_rename,
    .stat         = &udal_skt_stat,
-   
+
+   .readlink     = &udal_skt_readlink,
+   .symlink      = &udal_skt_symlink,
 };
 
 

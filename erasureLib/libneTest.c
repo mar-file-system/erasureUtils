@@ -98,7 +98,8 @@ int crc_status();
 // 
 //     Here, we don't have that.  Instead, this is just hardwired to match
 //     the latest config on the VLE testbed.  If the testbed changes, and
-//     you change your MARFSCONFIGRC ... this hardwired thing will still be
+//     you change your MARFSCONFIGRC to try to fix things ... things still
+//     won't be fixed, this hardwired thing will be the thing that's
 //     broken.
 //
 //     see marfs/fuse/src/dal.c
@@ -114,8 +115,8 @@ int snprintf_for_vle(char*       dest,
   int block_offset = 0;
 
   return snprintf(dest, size, format,
-                  pod_offset + host_offset,  // "192.168.0.%d"
-                  block_offset + block);             // "block%d"
+                  pod_offset + host_offset, // "192.168.0.%d"
+                  block_offset + block);    // "block%d"
 }
 #endif
 
@@ -215,6 +216,7 @@ select_snprintf(const char* path) {
 
 
 
+
 int main( int argc, const char* argv[] ) 
 {
    unsigned long long nread;
@@ -240,6 +242,7 @@ int main( int argc, const char* argv[] )
       return -1;
    }
 
+
    if ( strncmp( argv[1], "write", strlen(argv[1]) ) == 0 ) {
       if ( argc < 7 ) {
          usage( argv[0], argv[1] ); 
@@ -259,7 +262,7 @@ int main( int argc, const char* argv[] )
          return -1;
       }
       if ( argc >= 8 )          // optional <stat_flags>
-         parse_err = parse_flags(&stat_flags, argv[8]);
+         parse_err = parse_flags(&stat_flags, argv[7]);
 
       if ( argc >= 9)
          size_arg = argv[8];
@@ -304,10 +307,7 @@ int main( int argc, const char* argv[] )
          usage( argv[0], argv[1] );
          return -1;
       }
-      printf( "Size of \"%s\" -- %zd\n",
-              argv[2],
-              ne_size( argv[2], atoi(argv[3]), atoi(argv[4]) ) );
-      return 0;
+      wr = 5;
    }
 
    else {
@@ -315,7 +315,7 @@ int main( int argc, const char* argv[] )
       return -1;
    }
    
-   PRINTout("libneTest: command = '%s'\n", argv[1]);
+   PRINTdbg("libneTest: command = '%s'\n", argv[1]);
 
 
 
@@ -342,24 +342,25 @@ int main( int argc, const char* argv[] )
       totbytes = N * 64 * 1024; // default
 
  
+   srand(time(NULL));
+   ne_handle handle;
+
    SktAuth  auth;
    skt_auth_init(SKT_S3_USER, &auth); /* this is safe, whether built with S3_AUTH, or not */
 
-#  define NE_OPEN(PATH, MODE, ...)  ne_open1  (select_snprintf(PATH), NULL, auth, stat_flags, select_impl(PATH), \
-                                               (PATH), (MODE), ##__VA_ARGS__ )
-
-#  define NE_DELETE(PATH, WIDTH)    ne_delete1(select_snprintf(PATH), NULL, auth, stat_flags, select_impl(PATH), \
-                                               (PATH), (WIDTH))
-
-#  define NE_STATUS(PATH)           ne_status1(select_snprintf(PATH), NULL, auth, stat_flags, select_impl(PATH), \
-                                               (PATH))
-
-#  define NE_CHOWN(PATH)            ne_chown(select_snprintf(PATH), NULL, auth, stat_flags, select_impl(PATH), \
-                                               (PATH))
 
 
-   srand(time(NULL));
-   ne_handle handle;
+#  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, stat_flags, \
+                                                 (PATH), (MODE), ##__VA_ARGS__ )
+
+#  define NE_DELETE(PATH, WIDTH)      ne_delete1(select_snprintf(PATH), NULL, select_impl(PATH), auth, stat_flags, \
+                                                 (PATH), (WIDTH))
+
+#  define NE_STATUS(PATH)             ne_status1(select_snprintf(PATH), NULL, select_impl(PATH), auth, stat_flags, \
+                                                 (PATH))
+
+#  define NE_SIZE(PATH, QUOR, WIDTH)  ne_size1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, stat_flags, \
+                                                 (PATH), (QUOR), (WIDTH))
 
 
    // -----------------------------------------------------------------
@@ -448,11 +449,20 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
+#if 0
       tbd_bytes = totbytes;
       if ((N == 0) || (size_arg ==0)) {
-         handle = NE_OPEN( (char *)argv[3], NE_RDONLY | NE_NOINFO );
-         if (! size_arg)
-            tbd_bytes = handle->totsz;
+
+         // detect the size of the file, and then read the whole thing.
+         //
+         // NOTE: In the case of UDAL_SOCKETS case (with RDMA), NE_NOINFO
+         //       will attempt to stat MAXPARTS parts.  The snprintf
+         //       function will happily generate IP addrs off the deep-end.
+         //       Each of these will be stated through the RDMA UDAL, which
+         //       will result in an rsocket() call that has to time-out.
+         //       This works, but it's slow.
+         
+         handle = NE_OPEN( (char *)argv[3], (NE_RDONLY | NE_NOINFO) );
       }
       else
          handle = NE_OPEN( (char *)argv[3], NE_RDONLY, start, N, E );
@@ -461,7 +471,48 @@ int main( int argc, const char* argv[] )
          PRINTerr("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
          return -1;
       }
-      
+
+      if (! size_arg)
+         tbd_bytes = handle->totsz;
+
+#else
+      tbd_bytes = totbytes;
+      if ((N == 0) || (size_arg ==0)) {
+
+         // If the size for the read wasn't provided, use ne_stat() to find the
+         // actual size of the file, and then read the whole thing.
+
+         PRINTout("libneTest: stat'ing to get total size.  path = '%s'\n", (char *)argv[2] );
+         ne_stat stat = NE_STATUS( (char *)argv[3] );
+         if ( stat == NULL ) {
+            PRINTerr("libneTest: ne_status failed!\n" );
+            return -1;
+         }
+
+         printf( "after ne_status() -- N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
+                 stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
+
+         if (! N)
+            N = stat->N;
+
+         if (! E)
+            E = stat->E;
+
+         if (! start)
+            start = stat->start;
+
+         if (! size_arg)
+            tbd_bytes = stat->totsz;
+      }
+
+      handle = NE_OPEN( (char *)argv[3], NE_RDONLY, start, N, E );
+      if ( handle == NULL ) {
+         PRINTerr("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
+         return -1;
+      }
+
+#endif
+
       // fill multiple buffers, if needed
       totbytes_per_iter = totbytes;
       while (totdone < tbd_bytes) {
@@ -469,7 +520,7 @@ int main( int argc, const char* argv[] )
          totbytes = totbytes_per_iter;
          if ((totdone + totbytes) > tbd_bytes)
             totbytes = tbd_bytes - totdone;
-         PRINTout("libneTest: performing buffer-loop to read %llu bytes, at %llu/%llu\n",
+         PRINTdbg("libneTest: performing buffer-loop to read %llu bytes, at %llu/%llu\n",
                   totbytes, totdone, tbd_bytes );
 
          // go through each buffers-worth of data as a series of reads of
@@ -477,7 +528,7 @@ int main( int argc, const char* argv[] )
          toread = (rand() % totbytes) + 1;
          while ( totbytes > 0 ) {
 
-            PRINTout("libneTest: preparing to read %llu from erasure files with offset %llu\n", toread, totdone );
+            PRINTdbg("libneTest: preparing to read %llu from erasure files with offset %llu\n", toread, totdone );
             if ( toread > totbytes ) {
                PRINTerr("libneTest: toread (%llu) > totbytes (%llu)\n", toread, totbytes);
                exit(EXIT_FAILURE);
@@ -490,7 +541,7 @@ int main( int argc, const char* argv[] )
                return -1;
             }
 
-            PRINTout("libneTest: ...done.  Writing %llu to output file.\n", toread );
+            PRINTdbg("libneTest: ...done.  Writing %llu to output file.\n", toread );
             write( filefd, buff, toread );
 
             totbytes -= toread;
@@ -551,21 +602,21 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
-      printf( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\nExtended Attribute Errors : ",
-              stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
+      PRINTout( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\nExtended Attribute Errors : ",
+                stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
       for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
-         printf( "%d ", stat->xattr_status[tmp] );
+         PRINTout( "%d ", stat->xattr_status[tmp] );
       }
-      printf( "\n" );
+      PRINTout( "\n" );
 
-      printf( "Data/Erasure Errors :       " );
+      PRINTout( "Data/Erasure Errors :       " );
       int nerr = 0;
       for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
          if( stat->data_status[tmp] )
             nerr++;
-         printf( "%d ", stat->data_status[tmp] );
+         PRINTout( "%d ", stat->data_status[tmp] );
       }
-      printf( "\n" );
+      PRINTout( "\n" );
 
       if( nerr > stat->E )
          fprintf( stderr, "WARNING: the data appears to be unrecoverable!\n" );
@@ -589,6 +640,18 @@ int main( int argc, const char* argv[] )
 
 
    // -----------------------------------------------------------------
+   // size
+   // -----------------------------------------------------------------
+
+   else if (wr == 5) {
+      PRINTout( "Size of \"%s\" -- %zd\n",
+                argv[2],
+                NE_SIZE( argv[2], atoi(argv[3]), atoi(argv[4]) ) );
+      return 0;
+   }
+
+
+   // -----------------------------------------------------------------
    // delete
    // -----------------------------------------------------------------
 
@@ -605,8 +668,9 @@ int main( int argc, const char* argv[] )
 
 
    tmp = ne_close( handle );
+   PRINTout("%d\n",tmp);
    fflush(stdout);
-   printf("%d\n",tmp);
+   fflush(stderr);
 
    return tmp;
 

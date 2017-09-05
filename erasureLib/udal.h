@@ -148,11 +148,23 @@ typedef off_t   (*udal_lseek) (GenericFD* gfd, off_t offset, int whence);
 
 
    // PATHOP
-typedef int     (*udal_chown) (SktAuth* auth, const char *path, uid_t owner, gid_t group);
-typedef int     (*udal_unlink)(SktAuth* auth, const char* path);
-typedef int     (*udal_rename)(SktAuth* auth, const char* oldpath, const char* newpath);
-typedef int     (*udal_stat)  (SktAuth* auth, const char* path, struct stat* buff);
+typedef int     (*udal_chown)   (SktAuth* auth, const char *path, uid_t owner, gid_t group);
+typedef int     (*udal_unlink)  (SktAuth* auth, const char* path);
+typedef int     (*udal_rename)  (SktAuth* auth, const char* oldpath, const char* newpath);
+typedef int     (*udal_stat)    (SktAuth* auth, const char* path, struct stat* buff);
 
+typedef ssize_t (*udal_readlink)(SktAuth* auth, const char* path, char* buff, size_t bufsize);
+typedef int     (*udal_symlink) (SktAuth* auth, const char* oldpath, const char* newpath);
+
+
+
+
+
+// select uDAL implementation
+typedef enum {
+   UDAL_POSIX = 1,               // POSX-type uDAL
+   UDAL_SOCKETS
+} uDALType;
 
 
 
@@ -161,6 +173,7 @@ typedef int     (*udal_stat)  (SktAuth* auth, const char* path, struct stat* buf
 // Different uDAL implementations will choose how to extract their own FD.
 typedef struct uDALImpl {
    //   FDExtractor   fd_extractor;  // extract fd to be passed to uDAL functions
+   uDALType          itype;     /* allows reverse of get_impl() */
 
    udal_fd_init      fd_init;
    udal_fd_err       fd_err;
@@ -179,6 +192,8 @@ typedef struct uDALImpl {
    udal_unlink       unlink;
    udal_rename       rename;
    udal_stat         stat;
+   udal_readlink     readlink;
+   udal_symlink      symlink;
 
    udal_auth_init    auth_init;
    udal_auth_install auth_install;
@@ -190,15 +205,8 @@ extern const uDAL*  udal_posix;
 extern const uDAL*  udal_sockets;
 
 
-// select uDAL implementation
-typedef enum {
-   UDAL_POSIX = 1,               // POSX-type uDAL
-   UDAL_SOCKETS
-} uDALType;
-
 
 const uDAL*  get_impl(uDALType itype);
-
 
 
 // int default_auth_init(SktAuth* auth) {
