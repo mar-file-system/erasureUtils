@@ -264,7 +264,7 @@ int incomplete_write( ne_handle handle ) {
       int block = handle->src_err_list[i];
       handle->snprintf( fname, MAXNAME, handle->path,
                         (handle->erasure_offset + block) % ( (handle->N) ? (handle->N + handle->E) : MAXPARTS ),
-                        NULL);
+                        handle->state);
       strcat( fname, WRITE_SFX );
       
       struct stat st;
