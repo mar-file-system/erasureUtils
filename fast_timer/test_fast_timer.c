@@ -117,9 +117,14 @@ int main(int argc, char* argv[]) {
       // record duration of this interval.
       log_histo_add_interval(&hist, &timer);
    }
+   printf("\n");
 
-   // show stats
-   fast_timer_show(&timer, "-- loop with sleeps");
+   // show stats in the "simple" format
+   fast_timer_show(&timer, 1, "summary: ");
+   printf("\n");
+
+   // show stats in more detail
+   fast_timer_show(&timer, 0, "-- loop with sleeps");
    printf("\n");
 
    fast_timer_show_details(&timer, NULL);
@@ -128,7 +133,7 @@ int main(int argc, char* argv[]) {
    // show log-histogram bins
    // (run test_histogram, to show details of bin-values, etc)
    printf("histogram bins (most-significant first):\n");
-   log_histo_show_bins(&hist, NULL);
+   log_histo_show(&hist, 0, NULL);
    printf("\n");
 
 
@@ -142,7 +147,7 @@ int main(int argc, char* argv[]) {
    }
 
    // show stats
-   fast_timer_show(&no_ops, "-- loop with empty start/stops");
+   fast_timer_show(&no_ops, 0, "-- loop with empty start/stops");
    printf("\n");
 
    fast_timer_show_details(&timer, NULL);
@@ -165,7 +170,7 @@ int main(int argc, char* argv[]) {
    fast_timer_stop(&no_ops);
 
    // show stats
-   fast_timer_show(&no_ops, "-- loop with empty fused-start/stops");
+   fast_timer_show(&no_ops, 0, "-- loop with empty fused-start/stops");
    printf("\n");
 
    fast_timer_show_details(&timer, NULL);
@@ -190,7 +195,7 @@ int main(int argc, char* argv[]) {
    fast_timer_stop(&no_ops);
 
    // show stats
-   fast_timer_show(&no_ops, "-- loop with empty log-histogram inserts");
+   fast_timer_show(&no_ops, 0, "-- loop with empty log-histogram inserts");
    printf("\n");
 
    fast_timer_show_details(&no_ops, NULL);
@@ -209,7 +214,7 @@ int main(int argc, char* argv[]) {
    fast_timer_stop(&overall);
 
    // show stats
-   fast_timer_show(&overall, "-- overall (including printing)");
+   fast_timer_show(&overall, 0, "-- overall (including printing)");
    printf("\n");
    fast_timer_show_details(&timer, NULL);
    printf("\n");

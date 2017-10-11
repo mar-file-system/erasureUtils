@@ -274,7 +274,7 @@ double fast_timer_nsec(FastTimer* ft);
 
 
 // print timer stats
-int fast_timer_show(FastTimer* ft, const char* str);
+int fast_timer_show(FastTimer* ft, int simple, const char* str);
 int fast_timer_show_details(FastTimer* ft, const char* str);
 
 
@@ -295,7 +295,7 @@ int fast_timer_show_details(FastTimer* ft, const char* str);
 //
 // Because it may incur some cost to update the bins (vector load/store),
 // and many of the low-order bits represent time-scales the might not be
-// expected to be relevant, we can reduce the total size ofthe vector of
+// expected to be relevant, we could reduce the total size of the vector of
 // bins by shifting out some of the least-significant bits in accumulated
 // timer values, and mask off some of the remaining most-significant bits.
 // ---------------------------------------------------------------------------
@@ -434,7 +434,7 @@ int log_histo_add(LogHisto* dest, LogHisto* src) {
 
 
 
-int log_histo_show_bins(LogHisto* hist, const char* str);
+int log_histo_show(LogHisto* hist, int simple, const char* str);
 
 
 

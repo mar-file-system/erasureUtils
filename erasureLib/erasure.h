@@ -243,8 +243,10 @@ typedef enum {
    SF_CRC     =  0x0010,
    SF_ERASURE =  0x0020,
    SF_THREAD  =  0x0040,    /* from beginning to end  */
-   SF_HANDLE  =  0x0080,    /* from start/stop, all threads, in 1 handle */
+   SF_HANDLE  =  0x0080,    /* from start to stop, all threads, in 1 handle */
+
    // SF_GLOBAL  =  0x0100,    /* cost across all handles */
+   SF_SIMPLE  =  0x0100,    /* diagnostic output uses terse numeric formats */
 } StatFlags;
 
 typedef  uint16_t  StatFlagsValue;

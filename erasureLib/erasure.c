@@ -1214,7 +1214,9 @@ read:
    }     
 
    /**** set seek positions for initial reading ****/
-   if (startpart > maxNerr  ||  endchunk < minNerr ) {  //if not reading from corrupted chunks, we can just set these normally
+   //if not reading from corrupted chunks, we can just set these normally
+   if (startpart > maxNerr  ||  endchunk < minNerr ) {
+
       for ( counter = 0; counter <= stop; counter++ ) {
 
 #ifdef INT_CRC
@@ -1233,8 +1235,7 @@ read:
 #endif
 
          if (handle->stat_flags & SF_RW)
-            fast_timer_stop(&handle->stats[counter].read);
-
+            fast_timer_start(&handle->stats[counter].read);
 
          if( handle->src_in_err[counter] == 0 ) {
             if ( counter >= N ) {
@@ -1390,13 +1391,13 @@ read:
       /**** read data into buffers ****/
       for( counter=tmpchunk; counter < N; counter++ ) {
 
-         if (handle->stat_flags & SF_RW)
-            fast_timer_start(&handle->stats[counter].read);
-
          if ( llcounter == nbytes  &&  error_in_stripe == 0 ) {
             PRINTdbg( "ne_read: data reads complete\n");
             break;
          }
+
+         if (handle->stat_flags & SF_RW)
+            fast_timer_start(&handle->stats[counter].read);
 
          readsize = bsz-tmpoffset;
 
@@ -1422,7 +1423,14 @@ read:
             }
             // ensure that the stripe is flagged as having an error.
             error_in_stripe = 1;
+
+            if (handle->stat_flags & SF_RW) {
+               fast_timer_stop(&handle->stats[counter].read);
+               log_histo_add_interval(&handle->stats[counter].read_h,
+                                      &handle->stats[counter].read);
+            }
          }
+
          else {    //this data chunk is valid, store it
 
             if ( (nbytes-llcounter) < readsize  &&  error_in_stripe == 0 )
@@ -1476,8 +1484,19 @@ read:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
+               if (handle->stat_flags & SF_CRC)
+                  fast_timer_start(&handle->stats[counter].crc);
+
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
-               if ( memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) ) != 0 ){
+               int cmp = memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) );
+
+               if (handle->stat_flags & SF_CRC) {
+                  fast_timer_stop(&handle->stats[counter].crc);
+                  log_histo_add_interval(&handle->stats[counter].crc_h,
+                                         &handle->stats[counter].crc);
+               }
+
+               if ( cmp != 0 ){
                   PRINTerr( "ne_read: mismatch of int-crc for file %d while reading with rebuild\n", counter);
                   if ( counter > maxNerr )  maxNerr = counter;
                   if ( counter < minNerr )  minNerr = counter;
@@ -1662,9 +1681,6 @@ read:
       for( counter=startpart, tmp=0; counter <= endchunk; counter++ ) {
          readsize = datasz[counter];
 
-         if (handle->stat_flags & SF_RW)
-            fast_timer_start(&handle->stats[counter].write);
-
 #if DEBUG_NE
          if ( readsize+out_off > llcounter ) {
            fprintf(stderr,"ne_read: out_off + readsize(%lu) > llcounter at counter = %d!!!\n",(unsigned long)readsize,counter);
@@ -1675,6 +1691,9 @@ read:
            return -1;
          }
 #endif
+
+         if (handle->stat_flags & SF_RW)
+            fast_timer_start(&handle->stats[counter].write);
 
          if ( handle->src_in_err[counter] == 0 ) {
             PRINTdbg( "ne_read: performing write of %d from chunk %d data\n", readsize, counter );
@@ -1701,6 +1720,12 @@ read:
 
                   for ( counter = 0; counter < temp_buffs_alloc; counter++ )
                      free(temp_buffs[counter]);
+
+                  if (handle->stat_flags & SF_RW) {
+                     fast_timer_stop(&handle->stats[counter].write);
+                     log_histo_add_interval(&handle->stats[counter].write_h,
+                                            &handle->stats[counter].write);
+                  }
 
                   return -1;
                }
@@ -2017,8 +2042,10 @@ int show_handle_stats(ne_handle handle) {
       printf("No stats\n");
 
    else {
-      fast_timer_show(&handle->handle_timer,    "handle: ");
-      fast_timer_show(&handle->erasure_timer,   "erasure: ");
+      int simple = (handle->stat_flags & SF_SIMPLE);
+
+      fast_timer_show(&handle->handle_timer,  simple, "handle:  ");
+      fast_timer_show(&handle->erasure_timer, simple, "erasure: ");
       printf("\n");
          
       int i;
@@ -2027,23 +2054,20 @@ int show_handle_stats(ne_handle handle) {
       for (i=0; i<N+E; ++i) {
          printf("-- block %d\n", i);
 
-         fast_timer_show(&handle->stats[i].thread, "thread: ");
-         fast_timer_show(&handle->stats[i].open,   "open:   ");
+         fast_timer_show(&handle->stats[i].thread, simple, "thread:  ");
+         fast_timer_show(&handle->stats[i].open,   simple, "open:    ");
 
-         fast_timer_show(&handle->stats[i].read,   "read:   ");
-         log_histo_show_bins(&handle->stats[i].read_h, "\tread\n");
-         printf("\n");
+         fast_timer_show(&handle->stats[i].read,   simple, "read:    ");
+         log_histo_show(&handle->stats[i].read_h,  simple, "read_h:  ");
 
-         fast_timer_show(&handle->stats[i].write,  "write:  ");
-         log_histo_show_bins(&handle->stats[i].write_h, "\twrite\n");
-         printf("\n");
+         fast_timer_show(&handle->stats[i].write,  simple, "write:   ");
+         log_histo_show(&handle->stats[i].write_h, simple, "write_h: ");
 
-         fast_timer_show(&handle->stats[i].close,  "close:  ");
-         fast_timer_show(&handle->stats[i].rename, "rename:  ");
+         fast_timer_show(&handle->stats[i].close,  simple, "close:   ");
+         fast_timer_show(&handle->stats[i].rename, simple, "rename:  ");
 
-         fast_timer_show(&handle->stats[i].crc,    "CRC:    ");
-         log_histo_show_bins(&handle->stats[i].crc_h, "\tCRC\n");
-         printf("\n");
+         fast_timer_show(&handle->stats[i].crc,    simple, "CRC:     ");
+         log_histo_show(&handle->stats[i].crc_h,   simple, "CRC_h:   ");
       }
    }
 
@@ -2331,7 +2355,7 @@ int ne_delete1( SnprintfFunc snprintf_fn, void* state,
 
    if (stat_flags & SF_HANDLE) {
       fast_timer_stop(&timer);
-      fast_timer_show(&timer,  "delete: ");
+      fast_timer_show(&timer, (stat_flags & SF_SIMPLE),  "delete: ");
    }
 
    return ret;

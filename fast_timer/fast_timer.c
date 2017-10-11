@@ -208,10 +208,16 @@ double fast_timer_nsec(FastTimer* ft) {
 }
 
 
-int fast_timer_show(FastTimer* ft, const char* str) {
-   if (str)
-      printf("%s\n", str);
 
+int fast_timer_show(FastTimer* ft, int simple, const char* str) {
+   const char* str1 = ((str) ? str : "");
+
+   if (simple) {
+      printf("%s%7.5f sec\n",  str1, fast_timer_sec(ft));
+      return 0;
+   }
+   
+   printf("%s\n", str1);
    printf("  start:   %016lx\n", ft->start);
    printf("  stop:    %016lx\n", ft->stop);
 
@@ -267,6 +273,12 @@ int log_histo_reset(LogHisto* hist) {
 
 
 
+// print out the contents of a log-histo.
+//
+// <pretty> aims for somewhat more human-readability.  Non-pretty could
+// be handy for generating datasets for visualization, etc.
+//
+//
 // NOTE: 65 bins.  bin[0] is special, then there are bins for each bit in
 //    the 64-bit timer.
 //
@@ -280,26 +292,29 @@ int log_histo_reset(LogHisto* hist) {
 //    However, we're printing them out in big-endian order (i.e. bin[64] first).
 //    Thus, the display shows bins in order descending by significance.
 
-int log_histo_show_bins(LogHisto* hist, const char* str) {
+int log_histo_show(LogHisto* hist, int simple, const char* str) {
    int i;
+   const char* str1 = ((str) ? str : "");
 
-   if (str)
-      printf(str);
+   printf(str1);
+   if (!simple)
+      printf("\n\t");
 
-   printf("\t");
    for (i=0; i<65; ++i) {
 
       // spacing and newlines
       if (i && !(i%4))
          printf("  ");
-      if (i && !(i%16))
+      if ((i && !(i%16)) && (! simple))
          printf("\n\t");
 
-      if (hist->bin[64 - i])
+      if ((hist->bin[64 - i]) || simple)
          printf("%2d ", hist->bin[64 - i]);
       else
          printf("-- ");
    }
    printf("\n");
-   printf("\n");
+
+   if (! simple)
+      printf("\n");
 }

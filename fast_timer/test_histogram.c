@@ -109,8 +109,11 @@ int main(int argc, char* argv[]) {
 
    // show histogram bin contents
    printf("histogram bins (most-significant first):\n");
-   log_histo_show_bins(&hist, NULL);
+   log_histo_show(&hist, 0, NULL);
 
+   printf("as raw numbers:\n");
+   log_histo_show(&hist, 1, NULL);
+   printf("\n");
 
    // show the time-intervals represented by histogram bins
    printf("bin[%2d]:  0x%016lx      = %16.06lf sec\n", 0, 0, 0.f);

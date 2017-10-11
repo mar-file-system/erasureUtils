@@ -136,7 +136,9 @@ void usage(const char* prog_name, const char* op) {
            (!strcmp(op, CMD) ? "->" : ""), (CMD), (ARGS))
 
    USAGE("write",      "input_file  erasure_path N E start_file  [stat_flags] [input_size]");
+   USAGE("put",        "input_file  erasure_path N E start_file  [stat_flags] [input_size]");
    USAGE("read",       "output_file erasure_path N E start_file  [stat_flags] [read_size]");
+   USAGE("get",        "output_file erasure_path N E start_file  [stat_flags] [read_size]");
    USAGE("rebuild",    "erasure_path             N E start_file  [stat_flags]");
    USAGE("status",     "erasure_path");
    USAGE("delete",     "erasure_path stripe_width");
@@ -146,6 +148,8 @@ void usage(const char* prog_name, const char* op) {
    USAGE("help",       "");
 
    PRINTerr("\n");
+   PRINTerr("\n");
+   PRINTerr("     put/get are like write/read, but use fixed (1M) transfer-size\n");
    PRINTerr("\n");
    PRINTerr("     <stat_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
    PRINTerr("\n");
@@ -219,10 +223,12 @@ select_snprintf(const char* path) {
 
 int main( int argc, const char* argv[] ) 
 {
-   unsigned long long nread;
-   void *buff;
-   unsigned long long toread;
-   unsigned long long totdone = 0;
+   void* buff;
+   unsigned long long       nread;
+   unsigned long long       toread;
+   unsigned long long       totdone = 0;
+   const unsigned long long M       = (1024 * 1024);
+
    int start;
    char wr = -1;
    int filefd;
@@ -233,7 +239,7 @@ int main( int argc, const char* argv[] )
    StatFlagsValue     stat_flags = 0;
    int                parse_err = 0;
    const char*        size_arg = NULL;
-
+   int                stream = 0;
 
    LOG_INIT();
 
@@ -243,7 +249,8 @@ int main( int argc, const char* argv[] )
    }
 
 
-   if ( strncmp( argv[1], "write", strlen(argv[1]) ) == 0 ) {
+   if ((    strncmp( argv[1], "write", strlen(argv[1]) ) == 0 )
+       || ( strncmp( argv[1], "put",   strlen(argv[1]) ) == 0 )) {
       if ( argc < 7 ) {
          usage( argv[0], argv[1] ); 
          return -1;
@@ -255,8 +262,11 @@ int main( int argc, const char* argv[] )
          size_arg = argv[8];
 
       wr = 1;
+      if (strncmp( argv[1], "put",   strlen(argv[1]) ) == 0 )
+         stream = 1;
    }
-   else if ( strncmp( argv[1], "read", strlen(argv[1]) ) == 0 ) {
+   else if ((    strncmp( argv[1], "read", strlen(argv[1]) ) == 0 )
+            || ( strncmp( argv[1], "get",   strlen(argv[1]) ) == 0 )) {
       if ( argc < 7 ) {
          usage( argv[0], argv[1] ); 
          return -1;
@@ -268,6 +278,8 @@ int main( int argc, const char* argv[] )
          size_arg = argv[8];
 
       wr = 0;
+      if (strncmp( argv[1], "get",   strlen(argv[1]) ) == 0 )
+         stream = 1;
    }
    else if ( strncmp( argv[1], "rebuild", strlen(argv[1]) ) == 0 ) {
       if ( argc < 6 ) {
@@ -339,8 +351,12 @@ int main( int argc, const char* argv[] )
    if (size_arg)                // optional <input_size> for write
       totbytes = strtoll(size_arg, NULL, 10);
    else
-      totbytes = N * 64 * 1024; // default
-
+      // totbytes = N * 64 * 1024; // default
+#     ifdef INT_CRC
+      totbytes = M - sizeof(u32); // default
+#     else
+      totbytes = M;             // default
+#     endif
  
    srand(time(NULL));
    ne_handle handle;
@@ -386,7 +402,10 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
-      toread = rand() % (totbytes+1);
+      if (stream)
+         toread = (totbytes < M) ? totbytes : M;
+      else
+         toread = rand() % (totbytes+1);
 
       while ( totbytes != 0 ) {
 
@@ -394,12 +413,12 @@ int main( int argc, const char* argv[] )
          nread = read( filefd, buff, toread );
 
          // write to erasure stripes
-         PRINTout("libneTest: preparing to write %llu to erasure files...\n", nread );
+         PRINTdbg("libneTest: preparing to write %llu to erasure files...\n", nread );
          if ( nread != ne_write( handle, buff, nread ) ) {
             PRINTerr("libneTest: unexpected # of bytes written by ne_write\n" );
             return -1;
          }
-         PRINTout("libneTest: write successful\n" );
+         PRINTdbg("libneTest: write successful\n" );
 
          // without a command-line <input_size> argument, copy from the
          // input-file until we reach EOF
@@ -410,7 +429,10 @@ int main( int argc, const char* argv[] )
 
          totdone += nread;
 
-         toread = rand() % (totbytes+1);
+         if (stream)
+            toread = (totbytes < M) ? totbytes : M;
+         else
+            toread = rand() % (totbytes+1);
       }
 
       if ( ne_flush( handle ) != 0 ) {
@@ -482,15 +504,19 @@ int main( int argc, const char* argv[] )
          // If the size for the read wasn't provided, use ne_stat() to find the
          // actual size of the file, and then read the whole thing.
 
+         StatFlagsValue temp_stat_flags = stat_flags; /* don't use stat_flags during ... NE_STAT() */
+         stat_flags = 0;
+
          PRINTout("libneTest: stat'ing to get total size.  path = '%s'\n", (char *)argv[2] );
          ne_stat stat = NE_STATUS( (char *)argv[3] );
          if ( stat == NULL ) {
             PRINTerr("libneTest: ne_status failed!\n" );
             return -1;
          }
-
-         printf( "after ne_status() -- N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
+         PRINTout("after ne_status() -- N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
                  stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
+
+         stat_flags = temp_stat_flags; /* restore stat_flags for NE_READ() */
 
          if (! N)
             N = stat->N;
@@ -510,6 +536,7 @@ int main( int argc, const char* argv[] )
          PRINTerr("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
          return -1;
       }
+      PRINTout("did open()\n");
 
 #endif
 
@@ -525,7 +552,12 @@ int main( int argc, const char* argv[] )
 
          // go through each buffers-worth of data as a series of reads of
          // decreasing size, in order to exercise "corner cases".
-         toread = (rand() % totbytes) + 1;
+         // ("get" just uses max buffers always)
+         if (stream)
+            toread = (totbytes < M) ? totbytes : M;
+         else
+            toread = (rand() % totbytes) + 1;
+
          while ( totbytes > 0 ) {
 
             PRINTdbg("libneTest: preparing to read %llu from erasure files with offset %llu\n", toread, totdone );
@@ -547,7 +579,9 @@ int main( int argc, const char* argv[] )
             totbytes -= toread;
             totdone  += toread;
 
-            if ( totbytes != 0 )
+            if (stream)
+               toread = (totbytes < M) ? totbytes : M;
+            else if ( totbytes != 0 )
                toread = ( rand() % totbytes ) + 1;
          }
       }
