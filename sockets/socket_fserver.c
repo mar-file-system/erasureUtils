@@ -116,8 +116,10 @@ static int    socket_fd;               // main listens to this
 const char*   dir_root = NULL;
 size_t        dir_root_len;
 
-// command-line '-r' [option] says whether to run a reaper-thread
-int           reap = 0;
+// command-line '-r' [option] says whether to run a reaper-thread.
+// value is the period, in seconds, between reaper sweeps.
+// Reap (cancel) threads making no progress for two consecutive sweeps.
+int           reap_sec = 0;
 
 // command-line '-u' [option] says whether to do per-thread seteuid
 int           do_seteuid = 0;
@@ -175,8 +177,6 @@ SConn  conn_list[MAX_SOCKET_CONNS];
 //     timeout-period, the reaper will cancel it.
 
 ssize_t         reap_list[MAX_SOCKET_CONNS]; // stream_pos, or -1
-
-const size_t    reap_timeout_sec = 10;
 
 // lock for access to reap_list[] elements
 pthread_mutex_t reap_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -255,7 +255,7 @@ shut_down_server() {
    }
 
    // shutdown reaper
-   if (reap) {
+   if (reap_sec) {
       neDBG("stopping reaper\n");
       pthread_cancel(reap_thr);
       pthread_join(reap_thr, NULL);
@@ -1392,7 +1392,7 @@ void* reap_thread(void* arg) {
 
   while (1) {
 
-    sleep(reap_timeout_sec);
+    sleep(reap_sec);
     // neERR("reaper: awake\n");
 
     pthread_mutex_lock(&reap_mtx);
@@ -1467,7 +1467,6 @@ int find_available_conn(int client_fd) {
       result = pos;
       break;
     }
-
     else if (conn_list[pos].ctx.flags & CTX_THREAD_EXIT) {
       // thread exited, or was cancelled
       // TBD: handle threads that return failure?
@@ -1518,11 +1517,13 @@ int push_thread(int client_fd) {
 
 void usage(const char* progname) {
   neERR("Usage: %s -p <port> -d <dir> [ -r ]\n", progname);
-  neERR("  -p <port>   port on which the server should listen\n");
-  neERR("  -d <dir>    server will allow clients to write arbitrary files under <dir>\n");
-  neERR("                (but nowhere else)\n");
-  neERR("  -r          use a 'reap' thread, to clean up stuck threads\n");
-  neERR("  -u          perform a per-thread seteuid to the authenticated user\n");
+  neERR("\n");
+  neERR("  -h               help\n");
+  neERR("  -p <port>        port on which the server should listen\n");
+  neERR("  -d <dir>         server only allows clients to write files under <dir>\n");
+  neERR("  -u               perform a per-thread seteuid to the authenticated user\n");
+  neERR("  -r <sweep_sec>   use a 'reap' thread, to clean up stuck threads\n");
+  neERR("                     (runs every <sweep_sec> seconds))\n");
   exit(1);
 }
 
@@ -1533,12 +1534,12 @@ main(int argc, char* argv[]) {
   int         port = 0;
 
   int         c;
-  while ( (c = getopt(argc, argv, "p:d:ruh")) != -1) {
+  while ( (c = getopt(argc, argv, "p:d:r:uh")) != -1) {
     switch (c) {
-    case 'p':      port_str   = optarg;    break;
-    case 'd':      dir_root   = optarg;    break;
-    case 'r':      reap       = 1;         break;
-    case 'u':      do_seteuid = 1;         break;
+    case 'p':      port_str   = optarg;        break;
+    case 'd':      dir_root   = optarg;        break;
+    case 'r':      reap_sec   = atoi(optarg);  break;
+    case 'u':      do_seteuid = 1;             break;
 
     case 'h':
     default:
@@ -1686,7 +1687,7 @@ main(int argc, char* argv[]) {
   }
   // REQUIRE_0( pthread_mutex_init(&reap_mtx, NULL) );
 
-  if (reap)
+  if (reap_sec)
     REQUIRE_0( pthread_create(&reap_thr, NULL, reap_thread, NULL) );
 
   
