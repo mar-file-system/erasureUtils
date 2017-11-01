@@ -465,6 +465,14 @@ void *bq_writer(void *arg) {
 #endif
       bq->csum += crc;
       pthread_mutex_lock(&bq->qlock);
+
+      PRINTdbg("write done for block %d\n", bq->block_number);
+      if (handle->stat_flags & SF_RW) {
+         fast_timer_stop(&handle->stats[bq->block_number].write);
+         log_histo_add_interval(&handle->stats[bq->block_number].write_h,
+                                &handle->stats[bq->block_number].write);
+      }
+
     }
     else { // there were previous errors. skipping the write
       error = write_size;
@@ -475,13 +483,6 @@ void *bq_writer(void *arg) {
     }
     else {
       written += error;
-    }
-
-    PRINTdbg("write done for block %d\n", bq->block_number);
-    if (handle->stat_flags & SF_RW) {
-       fast_timer_stop(&handle->stats[bq->block_number].write);
-       log_histo_add_interval(&handle->stats[bq->block_number].write_h,
-                              &handle->stats[bq->block_number].write);
     }
 
     // even if there was an error, say we wrote the block and move on.
