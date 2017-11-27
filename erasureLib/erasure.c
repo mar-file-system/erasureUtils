@@ -361,7 +361,9 @@ void *bq_writer(void *arg) {
     if(!(bq->flags & BQ_ERROR)) {
       pthread_mutex_unlock(&bq->qlock);
       if(written >= SYNC_SIZE) {
-        fsync(bq->file);
+        if ( fsync(bq->file) ) {
+          bq->flags |= BQ_ERROR;
+        }
         written = 0;
       }
       DBG_FPRINTF(stdout, "Writing block %d\n", bq->block_number);
@@ -964,6 +966,25 @@ read:
 
          }
       }
+      //temporary addition to allow for the constant reading of erasure parts
+      for ( counter = N; counter < mtot; counter++ ) {
+         tmp = 0;
+         if ( handle->src_in_err[ counter ] == 0 ) {
+#ifdef INT_CRC
+            tmp = lseek(handle->FDArray[counter],(startstripe*( bsz+sizeof(u32) )),SEEK_SET);
+#else
+            tmp = lseek(handle->FDArray[counter],(startstripe*bsz),SEEK_SET);
+#endif
+         }
+         //note any errors, no need to restart though
+         if ( tmp < 0 ) {
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+            nsrcerr++;
+            handle->e_ready = 0; //indicate that erasure structs require re-initialization
+         }
+      }
       tmpchunk = startpart;
       tmpoffset = startoffset;
       error_in_stripe = 0;
@@ -1163,7 +1184,8 @@ read:
       } //completion of read from stripe
 
       //notice, we only need the erasure stripes if we hit an error
-      while ( counter < mtot  &&  error_in_stripe == 1 ) {
+      counter = N;
+      while ( counter < mtot ) { //&&  error_in_stripe == 1 ) {
 
 #ifdef INT_CRC
          readsize = bsz+sizeof(u32);
@@ -1183,7 +1205,7 @@ read:
                handle->src_err_list[handle->nerr] = counter;
                handle->nerr++;
                handle->e_ready = 0; //indicate that erasure structs require re-initialization
-               error_in_stripe = 1;
+              // error_in_stripe = 1;
                DBG_FPRINTF(stderr, "ne_read: failed to read all erasure data in file %d\n", counter);
                DBG_FPRINTF(stdout,"ne_read: zeroing data for faulty erasure %d from %lu to %d\n",counter,ret_in,bsz);
                bzero(handle->buffs[counter]+ret_in,bsz-ret_in);
@@ -1204,7 +1226,7 @@ read:
                   handle->nerr++;
                   nsrcerr++;
                   handle->e_ready = 0; //indicate that erasure structs require re-initialization
-                  error_in_stripe = 1;
+                  //error_in_stripe = 1;
                }
             }
 #endif
@@ -2989,7 +3011,7 @@ int ne_delete_block(const char *path) {
    // unlink a single block, including the manifest file (if
    // META_FILES is defined).
    int ret = unlink(path);
-#ifdef META_FILE
+#ifdef META_FILES
    char meta_path[2048];
    strncpy(meta_path, path, 2048);
    strcat(meta_path, META_SFX);

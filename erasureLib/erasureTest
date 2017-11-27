@@ -218,7 +218,7 @@ while [[ $cnt -lt $ITER ]]; do
       oldpos=0
       errcnt=0
       errpos=-1
-      readerr=0
+      readerr=1 # read should now detect all errors
       silent_count=0
 
       echo "$nerr error(s) are to be inserted..."

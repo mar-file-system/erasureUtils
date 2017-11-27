@@ -206,11 +206,6 @@ int main( int argc, const char* argv[] )
          toread = rand() % (totbytes+1);
       }
 
-      if ( ne_flush( handle ) != 0 ) {
-         fprintf( stderr, "libneTest: flush failed!\n" );
-         return -1;
-      }
-
       free(buff);
       close(filefd);
       fprintf( stdout, "libneTest: all writes completed\nlibneTest: total written = %llu\n", totdone );
