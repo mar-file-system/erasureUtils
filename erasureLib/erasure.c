@@ -1639,7 +1639,9 @@ int ne_close( ne_handle handle )
             && handle->src_in_err[counter]  == 1  &&  handle->mode == NE_REBUILD) {
             ret = -1;
             no_rename = 1;
+            DBG_FPRINTF( stderr, "ne_close: close failed for rebuild output file %d, aborting rename for that file\n", counter );
          }
+         handle->FDArray[counter] = -1;
       }
 
 
@@ -1651,6 +1653,7 @@ int ne_close( ne_handle handle )
              handle->src_err_list[handle->nerr] = counter;
              handle->nerr++;
              ret = -1;
+             DBG_FPRINTF( stderr, "ne_close: failed to set xattr for rebuilt file %d\n", counter );
            }
          }
          sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
@@ -1661,7 +1664,7 @@ int ne_close( ne_handle handle )
 
             chown(file, handle->owner, handle->group);
             if ( rename( file, nfile ) != 0 ) {
-               DBG_FPRINTF( stderr, "ne_close: failed to rename rebuilt file\n" );
+               DBG_FPRINTF( stderr, "ne_close: failed to chown rebuilt file\n" );
                // rebuild should fail even if only one file can't be renamed
                ret = -1;
             }
@@ -1716,12 +1719,15 @@ int ne_close( ne_handle handle )
    }
 
    if( (UNSAFE(handle) && handle->mode == NE_WRONLY) ) {
+     DBG_FPRINTF( stderr, "ne_close: detected unsafe error levels following write operation\n" );
      ret = -1;
    }
    else if( handle->mode == NE_REBUILD  &&  handle->e_ready == 0 ) {
+     DBG_FPRINTF( stderr, "ne_close: detected an incomplete/failed rebuild process\n" );
      ret = -1;
    }
-   else if ( handle->nerr > handle->E ) { /* for non-writes */
+   else if ( handle->nerr > handle->E  &&  handle->mode == NE_RDONLY ) { /* for non-writes */
+     DBG_FPRINTF( stderr, "ne_close: detected excessive errors following a read operation\n" );
      ret = -1;
    }
    if ( ret == 0 ) {
@@ -2403,6 +2409,8 @@ static int reset_blocks(ne_handle handle, rebuild_err epat) {
         // we skip updating the per-stripe errors here, as that will always be handled later on
         epat->per_rebuild_err[ block_index ] = 1;
       }
+      handle->nsz[ block_index ] = 0;
+      handle->ncompsz[ block_index ] = 0;
     }
   }
   return 0;
@@ -2422,8 +2430,10 @@ static int fill_buffers(ne_handle handle, u64 *csum, rebuild_err epat) {
     int readFD = handle->FDArray[block_index];
     if ( handle->src_in_err[ block_index ] ) {
       readFD = epat->FDArray[ block_index ];
-      if( readFD == -1 )
+      if( readFD == -1 ) {
         update_rebuild_err( epat, block_index );
+        DBG_FPRINTF( stderr, "ne_rebuild: encountered -1 FD for in-error file %d\n", block_index );
+      }
     }
     if(!epat->src_in_err[block_index]) {
       size_t read_size = read(readFD, handle->buffs[block_index],
@@ -2555,6 +2565,14 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
       errno = tmp;
       return -1;
     }
+    // clean up epat structures
+    if( alloc_flag ) {
+      // init the in-error FD array to -1 to avoid confusion
+      epat->FDArray[ block_index  ] = -1;
+      // clear all permanent errors
+      epat->permanent_err[ block_index ] = 0;
+    }
+    // rebuild now handles opening all output files
     if( handle->src_in_err[ block_index ] ) {
       epat->FDArray[ block_index ] = handle->FDArray[ block_index ];
       if( handle->mode == NE_STAT ) {
@@ -2563,12 +2581,6 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
       else {
         reopen_for_rebuild( handle, block_index, epat );
       }
-    }
-    if( alloc_flag ) {
-      // init the in-error FD array to -1 to avoid confusion
-      epat->FDArray[ block_index  ] = -1;
-      // clear all permanent errors
-      epat->permanent_err[ block_index ] = 0;
     }
   }
 
