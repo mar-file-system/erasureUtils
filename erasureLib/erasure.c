@@ -2443,11 +2443,12 @@ static int fill_buffers(ne_handle handle, u64 *csum, rebuild_err epat) {
                     "ne_rebuild: encountered error while reading file %d\n",
                     block_index);
         epat->per_rebuild_err[ block_index ] = 1;
-        if ( handle->src_in_err == 0 ) {
+        if ( handle->src_in_err[ block_index ] == 0 ) {
           reopen_for_rebuild(handle, block_index,epat);
           return -1;
         }
         update_rebuild_err( epat, block_index );
+        handle->e_ready = 0; // force reinit of erasure structs
         continue; //added here to avoid writing to rebuild file
       }
       crc = crc32_ieee( TEST_SEED, handle->buffs[block_index], handle->bsz);
@@ -2464,6 +2465,7 @@ static int fill_buffers(ne_handle handle, u64 *csum, rebuild_err epat) {
           return -1;
         }
         update_rebuild_err( epat, block_index );
+        handle->e_ready = 0; // force reinit of erasure structs
         continue; //added here to avoid writing to rebuild file
       }
 #endif
@@ -2699,7 +2701,7 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
         handle->recov[i] = handle->buffs[decode_index[i]];
       }
 
-      DBG_FPRINTF(stdout, "ne_rebuild: init erasure tables nsrcerr = %d...\n");
+      DBG_FPRINTF(stdout, "ne_rebuild: init erasure tables nsrcerr = %d...\n",nsrcerr);
       ec_init_tables(handle->N, epat->nerr,
                      handle->decode_matrix, handle->g_tbls);
       handle->e_ready = 1; // indicate that rebuild structures are initialized
