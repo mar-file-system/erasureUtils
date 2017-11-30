@@ -263,7 +263,7 @@ while [[ $cnt -lt $ITER ]]; do
                echo "   corrupting file $efile ( corruption-type : truncate )"
                echo "   corrupting file $efile ( corruption-type : truncate )" >> $LOGFILE
                fsize=$( stat $stfmt $efile )
-               corr=$(( RANDOM % fsize ))
+               corr=$(( `od -N 4 -t uL -An /dev/urandom | awk '{print $1}'` % fsize ))
                echo "      truncating from $fsize to $corr bytes"
                echo "      truncating from $fsize to $corr bytes" >> $LOGFILE
                dd if=$efile of=$efile.tmp bs=1 count=$corr > /dev/null 2>&1
@@ -277,8 +277,8 @@ while [[ $cnt -lt $ITER ]]; do
                echo "   corrupting file $efile ( corruption-type : silent )"
                echo "   corrupting file $efile ( corruption-type : silent )" >> $LOGFILE
                fsize=$( stat $stfmt $efile )
-               corr=$(( RANDOM % fsize ))
-               offset=$(( RANDOM % ( fsize - corr ) ))
+               corr=$(( `od -N 4 -t uL -An /dev/urandom | awk '{print $1}'` % fsize ))
+               offset=$(( `od -N 4 -t uL -An /dev/urandom | awk '{print $1}'` % ( fsize - corr ) ))
                echo "      inserting $corr random bytes at offset $offset"
                echo "      inserting $corr random bytes at offset $offset" >> $LOGFILE
 
