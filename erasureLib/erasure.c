@@ -2754,6 +2754,13 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
     }
   }
 
+  for ( tmp = 0; tmp < handle->nerr; tmp++ ) {
+    int block = handle->src_err_list[ tmp ];
+    if( epat->FDArray[ block ] != -1 ) {
+      close( epat->FDArray[ block ] ); // we don't really care if this fails
+    }
+  }
+  free( epat );
   free_buffers(rebuild_buffs, ERASURE_WIDTH);
   return 0;
 }
@@ -3175,6 +3182,7 @@ ne_stat ne_status( char *path )
    free(handle->decode_matrix);
    free(handle->invert_matrix);
    free(handle->g_tbls);
+   free(handle->path);
    free(handle);
 
    return stat;

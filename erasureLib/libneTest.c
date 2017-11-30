@@ -304,13 +304,13 @@ int main( int argc, const char* argv[] )
       printf( "\n" );
       if( nerr > stat->E ) { fprintf( stderr, "WARNING: the data appears to be unrecoverable!\n" ); }
       else if ( nerr > 0 ) { fprintf( stderr, "WARNING: errors were found, be sure to rebuild this object before data loss occurs!\n" ); }
-      free(stat);
 
       tmp=0;
       /* Encode any file errors into the return status */
       for( filefd = 0; filefd < stat->N+stat->E; filefd++ ) {
          if ( stat->data_status[filefd] || stat->xattr_status[filefd] ) { tmp += ( 1 << ((filefd + stat->start) % (stat->N+stat->E)) ); }
       }
+      free(stat);
 
       printf("%d\n",tmp);
 
