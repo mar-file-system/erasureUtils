@@ -2403,14 +2403,12 @@ static int reset_blocks(ne_handle handle, rebuild_err epat) {
       DBG_FPRINTF(stdout,
                   "ne_rebuild: performing seek to offset 0 for in-error file %d\n",
                   block_index);
-      // always reattempt a seek of the original, even if it doesn't succeed
+      // always reattempt a seek of the original, so long as we have a FD
       if ( lseek(epat->FDArray[block_index], 0, SEEK_SET) == -1 ) {
         DBG_FPRINTF(stderr, "ne_rebuild: failed to seek in-error file %d\n", block_index );
         // we skip updating the per-stripe errors here, as that will always be handled later on
         epat->per_rebuild_err[ block_index ] = 1;
       }
-      handle->nsz[ block_index ] = 0;
-      handle->ncompsz[ block_index ] = 0;
     }
   }
   return 0;
@@ -2430,7 +2428,9 @@ static int fill_buffers(ne_handle handle, u64 *csum, rebuild_err epat) {
     int readFD = handle->FDArray[block_index];
     if ( handle->src_in_err[ block_index ] ) {
       readFD = epat->FDArray[ block_index ];
-      if( readFD == -1 ) {
+      if( epat->src_in_err[ block_index ] == 0  &&  readFD == -1 ) {
+        epat->permanent_err[ block_index ] = 1;
+        epat->per_rebuild_err[ block_index ] = 1;
         update_rebuild_err( epat, block_index );
         DBG_FPRINTF( stderr, "ne_rebuild: encountered -1 FD for in-error file %d\n", block_index );
       }
@@ -2604,7 +2604,9 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
           csum[block_index] = 0;
         }
         else {
-          handle->csum[ block_index ] = 0;
+          handle->csum[ block_index ] =    0;
+          handle->nsz[ block_index ] =     0;
+          handle->ncompsz[ block_index ] = 0;
         }
       }
 
