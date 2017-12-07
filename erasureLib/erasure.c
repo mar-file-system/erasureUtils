@@ -2085,7 +2085,7 @@ int xattr_check( ne_handle handle, char *path )
          handle->csum[counter] = csum;
          if ( handle->mode == NE_RDONLY ) {
             if( ! handle->totsz ) handle->totsz = totsz; //only set the file size if it is not already set (i.e. by a call with mode=NE_STAT)
-            break;
+            continue;
          }
 
          // This bundle of spaghetti acts to individually verify each "important" xattr value and count matches amongst all files
