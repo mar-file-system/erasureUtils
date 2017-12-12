@@ -1596,6 +1596,9 @@ int ne_close( ne_handle handle )
 #endif
    unsigned char *zero_buff;
 
+   time_t curtime;
+   time(&curtime);
+
 
    if ( handle == NULL ) {
       DBG_FPRINTF( stderr, "ne_close: received a NULL handle\n" );
@@ -1648,23 +1651,50 @@ int ne_close( ne_handle handle )
      if (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1 ) {
          // if mode is NE_WRONLY this will be handled by the BQ thread.
          if(set_block_xattr(handle, counter) != 0) {
+           no_rename = 1;
+           ret = -1;
+           DBG_FPRINTF( stderr, "ne_close: failed to set xattr for rebuilt file %d\n", counter );
+           // isn't this dead code?
            if(handle->src_in_err[counter] == 0) {
              handle->src_in_err[counter] = 1;
              handle->src_err_list[handle->nerr] = counter;
              handle->nerr++;
-             ret = -1;
-             DBG_FPRINTF( stderr, "ne_close: failed to set xattr for rebuilt file %d\n", counter );
            }
          }
          sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
+
+         if( chown(file, handle->owner, handle->group) ) {
+            DBG_FPRINTF( stderr, "ne_close: failed to chown rebuilt file\n" );
+            no_rename = 1;
+            ret = -1;
+         }
+
          strncpy( nfile, file, strlen(file) + 1);
+
+         // save the original file
+         if( handle->e_ready == 1  &&  no_rename == 0 ) {
+            char timestamp[30];
+
+            strftime( timestamp, 30, ".rebuild_bkp.%m%d%y-%H%M%S", localtime(&curtime) );
+
+            strncat( file, timestamp, 30 );
+            
+            // perform the rename
+            if( rename( nfile, file ) ) {
+               DBG_FPRINTF( stderr, "ne_close: failed to rename original file \"%s\" to \"%s\"\n", nfile, file );
+               ret = -1;
+               no_rename = 1;
+            }
+
+            strncpy( file, nfile, strlen(nfile) + 1);
+         }
+
          strncat( file, REBUILD_SFX, strlen(REBUILD_SFX) + 1 );
 
          if ( handle->e_ready == 1  &&  no_rename == 0 ) {
 
-            chown(file, handle->owner, handle->group);
             if ( rename( file, nfile ) != 0 ) {
-               DBG_FPRINTF( stderr, "ne_close: failed to chown rebuilt file\n" );
+               DBG_FPRINTF( stderr, "ne_close: failed to rename rebuilt file\n" );
                // rebuild should fail even if only one file can't be renamed
                ret = -1;
             }
