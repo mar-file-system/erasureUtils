@@ -6,11 +6,16 @@
 #include <errno.h>
 #include <math.h>
 #include <limits.h>
+#include <time.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <erasure.h>
 
 #define PRINTERR(...)   fprintf( stderr, "data_shredder: "__VA_ARGS__)
 #define PRINTOUT(...)   fprintf( stdout, "data_shredder: "__VA_ARGS__)
 
+// global var for start time of this prog
+time_t curtime;
 
 // helper function to print this programs usage info
 void print_usage() {
@@ -21,12 +26,12 @@ void print_usage() {
            "  As a safety measure, backups of the original files are created (by appending a \n"
            "  '.shrd_backup.<TS>' suffix) before the corruption is inserted.  Note, however, \n"
            "  that these backup files will not have any xattrs/manifest info attached.\n"
-           "  To reiterate, NEVER RUN THIS PROGRAM AGAINST USER DATA!\n" );
+           "  To reiterate, NEVER RUN THIS PROGRAM AGAINST USER DATA!\n\n" );
    printf( "usage:  data_shredder -d <corruption_distribution> -o <start_offset>:<end_offset> \n"
            "                      [-b <libne_block-size>] [-n <N>] [-e <E>] [-f] \n"
            "                      <erasure_path_fmt>\n" );
    printf( "  <erasure_path_fmt>   The format string for the erasure stripe to be corrupted, \n"
-           "                        including a '\%d' character to be replaced by each block-\n"
+           "                        including a '%%d' character to be replaced by each block-\n"
            "                        file index\n" );
    printf( "        -d   Specifies the pattern in which data corruption should be inserted\n"
            "               Options = shotgun (random distribution), diagonal_up (adjacent \n"
@@ -34,8 +39,9 @@ void print_usage() {
            "               later stripes), diagonal_down (adjacent corruption along a stripe, \n"
            "               shifted to lower index block-files in later stripes)\n" );
    printf( "        -o   Specifies the offsets within each block-file which should have their \n"
-           "               content corrupted (offsets will be shifted to the nearest block \n"
-           "               boundry\n" );
+           "               content corrupted\n"
+           "               Note that the offsets provided will be alligned to the next lower \n"
+           "               (for lower bound) or next higher stripe-boundary (for upper bound)\n" );
    printf( "        -b   Explicitly specifies the libne block size (overrides erasure.h value)\n" );
    printf( "        -n   Explicitly specifies the libne stripe data-width (overrides the \n"
            "               erasure.h value)\n" );
@@ -47,7 +53,19 @@ void print_usage() {
 
 
 // helper function to copy a given file to a new location
-off_t copy_file_by_name( const char* original, const char* destination ) {
+off_t backup_file( const char* original ) {
+   char* destination = malloc( strlen(original) + 30 );
+   if( destination == NULL ) {
+      PRINTERR( "failed to allocate space for the name of a new backup file\n" );
+      return 0;
+   }
+
+   sprintf( destination, "%s.shrd_backup.", original );
+   char* tdest = destination + strlen(original) + 13;
+   strftime( tdest, 16, "%m%d%y-%H%M%S", localtime(&curtime) );
+
+   PRINTOUT( "backing up file \"%s\" to \"%s\"\n", original, destination );
+
    char buffer[4096];
    size_t bytes_read;
    size_t bytes_written;
@@ -58,6 +76,7 @@ off_t copy_file_by_name( const char* original, const char* destination ) {
    int fd_orig = open( original, O_RDONLY );
    if( fd_orig < 0 ) {
       PRINTERR( "failed to open file \"%s\" for read\n", original );
+      free(destination);
       return 0;
    }
    mode_t mask = umask(0000);
@@ -66,6 +85,7 @@ off_t copy_file_by_name( const char* original, const char* destination ) {
    if( fd_dest < 0 ) {
       PRINTERR( "failed to open file \"%s\" for write\n", destination );
       close( fd_orig );
+      free(destination);
       return 0;
    }
 
@@ -93,10 +113,35 @@ off_t copy_file_by_name( const char* original, const char* destination ) {
       fail = 1;
    }
 
+   free(destination);
+
    if( fail )
       return 0;
 
    return total_written;
+}
+
+
+// return a pseudo-random int in the range [0,limit)
+int rand_under( int limit ) {
+   return (int)(rand() % limit);
+}
+
+
+// write a corrupted block into a erasure/data file at the given offset
+int corrupt_block( int FDArray[ MAXPARTS ], char* randbuff, unsigned long bsz, unsigned long long coff, int cblock ) {
+   if( lseek( FDArray[ cblock ], coff, SEEK_SET ) < 0 ) {
+      PRINTERR( "failed to seek data/erasure file with index %d\n", cblock );
+      return -1;
+   }
+
+   if( write( FDArray[ cblock ], randbuff, bsz ) != bsz ) {
+      PRINTERR( "failed to write to data/erasure file wiht index %d at offset %llu\n", cblock, coff );
+      return -1;
+   }
+
+
+   return 0;
 }
 
 
@@ -110,10 +155,12 @@ int main( int argc, char** argv ) {
    int E = 2;
    
    int opt;
-   int status = 0;
    char fflag = 0;
    char* endptr;
    unsigned long input;
+
+   // get the current time
+   time(&curtime);
 
    // parse arguments
    while( (opt = getopt( argc, argv, "d:o:b:n:e:fh" )) != -1 ) {
@@ -121,7 +168,7 @@ int main( int argc, char** argv ) {
          case 'd':
             if( distrib != 0 ) {
                PRINTERR( "received duplicate '-d' argument, only the last argument will be honored\n" );
-               distrib == 0;
+               distrib = 0;
             }
             // looking for shotgun or diagonals
             if( strncmp( optarg, "shotgun", 78 ) == 0 ) {
@@ -264,7 +311,6 @@ int main( int argc, char** argv ) {
 
    // parse any remaining args
    int index;
-   char usage = 0;
    unsigned int strln;
    for( index = optind; index < argc; index++ ) {
       // only set pathpat if it has not already been set
@@ -304,13 +350,29 @@ int main( int argc, char** argv ) {
       return -1;
    }
 
-   // align the starting and ending offsets to the block-size
+   // align the starting and ending offsets with the block-size
    shred_range[0] -= (shred_range[0] % bsz);
-   shred_range[1] += (bsz - (shred_range[1] % bsz));
+   if( shred_range[1] != 0 )
+      shred_range[1] += (bsz - (shred_range[1] % bsz) - 1);
 
    // print info for this run
    PRINTOUT( "using path = %s, n = %d, e = %d, bsz = %lu, distrib = %d, low_off = %llu, high_off = %llu, force = %d\n", 
               pathpat,N,E,bsz,distrib,shred_range[0],shred_range[1],fflag);
+
+   // prompt for confirmation
+   if( !fflag ) {
+      printf( "Are you sure you wish to perform this operation? (y/n): " );
+      fflush( stdout );
+      char uin;
+      char prev;
+      index = 0;
+      while( (uin = fgetc(stdin)) != '\n' ) { prev = uin; index++; }
+      if( index != 1  ||  prev != 'y' ) {
+         PRINTOUT( "did not recieve 'y' confirmation: terminating early\n" );
+         free( pathpat );
+         return -1;
+      }
+   }
 
    // allocate space for both the pattern string and extra for all possible indexes
    char* bfile = malloc( sizeof(char) * ( strln + log10( MAXPARTS ) ) );
@@ -319,14 +381,140 @@ int main( int argc, char** argv ) {
       return -1;
    }
 
-   int stripewidth = N+E;                      // the total data/erasure stripe width
-   char backup_array[ MAXPARTS ] = {0};        // indicates whether a given block-file has been backed-up yet
-   unsigned long stripecnt = 0;                // the total number of stripes currently processed
-   unsigned long long coff = shred_range[0];   // the current offset being dealt with in all block-files
+   // use /dev/urandom as the source of random bits
+   int rand_fd = open( "/dev/urandom", O_RDONLY );
+   if( rand_fd < 0 ) {
+      PRINTERR( "failed to open device \"/dev/urandom\"" );
+      return -1;
+   }
+   // initialize a random number seed
+   srand(time(NULL));
+
+
+   int FDArray[ MAXPARTS ];                   // array of file-descriptors for files to be corrupted
+   char randbuf[ bsz ];                       // buffer to be filled with random corruption bits
+   int stripewidth = N+E;                     // the total data/erasure stripe width
+   char backup_array[ MAXPARTS ] = {0};       // indicates whether a given block-file has been backed-up yet
+   unsigned long stripecnt = 0;               // the total number of stripes currently processed
+   unsigned long long coff = shred_range[0];  // the current offset being dealt with in all block-files
+   unsigned long long totsz = 0;              // the total size of each data/erasure part (set properly later)
+   unsigned long long limit = shred_range[1]; // the upper offset limit for corruption insertions
+   char eflag = 0;                            // error flag
+   
+   // perform some initialization
+   for( index = 0; index < MAXPARTS; index++ ) {
+      FDArray[ index ] = -1;
+   }
+   if( limit == 0 )
+      limit = bsz + coff;
+
+   // fill in corruption between the designated offsets
+   for( coff = shred_range[0]; coff < limit  &&  eflag == 0; coff += bsz ) {
+      int corrupted;
+      int block;
+      // TODO: this could be determined randomly
+      // TODO: it would be nice to have a 'min-protection' setting taken into account here
+      int to_corrupt = E;
+      char cparts[ MAXPARTS ] = {0};
+      PRINTOUT( "corrupting stripe %lu at file offset %llu with %d randomized blocks\n", stripecnt, coff, to_corrupt );
+      for( corrupted = 0; corrupted < to_corrupt; corrupted++ ) {
+         // fill the buffer with random bits
+         if( read( rand_fd, randbuf, bsz ) != bsz ) {
+            PRINTERR( "failed to fill random buffer from /dev/urandom\n" );
+            eflag = 1;
+            break;
+         }
+
+         // find a new part to corrupt, depending on the distribution
+         if( distrib == 1 ) {
+            while( cparts[(block = rand_under( stripewidth ))] == 1 ) {
+               ;
+            }
+         }
+         else if( distrib == 2 ) {
+            block = ( corrupted + stripecnt ) % stripewidth;
+         }
+         else if( distrib == 3 ) {
+            block = (stripewidth - (stripecnt % stripewidth)) - corrupted - 1;
+            if( block < 0 )
+               block += stripewidth;
+         }
+         else {
+            PRINTERR( "encountered an unexpected distribution value (%d)\n", distrib );
+            eflag = 1;
+            break;
+         }
+
+         // ensure that a backup of this file exists
+         if( backup_array[ block ] == 0 ) {
+            // generate a string for the file name
+            sprintf( bfile, pathpat, block );
+
+            // backup the original file
+            off_t fsize = backup_file( bfile );
+            backup_array[ block ] = 1;
+
+            if( fsize == 0 ) {
+               PRINTERR( "encountered an unexpected error while attempting to backup file \"%s\"\n", bfile );
+               eflag = 1;
+               break;
+            }
+            else if( stripecnt == 0  &&  corrupted == 0 ) {
+               // set totsz to an actually appropriate value
+               totsz = fsize;
+               if( shred_range[1] == 0 )
+                  limit = totsz;
+            }
+            else if ( totsz != fsize ) {
+               PRINTERR( "encountered file \"%s\" with unexpected size %zd (expected %llu)\n", bfile, fsize, totsz );
+               eflag = 1;
+               break;
+            }
+
+            PRINTOUT( "opening file \"%s\" for write\n", bfile );
+
+            // if we've never dealt with this file before, we'll need to open it as well
+            FDArray[ block ] = open( bfile, O_WRONLY );
+            if( FDArray[ block ] < 0 ) {
+               PRINTERR( "failed to open block file \"%s\"\n", bfile );
+               eflag = 1;
+               break;
+            }
+         }
+
+         PRINTOUT( "corrupting file with index %d\n", block );
+
+         // corrupt the appropriate block
+         if( corrupt_block( FDArray, randbuf, bsz, coff, block ) ) {
+            PRINTERR( "detected a failure to properly corrupt part %d\n", block );
+            eflag = 1;
+            break;
+         }
+         // indicate that this part is corrupted
+         cparts[ block ] = 1;
+      }
+      stripecnt++;
+   }
     
+   // cleanup
+   close( rand_fd );
    free( pathpat );
    free( bfile );
-   return 0;
 
+   // close any opened file descriptors
+   for( index = 0; index < MAXPARTS; index++ ) {
+      if( FDArray[ index ] >= 0  &&  close( FDArray[ index ] ) != 0 ) {
+         PRINTERR( "failed to close the FD for index %d (value = %d)\n", index, FDArray[ index ] );
+         eflag = 1;
+      }
+   }
+
+   // notify if an error occured
+   if( eflag ) {
+      PRINTERR( "an error was encountered and the erasure stripe may not have been properly or fully corrupted\n" );
+      return -1;
+   }
+
+   return 0;
 }
 
