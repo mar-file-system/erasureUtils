@@ -1663,12 +1663,6 @@ int ne_close( ne_handle handle )
          }
          sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
 
-         if( chown(file, handle->owner, handle->group) ) {
-            DBG_FPRINTF( stderr, "ne_close: failed to chown rebuilt file\n" );
-            no_rename = 1;
-            ret = -1;
-         }
-
          strncpy( nfile, file, strlen(file) + 1);
 
          // save the original file
@@ -1680,7 +1674,8 @@ int ne_close( ne_handle handle )
             strncat( file, timestamp, 30 );
             
             // perform the rename
-            if( rename( nfile, file ) ) {
+            errno = 0;
+            if( rename( nfile, file )  &&  errno != ENOENT ) { //if there is no original, this is not an error
                DBG_FPRINTF( stderr, "ne_close: failed to rename original file \"%s\" to \"%s\"\n", nfile, file );
                ret = -1;
                no_rename = 1;
@@ -1690,6 +1685,12 @@ int ne_close( ne_handle handle )
          }
 
          strncat( file, REBUILD_SFX, strlen(REBUILD_SFX) + 1 );
+
+         if( chown(file, handle->owner, handle->group) ) {
+            DBG_FPRINTF( stderr, "ne_close: failed to chown rebuilt file\n" );
+            no_rename = 1;
+            ret = -1;
+         }
 
          if ( handle->e_ready == 1  &&  no_rename == 0 ) {
 
