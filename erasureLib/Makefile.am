@@ -59,10 +59,11 @@ libne_a_SOURCES = erasure.c erasure.h
 
 include_HEADERS = erasure.h
 
-bin_PROGRAMS = libneTest
+bin_PROGRAMS = libneTest data_shredder
 libneTest_SOURCES = libneTest.c
 libneTest_LDADD = libne.a
 libneTest_LDFLAGS = -lisal
+data_shredder_SOURCES = data_shredder.c
 
 check_PROGRAMS = test_read_offset testLink
 test_read_offset_SOURCES = test_read_offset.c
