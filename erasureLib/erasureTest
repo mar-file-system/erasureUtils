@@ -266,9 +266,10 @@ while [[ $cnt -lt $ITER ]]; do
                corr=$(( `od -N 4 -t uL -An /dev/urandom | awk '{print $1}'` % fsize ))
                echo "      truncating from $fsize to $corr bytes"
                echo "      truncating from $fsize to $corr bytes" >> $LOGFILE
-               dd if=$efile of=$efile.tmp bs=1 count=$corr > /dev/null 2>&1
-               rm $efile
-               mv $efile.tmp $efile
+               #dd if=$efile of=$efile.tmp bs=1 count=$corr > /dev/null 2>&1
+               #rm $efile
+               #mv $efile.tmp $efile
+               truncate -s $corr $efile
                echo "   creating backup of corrupted file..."
                cp $efile "$efile".corrupted
             else
@@ -282,10 +283,13 @@ while [[ $cnt -lt $ITER ]]; do
                echo "      inserting $corr random bytes at offset $offset"
                echo "      inserting $corr random bytes at offset $offset" >> $LOGFILE
 
+               corrmegab=$(( ($corr / 1048576) + 1 ))
+               dd if=/dev/urandom of="$efile".esource bs=1M count=$corrmegab > /dev/null 2>&1
+
                cp $efile $efile".tmp"
                diff=0
                while [[ $diff -eq 0 ]]; do
-                  dd if=/dev/urandom of=$efile bs=1 count=$corr seek=$offset conv=notrunc > /dev/null 2>&1
+                  dd if="$efile".esource of=$efile bs=1c count=$corr seek=$offset conv=notrunc > /dev/null 2>&1
                   diff $efile $efile".tmp" > /dev/null 2>&1
                   diff=$?
                   if [[ $diff -eq 0 ]]; then
@@ -293,6 +297,7 @@ while [[ $cnt -lt $ITER ]]; do
                   fi
                done
                rm $efile".tmp"
+               rm "$efile".esource
                echo "   creating backup of corrupted file..."
                cp $efile "$efile".corrupted
             fi
@@ -381,15 +386,25 @@ while [[ $cnt -lt $ITER ]]; do
             tN=$n
          fi
          
+         RFAIL=0
+
          { ret=$( time -p ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.read
          
-         if [[ ! $ret =~ $re  ||  $ret -ne $tstat ]]; then
+         if [[ ! $ret =~ $re  ||  $ret -gt $tstat  ||  ( $ICRC -eq 1  &&  $ret -ne $tstat ) ]]; then
             echo
             echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but recieved $ret"
             echo -e "CMD = ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ\033[0m"
             echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but recieved $ret" >> $LOGFILE
             echo "CMD = ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ" >> $LOGFILE
             exit -1
+         elif [[ $ret -lt $tstat ]]; then
+            echo
+            echo -e "\033[0;33mWARNING - read operation returned an inappropriate status, expected $tstat but recieved $ret"
+            echo -e "This may simply be the result of silent corruption present in the zero fill (undetectable on read)"
+            echo -e "CMD = ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ\033[0m"
+            echo "   WARNING: read operation returned an inappropriate status, expected $tstat but recieved $ret" >> $LOGFILE
+            echo "CMD = ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ" >> $LOGFILE
+            RFAIL=1
          fi
          echo "read completed"
          echo
@@ -432,13 +447,20 @@ while [[ $cnt -lt $ITER ]]; do
          
          { ret=$( time -p ./libneTest read /dev/null $EPAT $tN $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.no_read
          
-         if [[ ! $ret =~ $re  ||  $ret -ne $tstat ]]; then
+         if [[ ! $ret =~ $re  ||  $ret -gt $tstat  ||  ( $RFAIL -eq 0  &&  $ret -ne $tstat ) ]]; then
             echo
             echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but recieved $ret"
             echo -e "CMD = ./libneTest read /dev/null $EPAT $tN $e $start $FSZ\033[0m"
             echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but recieved $ret" >> $LOGFILE
             echo "CMD = ./libneTest read /dev/null $EPAT $tN $e $start $FSZ" >> $LOGFILE
             exit -1
+         elif [[ $ret -lt $tstat  &&  $RFAIL -eq 1 ]]; then
+            echo
+            echo -e "\033[0;33mWARNING - read operation returned an inappropriate status, expected $tstat but recieved $ret"
+            echo -e "This may simply be the result of silent corruption present in the zero fill (undetectable on read)"
+            echo -e "CMD = ./libneTest read /dev/null $EPAT $tN $e $start $FSZ\033[0m"
+            echo "   WARNING: read operation returned an inappropriate status, expected $tstat but recieved $ret" >> $LOGFILE
+            echo "CMD = ./libneTest read /dev/null $EPAT $tN $e $start $FSZ" >> $LOGFILE
          fi
          echo "read completed"
          echo
@@ -493,9 +515,25 @@ while [[ $cnt -lt $ITER ]]; do
                   echo "Comparison passed. Removing backup file." >> $LOGFILE
                   rm "$line".backup
                   if [[ -e "$line".corrupted ]]; then
+                     cmp "$line".corrupted "$line".rebuild_bkp.*
+                     if [[ $? -ne 0 ]]; then
+                        echo
+                        echo -e "\033[0;31mFAIL - rebuild backup does not match expected data"
+                        echo -e "        compared $line"".corrupted and $line"".rebuild_bkp.*"
+                        echo -e "CMD = ./libneTest rebuild $EPAT $n $e $start\033[0m"
+                        echo "   FAILURE: output of ne_rebuild backup file does not match the expected data" >> $LOGFILE
+                        echo "            compared $line"".corrupted and $line"".rebuild_bkp.*" >> $LOGFILE
+                        echo "CMD = ./libneTest rebuild $EPAT $n $e $start" >> $LOGFILE
+                        exit -1
+                     fi
+
                      echo -n "Removing backup corrupted file..."
                      echo "Removing backup corrupted file." >> $LOGFILE
                      rm "$line".corrupted
+
+                     echo -n "Removing backup pre-rebuild file..."
+                     echo "Removing backup pre-rebuild file." >> $LOGFILE
+                     rm "$line".rebuild_bkp.*
                   fi
                   echo "done"
                fi
@@ -522,6 +560,7 @@ while [[ $cnt -lt $ITER ]]; do
          fi
          echo "done"
          echo
+
 
          #All tests passed for this iteration
          if [[ $incnt -gt 0 ]]; then
