@@ -318,7 +318,9 @@ void *bq_writer(void *arg) {
 #endif
 
   // open the file.
+  mode_t mask = umask( 0000 );
   bq->file = open(bq->path, O_WRONLY|O_CREAT, 0666);
+  umask( mask );
 
   if(pthread_mutex_lock(&bq->qlock) != 0) {
     exit(-1); // XXX: is this the appropriate response??
@@ -1688,8 +1690,8 @@ int ne_close( ne_handle handle )
 
          if( chown(file, handle->owner, handle->group) ) {
             DBG_FPRINTF( stderr, "ne_close: failed to chown rebuilt file\n" );
-            no_rename = 1;
-            ret = -1;
+            //no_rename = 1;
+            //ret = -1;
          }
 
          if ( handle->e_ready == 1  &&  no_rename == 0 ) {
