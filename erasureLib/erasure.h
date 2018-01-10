@@ -147,7 +147,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #else
 #  define PRINTout(...)   fprintf(stdout, ##__VA_ARGS__)
-#  define PRINTerr(...)   fprintf(stderr, ##__VA_ARGS__)
+#  define PRINTerr(...)   /* fprintf(stderr, ##__VA_ARGS__) */
 #  define PRINTdbg(...)
 #  define LOG_INIT()
 #endif
