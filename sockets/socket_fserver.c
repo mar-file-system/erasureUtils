@@ -87,8 +87,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "skt_common.h"
 
 
-static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-
 
 // These are now only used in main_flags
 #define  MAIN_BIND               0x0001
@@ -245,9 +243,9 @@ shut_down_server() {
    // (stop receiving new connections)
    if (main_flags & MAIN_SOCKET_FD) {
       neDBG("closing socket_fd %d\n", socket_fd);
-      LOCK(&lock);
+      BUG_LOCK();
       CLOSE(socket_fd);
-      UNLOCK(&lock);     
+      BUG_UNLOCK();
    }
    if (main_flags & MAIN_BIND) {
       neDBG("unlinking '%s'\n", server_name);
@@ -521,8 +519,8 @@ int server_s3_authenticate_internal(int client_fd, PseudoPacketHeader* hdr, char
    neDBG("  date [now]: %s", time_now); // includes newline
 #endif
    if ((MAX_S3_DATE_LAG >= 0) && ((now - date) > MAX_S3_DATE_LAG)) {
-      neERR("caller's date is %llu seconds behind (limit: %llu)\n",
-          (now - date), MAX_S3_DATE_LAG);
+      neLOG("caller's date is %llu seconds behind (limit: %llu)\n",
+            (now - date), (time_t)MAX_S3_DATE_LAG);
       return -1;
    }
 
@@ -1649,9 +1647,10 @@ main(int argc, char* argv[]) {
 
 
   // --- open socket as server, and wait for a client
-  LOCK(&lock);
-  REQUIRE_GT0( socket_fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
-  UNLOCK(&lock);
+  BUG_LOCK();
+  socket_fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0);
+  BUG_UNLOCK();
+  REQUIRE_GT0( socket_fd );
 
   // --- When a server dies or exits, it leaves a connection in
   //     TIME_WAIT state, which is eventually cleaned up.  Meanwhile,
@@ -1704,12 +1703,34 @@ main(int argc, char* argv[]) {
 
     neDBG("main: connected fd=%d\n", client_fd);
     if (push_thread(client_fd)) {
-      neERR("main: couldn't allocate thread, dropping fd=%d\n", client_fd);
-      SHUTDOWN(client_fd, SHUT_RDWR);
+       neERR("main: couldn't allocate thread, dropping fd=%d\n", client_fd);
 
-      LOCK(&lock);     
-      CLOSE(client_fd);
-      UNLOCK(&lock);     
+       // rclose() -> rshutdown() -> read() can hang for ~30 sec.  If we
+       // are wrapped in BUG_LOCK(), this can cause large numbers of
+       // server-threads to be serialized, stuck waiting to release their
+       // fd, preventing allocation of new threads, making the server
+       // unresponsive.
+
+#if 0
+       // Change the timeouts, so the read() will return quickly if the
+       // client is unresponsive (e.g. client already exited).
+       // NOTE: rsetsockopt() just silently ignores these options.
+       struct timeval tv;
+       tv.tv_sec  = 0;
+       tv.tv_usec = 250000;        // 250 ms
+       EXPECT_0( SETSOCKOPT(client_fd, SOL_SOCKET, SO_RCVTIMEO, (const void*)&tv, sizeof(tv)) );
+       EXPECT_0( SETSOCKOPT(client_fd, SOL_SOCKET, SO_SNDTIMEO, (const void*)&tv, sizeof(tv)) );
+#endif
+
+       //      // We used to do this inside shut_down_handle(), but that's commented
+       //      // out, now.  rclose() calls rshutdown() internally.  Do we really
+       //      // want to do it here?
+       //      SHUTDOWN(client_fd, SHUT_RDWR);
+
+       // TBD: move this to a separate thread, so the server can remain responsive
+       BUG_LOCK();
+       CLOSE(client_fd);
+       BUG_UNLOCK();
     }
   }
 

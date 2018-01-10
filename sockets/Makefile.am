@@ -78,7 +78,8 @@ AM_CPPFLAGS += -I${top_srcdir}/fast_timer
 
 
 if RDMA_SOCKETS
-  DEFS        += -DRDMA_SOCKETS -DUSE_RIOWRITE
+  # -D_GNU_SOURCE provides POLLRDHUP among the flags for poll()/rpoll()
+  DEFS        += -DRDMA_SOCKETS -DUSE_RIOWRITE -D_GNU_SOURCE
   LIBS        += -lrdmacm
 endif
 

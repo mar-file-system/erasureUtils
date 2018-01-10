@@ -76,6 +76,13 @@ start() {
 
 stop() {
         [ "$EUID" != "0" ] && exit 4
+
+        # Allow running server under valgrind
+        # valgrind diagnostics will go wherever $config_file redirects output
+        if [ "$1" == "valgrind" ]; then
+            prog=valgrind
+        fi
+
         echo -n $"Shutting down $prog: "
         killproc $prog
         RETVAL=$?
@@ -92,19 +99,28 @@ case "$1" in
         start
         ;;
 
-  # Careful, the valgrind process doesn't stop when you stop the service.
+  # Careful, the valgrind process doesn't stop when you "stop" the service.
   start_memcheck)
         start memcheck
         ;;
 
-  # Careful, the valgrind process doesn't stop when you stop the service.
+  # Careful, the valgrind process doesn't stop when you "stop" the service.
   start_callgrind)
         start callgrind
         ;;
 
+
   stop)
         stop
         ;;
+
+  # stop valgrind started with "start_memcheck" / "start_callgrind"
+  stop_valgrind)
+        stop valgrind
+        ;;
+
+
+
   status)
         status $prog
         ;;

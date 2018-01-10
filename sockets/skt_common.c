@@ -100,7 +100,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 // static sem_t  sem;
-static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t rdma_bug_lock = PTHREAD_MUTEX_INITIALIZER;
 
 
 
@@ -114,6 +114,7 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 //
 void
 shut_down_handle(SocketHandle* handle) {
+    int dbg;                    // check return values
 
 #if UNIX_SOCKETS
   if (handle->flags & HNDL_FNAME) {
@@ -124,11 +125,23 @@ shut_down_handle(SocketHandle* handle) {
 #endif
 
   if (handle->flags & HNDL_CONNECTED) {
-    int dbg;                    // check return values
+
+    // rclose() -> rshutdown() -> read() can hang for ~30 sec.  If we are
+    // wrapped in BUG_LOCK(), this can cause large numbers of
+    // server-threads to be stuck waiting to release their fd,
+    // one-at-a-time, preventing allocation of new threads, making the
+    // server unresponsive.
+    //
+    // UNFORTUNTATELY: rsetsockopt() silently ignores SND/RCVTIMEO options.
+    struct timeval tv;
+    tv.tv_sec  = 1;
+    tv.tv_usec = 0;
+    SETSOCKOPT(handle->peer_fd, SOL_SOCKET, SO_RCVTIMEO, (const void*)&tv, sizeof(tv));
+    SETSOCKOPT(handle->peer_fd, SOL_SOCKET, SO_SNDTIMEO, (const void*)&tv, sizeof(tv));
 
 #if 0
-    // NOTE: As of librdmacm-1.0.21, which is installed in our TSS-2
-    //       RHEL6.9 machines) rclose() calls rshutdown(), if needed.
+    // NOTE: As of librdmacm-1.0.21 (installed in our TOSS-2 RHEL6.9
+    //       machines) rclose() calls rshutdown(), if needed.
     //       
     // Commented out because rshutdown() sometimes deadlocks.
     // The stacktrace isn't identical to the one reported here:
@@ -152,11 +165,13 @@ shut_down_handle(SocketHandle* handle) {
        handle->flags |= HNDL_DBG3;
     neDBG("peer_fd %3d: shutdown = %d\n", handle->peer_fd, dbg);
 #endif
+  }
 
+  if (handle->peer_fd > 0) {
 #if 1
-    // NOTE: As of librdmacm-1.0.21, which is installed in our TSS-2
-    //       RHEL6.9 machines) rclose() calls rs_free() ->
-    //       rs_free_iomappings() -> riounmap().
+    // NOTE: As of librdmacm-1.0.21 (installed in our TOSS-2 RHEL6.9
+    //       machines), rclose() calls rs_free() -> rs_free_iomappings() ->
+    //       riounmap().
     //
     // Without doing our own riounmap, we get a segfault in the
     // CLOSE() below, when rclose() calls riounmap() itself.
@@ -175,9 +190,9 @@ shut_down_handle(SocketHandle* handle) {
 #endif
 
     neDBG("peer_fd %3d: close\n", handle->peer_fd);
-    LOCK(&lock);
+    BUG_LOCK();
     dbg = CLOSE(handle->peer_fd);
-    UNLOCK(&lock);
+    BUG_UNLOCK();
     if (dbg)
        handle->flags |= HNDL_DBG3;
     neDBG("peer_fd %3d: close = %d\n", handle->peer_fd, dbg);
@@ -187,6 +202,7 @@ shut_down_handle(SocketHandle* handle) {
 
   handle->flags = 0;
   neDBG("peer_fd %3d: done\n", handle->peer_fd);
+  handle->peer_fd = -1;
 }
 
 void jshut_down_handle(void* handle) {
@@ -394,60 +410,119 @@ int write_buffer(int fd, const char* buf, size_t size, int is_socket, off_t offs
 int read_raw(int fd, char* buf, size_t size, int peek_p) {
    neDBG("read_raw(%d, 0x%llx, %lld, %d)\n", fd, buf, size, peek_p);
 
-   fd_set         rd_fds;
    struct timeval tv;
    int            rc;
 
-   // wait until <fd> has input (or timeout)
-   FD_ZERO(&rd_fds);
-   FD_SET(fd, &rd_fds);
+   // WARNING: tried setting wait_usec small, to allow finer resolution.
+   //     However, that actually causes us to fail by radically
+   //     underestimating the elapsed time (such that RD_TIMEOUT indicates
+   //     30 seconds, and we're finishing the 300000 iterations that should
+   //     add up to 30 seconds in well under one second.  Larger
+   //     mait-period seems to work correctly.
+   const long M         = 1000000L;
+   // const long wait_usec = 100;    /* 100 us.  too small: early rselect() timeout */
+   // const long wait_usec = M-1;    /* ~1 sec.  works, but too large? */
+   const long wait_usec = M/100;  /* 10 ms */
+   const long i_max     = (M * RD_TIMEOUT) / wait_usec;
 
-   int  sec;
+   int  i;
    rc = 0;
-   for (sec=0; (rc>=0 && sec<RD_TIMEOUT); ++sec) {
+   for (i=0; (rc>=0 && i<i_max); ++i) {
 
-#if 0
       // --- wait for the fd to have data
       //    (see comment about race-condition)
-      if (sec) {
+#if 0
+      ssize_t read_count = RECV(fd, buf, size, (peek_p ? MSG_PEEK : MSG_WAITALL));
+
+#elif 0
+      if (i)
+         sched_yield();
+
+      // --- try the read
+      ssize_t read_count = RECV(fd, buf, size, (peek_p ? MSG_PEEK : MSG_DONTWAIT));
+
+#elif 1
+      // SELECT
+
+      if ((unsigned)fd >= FD_SETSIZE) {
+         neERR("fd %u exceeds FD_SETSIZE\n", (unsigned) fd);
+         errno = EIO;
+         return -1;
+      }
+
+      fd_set rd_fds;
+      FD_ZERO(&rd_fds);
+      FD_SET(fd, &rd_fds);
+
+      // wait until <fd> has input (or timeout)
+      //      if (i) {
          do {
-            tv.tv_sec  = 1;
-            tv.tv_usec = 0;
+            tv.tv_sec  = 0;
+            tv.tv_usec = wait_usec;
             rc = SELECT(fd +1, &rd_fds, NULL, NULL, &tv); // side-effect on <tv>
          } while ((rc < 0) && (errno == EINTR));
 
          if (rc < 0) {
-            neERR("select failed (iter: %d)\n", sec);
+            neERR("select failed (iter: %d)\n", i);
             errno = EIO;
             return -1;
          }
-         //        neDBG("[%d] select returned %d, with %ld.%06ld sec remaining\n",
-         //              sec, rc, tv.tv_sec, tv.tv_usec);
-      }
+         //         neDBG("[%d] select returned %d (%s), with %ld.%06ld sec remaining\n",
+         //               i, rc, strerror(errno), tv.tv_sec, tv.tv_usec);
+      //      }
 
 
       // --- try the read
       ssize_t read_count = RECV(fd, buf, size, (peek_p ? MSG_PEEK : MSG_DONTWAIT));
+
+#elif 0
+      // POLL
+
+      int           wait_millis = (wait_usec / 1000) + 1;
+      struct pollfd pfd         = { .fd      = fd,
+                                    .events  = (POLLIN | POLLRDHUP),
+                                    .revents = 0 };
+      ssize_t       read_count;
+
+      rc = POLL(&pfd, 1, wait_millis);
+      //         neDBG("[%d] poll returned %d (%s)\n",
+      //               i, rc, strerror(errno));
+
+      if (rc < 0) {
+         neERR("poll failed (iter: %d)\n", i);
+         errno = EIO;
+         return -1;
+      }
+      else if (pfd.revents & (POLLRDHUP)) {
+         neERR("poll got err-flags 0x%x (iter: %d)\n", pfd.revents, i);
+         errno = EIO;
+         return -1;
+      }
+      else if (rc > 0)
+         read_count = RECV(fd, buf, size, (peek_p ? MSG_PEEK : MSG_DONTWAIT));
+      else
+         continue;
+
 #else
-      ssize_t read_count = RECV(fd, buf, size, (peek_p ? MSG_PEEK : MSG_WAITALL));
+#     error "Forgot to pick an option"
 #endif
 
       if (read_count == size) {
-         neDBG("read OK (iter: %d)\n", sec);
+         neDBG("read OK (iter: %d)\n", i);
          return 0;
       }
       else if (! read_count) {
-         neERR("read EOF (iter: %d)\n", sec);
+         neERR("read EOF (iter: %d)\n", i);
          return -1;             // you called read_raw() expecting something
       }
       else if (read_count > 0) {
          neERR("read %lld instead of %lld bytes (iter: %d)\n",
-               read_count, size, sec);
+               read_count, size, i);
          return -1;
       }
       else if ((errno != EAGAIN)
                && (errno != EWOULDBLOCK)) {
-         neERR("read failed (iter: %d)\n", sec);
+         neERR("read failed (iter: %d)\n", i);
          return -1;
       }
    }
@@ -471,67 +546,122 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
 int write_raw(int fd, char* buf, size_t size) {
    neDBG("write_raw(%d, 0x%llx, %lld)\n", fd, buf, size);
 
-   fd_set         wr_fds;
    struct timeval tv;
    int            rc;
 
-   // wait until <fd> has room for output (or timeout)
-   FD_ZERO(&wr_fds);
-   FD_SET(fd, &wr_fds);
+   // see corresponding notes in read_raw()
+   const long M         = 1000000L;
+   // const long wait_usec = 100;    /* 100 us.  too small: causes early "timeout" */
+   // const long wait_usec = M-1;    /* ~1 sec.  works, but too large? */
+   const long wait_usec = M/100;  /* 10 ms */
+   const long i_max     = (M * WR_TIMEOUT) / wait_usec;
 
-   int  sec;
+   int  i;
    rc = 0;
-   for (sec=0; (rc>=0 && sec<WR_TIMEOUT); ++sec) {
+   for (i=0; (rc>=0 && i<i_max); ++i) {
 
-#if 0
       // --- wait for the fd to have room
       //    (see comment about race-condition)
-      if (sec) {
+#if 0
+      ssize_t write_count = SEND(fd, buf, size, MSG_WAITALL);
+
+#elif 0
+      if (i)
+         sched_yield();
+
+      // --- try the write
+      // ssize_t write_count = WRITE(fd, buf, size);
+      ssize_t write_count = SEND(fd, buf, size, MSG_DONTWAIT);
+
+#elif 1
+
+      if ((unsigned)fd >= FD_SETSIZE) {
+         neERR("fd %u exceeds FD_SETSIZE\n", (unsigned) fd);
+         errno = EIO;
+         return -1;
+      }
+
+      fd_set  wr_fds;
+      FD_ZERO(&wr_fds);
+      FD_SET(fd, &wr_fds);
+
+      // wait until <fd> has room for output (or timeout)
+      if (i) {
          do {
-            tv.tv_sec  = 1;
-            tv.tv_usec = 0;
+            tv.tv_sec  = 0;
+            tv.tv_usec = wait_usec;
             rc = SELECT(fd +1, NULL, &wr_fds, NULL, &tv); // side-effect on <tv>
          } while ((rc < 0) && (errno == EINTR));
 
 
          if (rc < 0) {
-            neERR("select failed (iter: %d)\n", sec);
+            neERR("select failed (iter: %d)\n", i);
             errno = EIO;
             return -1;
          }
-         //        neDBG("[%d] select returned %d, with %ld.%06ld sec remaining\n",
-         //              sec, rc, tv.tv_sec, tv.tv_usec);
+         //         neDBG("[%d] select returned %d (%s), with %ld.%06ld sec remaining\n",
+         //               i, rc, strerror(errno), tv.tv_sec, tv.tv_usec);
       }
 
       // --- try the write
       // ssize_t write_count = WRITE(fd, buf, size);
-      // ssize_t write_count = SEND(fd, buf, size, 0); // TBD: flags?
       ssize_t write_count = SEND(fd, buf, size, MSG_DONTWAIT);
+
+#elif 0
+      // POLL
+
+      int           wait_millis = (wait_usec / 1000) + 1;
+      struct pollfd pfd         = { .fd      = fd,
+                                    .events  = (POLLOUT | POLLERR | POLLHUP | POLLNVAL),
+                                    .revents = 0 };
+      ssize_t       write_count;
+
+      rc = POLL(&pfd, 1, wait_millis);
+      //         neDBG("[%d] poll returned %d (%s)\n",
+      //               i, rc, strerror(errno));
+
+      if (rc < 0) {
+         neERR("poll failed (iter: %d)\n", i);
+         errno = EIO;
+         return -1;
+      }
+      else if (pfd.revents
+               && !(pfd.revents & (POLLOUT))) { // I saw POLLHUP + POLLOUT ?
+         neERR("poll got err-flags 0x%x (iter: %d)\n", pfd.revents, i);
+         errno = EIO;
+         return -1;
+      }
+      else if (rc)
+         // ssize_t write_count = WRITE(fd, buf, size);
+         write_count = SEND(fd, buf, size, MSG_DONTWAIT);
+      else
+         continue;
+
 #else
-      ssize_t write_count = SEND(fd, buf, size, MSG_WAITALL);
+#     error "Forgot to pick an option"
 #endif
 
       if (write_count == size) {
-         neDBG("write OK (iter: %d)\n", sec);
+         neDBG("write OK (iter: %d)\n", i);
          return 0;
       }
       else if (! write_count) {
-         neERR("write EOF (iter: %d)\n", sec);
+         neERR("write EOF (iter: %d)\n", i);
          return -1;
       }
       else if (write_count > 0) {
          neERR("write %lld instead of %lld bytes (iter: %d)\n",
-               write_count, size, sec);
+               write_count, size, i);
          return -1;
       }
       else if ((errno != EAGAIN)
                && (errno != EWOULDBLOCK)) {
-         neERR("write failed (iter: %d)\n", sec);
+         neERR("write failed (iter: %d)\n", i);
          return -1;
       }
    }
 
-   neERR("timeout after %d sec\n", RD_TIMEOUT);
+   neERR("timeout after %d sec\n", WR_TIMEOUT);
    errno = EIO;
    return -1;
 }
@@ -1408,6 +1538,13 @@ int client_s3_authenticate(SocketHandle* handle, int command) {
 //     operations (e.g. SETXATTR, CHOWN, etc).  In these cases, the
 //     open flags are ignored.
 //
+// NOTE: if ne_write() -> bq_writer (thread) is calling, in the case where
+//     our call to SOCKET() succeeds, but our CONNECT() fails, we must
+//     return a handle with peer_fd = -1, or ne_write will presume success.
+//     Therefore, we're using a jump-handler to call shut_down_handle() on
+//     the way out, for such premature exits, and having shut_down_handle()
+//     set peer_fd = -1.
+//
 // TBD: Set errcode "appropriately".
 // ...........................................................................
 
@@ -1523,28 +1660,33 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
   int fd;
 
   // open socket to server
-  LOCK(&lock);
-  NEED_GT0( fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0) );
-  UNLOCK(&lock);
+  BUG_LOCK();
+  fd = SOCKET(SKT_FAMILY, SOCK_STREAM, 0);
+  BUG_UNLOCK();
+  NEED_GT0(fd);
   neDBG("fd = %d\n", fd);
-
   //  REQUIRE_0( rs_check(fd) ); // DEBUGGING (custom rsocket.h helper)
+
+
+  // jNEED() macros will run this before exiting
+  jHANDLER( jshut_down_handle, handle );
+
+  handle->peer_fd = fd;
 
   //  // don't do this on the PUT-client?
   //  int disable = 0;
-  //  NEED_0( RSETSOCKOPT( fd, SOL_RDMA, RDMA_INLINE, &disable, sizeof(disable)) );
+  //  jNEED_0( RSETSOCKOPT( fd, SOL_RDMA, RDMA_INLINE, &disable, sizeof(disable)) );
 
   if (handle->flags & HNDL_PUT) {
     unsigned mapsize = 1; // max number of riomap'ed buffers (on this fd ?)
-    NEED_0( RSETSOCKOPT( fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
+    jNEED_0( RSETSOCKOPT( fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
   }
   //  REQUIRE_0( rs_check(fd) ); // DEBUGGING (custom rsocket.h helper)
 
-  NEED_0( CONNECT(fd, s_addr_ptr, s_addr_len) );
+  jNEED_0( CONNECT(fd, s_addr_ptr, s_addr_len) );
   neDBG("skt_open: connected [%d] '%s'\n", fd, spec->fname);
   //  REQUIRE_0( rs_check(fd) ); // DEBUGGING (custom rsocket.h helper)
 
-  handle->peer_fd = fd;         // now peer_fd can be assigned
   handle->flags |= HNDL_CONNECTED;
   return fd;
 }
@@ -2376,7 +2518,11 @@ int skt_close(SocketHandle* handle) {
 
 #ifdef USE_RIOWRITE
          // We got the DATA 0 indicating EOF.  Send an ACK 0, as a sign off.
-         jNEED_0( write_pseudo_packet(handle->peer_fd, CMD_ACK, 0, NULL) );
+         // NOTE: the peer may already have hung up.  Not a problem.
+
+         // jNEED_0( write_pseudo_packet(handle->peer_fd, CMD_ACK, 0, NULL) );
+         write_pseudo_packet(handle->peer_fd, CMD_ACK, 0, NULL);
+
 #endif
       }
    }

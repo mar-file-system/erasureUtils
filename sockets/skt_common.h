@@ -97,6 +97,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  define neDBG(...)
 #endif
 
+// always goes to stderr, regardless of DEBUG setting
 #define DIAGNOSE(FMT,...)  FPRINTF(stderr,   FAIL_STR FMT, ##__VA_ARGS__)
 
 
@@ -130,9 +131,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define NEED(EXPR)          _TEST(EXPR,    , neDBG, neDBG,   return -1)
 #define NEED_0(EXPR)        _TEST(EXPR, ==0, neDBG, neDBG,   return -1)
 #define NEED_GT0(EXPR)      _TEST(EXPR,  >0, neDBG, neDBG,   return -1)
-//#define NEED(EXPR)          _TEST(EXPR,    , neDBG, DIAGNOSE,   return -1)
-//#define NEED_0(EXPR)        _TEST(EXPR, ==0, neDBG, DIAGNOSE,   return -1)
-//#define NEED_GT0(EXPR)      _TEST(EXPR,  >0, neDBG, DIAGNOSE,   return -1)
 
 
 // call cleanup function before exiting, if expr doesn't return expected value
@@ -143,9 +141,6 @@ typedef void(*jHandlerType)(void* arg);
 #define jNEED(EXPR)         _TEST(EXPR,    , neDBG, neDBG,   j_handler(j_handler_arg); return -1)
 #define jNEED_0(EXPR)       _TEST(EXPR, ==0, neDBG, neDBG,   j_handler(j_handler_arg); return -1)
 #define jNEED_GT0(EXPR)     _TEST(EXPR,  >0, neDBG, neDBG,   j_handler(j_handler_arg); return -1)
-//#define jNEED(EXPR)         _TEST(EXPR,    , neDBG, DIAGNOSE,   abort() )
-//#define jNEED_0(EXPR)       _TEST(EXPR, ==0, neDBG, DIAGNOSE,   abort() )
-//#define jNEED_GT0(EXPR)     _TEST(EXPR,  >0, neDBG, DIAGNOSR,   abort() )
 
 
 // abort(), if expr doesn't have expected value
@@ -158,8 +153,6 @@ typedef void(*jHandlerType)(void* arg);
 
 #define SOCKET_NAME_PREFIX      "socket_"
 #define MAX_SOCKET_NAME_SIZE    (sizeof(SOCKET_NAME_PREFIX) + 10)
-
-#define MAX_SOCKET              9
 
 #define MAX_SOCKET_CONNS        256  /* server-side */
 
@@ -186,36 +179,71 @@ typedef void(*jHandlerType)(void* arg);
 
 
 
-// These represent the max delay (in sec), waiting for tokens to/from
-// client/server.  When debugging, we typically want to be able to step
-// slowly through an exchange, without causing a timeout.  Careful, though,
-// you might be debugging something that happens because of a timeout.
-// Also, note that when *not* debugging, DEBUG_SOCKETS is #define'd, but is 0.
+// These represent the max delay (in sec), waiting for protocol tokens
+// to/from client/server.  When debugging, we typically want to be able to
+// step slowly through an exchange, without provoking a timeout.  Be
+// careful, though: you might be debugging a problem that happens only
+// because of a timeout.  Also, note that when *not* debugging,
+// DEBUG_SOCKETS is #define'd, but is 0.
+
+// WARNING: if these values are set small (e.g. 30 sec), and there is a
+//     small value (e.g. 100) for wait_usec in read/write_raw(), then the
+//     computation of the total amount spent in the loops is radically
+//     overestimated (i.e. SELECT() appears very innaccurate for such small
+//     intervals, and the result is that e.g. clients see the server
+//     spontaneously dropping connections, etc, showing as getting EOF from
+//     the server.
 
 #if DEBUG_SOCKETS
-#  define WR_TIMEOUT          10000
-#  define RD_TIMEOUT          10000
+// #  define WR_TIMEOUT          10000
+// #  define RD_TIMEOUT          10000
+
+// for debugging short-timeout probs, with logging enabled.
+#  define WR_TIMEOUT          30
+#  define RD_TIMEOUT          30
+
 #else
-// #  define WR_TIMEOUT             30
-// #  define RD_TIMEOUT             30
-#  define WR_TIMEOUT             10000
-#  define RD_TIMEOUT             10000
+#  define WR_TIMEOUT             30
+#  define RD_TIMEOUT             30
+// #  define WR_TIMEOUT             10000
+// #  define RD_TIMEOUT             10000
 #endif
 
 
 
 // max seconds server-side date string can lag behind date-string generated
 // on client, for S3-authentication.  (Set negative to disable.)
+// NOTE: this formulation is intended to allow more lag when debugging.
 #define MAX_S3_DATE_LAG          ((WR_TIMEOUT > RD_TIMEOUT) ? WR_TIMEOUT : RD_TIMEOUT)
+
 #define MAX_S3_DATA              1024 + FNAME_SIZE /* authentication data */
 
-#define SKT_S3_USER              "mcadmin"  /* token 1 in ~/.awsAuth */
+#define SKT_S3_USER              "mcadmin"  /* desired token #1 in ~/.awsAuth */
 
 
 // This allows SocketHandle (which needs a reference to an AWSContext*, iff
 // S3_AUTH is defined) to be used in other contexts where S3_AUTH does not
 // get defined.  In other words, this typedef is agnostic about S3_AUTH.
 typedef void*    SktAuth; // actually, AWSContext*
+
+
+
+#ifdef __GNUC__
+#  define likely(x)      __builtin_expect(!!(x), 1)
+#  define unlikely(x)    __builtin_expect(!!(x), 0)
+#else
+#  define likely(x)      (x)
+#  define unlikely(x)    (x)
+#endif
+
+
+// shorthand, to turn thread-cancelability off/on
+// argument must be ENABLE or DISABLE
+#define THREAD_CANCEL(ENABLE)                                           \
+  do { int prev_cancel_state;                                           \
+    pthread_setcancelstate(PTHREAD_CANCEL_##ENABLE, &prev_cancel_state); \
+  } while (0)
+
 
 
 /* -----------------------------------
@@ -238,6 +266,7 @@ typedef struct sockaddr_un                   SockAddr;
 #  define RECV(...)             recv(__VA_ARGS__)
 #  define SHUTDOWN(...)         shutdown(__VA_ARGS__)
 #  define SELECT(...)           select(__VA_ARGS__)
+#  define POLL(...)             poll(__VA_ARGS__)
 
 #  define RIOMAP(...)
 #  define RIOUNMAP(...)
@@ -245,6 +274,9 @@ typedef struct sockaddr_un                   SockAddr;
 
 #  define LOCK(LOCK)
 #  define UNLOCK(LOCK)
+
+#  define BUG_LOCK()
+#  define BUG_UNLOCK(LOCK)
 
 
 /* -----------------------------------
@@ -268,6 +300,7 @@ typedef struct rdma_addrinfo           SockAddr;
 #  define RECV(...)             rrecv(__VA_ARGS__)
 #  define SHUTDOWN(...)         rshutdown(__VA_ARGS__)
 #  define SELECT(...)           rselect(__VA_ARGS__)
+#  define POLL(...)             rpoll(__VA_ARGS__)
 
 #  define RIOMAP(...)           riomap(__VA_ARGS__)
 #  define RIOUNMAP(...)         riounmap(__VA_ARGS__)
@@ -277,11 +310,24 @@ typedef struct rdma_addrinfo           SockAddr;
 // These LOCK/UNLOCKs should be removed, after our patch (5ac0576d51dd) to
 // librdmacm is installed.  This is a work-around for unpatched systems.
 
+extern pthread_mutex_t rdma_bug_lock;
+
 #  define LOCK(LOCK)            pthread_mutex_lock(LOCK);
 #  define UNLOCK(LOCK)          pthread_mutex_unlock(LOCK);
 
-// #  define LOCK(LOCK)
-// #  define UNLOCK(LOCK)
+#  define BUG_LOCK()                               \
+   while(1) {                                      \
+      THREAD_CANCEL(DISABLE);                      \
+      if (! pthread_mutex_trylock(&rdma_bug_lock)) \
+         break;                                    \
+      THREAD_CANCEL(ENABLE);                       \
+      sched_yield();                               \
+   }
+
+#  define BUG_UNLOCK()                             \
+   pthread_mutex_unlock(&rdma_bug_lock);           \
+   THREAD_CANCEL(ENABLE);
+
 
 
 /* -----------------------------------
@@ -304,6 +350,7 @@ typedef struct sockaddr_in                   SockAddr;
 #  define RECV(...)             recv(__VA_ARGS__)
 #  define SHUTDOWN(...)         shutdown(__VA_ARGS__)
 #  define SELECT(...)           select(__VA_ARGS__)
+#  define POLL(...)             poll(__VA_ARGS__)
 
 #  define RIOMAP(...)
 #  define RIOUNMAP(...)
@@ -312,24 +359,11 @@ typedef struct sockaddr_in                   SockAddr;
 #  define LOCK(LOCK)
 #  define UNLOCK(LOCK)
 
+#  define BUG_LOCK()
+#  define BUG_UNLOCK(LOCK)
+
 #endif
 
-
-#ifdef __GNUC__
-#  define likely(x)      __builtin_expect(!!(x), 1)
-#  define unlikely(x)    __builtin_expect(!!(x), 0)
-#else
-#  define likely(x)      (x)
-#  define unlikely(x)    (x)
-#endif
-
-
-// shorthand, to turn thread-cancelability off/on
-// argument must be ENABLE or DISABLE
-#define THREAD_CANCEL(ENABLE)                                           \
-  do { int prev_cancel_state;                                           \
-    pthread_setcancelstate(PTHREAD_CANCEL_##ENABLE, &prev_cancel_state); \
-  } while (0)
 
 
 
