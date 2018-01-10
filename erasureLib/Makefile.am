@@ -55,6 +55,11 @@
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
+# automake requires '=' before '+=', even for these built-in vars
+AM_CFLAGS  =
+AM_LDFLAGS =
+
+
 # Here's how to get automake to do an assignment based on two conditions
 SOCKET_DEFS =
 if RDMA_SOCKETS
@@ -78,13 +83,18 @@ endif
 
 
 if DEBUG_NE
-  AM_CFLAGS = -g -O1
+  AM_CFLAGS   += -g -O0
   SOCKET_DEFS += -DDEBUG_NE=$(DEBUG_NE_VALUE)  -fstack-protector-all -fstack-check
 else
-  AM_CFLAGS = -g -O3
+  AM_CFLAGS   += -g -O3
   SOCKET_DEFS += -DDEBUG_NE=0
 endif
 
+
+if GPROF
+  AM_CFLAGS  += -pg
+  AM_LDFLAGS += -pg
+endif
 
 
 TIMER_CPPFLAGS = -I${top_srcdir}/fast_timer

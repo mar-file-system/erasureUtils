@@ -1,5 +1,15 @@
-AM_CFLAGS = -I.
-AM_LDFLAGS = -lisal
+# automake requires '=' before '+=', even for these built-in vars
+AM_CFLAGS  =
+AM_LDFLAGS =
+
+if GPROF
+  AM_CFLAGS  += -pg
+  AM_LDFLAGS += -pg
+endif
+
+AM_CFLAGS  += -I.
+AM_LDFLAGS += -lisal
+
 
 noinst_PROGRAMS = lanl_netof lanl_ntofe lanl_rebuildne lanl_ftone lanl_rebuild1n_from_e0 lanl_health lanl_singleHealth
 lanl_netof_SOURCES = lanl_netof.c

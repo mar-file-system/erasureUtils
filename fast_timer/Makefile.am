@@ -57,14 +57,26 @@
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
+# automake requires '=' before '+=', even for these built-in vars
+AM_CFLAGS =
+AM_LDFLAGS =
+
 
 if DEBUG_FT
-  AM_CFLAGS    = -g -O1
+  AM_CFLAGS   += -g -O0
   DEFS        += -DDEBUG_FT=1
 else
-  AM_CFLAGS    = -g -O3
+  AM_CFLAGS   += -g -O3
   DEFS        += -DDEBUG_FT=0
 endif
+
+
+if GPROF
+  AM_CFLAGS  += -pg
+  AM_LDFLAGS += -pg
+endif
+
+
 
 
 include_HEADERS = fast_timer.h

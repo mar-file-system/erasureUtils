@@ -158,7 +158,7 @@ AM_COND_IF([RDMA_SOCKETS],
 # libaws4c is used to generate authentication-headers for RDMA socket server
 AC_ARG_ENABLE([auth],
                AS_HELP_STRING([--disable-auth],
-                              [Don't require RDMA client/server to use authentication.  (Avoid link with aws4c, curl, etc)]),
+                              [Don't require RDMA client/server to use authentication.  (Avoids link with aws4c, curl, etc)]),
                [enable_auth=${enableval}],
                [enable_auth=yes])
 
@@ -212,7 +212,7 @@ AM_CONDITIONAL([SUPPRESS_FILE_IO],  [test "$enable_file_io" != yes])
 # Allow turning on debugging flags
 AC_ARG_ENABLE([debug],
                AS_HELP_STRING([--enable-debug],
-                              [Turn on internal debugging.  One of {ne,sockets,all,no}]),
+                              [Turn on internal debugging.  One of {ne,sockets,all,allft,no}]),
                [case "${enableval}" in
                   ne)        enable_debug=ne ;;
                   sockets)   enable_debug=sockets ;;
@@ -236,6 +236,12 @@ AC_ARG_ENABLE([syslog],
               [enable_syslog=no])
 
 AM_CONDITIONAL([USE_SYSLOG], [test "x$enable_syslog" != xno])
+
+
+
+AC_ARG_ENABLE(gprof,
+   AS_HELP_STRING([--enable-gprof], [Dump run-time profiling info for gprof]))
+AM_CONDITIONAL([GPROF], [test x$enable_gprof = xyes])
 
 
 

@@ -58,10 +58,10 @@
 
 
 AM_CPPFLAGS =
-
-#AM_LDFLAGS = -lrt
-#AM_LDFLAGS = -static
 AM_LDFLAGS =
+
+#AM_LDFLAGS += -lrt
+#AM_LDFLAGS += -static
 
 
 # number says how many buffers to fake reading from file, to send to server
@@ -90,12 +90,18 @@ endif
 
 
 if DEBUG_SOCKETS
-  AM_CFLAGS    = -g -O1
+  AM_CFLAGS    = -g -O0
   DEFS        += -DDEBUG_SOCKETS=$(DEBUG_SOCKETS_VALUE)
   AM_CPPFLAGS += -fstack-protector-all -fstack-check
 else
   AM_CFLAGS    = -g -O3
   DEFS        += -DDEBUG_SOCKETS=0
+endif
+
+
+if GPROF
+  AM_CFLAGS  += -pg
+  AM_LDFLAGS += -pg
 endif
 
 
