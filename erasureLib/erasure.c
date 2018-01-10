@@ -3872,7 +3872,7 @@ int ne_set_xattr1(const uDAL* impl, SktAuth auth,
    OPEN( fd, handle, meta_file, O_WRONLY | O_CREAT, 0666 );
    umask(mask);
 
-   if ( FD_ERR(fd) < 0 ) { 
+   if (FD_ERR(fd)) {
       PRINTerr( "ne_close: failed to open file %s\n", meta_file);
       ret = -1;
    }
@@ -3897,7 +3897,7 @@ int ne_set_xattr1(const uDAL* impl, SktAuth auth,
 #   error "xattr metadata is not functional with new thread model"
 
    OPEN( fd, handle, path, O_RDONLY );
-   if ( FD_ERR(fd) ) { 
+   if (FD_ERR(fd)) { 
       PRINTerr("ne_set_xattr: failed to open file %s\n", path);
       ret = -1;
    }
@@ -3996,7 +3996,7 @@ int ne_get_xattr1( const uDAL* impl, SktAuth auth,
 #   error "xattr metadata is not functional with new thread model"
 
    OPEN( fd, handle, path, O_RDONLY );
-   if ( FD_ERR(fd) ) { 
+   if (FD_ERR(fd)) { 
       PRINTerr("ne_get_xattr: failed to open file %s\n", path);
       ret = -1;
    }
