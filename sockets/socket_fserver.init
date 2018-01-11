@@ -34,7 +34,15 @@ logfile=${prog}.log
 lockfile=${prog}.lock
 
 
+
 start() {
+        # WARNING: The default 'daemon' invocation causes this script
+        #     to fail to return when running 'ssh host <this_script> start'
+        #     The problem is that the program has output.
+        #     Redirecting to a log-file (or /dev/null) allows ssh to return.
+        #     We assume that the definition of OPTIONS in the config-file looks
+        #     something like this:  "... > my_log_file 2>&1 &"
+
         [ "$EUID" != "0" ] && exit 4
         [ "$NETWORKING" = "no" ] && exit 1
 
@@ -66,10 +74,6 @@ start() {
         # So, don't bother with "echo -n"
         echo -e "Starting: $prog $OPTIONS $AFTER"
 
-        # The default 'daemon' invocation causes this script
-        # to fail to return when running 'ssh host <this_script> start'
-        # The problem is that the program has output.
-        # Redirecting to a log-file (or /dev/null) allows ssh to return
         echo "Starting: $prog $OPTIONS $AFTER" > $logfile
 
         daemon $prog $OPTIONS
