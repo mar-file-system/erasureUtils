@@ -46,25 +46,31 @@ start() {
 
         # Allow running server under valgrind
         # valgrind diagnostics will go wherever $config_file redirects output
+        #
+        # NOTE: Invocation can supply extra options:
+        #           start callgrind --separate-threads=yes"
+        #
         if [ "$1" == "memcheck" ]; then
-            OPTIONS="--tool=memcheck --fair-sched=try --track-origins=yes $prog $OPTIONS"
+            OPTIONS="--tool=memcheck --fair-sched=try --track-origins=yes --leak-check=full ${@:2}  $prog $OPTIONS"
             prog=valgrind
+            AFTER="\nuse '$0 stop memcheck' to terminate service\noutput will appear in standard out, after you stop the service"
+
         elif [ "$1" == "callgrind" ]; then
-            # afterwards: "callgrind_annotate --tree=both --inclusive=yes callgrind.out.xxxx"
-            OPTIONS="--tool=callgrind --fair-sched=try $prog $OPTIONS"
+            OPTIONS="--tool=callgrind --fair-sched=try ${@:2}  $prog $OPTIONS"
             prog=valgrind
+            AFTER="\nuse '$0 stop callgrind' to terminate service\nafterwards: 'callgrind_annotate --tree=both --inclusive=yes callgrind.out.xxxx'"
         fi
 
         # Start daemons.
         # The "[OK]" from 'daemon' would get printed at column 60, overwriting this text.
         # So, don't bother with "echo -n"
-        echo "Starting: $prog $OPTIONS"
+        echo -e "Starting: $prog $OPTIONS $AFTER"
 
         # The default 'daemon' invocation causes this script
         # to fail to return when running 'ssh host <this_script> start'
         # The problem is that the program has output.
         # Redirecting to a log-file (or /dev/null) allows ssh to return
-        echo "Starting: $prog $OPTIONS" > $logfile
+        echo "Starting: $prog $OPTIONS $AFTER" > $logfile
 
         daemon $prog $OPTIONS
 
@@ -74,13 +80,24 @@ start() {
         return $RETVAL
 }
 
+
 stop() {
         [ "$EUID" != "0" ] && exit 4
 
         # Allow running server under valgrind
         # valgrind diagnostics will go wherever $config_file redirects output
-        if [ "$1" == "valgrind" ]; then
-            prog=valgrind
+        if [ -n "$1" ]; then
+            case "$1" in
+                memcache)  ;&
+                callgrind) ;&
+                valgrind)
+                    prog=valgrind
+                    ;;
+
+                *)
+                    echo "unknown stop-option '$1'"
+                    exit 1
+            esac
         fi
 
         echo -n $"Shutting down $prog: "
@@ -93,51 +110,52 @@ stop() {
 
 
 
+
+
 # See how we were called.
 case "$1" in
+
   start)
-        start
+        # Careful, if you're starting a valgrind-related process, it
+        # doesn't stop when you simply "stop" the service.
+        start "${@:2}"
         ;;
-
-  # Careful, the valgrind process doesn't stop when you "stop" the service.
-  start_memcheck)
-        start memcheck
-        ;;
-
-  # Careful, the valgrind process doesn't stop when you "stop" the service.
-  start_callgrind)
-        start callgrind
-        ;;
-
 
   stop)
-        stop
+        # to stop a valgrind-related process, you can use any of
+        # "stop memcheck" "stop callgrind" or "stop valgrind"
+        stop "${@:2}"
         ;;
-
-  # stop valgrind started with "start_memcheck" / "start_callgrind"
-  stop_valgrind)
-        stop valgrind
-        ;;
-
-
 
   status)
         status $prog
         ;;
-  restart|force-reload)
+
+  restart)
         stop
         start
         ;;
-  try-restart|condrestart)
+
+  try-restart)
         if status $prog > /dev/null; then
             stop
             start
         fi
         ;;
+
   reload)
         exit 3
         ;;
+
   *)
-        echo $"Usage: $0 {start|stop|status|restart|try-restart|force-reload}"
+        echo "Usage: $0 [ command [options] ]"
+        echo "  start { callgrind | memcheck } [ valgrind_option ... ]"
+        echo "  stop  { callgrind | memcheck | valgrind }"
+        echo "  status"
+        echo "  restart          [NOTE: does not re-apply callgrind/memcheck args]"
+        echo "  try-restart      [NOTE: does not re-apply callgrind/memcheck args]"
+        echo 
+        echo "You can add extra valgrind options:"
+        echo "  start memcheck --separate-threads=yes"
         exit 2
 esac
