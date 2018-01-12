@@ -135,11 +135,11 @@ void usage(const char* prog_name, const char* op) {
    PRINTerr("  %2s %-10s %s\n",                                \
            (!strcmp(op, CMD) ? "->" : ""), (CMD), (ARGS))
 
-   USAGE("write",      "input_file  erasure_path N E start_file  [stat_flags] [input_size]");
-   USAGE("put",        "input_file  erasure_path N E start_file  [stat_flags] [input_size]");
-   USAGE("read",       "output_file erasure_path N E start_file  [stat_flags] [read_size]");
-   USAGE("get",        "output_file erasure_path N E start_file  [stat_flags] [read_size]");
-   USAGE("rebuild",    "erasure_path             N E start_file  [stat_flags]");
+   USAGE("write",      "input_file  erasure_path N E start_file  [timer_flags] [input_size]");
+   USAGE("put",        "input_file  erasure_path N E start_file  [timer_flags] [input_size]");
+   USAGE("read",       "output_file erasure_path N E start_file  [timer_flags] [read_size]");
+   USAGE("get",        "output_file erasure_path N E start_file  [timer_flags] [read_size]");
+   USAGE("rebuild",    "erasure_path             N E start_file  [timer_flags]");
    USAGE("status",     "erasure_path");
    USAGE("delete",     "erasure_path stripe_width");
    USAGE("sizeof",     "erasure_path quorum stripe_width");
@@ -149,9 +149,10 @@ void usage(const char* prog_name, const char* op) {
 
    PRINTerr("\n");
    PRINTerr("\n");
-   PRINTerr("     put/get are like write/read, but use fixed (1M) transfer-size\n");
+   PRINTerr("     write/read        use random transfer-size  (<= 1MB)\n");
+   PRINTerr("     put/get           like write/read but use fixed (1MB) transfer-size\n");
    PRINTerr("\n");
-   PRINTerr("     <stat_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
+   PRINTerr("     <timer_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
    PRINTerr("\n");
    PRINTerr("        OPEN    =  0x0001\n");
    PRINTerr("        RW      =  0x0002     /* each individual read/write, in given stream */\n");
@@ -179,13 +180,13 @@ void usage(const char* prog_name, const char* op) {
 
 
 int
-parse_flags(StatFlagsValue* flags, const char* str) {
+parse_flags(TimerFlagsValue* flags, const char* str) {
    if (! str)
       *flags = 0;
 
    else if (!strncmp("0x", str, 2)) {
       errno = 0;
-      *flags = (StatFlagsValue)strtol(str+2, NULL, 16);
+      *flags = (TimerFlagsValue)strtol(str+2, NULL, 16);
       if (errno) {
          PRINTerr("couldn't parse flags from '%s'\n", str);
          return -1;
@@ -193,7 +194,7 @@ parse_flags(StatFlagsValue* flags, const char* str) {
    }
    else {
       errno = 0;
-      *flags = (StatFlagsValue)strtol(str, NULL, 10);
+      *flags = (TimerFlagsValue)strtol(str, NULL, 10);
       if (errno) {
          PRINTerr("couldn't parse flags from '%s'\n", str);
          return -1;
@@ -236,10 +237,10 @@ int main( int argc, const char* argv[] )
    int E;
    int tmp;
    unsigned long long totbytes;
-   StatFlagsValue     stat_flags = 0;
+   TimerFlagsValue     timer_flags = 0;
    int                parse_err = 0;
    const char*        size_arg = NULL;
-   int                stream = 0;
+   int                rand_size = 1;
 
    LOG_INIT();
 
@@ -249,50 +250,50 @@ int main( int argc, const char* argv[] )
    }
 
 
-   if ((    strncmp( argv[1], "write", strlen(argv[1]) ) == 0 )
-       || ( strncmp( argv[1], "put",   strlen(argv[1]) ) == 0 )) {
+   if ((    strcmp( argv[1], "write"    ) == 0 )
+       || ( strcmp( argv[1], "put" ) == 0 )) {
       if ( argc < 7 ) {
          usage( argv[0], argv[1] ); 
          return -1;
       }
-      if ( argc >= 8 )          // optional <stat_flags>
-         parse_err = parse_flags(&stat_flags, argv[7]);
+      if ( argc >= 8 )          // optional <timer_flags>
+         parse_err = parse_flags(&timer_flags, argv[7]);
 
       if ( argc >= 9)
          size_arg = argv[8];
 
       wr = 1;
-      if (strncmp( argv[1], "put",   strlen(argv[1]) ) == 0 )
-         stream = 1;
+      if (strcmp( argv[1], "put" ) == 0 )
+         rand_size = 0;
    }
-   else if ((    strncmp( argv[1], "read", strlen(argv[1]) ) == 0 )
-            || ( strncmp( argv[1], "get",   strlen(argv[1]) ) == 0 )) {
+   else if ((    strcmp( argv[1], "read" ) == 0 )
+            || ( strcmp( argv[1], "get" ) == 0 )) {
       if ( argc < 7 ) {
          usage( argv[0], argv[1] ); 
          return -1;
       }
-      if ( argc >= 8 )          // optional <stat_flags>
-         parse_err = parse_flags(&stat_flags, argv[7]);
+      if ( argc >= 8 )          // optional <timer_flags>
+         parse_err = parse_flags(&timer_flags, argv[7]);
 
       if ( argc >= 9)
          size_arg = argv[8];
 
       wr = 0;
-      if (strncmp( argv[1], "get",   strlen(argv[1]) ) == 0 )
-         stream = 1;
+      if (strcmp( argv[1], "get" ) == 0 )
+         rand_size = 0;
    }
-   else if ( strncmp( argv[1], "rebuild", strlen(argv[1]) ) == 0 ) {
+   else if ( strcmp( argv[1], "rebuild" ) == 0 ) {
       if ( argc < 6 ) {
          usage( argv[0], argv[1] ); 
          return -1;
       }
-      if ( argc == 7 )          // optional <stat_flags>
-         parse_err = parse_flags(&stat_flags, argv[6]);
+      if ( argc == 7 )          // optional <timer_flags>
+         parse_err = parse_flags(&timer_flags, argv[6]);
 
       wr = 2;
    }
 
-   else if ( strncmp( argv[1], "status", strlen(argv[1]) ) == 0 ) {
+   else if ( strcmp( argv[1], "status" ) == 0 ) {
       if ( argc != 3 ) { 
          usage( argv[0], argv[1] ); 
          return -1;
@@ -300,7 +301,7 @@ int main( int argc, const char* argv[] )
       wr = 3;
    }
 
-   else if ( strncmp( argv[1], "delete", strlen(argv[1]) ) == 0 ) {
+   else if ( strcmp( argv[1], "delete" ) == 0 ) {
       if ( argc != 4 ) {
          usage( argv[0], argv[1] ); 
          return -1;
@@ -309,12 +310,12 @@ int main( int argc, const char* argv[] )
       wr = 4;
    }
 
-   else if ( strncmp( argv[1], "crc-status", strlen(argv[1]) ) == 0 ) {
+   else if ( strcmp( argv[1], "crc-status" ) == 0 ) {
       printf("MAX-N: %d   MAX-E: %d\n", MAXN, MAXE);
       return crc_status();
    }
 
-   else if ( strncmp( argv[1], "sizeof", strlen(argv[1]) ) == 0 ) {
+   else if ( strcmp( argv[1], "sizeof" ) == 0 ) {
       if ( argc != 5 ) {
          usage( argv[0], argv[1] );
          return -1;
@@ -366,16 +367,16 @@ int main( int argc, const char* argv[] )
 
 
 
-#  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, stat_flags, \
+#  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, timer_flags, \
                                                  (PATH), (MODE), ##__VA_ARGS__ )
 
-#  define NE_DELETE(PATH, WIDTH)      ne_delete1(select_snprintf(PATH), NULL, select_impl(PATH), auth, stat_flags, \
+#  define NE_DELETE(PATH, WIDTH)      ne_delete1(select_snprintf(PATH), NULL, select_impl(PATH), auth, timer_flags, \
                                                  (PATH), (WIDTH))
 
-#  define NE_STATUS(PATH)             ne_status1(select_snprintf(PATH), NULL, select_impl(PATH), auth, stat_flags, \
+#  define NE_STATUS(PATH)             ne_status1(select_snprintf(PATH), NULL, select_impl(PATH), auth, timer_flags, \
                                                  (PATH))
 
-#  define NE_SIZE(PATH, QUOR, WIDTH)  ne_size1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, stat_flags, \
+#  define NE_SIZE(PATH, QUOR, WIDTH)  ne_size1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, timer_flags, \
                                                  (PATH), (QUOR), (WIDTH))
 
 
@@ -402,10 +403,10 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
-      if (stream)
-         toread = (totbytes < M) ? totbytes : M;
-      else
+      if (rand_size)
          toread = rand() % (totbytes+1);
+      else
+         toread = (totbytes < M) ? totbytes : M;
 
       while ( totbytes != 0 ) {
 
@@ -429,10 +430,10 @@ int main( int argc, const char* argv[] )
 
          totdone += nread;
 
-         if (stream)
-            toread = (totbytes < M) ? totbytes : M;
-         else
+         if (rand_size)
             toread = rand() % (totbytes+1);
+         else
+            toread = (totbytes < M) ? totbytes : M;
       }
 
       if ( ne_flush( handle ) != 0 ) {
@@ -504,8 +505,8 @@ int main( int argc, const char* argv[] )
          // If the size for the read wasn't provided, use ne_stat() to find the
          // actual size of the file, and then read the whole thing.
 
-         StatFlagsValue temp_stat_flags = stat_flags; /* don't use stat_flags during ... NE_STAT() */
-         stat_flags = 0;
+         TimerFlagsValue temp_timer_flags = timer_flags; /* don't use timer_flags during ... NE_STAT() */
+         timer_flags = 0;
 
          PRINTout("libneTest: stat'ing to get total size.  path = '%s'\n", (char *)argv[2] );
          ne_stat stat = NE_STATUS( (char *)argv[3] );
@@ -516,7 +517,7 @@ int main( int argc, const char* argv[] )
          PRINTout("after ne_status() -- N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
                  stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
 
-         stat_flags = temp_stat_flags; /* restore stat_flags for NE_READ() */
+         timer_flags = temp_timer_flags; /* restore timer_flags for NE_READ() */
 
          if (! N)
             N = stat->N;
@@ -552,11 +553,11 @@ int main( int argc, const char* argv[] )
 
          // go through each buffers-worth of data as a series of reads of
          // decreasing size, in order to exercise "corner cases".
-         // ("get" just uses max buffers always)
-         if (stream)
-            toread = (totbytes < M) ? totbytes : M;
-         else
+         // ("readall" just uses max buffers always)
+         if (rand_size)
             toread = (rand() % totbytes) + 1;
+         else
+            toread = (totbytes < M) ? totbytes : M;
 
          while ( totbytes > 0 ) {
 
@@ -579,10 +580,10 @@ int main( int argc, const char* argv[] )
             totbytes -= toread;
             totdone  += toread;
 
-            if (stream)
-               toread = (totbytes < M) ? totbytes : M;
-            else if ( totbytes != 0 )
+            if (rand_size)
                toread = ( rand() % totbytes ) + 1;
+            else if ( totbytes != 0 )
+               toread = (totbytes < M) ? totbytes : M;
          }
       }
 

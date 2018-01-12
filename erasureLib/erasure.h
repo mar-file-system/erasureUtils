@@ -247,9 +247,9 @@ typedef enum {
 
    // SF_GLOBAL  =  0x0100,    /* cost across all handles */
    SF_SIMPLE  =  0x0100,    /* diagnostic output uses terse numeric formats */
-} StatFlags;
+} TimerFlags;
 
-typedef  uint16_t  StatFlagsValue;
+typedef  uint16_t  TimerFlagsValue;
 
 
 // This allows ne_open() and other functions to perform arbitrary
@@ -325,7 +325,7 @@ struct handle {
    const uDAL*    impl;
 
    /* optional timing/benchmarking */
-   int            stat_flags;        /* initialized at build-time */
+   TimerFlags     timer_flags;       /* initialized at build-time */
    BenchStats     stats[ MAXPARTS ]; /* ops w/in each thread */
    BenchStats     agg_stats;         /* ops across "threads", O_RDONLY */
    FastTimer      handle_timer;      /* pre-open to post-close, all threads complete */
@@ -356,19 +356,19 @@ typedef struct handle* ne_handle;
 //       work can be done using the RDMA uDAL.
 
 ne_handle ne_open1  ( SnprintfFunc func, void* state,
-                      uDALType itype, SktAuth auth, StatFlagsValue flags,
+                      uDALType itype, SktAuth auth, TimerFlagsValue flags,
                       char *path, ne_mode mode, ... );
 
 int       ne_delete1( SnprintfFunc func, void* state,
-                      uDALType itype, SktAuth auth, StatFlagsValue flags, 
+                      uDALType itype, SktAuth auth, TimerFlagsValue flags, 
                       char *path, int width );
 
 ne_stat   ne_status1( SnprintfFunc func, void* state,
-                      uDALType itype, SktAuth auth, StatFlagsValue flags,
+                      uDALType itype, SktAuth auth, TimerFlagsValue flags,
                       char *path );
 
 off_t     ne_size1  ( SnprintfFunc func, void* state,
-                      uDALType itype, SktAuth auth, StatFlagsValue flags,
+                      uDALType itype, SktAuth auth, TimerFlagsValue flags,
                       const char* path, int quorum, int max_stripe_width );
 
 
