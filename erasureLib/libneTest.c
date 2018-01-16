@@ -135,11 +135,11 @@ void usage(const char* prog_name, const char* op) {
    PRINTerr("  %2s %-10s %s\n",                                \
            (!strcmp(op, CMD) ? "->" : ""), (CMD), (ARGS))
 
-   USAGE("write",      "input_file  erasure_path N E start_file  [timer_flags] [input_size]");
-   USAGE("put",        "input_file  erasure_path N E start_file  [timer_flags] [input_size]");
-   USAGE("read",       "output_file erasure_path N E start_file  [timer_flags] [read_size]");
-   USAGE("get",        "output_file erasure_path N E start_file  [timer_flags] [read_size]");
-   USAGE("rebuild",    "erasure_path             N E start_file  [timer_flags]");
+   USAGE("write",      "input_file  erasure_path N E start_file  [timing_flags] [input_size]");
+   USAGE("put",        "input_file  erasure_path N E start_file  [timing_flags] [input_size]");
+   USAGE("read",       "output_file erasure_path N E start_file  [timing_flags] [read_size]");
+   USAGE("get",        "output_file erasure_path N E start_file  [timing_flags] [read_size]");
+   USAGE("rebuild",    "erasure_path             N E start_file  [timing_flags]");
    USAGE("status",     "erasure_path");
    USAGE("delete",     "erasure_path stripe_width");
    USAGE("sizeof",     "erasure_path quorum stripe_width");
@@ -152,16 +152,19 @@ void usage(const char* prog_name, const char* op) {
    PRINTerr("     write/read        use random transfer-size  (<= 1MB)\n");
    PRINTerr("     put/get           like write/read but use fixed (1MB) transfer-size\n");
    PRINTerr("\n");
-   PRINTerr("     <timer_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
+   PRINTerr("     <timing_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
    PRINTerr("\n");
    PRINTerr("        OPEN    =  0x0001\n");
    PRINTerr("        RW      =  0x0002     /* each individual read/write, in given stream */\n");
    PRINTerr("        CLOSE   =  0x0004     /* cost of close */\n");
    PRINTerr("        RENAME  =  0x0008\n");
-   PRINTerr("        CRC     =  0x0010\n");
-   PRINTerr("        ERASURE =  0x0020\n");
-   PRINTerr("        THREAD  =  0x0040     /* from beginning to end  */\n");
-   PRINTerr("        HANDLE  =  0x0080     /* from start/stop, all threads, in 1 handle */\n");
+   PRINTerr("        STAT    =  0x0010\n");
+   PRINTerr("        XATTR   =  0x0020\n");
+   PRINTerr("        ERASURE =  0x0040\n");
+   PRINTerr("        CRC     =  0x0080\n");
+   PRINTerr("        THREAD  =  0x0100     /* from beginning to end  */\n");
+   PRINTerr("        HANDLE  =  0x0200     /* from start/stop, all threads, in 1 handle */\n");
+   PRINTerr("        SIMPLE  =  0x0400     /* diagnostic output uses terse numeric formats */\n");
    PRINTerr("\n");
    PRINTerr("     <erasure_path> is one of the following\n");
    PRINTerr("\n");
@@ -180,13 +183,13 @@ void usage(const char* prog_name, const char* op) {
 
 
 int
-parse_flags(TimerFlagsValue* flags, const char* str) {
+parse_flags(TimingFlagsValue* flags, const char* str) {
    if (! str)
       *flags = 0;
 
    else if (!strncmp("0x", str, 2)) {
       errno = 0;
-      *flags = (TimerFlagsValue)strtol(str+2, NULL, 16);
+      *flags = (TimingFlagsValue)strtol(str+2, NULL, 16);
       if (errno) {
          PRINTerr("couldn't parse flags from '%s'\n", str);
          return -1;
@@ -194,7 +197,7 @@ parse_flags(TimerFlagsValue* flags, const char* str) {
    }
    else {
       errno = 0;
-      *flags = (TimerFlagsValue)strtol(str, NULL, 10);
+      *flags = (TimingFlagsValue)strtol(str, NULL, 10);
       if (errno) {
          PRINTerr("couldn't parse flags from '%s'\n", str);
          return -1;
@@ -237,7 +240,7 @@ int main( int argc, const char* argv[] )
    int E;
    int tmp;
    unsigned long long totbytes;
-   TimerFlagsValue     timer_flags = 0;
+   TimingFlagsValue   timing_flags = 0;
    int                parse_err = 0;
    const char*        size_arg = NULL;
    int                rand_size = 1;
@@ -256,8 +259,8 @@ int main( int argc, const char* argv[] )
          usage( argv[0], argv[1] ); 
          return -1;
       }
-      if ( argc >= 8 )          // optional <timer_flags>
-         parse_err = parse_flags(&timer_flags, argv[7]);
+      if ( argc >= 8 )          // optional <timing_flags>
+         parse_err = parse_flags(&timing_flags, argv[7]);
 
       if ( argc >= 9)
          size_arg = argv[8];
@@ -272,8 +275,8 @@ int main( int argc, const char* argv[] )
          usage( argv[0], argv[1] ); 
          return -1;
       }
-      if ( argc >= 8 )          // optional <timer_flags>
-         parse_err = parse_flags(&timer_flags, argv[7]);
+      if ( argc >= 8 )          // optional <timing_flags>
+         parse_err = parse_flags(&timing_flags, argv[7]);
 
       if ( argc >= 9)
          size_arg = argv[8];
@@ -287,8 +290,8 @@ int main( int argc, const char* argv[] )
          usage( argv[0], argv[1] ); 
          return -1;
       }
-      if ( argc == 7 )          // optional <timer_flags>
-         parse_err = parse_flags(&timer_flags, argv[6]);
+      if ( argc == 7 )          // optional <timing_flags>
+         parse_err = parse_flags(&timing_flags, argv[6]);
 
       wr = 2;
    }
@@ -367,16 +370,16 @@ int main( int argc, const char* argv[] )
 
 
 
-#  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, timer_flags, \
+#  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, timing_flags, \
                                                  (PATH), (MODE), ##__VA_ARGS__ )
 
-#  define NE_DELETE(PATH, WIDTH)      ne_delete1(select_snprintf(PATH), NULL, select_impl(PATH), auth, timer_flags, \
+#  define NE_DELETE(PATH, WIDTH)      ne_delete1(select_snprintf(PATH), NULL, select_impl(PATH), auth, timing_flags, \
                                                  (PATH), (WIDTH))
 
-#  define NE_STATUS(PATH)             ne_status1(select_snprintf(PATH), NULL, select_impl(PATH), auth, timer_flags, \
+#  define NE_STATUS(PATH)             ne_status1(select_snprintf(PATH), NULL, select_impl(PATH), auth, timing_flags, \
                                                  (PATH))
 
-#  define NE_SIZE(PATH, QUOR, WIDTH)  ne_size1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, timer_flags, \
+#  define NE_SIZE(PATH, QUOR, WIDTH)  ne_size1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, timing_flags, \
                                                  (PATH), (QUOR), (WIDTH))
 
 
@@ -505,19 +508,21 @@ int main( int argc, const char* argv[] )
          // If the size for the read wasn't provided, use ne_stat() to find the
          // actual size of the file, and then read the whole thing.
 
-         TimerFlagsValue temp_timer_flags = timer_flags; /* don't use timer_flags during ... NE_STAT() */
-         timer_flags = 0;
+         TimingFlagsValue temp_timing_flags = timing_flags; /* don't use timing_flags during ... NE_STAT() */
+         timing_flags = 0;
 
          PRINTout("libneTest: stat'ing to get total size.  path = '%s'\n", (char *)argv[2] );
+
          ne_stat stat = NE_STATUS( (char *)argv[3] );
          if ( stat == NULL ) {
             PRINTerr("libneTest: ne_status failed!\n" );
             return -1;
          }
+
          PRINTout("after ne_status() -- N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
                  stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
 
-         timer_flags = temp_timer_flags; /* restore timer_flags for NE_READ() */
+         timing_flags = temp_timing_flags; /* restore timing_flags for NE_READ() */
 
          if (! N)
             N = stat->N;

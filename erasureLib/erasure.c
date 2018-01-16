@@ -267,17 +267,34 @@ int incomplete_write( ne_handle handle ) {
                         handle->state);
       strcat( fname, WRITE_SFX );
       
-      struct stat st;
+
+      if (handle->timing_flags & TF_STAT)
+         fast_timer_start(&handle->stats[block].stat);
+
       // check for a partial data-file
+      struct stat st;
       if( stat( fname, &st ) == 0 ) {
+
+         if (handle->timing_flags & TF_STAT)
+            fast_timer_stop(&handle->stats[block].stat);
+
          return 1;
       }
-      else {
-         //check for a partial meta-file
-         strcat( fname, META_SFX );
-         if( stat( fname, &st ) == 0 ) return 1;
-         err_cnt++;
+
+      //check for a partial meta-file
+      strcat( fname, META_SFX );
+      if( stat( fname, &st ) == 0 ) {
+
+         if (handle->timing_flags & TF_STAT)
+            fast_timer_stop(&handle->stats[block].stat);
+
+         return 1;
       }
+
+      err_cnt++;                // ?
+
+      if (handle->timing_flags & TF_STAT)
+         fast_timer_stop(&handle->stats[block].stat);
    }
 
    return 0;
@@ -364,9 +381,9 @@ void *bq_writer(void *arg) {
   const int write_size = bq->buffer_size;
 #endif
 
-  if (handle->timer_flags & SF_THREAD)
+  if (handle->timing_flags & TF_THREAD)
      fast_timer_start(&handle->stats[bq->block_number].thread);
-  if (handle->timer_flags & SF_OPEN)
+  if (handle->timing_flags & TF_OPEN)
      fast_timer_start(&handle->stats[bq->block_number].open);
   
   // debugging, assure we see thread entry/exit, even via cancellation
@@ -377,7 +394,7 @@ void *bq_writer(void *arg) {
   OPEN(bq->file, handle, bq->path, O_WRONLY|O_CREAT, 0666);
 
   if(pthread_mutex_lock(&bq->qlock) != 0) {
-    if (handle->timer_flags & SF_THREAD)
+    if (handle->timing_flags & TF_THREAD)
        fast_timer_stop(&handle->stats[bq->block_number].thread);
     exit(-1); // XXX: is this the appropriate response??
   }
@@ -391,9 +408,9 @@ void *bq_writer(void *arg) {
   pthread_mutex_unlock(&bq->qlock);
 
   PRINTdbg("opened file %d\n", bq->block_number);
-  if (handle->timer_flags & SF_OPEN)
+  if (handle->timing_flags & TF_OPEN)
      fast_timer_stop(&handle->stats[bq->block_number].open);
-  if (handle->timer_flags & SF_RW)
+  if (handle->timing_flags & TF_RW)
      fast_timer_start(&handle->stats[bq->block_number].read);
 
   
@@ -403,7 +420,7 @@ void *bq_writer(void *arg) {
     if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
       PRINTerr("failed to lock queue lock: %s\n", strerror(error));
       // XXX: This is a FATAL error
-      if (handle->timer_flags & SF_THREAD)
+      if (handle->timing_flags & TF_THREAD)
          fast_timer_stop(&handle->stats[bq->block_number].thread);
       return (void *)-1;
     }
@@ -412,7 +429,7 @@ void *bq_writer(void *arg) {
       pthread_cond_wait(&bq->full, &bq->qlock);
     }
 
-    if (handle->timer_flags & SF_RW) {
+    if (handle->timing_flags & TF_RW) {
        fast_timer_stop(&handle->stats[bq->block_number].read);
        log_histo_add_interval(&handle->stats[bq->block_number].read_h,
                               &handle->stats[bq->block_number].read);
@@ -421,7 +438,7 @@ void *bq_writer(void *arg) {
     // check for flags that might tell us to quit
     if(bq->flags & BQ_ABORT) {
       PRINTerr("aborting buffer queue\n");
-      if (handle->timer_flags & SF_CLOSE)
+      if (handle->timing_flags & TF_CLOSE)
          fast_timer_start(&handle->stats[bq->block_number].close);
 
       if(HNDLOP(close, bq->file) == 0) {
@@ -429,7 +446,7 @@ void *bq_writer(void *arg) {
       }
       pthread_mutex_unlock(&bq->qlock);
 
-      if (handle->timer_flags & SF_CLOSE)
+      if (handle->timing_flags & TF_CLOSE)
          fast_timer_stop(&handle->stats[bq->block_number].close);
       return NULL;
     }
@@ -447,7 +464,7 @@ void *bq_writer(void *arg) {
 
     if(!(bq->flags & BQ_ERROR)) {
 
-      if (handle->timer_flags & SF_RW)
+      if (handle->timing_flags & TF_RW)
          fast_timer_start(&handle->stats[bq->block_number].write);
 
       pthread_mutex_unlock(&bq->qlock);
@@ -467,7 +484,7 @@ void *bq_writer(void *arg) {
       pthread_mutex_lock(&bq->qlock);
 
       PRINTdbg("write done for block %d\n", bq->block_number);
-      if (handle->timer_flags & SF_RW) {
+      if (handle->timing_flags & TF_RW) {
          fast_timer_stop(&handle->stats[bq->block_number].write);
          log_histo_add_interval(&handle->stats[bq->block_number].write_h,
                                 &handle->stats[bq->block_number].write);
@@ -488,7 +505,7 @@ void *bq_writer(void *arg) {
     // even if there was an error, say we wrote the block and move on.
     // the producer thread is responsible for checking the error flag
     // and killing us if needed.
-    if (handle->timer_flags & SF_RW)
+    if (handle->timing_flags & TF_RW)
        fast_timer_start(&handle->stats[bq->block_number].read);
 
     bq->head = (bq->head + 1) % MAX_QDEPTH;
@@ -501,13 +518,13 @@ void *bq_writer(void *arg) {
 
 
   // close the file and terminate if any errors were encountered
-  if (handle->timer_flags & SF_CLOSE)
+  if (handle->timing_flags & TF_CLOSE)
      fast_timer_start(&handle->stats[bq->block_number].close);
 
   if ( HNDLOP(close, bq->file) || (bq->flags & BQ_ERROR) ) {
     bq->flags |= BQ_ERROR;      // ensure the error was noted
     PRINTerr("error closing block %d\n", bq->block_number);
-    if (handle->timer_flags & SF_THREAD)
+    if (handle->timing_flags & TF_THREAD)
        fast_timer_stop(&handle->stats[bq->block_number].thread);
     return NULL; // don't bother trying to rename
   }
@@ -517,16 +534,16 @@ void *bq_writer(void *arg) {
     bq->flags |= BQ_ERROR;
     // if we failed to set the xattr, don't bother with the rename.
     PRINTerr("error setting xattr for block %d\n", bq->block_number);
-    if (handle->timer_flags & SF_THREAD)
+    if (handle->timing_flags & TF_THREAD)
        fast_timer_stop(&handle->stats[bq->block_number].thread);
     return NULL;
   }
-  if (handle->timer_flags & SF_CLOSE)
+  if (handle->timing_flags & TF_CLOSE)
      fast_timer_stop(&handle->stats[bq->block_number].close);
 
 
   // rename
-  if (handle->timer_flags & SF_RENAME)
+  if (handle->timing_flags & TF_RENAME)
      fast_timer_start(&handle->stats[bq->block_number].rename);
 
   char block_file_path[MAXNAME];
@@ -550,9 +567,9 @@ void *bq_writer(void *arg) {
   }
 #endif
 
-  if (handle->timer_flags & SF_RENAME)
+  if (handle->timing_flags & TF_RENAME)
      fast_timer_stop(&handle->stats[bq->block_number].rename);
-  if (handle->timer_flags & SF_THREAD)
+  if (handle->timing_flags & TF_THREAD)
      fast_timer_stop(&handle->stats[bq->block_number].thread);
 
   pthread_cleanup_pop(1);
@@ -706,6 +723,9 @@ int init_bench_stats(BenchStats* stats) {
    fast_timer_reset(&stats->close);
    fast_timer_reset(&stats->rename);
 
+   fast_timer_reset(&stats->stat);
+   fast_timer_reset(&stats->xattr);
+
    fast_timer_reset(&stats->crc);
    log_histo_reset(&stats->crc_h);
 
@@ -748,7 +768,7 @@ int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, 
 
 
 ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
-                       uDALType itype, SktAuth auth, TimerFlagsValue timer_flags,
+                       uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                        char *path, ne_mode mode, va_list ap )
 {
    char file[MAXNAME];       /* array name of files */
@@ -850,14 +870,14 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
    }
 
    // flags control collection of timing stats
-   handle->timer_flags = timer_flags;
-   if (handle->timer_flags) {
+   handle->timing_flags = timing_flags;
+   if (handle->timing_flags) {
       fast_timer_inits();
 
       // // redundant with memset() on handle
       // init_bench_stats(&handle->agg_stats);
    }
-   if (handle->timer_flags & SF_HANDLE)
+   if (handle->timing_flags & TF_HANDLE)
       fast_timer_start(&handle->handle_timer); /* start overall timer for handle */
 
    char* nfile = malloc( strlen(path) + 1 );
@@ -880,7 +900,10 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
                handle->nerr, handle->N, handle->E, handle->erasure_offset, handle->totsz );
 
       if ( ret != 0 ) {
-         if( incomplete_write( handle ) ) { errno = ENOENT; return NULL; }
+         if( incomplete_write( handle ) ) {
+            errno = ENOENT;
+            return NULL;
+         }
          PRINTerr( "ne_open: extended attribute check has failed\n" );
          free( handle );
          errno = ENODATA;
@@ -947,7 +970,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
      mode_t mask = umask(0000);
      while ( counter < N+E ) {
 
-       if (handle->timer_flags & SF_OPEN)
+       if (handle->timing_flags & TF_OPEN)
            fast_timer_start(&handle->stats[counter].open);
 
        bzero( file, MAXNAME );
@@ -966,7 +989,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
        handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
 #endif
 
-       if (handle->timer_flags & SF_OPEN)
+       if (handle->timing_flags & TF_OPEN)
           fast_timer_start(&handle->stats[counter].open);
 
       if( mode == NE_WRONLY ) {
@@ -984,7 +1007,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
          OPEN(handle->FDArray[counter], handle, file, O_RDONLY );
       }
 
-      if (handle->timer_flags & SF_OPEN)
+      if (handle->timing_flags & TF_OPEN)
          fast_timer_stop(&handle->stats[counter].open);
 
       if ( FD_ERR(handle->FDArray[counter])  &&  handle->src_in_err[counter] == 0 ) {
@@ -1019,12 +1042,12 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
 // caller (e.g. MC-sockets DAL) specifies SprintfFunc, stat, and SktAuth
 // New: caller also provides flags that control whether stats are collected
 ne_handle ne_open1( SnprintfFunc fn, void* state,
-                    uDALType itype, SktAuth auth, TimerFlagsValue timer_flags,
+                    uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                     char *path, ne_mode mode, ... ) {
 
    va_list vl;
    va_start(vl, mode);
-   return ne_open1_vl(fn, state, itype, auth, timer_flags, path, mode, vl);
+   return ne_open1_vl(fn, state, itype, auth, timing_flags, path, mode, vl);
    va_end(vl);
 }
 
@@ -1235,7 +1258,7 @@ read:
          }
 #endif
 
-         if (handle->timer_flags & SF_RW)
+         if (handle->timing_flags & TF_RW)
             fast_timer_start(&handle->stats[counter].read);
 
          if( handle->src_in_err[counter] == 0 ) {
@@ -1265,7 +1288,7 @@ read:
                nsrcerr++;
                handle->e_ready = 0; //indicate that erasure structs require re-initialization
 
-               if (handle->timer_flags & SF_RW) {
+               if (handle->timing_flags & TF_RW) {
                   fast_timer_stop(&handle->stats[counter].read);
                   log_histo_add_interval(&handle->stats[counter].read_h,
                                          &handle->stats[counter].read);
@@ -1275,7 +1298,7 @@ read:
             }
          }
 
-         if (handle->timer_flags & SF_RW) {
+         if (handle->timing_flags & TF_RW) {
             fast_timer_stop(&handle->stats[counter].read);
             log_histo_add_interval(&handle->stats[counter].read_h,
                                    &handle->stats[counter].read);
@@ -1294,7 +1317,7 @@ read:
 
          if( handle->src_in_err[counter] == 0 ) {
 
-            if (handle->timer_flags & SF_RW)
+            if (handle->timing_flags & TF_RW)
                fast_timer_start(&handle->stats[counter].read);
 
 #ifdef INT_CRC
@@ -1314,7 +1337,7 @@ read:
                handle->e_ready = 0; //indicate that erasure structs require re-initialization
                counter++;
 
-               if (handle->timer_flags & SF_RW) {
+               if (handle->timing_flags & TF_RW) {
                   fast_timer_stop(&handle->stats[counter].read);
                   log_histo_add_interval(&handle->stats[counter].read_h,
                                          &handle->stats[counter].read);
@@ -1327,7 +1350,7 @@ read:
             PRINTdbg("seek input file %d to %lu, to read entire stripe\n",counter, (unsigned long)(startstripe*bsz));
 #endif
 
-            if (handle->timer_flags & SF_RW) {
+            if (handle->timing_flags & TF_RW) {
                fast_timer_stop(&handle->stats[counter].read);
                log_histo_add_interval(&handle->stats[counter].read_h,
                                       &handle->stats[counter].read);
@@ -1397,7 +1420,7 @@ read:
             break;
          }
 
-         if (handle->timer_flags & SF_RW)
+         if (handle->timing_flags & TF_RW)
             fast_timer_start(&handle->stats[counter].read);
 
          readsize = bsz-tmpoffset;
@@ -1425,7 +1448,7 @@ read:
             // ensure that the stripe is flagged as having an error.
             error_in_stripe = 1;
 
-            if (handle->timer_flags & SF_RW) {
+            if (handle->timing_flags & TF_RW) {
                fast_timer_stop(&handle->stats[counter].read);
                log_histo_add_interval(&handle->stats[counter].read_h,
                                       &handle->stats[counter].read);
@@ -1447,7 +1470,7 @@ read:
             // ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], readsize);
             ret_in = read_all(&handle->FDArray[counter], handle->buffs[counter], readsize);
 #endif
-            if (handle->timer_flags & SF_RW) {
+            if (handle->timing_flags & TF_RW) {
                fast_timer_stop(&handle->stats[counter].read);
                log_histo_add_interval(&handle->stats[counter].read_h,
                                       &handle->stats[counter].read);
@@ -1485,13 +1508,13 @@ read:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
-               if (handle->timer_flags & SF_CRC)
+               if (handle->timing_flags & TF_CRC)
                   fast_timer_start(&handle->stats[counter].crc);
 
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
                int cmp = memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) );
 
-               if (handle->timer_flags & SF_CRC) {
+               if (handle->timing_flags & TF_CRC) {
                   fast_timer_stop(&handle->stats[counter].crc);
                   log_histo_add_interval(&handle->stats[counter].crc_h,
                                          &handle->stats[counter].crc);
@@ -1557,13 +1580,13 @@ read:
          if ( handle->src_in_err[counter] == 0 ) {
 
             PRINTdbg("ne_read: reading %d from erasure %d\n",readsize,counter);
-            if (handle->timer_flags & SF_RW)
+            if (handle->timing_flags & TF_RW)
                fast_timer_start(&handle->stats[counter].read);
 
             // ret_in = HNDLOP(read, handle->FDArray[counter], handle->buffs[counter], readsize);
             ret_in = read_all(&handle->FDArray[counter], handle->buffs[counter], readsize);
 
-            if (handle->timer_flags & SF_RW) {
+            if (handle->timing_flags & TF_RW) {
                fast_timer_stop(&handle->stats[counter].read);
                log_histo_add_interval(&handle->stats[counter].read_h,
                                       &handle->stats[counter].read);
@@ -1589,13 +1612,13 @@ read:
 #ifdef INT_CRC
             else {
                //calculate and verify crc
-               if (handle->timer_flags & SF_CRC)
+               if (handle->timing_flags & TF_CRC)
                   fast_timer_start(&handle->stats[counter].crc);
 
                crc = crc32_ieee( TEST_SEED, handle->buffs[counter], bsz );
                int cmp = memcmp( handle->buffs[counter]+bsz, &crc, sizeof(u32) );
 
-               if (handle->timer_flags & SF_CRC) {
+               if (handle->timing_flags & TF_CRC) {
                   fast_timer_stop(&handle->stats[counter].crc);
                   log_histo_add_interval(&handle->stats[counter].crc_h,
                                          &handle->stats[counter].crc);
@@ -1624,7 +1647,7 @@ read:
       /**** regenerate from erasure ****/
       if ( error_in_stripe == 1 ) {
 
-         if (handle->timer_flags & SF_ERASURE)
+         if (handle->timing_flags & TF_ERASURE)
             fast_timer_start(&handle->erasure_timer);
 
          /* If necessary, initialize the erasure structures */
@@ -1649,7 +1672,7 @@ read:
                for ( counter = 0; counter < temp_buffs_alloc; counter++ )
                   free(temp_buffs[counter]);
 
-               if (handle->timer_flags & SF_ERASURE) {
+               if (handle->timing_flags & TF_ERASURE) {
                   fast_timer_stop(&handle->erasure_timer);
                   log_histo_add_interval(&handle->erasure_h,
                                          &handle->erasure_timer);
@@ -1670,7 +1693,7 @@ read:
 
          ec_encode_data(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
 
-         if (handle->timer_flags & SF_ERASURE) {
+         if (handle->timing_flags & TF_ERASURE) {
             fast_timer_stop(&handle->erasure_timer);
             log_histo_add_interval(&handle->erasure_h,
                                    &handle->erasure_timer);
@@ -1693,7 +1716,7 @@ read:
          }
 #endif
 
-         if (handle->timer_flags & SF_RW)
+         if (handle->timing_flags & TF_RW)
             fast_timer_start(&handle->stats[counter].write);
 
          if ( handle->src_in_err[counter] == 0 ) {
@@ -1722,7 +1745,7 @@ read:
                   for ( counter = 0; counter < temp_buffs_alloc; counter++ )
                      free(temp_buffs[counter]);
 
-                  if (handle->timer_flags & SF_RW) {
+                  if (handle->timing_flags & TF_RW) {
                      fast_timer_stop(&handle->stats[counter].write);
                      log_histo_add_interval(&handle->stats[counter].write_h,
                                             &handle->stats[counter].write);
@@ -1747,7 +1770,7 @@ read:
 
          out_off += readsize;
 
-         if (handle->timer_flags & SF_RW) {
+         if (handle->timing_flags & TF_RW) {
             fast_timer_stop(&handle->stats[counter].write);
             log_histo_add_interval(&handle->stats[counter].write_h,
                                    &handle->stats[counter].write);
@@ -1959,7 +1982,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
 
 
       /* calculate and write erasure */
-      if (handle->timer_flags & SF_ERASURE)
+      if (handle->timing_flags & TF_ERASURE)
          fast_timer_start(&handle->erasure_timer);
 
       if ( handle->e_ready == 0 ) {
@@ -2001,7 +2024,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
                      (unsigned char **)handle->block_buffs[buffer_index],
                      (unsigned char **)&(handle->block_buffs[buffer_index][N]));
 
-      if (handle->timer_flags & SF_ERASURE) {
+      if (handle->timing_flags & TF_ERASURE) {
          fast_timer_stop(&handle->erasure_timer);
          log_histo_add_interval(&handle->erasure_h,
                                 &handle->erasure_timer);
@@ -2039,11 +2062,11 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
 
 int show_handle_stats(ne_handle handle) {
 
-   if (! handle->timer_flags)
+   if (! handle->timing_flags)
       printf("No stats\n");
 
    else {
-      int simple = (handle->timer_flags & SF_SIMPLE);
+      int simple = (handle->timing_flags & TF_SIMPLE);
 
       fast_timer_show(&handle->handle_timer,  simple, "handle:  ");
       fast_timer_show(&handle->erasure_timer, simple, "erasure: ");
@@ -2066,6 +2089,8 @@ int show_handle_stats(ne_handle handle) {
 
          fast_timer_show(&handle->stats[i].close,  simple, "close:   ");
          fast_timer_show(&handle->stats[i].rename, simple, "rename:  ");
+         fast_timer_show(&handle->stats[i].stat,   simple, "stat:    ");
+         fast_timer_show(&handle->stats[i].xattr,  simple, "xattr:   ");
 
          fast_timer_show(&handle->stats[i].crc,    simple, "CRC:     ");
          log_histo_show(&handle->stats[i].crc_h,   simple, "CRC_h:   ");
@@ -2240,7 +2265,7 @@ int ne_close( ne_handle handle )
      free(handle->buffer);
    }
 
-   if (handle->timer_flags) {
+   if (handle->timing_flags) {
       fast_timer_stop(&handle->handle_timer);
       show_handle_stats(handle);
    }
@@ -2267,7 +2292,7 @@ int ne_close( ne_handle handle )
    free(handle->invert_matrix);
    free(handle->g_tbls);
    
-   if (handle->timer_flags & SF_HANDLE)
+   if (handle->timing_flags & TF_HANDLE)
       fast_timer_stop(&handle->handle_timer); /* overall cost of this op */
 
    free(handle);
@@ -2317,7 +2342,7 @@ int parent_dir_missing(uDALType itype, SktAuth auth, char* path, int max_length 
  * @return int : 0 on success and -1 on failure
  */
 int ne_delete1( SnprintfFunc snprintf_fn, void* state,
-                uDALType itype, SktAuth auth, TimerFlagsValue timer_flags,
+                uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                 char* path, int width ) {
 
    char  file[MAXNAME];       /* array name of files */
@@ -2330,7 +2355,7 @@ int ne_delete1( SnprintfFunc snprintf_fn, void* state,
 
    // flags control collection of timing stats
    FastTimer  timer;            // we don't have an ne_handle
-   if (timer_flags & SF_HANDLE) {
+   if (timing_flags & TF_HANDLE) {
       fast_timer_inits();
       fast_timer_start(&timer); /* start overall timer */
    }
@@ -2354,9 +2379,9 @@ int ne_delete1( SnprintfFunc snprintf_fn, void* state,
       }
    }
 
-   if (timer_flags & SF_HANDLE) {
+   if (timing_flags & TF_HANDLE) {
       fast_timer_stop(&timer);
-      fast_timer_show(&timer, (timer_flags & SF_SIMPLE),  "delete: ");
+      fast_timer_show(&timer, (timing_flags & TF_SIMPLE),  "delete: ");
    }
 
    return ret;
@@ -2379,7 +2404,7 @@ int ne_delete(char* path, int width ) {
 
 
 // This is only used from libneTest?  (Maybe this was developed to give
-// libneTest an easy way to determin the size of a striped object, so that
+// libneTest an easy way to determine the size of a striped object, so that
 // that size could then be provided on a subsequent command-line, to do a
 // "read" of the whole file?  If so, you can now just skip providing the
 // size on the command-line for a "read", and libneTest will just read the
@@ -2391,7 +2416,7 @@ int ne_delete(char* path, int width ) {
 // want meta.  libneTest will do this.
 
 off_t ne_size1( SnprintfFunc snprintf_fn, void* state,
-                uDALType itype, SktAuth auth, TimerFlagsValue flags,
+                uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                 const char* ptemplate, int quorum, int max_stripe_width ) {
 
    char file[MAXNAME];
@@ -2585,7 +2610,15 @@ int xattr_check( ne_handle handle, char *path )
       bzero(file,sizeof(file));
       handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_offset)%(lN+lE), handle->state );
 
+      if (handle->timing_flags & TF_STAT)
+         fast_timer_start(&handle->stats[counter].stat);
+
       ret = PATHOP(stat, handle->impl, handle->auth, file, partstat);
+
+      if (handle->timing_flags & TF_STAT)
+         fast_timer_stop(&handle->stats[counter].stat);
+
+
       PRINTdbg( "xattr_check: stat of file %s returns %d\n", file, ret );
       handle->csum[counter]=0; //reset csum to make results clearer
       if ( ret != 0 ) {
@@ -2599,7 +2632,15 @@ int xattr_check( ne_handle handle, char *path )
       handle->group = partstat->st_gid;
       bzero(xattrval,sizeof(xattrval));
 
+
+      if (handle->timing_flags & TF_XATTR)
+         fast_timer_start(&handle->stats[counter].xattr);
+
       ret = ne_get_xattr1(handle->impl, handle->auth, file, xattrval, sizeof(xattrval));
+
+      if (handle->timing_flags & TF_XATTR)
+         fast_timer_stop(&handle->stats[counter].xattr);
+
       if (ret < 0) {
          PRINTerr( "xattr_check: failure of xattr retrieval for file %s\n", file);
          handle->src_in_err[counter] = 1;
@@ -3596,7 +3637,7 @@ int ne_noxattr_rebuild(ne_handle handle) {
  * @param SnprintfFunc fn : function takes block-number and <state> and produces per-block path from template.
  * @param void* state : optional state to be used by SnprintfFunc (e.g. configuration details)
  * @param SktAuth auth : authentication may be required for RDMA uDALTypes
- * @param TimerFlagsValue flags : flags control the collection of *statistics*.  (Confusing, in this particular function.)
+ * @param TimingFlagsValue flags : flags control the collection of statistics.
  * @param uDALType itype : select the underlying file-system implementation (RDMA versus POSIX).
  * @param char* path : sprintf format-template for individual files of in each stripe.
  *
@@ -3607,7 +3648,7 @@ int ne_noxattr_rebuild(ne_handle handle) {
  */
 
 ne_stat ne_status1( SnprintfFunc fn, void* state,
-                    uDALType itype, SktAuth auth, TimerFlagsValue timer_flags,
+                    uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                     char *path )
 {
    char file[MAXNAME];       /* array name of files */
@@ -3631,14 +3672,14 @@ ne_stat ne_status1( SnprintfFunc fn, void* state,
    handle->impl = get_impl(itype);
 
    // flags control collection of timing stats
-   handle->timer_flags = timer_flags;
-   if (timer_flags) {
+   handle->timing_flags = timing_flags;
+   if (timing_flags) {
       fast_timer_inits();
 
       // // redundant with memset() on handle
       // init_bench_stats(&handle->agg_stats);
    }
-   if (handle->timer_flags & SF_HANDLE)
+   if (handle->timing_flags & TF_HANDLE)
       fast_timer_start(&handle->handle_timer); /* start overall timer for handle */
 
 
@@ -3804,7 +3845,7 @@ ne_stat ne_status1( SnprintfFunc fn, void* state,
    free(handle->invert_matrix);
    free(handle->g_tbls);
 
-   if (timer_flags & SF_HANDLE) {
+   if (timing_flags & TF_HANDLE) {
       fast_timer_stop(&handle->handle_timer);
       show_handle_stats(handle);
    }
@@ -3838,7 +3879,7 @@ ne_stat ne_status(char *path) {
 // from (a) administrative applications which run on the server-side, and
 // (b) from client-side applications (like the MarFS run-time).  With the
 // advent of the uDAL, the second case requires wrapping in
-// uDAL-implementation sensitive code.  See comments above
+// uDAL-implementation-sensitive code.  See comments above
 // ne_delete_block() for details.
 // ---------------------------------------------------------------------------
 
@@ -4055,7 +4096,16 @@ static int set_block_xattr(ne_handle handle, int block) {
    else if ( handle->mode == NE_WRONLY )
       strncat( block_file_path, WRITE_SFX, strlen(WRITE_SFX)+1 );
    
-   return ne_set_xattr1(handle->impl, handle->auth, block_file_path, xattrval, strlen(xattrval));
+
+   if (handle->timing_flags & TF_XATTR)
+      fast_timer_start(&handle->stats[block].xattr);
+
+   int rc = ne_set_xattr1(handle->impl, handle->auth, block_file_path, xattrval, strlen(xattrval));
+
+   if (handle->timing_flags & TF_XATTR)
+      fast_timer_stop(&handle->stats[block].xattr);
+
+   return rc;
 }
 
 
