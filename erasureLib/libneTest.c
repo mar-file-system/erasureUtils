@@ -559,7 +559,7 @@ int main( int argc, const char* argv[] )
          // go through each buffers-worth of data as a series of reads of
          // decreasing size, in order to exercise "corner cases".
          // ("readall" just uses max buffers always)
-         if (rand_size)
+         if (totbytes && rand_size)
             toread = (rand() % totbytes) + 1;
          else
             toread = (totbytes < M) ? totbytes : M;
@@ -585,9 +585,9 @@ int main( int argc, const char* argv[] )
             totbytes -= toread;
             totdone  += toread;
 
-            if (rand_size)
+            if ( totbytes && rand_size)
                toread = ( rand() % totbytes ) + 1;
-            else if ( totbytes != 0 )
+            else if ( totbytes )
                toread = (totbytes < M) ? totbytes : M;
          }
       }
