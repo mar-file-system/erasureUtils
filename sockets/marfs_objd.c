@@ -54,18 +54,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 
-// This is like socket_server.c, but we now have multiple servers.
-//
-// CLIENT: The goal for the client is to maintain connections with as many
-// servers as are in service at a time, reading from whichever ones produce
-// output, in a timely manner.  The client is currently in C++ only because
-// it uses some STL to manage info about which servers are connected, etc.
-//
-// SERVER: The goal for the server is to produce continuous output at a
-// rate similar to that of our application, and to be robust if the client
-// fails to read, drops a connection, or lets the buffer fill up.  We want
-// the server to remain in C.
-
 
 #include <stdio.h>
 #include <stdint.h>
@@ -766,7 +754,7 @@ int read_fname(int peer_fd, char* fname, size_t fname_size, size_t max_size) {
   if (strncmp(canon, dir_root, dir_root_len)
       || (canon[dir_root_len] != '/')) {
 
-    neERR("illegal path: '%s'  (canonicalized path: '%s' does not begin with '%s')\n",
+    neLOG("illegal path: '%s'  (canonicalized path: '%s' does not begin with '%s')\n",
           fname, canon, dir_root);
     return -1;
   }

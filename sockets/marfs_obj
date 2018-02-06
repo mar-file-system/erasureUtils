@@ -1,20 +1,20 @@
 #!/bin/bash
 #
-# socket_fsrvd  This shell script takes care of starting and stopping socket_fserver.
+# marfs_obj  This shell script takes care of starting and stopping marfs_objd.
 #
 # ### chkconfig: [TBD]
 
 
 ### BEGIN INIT INFO
-### lifted from ntpd
-# Provides: socket_fserver
+### adapted from ntpd
+# Provides: marfs_obj
 # Required-Start: $network $local_fs $remote_fs
 # Required-Stop: $network $local_fs $remote_fs
 # Should-Start: $syslog $named ntpdate
 # Should-Stop: $syslog $named
-# Short-Description: start and stop socket_fserver
-# Description: socket_fserver supports MarFS by allowing direct
-#              access to files using RDMA over IB via rsockets.
+# Short-Description: start and stop marfs_objd
+# Description: marfs_objd supports MarFS by allowing direct access
+#              to object-files using RDMA over IB via rsockets.
 ### END INIT INFO
 
 # Source function library.
@@ -23,15 +23,16 @@
 # Source networking configuration.
 . /etc/sysconfig/network
 
-executable=socket_fserver
-dir=/usr/local/marfs_sockets
+
+dir=/usr/sbin
+executable=marfs_objd
+init=marfs_obj
+
 
 prog=${dir}/$executable
-config_file=${prog}.conf
-logfile=${prog}.log
-
-# lockfile=/var/lock/subsys/$executable
-lockfile=${prog}.lock
+config_file=/etc/sysconfig/marfs/${executable}.conf
+logfile=/tmp/${executable}.log
+lockfile=/var/lock/subsys/$executable
 
 
 
@@ -76,7 +77,13 @@ start() {
 
         echo "Starting: $prog $OPTIONS $AFTER" > $logfile
 
-        daemon $prog $OPTIONS
+        # TBD: Add '--user=mcadmin'.  This would start the service as user
+        # "mcadmin".  However, that would also presume that this user had
+        # access to all the directories in which object-files are stored,
+        # as well to the object-files themselves.
+
+        ### daemon --user=mcadmin $prog $OPTIONS >> $logfile 2>&1 &
+        daemon $prog $OPTIONS >> $logfile 2>&1 &
 
         RETVAL=$?
         echo

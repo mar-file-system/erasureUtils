@@ -1,4 +1,6 @@
-*
+### # pattern "*", even when followed by "!*/", was hiding sockets/marfs_obj
+### *
+*.*
 
 !*/
 !*.c
