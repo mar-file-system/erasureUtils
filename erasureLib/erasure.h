@@ -130,24 +130,39 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
    here, to send stdout-diagnostics to stderr, then rebuild with
    --enable-debug=all, then rebuild marfs_fuse with --enable-logging=stdout
    --enable-debug, run fuse as suggested above, and see integrated
-   diagnostics for fuse and libne in the fuse output log. */
+   diagnostics for fuse and libne in the fuse output log.
+
+   I know it seems odd to suppress stderr-output for the non-debugging
+   build, but, otherwise, pftool spews many errors at the user, e.g. when
+   underlying libne is failing reads.  This may happen, for example, when
+   servers are bottlenecked and communications are timing out, or if a
+   server fails, etc.  This kind of output is not something the user wants
+   to see, even though from libne's perspective it is a genuine error.
+   Probably the best solution is to add PRINTlog(), or something, and have
+   the code become conscious of output that really is worth showing to the
+   user (for example, command-line help from libneTest).
+ */
+
 
 #if (DEBUG_NE == 2)
 #  include <syslog.h>
 #  define PRINTout(...)   SYSLOG(LOG_INFO,  ##__VA_ARGS__)
 #  define PRINTerr(...)   SYSLOG(LOG_ERR,   ##__VA_ARGS__)
+#  define PRINTlog(...)   SYSLOG(LOG_ERR,   ##__VA_ARGS__)
 #  define PRINTdbg(...)   SYSLOG(LOG_DEBUG, ##__VA_ARGS__)
 #  define LOG_INIT()      openlog(NE_LOG_PREFIX, LOG_CONS|LOG_PID, LOG_USER)
 
 #elif (DEBUG_NE)
 #  define PRINTout(...)   FPRINTF(stderr, ##__VA_ARGS__) /* stderr for 'fuse -f ...' */
 #  define PRINTerr(...)   FPRINTF(stderr, ##__VA_ARGS__)
+#  define PRINTlog(...)   FPRINTF(stderr, ##__VA_ARGS__)
 #  define PRINTdbg(...)   FPRINTF(stderr, ##__VA_ARGS__)
 #  define LOG_INIT()
 
 #else
 #  define PRINTout(...)   fprintf(stdout, ##__VA_ARGS__)
 #  define PRINTerr(...)   /* fprintf(stderr, ##__VA_ARGS__) */
+#  define PRINTlog(...)   fprintf(stdout, ##__VA_ARGS__)
 #  define PRINTdbg(...)
 #  define LOG_INIT()
 #endif

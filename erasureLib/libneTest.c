@@ -127,12 +127,12 @@ int snprintf_for_vle(char*       dest,
 //
 void usage(const char* prog_name, const char* op) {
 
-   PRINTerr("Usage: %s <op> [args ...]\n", prog_name);
-   PRINTerr("  <op> and args are one of the following\n");
-   PRINTerr("\n");
+   PRINTlog("Usage: %s <op> [args ...]\n", prog_name);
+   PRINTlog("  <op> and args are like one of the following lines\n");
+   PRINTlog("\n");
 
 #define USAGE(CMD, ARGS)                                       \
-   PRINTerr("  %2s %-10s %s\n",                                \
+   PRINTlog("  %2s %-10s %s\n",                                \
            (!strcmp(op, CMD) ? "->" : ""), (CMD), (ARGS))
 
    USAGE("write",      "input_file  erasure_path N E start_file  [timing_flags] [input_size]");
@@ -147,35 +147,36 @@ void usage(const char* prog_name, const char* op) {
    USAGE("crc_status", "");
    USAGE("help",       "");
 
-   PRINTerr("\n");
-   PRINTerr("\n");
-   PRINTerr("     write/read        use random transfer-size  (<= 1MB)\n");
-   PRINTerr("     put/get           like write/read but use fixed (1MB) transfer-size\n");
-   PRINTerr("\n");
-   PRINTerr("     <timing_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
-   PRINTerr("\n");
-   PRINTerr("        OPEN    =  0x0001\n");
-   PRINTerr("        RW      =  0x0002     /* each individual read/write, in given stream */\n");
-   PRINTerr("        CLOSE   =  0x0004     /* cost of close */\n");
-   PRINTerr("        RENAME  =  0x0008\n");
-   PRINTerr("        STAT    =  0x0010\n");
-   PRINTerr("        XATTR   =  0x0020\n");
-   PRINTerr("        ERASURE =  0x0040\n");
-   PRINTerr("        CRC     =  0x0080\n");
-   PRINTerr("        THREAD  =  0x0100     /* from beginning to end  */\n");
-   PRINTerr("        HANDLE  =  0x0200     /* from start/stop, all threads, in 1 handle */\n");
-   PRINTerr("        SIMPLE  =  0x0400     /* diagnostic output uses terse numeric formats */\n");
-   PRINTerr("\n");
-   PRINTerr("     <erasure_path> is one of the following\n");
-   PRINTerr("\n");
-   PRINTerr("       [RDMA] xx.xx.xx.%%d:pppp/local/blah/block%%d/.../fname\n");
-   PRINTerr("\n");
-   PRINTerr("               ('/local/blah' is some local path on all accessed storage nodes\n");
-   PRINTerr("\n");
-   PRINTerr("       [MC]   /NFS/blah/block%%d/.../fname\n");
-   PRINTerr("\n");
-   PRINTerr("               ('/NFS/blah/'  is some NFS path on the client nodes\n");
-   PRINTerr("\n");
+   PRINTlog("\n");
+   PRINTlog("\n");
+   PRINTlog("  NOTES:\n");
+   PRINTlog("     write/read        use random transfer-size  (<= 1MB)\n");
+   PRINTlog("     put/get           like write/read but use fixed (1MB) transfer-size\n");
+   PRINTlog("\n");
+   PRINTlog("     <timing_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
+   PRINTlog("\n");
+   PRINTlog("        OPEN    =  0x0001\n");
+   PRINTlog("        RW      =  0x0002     /* each individual read/write, in given stream */\n");
+   PRINTlog("        CLOSE   =  0x0004     /* cost of close */\n");
+   PRINTlog("        RENAME  =  0x0008\n");
+   PRINTlog("        STAT    =  0x0010\n");
+   PRINTlog("        XATTR   =  0x0020\n");
+   PRINTlog("        ERASURE =  0x0040\n");
+   PRINTlog("        CRC     =  0x0080\n");
+   PRINTlog("        THREAD  =  0x0100     /* from beginning to end  */\n");
+   PRINTlog("        HANDLE  =  0x0200     /* from start/stop, all threads, in 1 handle */\n");
+   PRINTlog("        SIMPLE  =  0x0400     /* diagnostic output uses terse numeric formats */\n");
+   PRINTlog("\n");
+   PRINTlog("     <erasure_path> is one of the following\n");
+   PRINTlog("\n");
+   PRINTlog("       [RDMA] xx.xx.xx.%%d:pppp/local/blah/block%%d/.../fname\n");
+   PRINTlog("\n");
+   PRINTlog("               ('/local/blah' is some local path on all accessed storage nodes\n");
+   PRINTlog("\n");
+   PRINTlog("       [MC]   /NFS/blah/block%%d/.../fname\n");
+   PRINTlog("\n");
+   PRINTlog("               ('/NFS/blah/'  is some NFS path on the client nodes\n");
+   PRINTlog("\n");
 
 #undef USAGE
 }
@@ -191,7 +192,7 @@ parse_flags(TimingFlagsValue* flags, const char* str) {
       errno = 0;
       *flags = (TimingFlagsValue)strtol(str+2, NULL, 16);
       if (errno) {
-         PRINTerr("couldn't parse flags from '%s'\n", str);
+         PRINTlog("couldn't parse flags from '%s'\n", str);
          return -1;
       }
    }
@@ -199,7 +200,7 @@ parse_flags(TimingFlagsValue* flags, const char* str) {
       errno = 0;
       *flags = (TimingFlagsValue)strtol(str, NULL, 10);
       if (errno) {
-         PRINTerr("couldn't parse flags from '%s'\n", str);
+         PRINTlog("couldn't parse flags from '%s'\n", str);
          return -1;
       }
    }
@@ -396,13 +397,13 @@ int main( int argc, const char* argv[] )
 
       filefd = open( argv[2], O_RDONLY );
       if ( filefd == -1 ) {
-         PRINTerr("libneTest: failed to open file %s\n", argv[2] );
+         PRINTlog("libneTest: failed to open file %s\n", argv[2] );
          return -1;
       }
 
       handle = NE_OPEN( (char *)argv[3], NE_WRONLY, start, N, E );
       if ( handle == NULL ) {
-         PRINTerr("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
+         PRINTlog("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
          return -1;
       }
 
@@ -419,7 +420,7 @@ int main( int argc, const char* argv[] )
          // write to erasure stripes
          PRINTdbg("libneTest: preparing to write %llu to erasure files...\n", nread );
          if ( nread != ne_write( handle, buff, nread ) ) {
-            PRINTerr("libneTest: unexpected # of bytes written by ne_write\n" );
+            PRINTlog("libneTest: unexpected # of bytes written by ne_write\n" );
             return -1;
          }
          PRINTdbg("libneTest: write successful\n" );
@@ -440,7 +441,7 @@ int main( int argc, const char* argv[] )
       }
 
       if ( ne_flush( handle ) != 0 ) {
-         PRINTerr("libneTest: flush failed!\n" );
+         PRINTlog("libneTest: flush failed!\n" );
          return -1;
       }
 
@@ -471,7 +472,7 @@ int main( int argc, const char* argv[] )
 
       filefd = open( argv[2], O_WRONLY | O_CREAT, 0644 );
       if ( filefd == -1 ) {
-         PRINTerr("libneTest: failed to open file %s\n", argv[2] );
+         PRINTlog("libneTest: failed to open file %s\n", argv[2] );
          return -1;
       }
 
@@ -494,7 +495,7 @@ int main( int argc, const char* argv[] )
          handle = NE_OPEN( (char *)argv[3], NE_RDONLY, start, N, E );
 
       if ( handle == NULL ) {
-         PRINTerr("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
+         PRINTlog("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
          return -1;
       }
 
@@ -515,7 +516,7 @@ int main( int argc, const char* argv[] )
 
          ne_stat stat = NE_STATUS( (char *)argv[3] );
          if ( stat == NULL ) {
-            PRINTerr("libneTest: ne_status failed!\n" );
+            PRINTlog("libneTest: ne_status failed!\n" );
             return -1;
          }
 
@@ -539,7 +540,7 @@ int main( int argc, const char* argv[] )
 
       handle = NE_OPEN( (char *)argv[3], NE_RDONLY, start, N, E );
       if ( handle == NULL ) {
-         PRINTerr("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
+         PRINTlog("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
          return -1;
       }
       PRINTout("did open()\n");
@@ -568,14 +569,14 @@ int main( int argc, const char* argv[] )
 
             PRINTdbg("libneTest: preparing to read %llu from erasure files with offset %llu\n", toread, totdone );
             if ( toread > totbytes ) {
-               PRINTerr("libneTest: toread (%llu) > totbytes (%llu)\n", toread, totbytes);
+               PRINTlog("libneTest: toread (%llu) > totbytes (%llu)\n", toread, totbytes);
                exit(EXIT_FAILURE);
             }
 
             tmp = ne_read( handle, buff, toread, totdone );
             if ( toread != tmp ) {
                // couldn't this happen without there being an error (?)
-               PRINTerr("libneTest: ne_read got %d but expected %llu\n", tmp, toread );
+               PRINTlog("libneTest: ne_read got %d but expected %llu\n", tmp, toread );
                return -1;
             }
 
@@ -623,7 +624,7 @@ int main( int argc, const char* argv[] )
       tmp = ne_rebuild( handle );
       if ( tmp < 0 ) {
         printf("rebuild result %d, errno=%d (%s)\n", tmp, errno, strerror(errno));
-        PRINTerr("libneTest: rebuild failed!\n" );
+        PRINTlog("libneTest: rebuild failed!\n" );
          return -1;
       }
       PRINTout("libneTest: rebuild complete\n" );
@@ -638,7 +639,7 @@ int main( int argc, const char* argv[] )
       PRINTout("libneTest: retrieving status of erasure striping with path \"%s\"\n", (char *)argv[2] );
       ne_stat stat = NE_STATUS( (char *)argv[2] );
       if ( stat == NULL ) {
-         PRINTerr("libneTest: ne_status failed!\n" );
+         PRINTlog("libneTest: ne_status failed!\n" );
          return -1;
       }
 
@@ -698,7 +699,7 @@ int main( int argc, const char* argv[] )
    else if ( wr == 4 ) {
       PRINTout("libneTest: deleting striping corresponding to path \"%s\" with width %d...\n", (char*)argv[2], N );
       if ( NE_DELETE( (char*) argv[2], N ) ) {
-         PRINTerr("libneTest: deletion attempt indicates a failure for path \"%s\"\n", (char*)argv[2] );
+         PRINTlog("libneTest: deletion attempt indicates a failure for path \"%s\"\n", (char*)argv[2] );
          return -1;
       }
       PRINTout("libneTest: deletion successful\n" );
