@@ -154,8 +154,8 @@ shut_down_handle(SocketHandle* handle) {
     //    rs_process_cq (rs=0x25db730, nonblock=0, test=0x2b9eb5670870 <rs_conn_all_sends_done>) at src/rsocket.c:2022
     //    0x00002b9eb5674acc in rshutdown (socket=<value optimized out>, how=<value optimized out>) at src/rsocket.c:3242
     //    0x00000000004078f8 in shut_down_handle (handle=0x60f608) at skt_common.c:101
-    //    0x000000000040422e in shut_down_thread (arg=0x60f5e8) at socket_fserver.c:207
-    //    0x00000000004046da in server_thread (arg=0x60f5e8) at socket_fserver.c:748
+    //    0x000000000040422e in shut_down_thread (arg=0x60f5e8) at marfs_objd.c:207
+    //    0x00000000004046da in server_thread (arg=0x60f5e8) at marfs_objd.c:748
     //    0x00002b9eb5452aa1 in start_thread (arg=0x2b9eb718a700) at pthread_create.c:301
     //    0x00002b9eb596593d in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:115
 
@@ -420,9 +420,18 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
    //     add up to 30 seconds in well under one second.  Larger
    //     mait-period seems to work correctly.
    const long M         = 1000000L;
+#if 0
+   // tested with SELECT
    // const long wait_usec = 100;    /* 100 us.  too small: early rselect() timeout */
    // const long wait_usec = M-1;    /* ~1 sec.  works, but too large? */
    const long wait_usec = M/100;  /* 10 ms */
+#elif 1
+   // tested with POLL
+   // const long wait_usec = M;  /* 1 sec */
+   // const long wait_usec = M/100;  /* 10 ms */
+   const long wait_usec = M/1000;  /* 1 ms */
+#endif
+
    const long i_max     = (M * RD_TIMEOUT) / wait_usec;
 
    int  i;
@@ -441,7 +450,7 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
       // --- try the read
       ssize_t read_count = RECV(fd, buf, size, (peek_p ? MSG_PEEK : MSG_DONTWAIT));
 
-#elif 1
+#elif 0
       // SELECT
 
       if ((unsigned)fd >= FD_SETSIZE) {
@@ -475,7 +484,7 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
       // --- try the read
       ssize_t read_count = RECV(fd, buf, size, (peek_p ? MSG_PEEK : MSG_DONTWAIT));
 
-#elif 0
+#elif 1
       // POLL
 
       int           wait_millis = (wait_usec / 1000) + 1;
@@ -493,12 +502,13 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
          errno = EIO;
          return -1;
       }
-      else if (pfd.revents & (POLLRDHUP)) {
+      else if (pfd.revents
+               && !(pfd.revents & POLLIN)) { // see POLLOUT in write_raw()
          neERR("poll got err-flags 0x%x (iter: %d)\n", pfd.revents, i);
          errno = EIO;
          return -1;
       }
-      else if (rc > 0)
+      else if (rc)
          read_count = RECV(fd, buf, size, (peek_p ? MSG_PEEK : MSG_DONTWAIT));
       else
          continue;
@@ -551,9 +561,18 @@ int write_raw(int fd, char* buf, size_t size) {
 
    // see corresponding notes in read_raw()
    const long M         = 1000000L;
+#if 0
+   // tested with SELECT
    // const long wait_usec = 100;    /* 100 us.  too small: causes early "timeout" */
    // const long wait_usec = M-1;    /* ~1 sec.  works, but too large? */
    const long wait_usec = M/100;  /* 10 ms */
+#elif 1
+   // tested with POLL
+   // const long wait_usec = M;  /* 1 sec */
+   // const long wait_usec = M/100;  /* 10 ms */
+   const long wait_usec = M/1000;  /* 1 ms */
+#endif
+
    const long i_max     = (M * WR_TIMEOUT) / wait_usec;
 
    int  i;
@@ -573,7 +592,7 @@ int write_raw(int fd, char* buf, size_t size) {
       // ssize_t write_count = WRITE(fd, buf, size);
       ssize_t write_count = SEND(fd, buf, size, MSG_DONTWAIT);
 
-#elif 1
+#elif 0
 
       if ((unsigned)fd >= FD_SETSIZE) {
          neERR("fd %u exceeds FD_SETSIZE\n", (unsigned) fd);
@@ -607,7 +626,7 @@ int write_raw(int fd, char* buf, size_t size) {
       // ssize_t write_count = WRITE(fd, buf, size);
       ssize_t write_count = SEND(fd, buf, size, MSG_DONTWAIT);
 
-#elif 0
+#elif 1
       // POLL
 
       int           wait_millis = (wait_usec / 1000) + 1;
@@ -1574,7 +1593,7 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
   handle->open_flags = flags;
   handle->open_mode  = mode;
 
-  // RD/WR with RDMA would require riomaps on both ends, or else
+  // O_RDWR with RDMA would require riomaps on both ends, or else
   // two different channels, each with a single riomap.
   if (flags & (O_RDWR)) {
     errno = ENOTSUP;            // TBD?
