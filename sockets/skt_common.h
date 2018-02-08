@@ -451,6 +451,8 @@ typedef enum {
   CMD_RENAME,
   CMD_UNLINK,
 
+  CMD_TEST,
+
   CMD_S3_AUTH,                  // client submits S3 signature, etc
   CMD_RIO_OFFSET,               // reader sends riomapped offset (for riowrite)
   CMD_DATA,                     // amount of data sent (via riowrite)

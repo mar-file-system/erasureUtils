@@ -209,6 +209,7 @@ AM_CONDITIONAL([SUPPRESS_FILE_IO],  [test "$enable_file_io" != yes])
 
 
 
+
 # Allow turning on debugging flags
 AC_ARG_ENABLE([debug],
                AS_HELP_STRING([--enable-debug],
@@ -239,6 +240,30 @@ AM_CONDITIONAL([USE_SYSLOG], [test "x$enable_syslog" != xno])
 
 
 
+
+# Build the server so that it will respond to "test" commands, which allow
+# low-level custom tests.  (Currently, test_client is the only client that
+# invokes these tests, and they just revolve around rpoll() functionality.)
+#
+# NOTE: The server-side test-interface is not, strictly speaking, a "back
+# door", because the test functions, like all other server functions, must
+# still go through regular authentication [assuming configuration with
+# --enable-auth], and the test-functions do not (currently) change the
+# operation of the server, or provide special access to data.  However,
+# there is no need to enable the test API during normal operation.
+
+AC_ARG_ENABLE([test-api],
+               AS_HELP_STRING([--enable-test-api],
+                              [Server presents testing interface.  (Developers only.)]),
+              [enable_test_api=$enableval],
+              [enable_test_api=no])
+
+AM_CONDITIONAL([TEST_API],  [test "x$enable_test_api" != "xno"])
+
+
+
+
+# build for gprof
 AC_ARG_ENABLE(gprof,
    AS_HELP_STRING([--enable-gprof], [Dump run-time profiling info for gprof]))
 AM_CONDITIONAL([GPROF], [test x$enable_gprof = xyes])
