@@ -809,6 +809,8 @@ const char* _command_str[] = {
   "RENAME",
   "UNLINK",
 
+  "TEST",
+
   "S3_AUTH",
   "RIO_OFFSET",
   "DATA",

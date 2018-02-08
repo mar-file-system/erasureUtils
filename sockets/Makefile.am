@@ -100,6 +100,11 @@ else
 endif
 
 
+if TEST_API
+  DEFS        += -DTEST_API
+endif
+
+
 if GPROF
   AM_CFLAGS  += -pg
   AM_LDFLAGS += -pg

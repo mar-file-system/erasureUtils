@@ -1201,6 +1201,12 @@ int server_stat(ThreadContext* ctx) {
   fake_open_basic(handle, O_RDONLY);
 
   // jNEED() failures run this before exiting
+  //
+  // QUES: This is the only sever_*() function that installs jskt_close.
+  //     Does this function just not know that the handle will already be
+  //     reliably cleaned up in shut_down_thread() -> shut_down_handle(),
+  //     in server_thread()?  Or is there some reason it is explicitly
+  //     setting this up?
   jHANDLER(jskt_close, handle);
 
   // stat local file
@@ -1254,6 +1260,118 @@ int server_stat(ThreadContext* ctx) {
   return 0;
 }
 
+
+#ifdef TEST_API
+
+// This is an interface to let clients invoke tests on the server.
+//
+// Initially, we are just going to test whether rpoll() returns immediately
+// if it is called on a socket on which the peer has already sent a message
+// before rpoll() was called.
+
+int server_test(ThreadContext* ctx) {
+
+  SocketHandle*      handle    = &ctx->handle;
+  char*              fname     = ctx->fname;
+  int                client_fd = handle->peer_fd;
+  PseudoPacketHeader header = {0};
+
+  // we only use the control-channel
+  NEED_0( fake_open_basic(handle, O_RDONLY) );
+
+  // read the test-number
+  NEED_0( read_pseudo_packet_header(client_fd, &header, 0) );
+  NEED(HDR_CMD(&header) == CMD_DATA);
+
+  // select the test-function (i.e. the test-number)
+  int rc = 0;
+  int test_num = (int)HDR_SIZE(&header);
+
+  neDBG("test = %d\n", test_num);
+  switch (test_num) {
+
+  case 1: 
+     // test 1: wait 5 sec (during which time client sends a
+     //    pseudo-packet), then do an rpoll(), and see whether the rpoll()
+     //    detects the waiting packet.  This mirrors the
+     //    implementation-questions we've been trying to sort-out in
+     //    read_raw()/write_raw().
+
+  case 2:
+     // test 2: begin rpoll() with 10-second timeout. (client sends a
+     //    message after 5 seconds).  This mirrors some other
+     //    implementation-questions we've been trying to sort-out in
+     //    read_raw()/write_raw().
+  {
+
+     if (test_num == 1)
+        sleep(5);
+
+     struct pollfd pfd         = { .fd      = client_fd,
+                                   .events  = (POLLIN | POLLRDHUP),
+                                   .revents = 0 };
+     int timeout = 0;
+     if (test_num == 2)
+        timeout = 10 * 1000;    // 10 sec
+
+     neDBG("entering poll() with timeout = %d\n", timeout);
+     rc = POLL(&pfd, 1, timeout);
+     neDBG("poll() returned %d (revents = 0x%02x) (errno: %d '%s')\n",
+           rc, pfd.revents, errno, strerror(errno));
+
+     //     int     poll_rc = rc;
+     //     ssize_t revents = pfd.revents;
+     ssize_t read_count = 0;
+     static const size_t BUF_SIZE = 128;
+     char    buf[BUF_SIZE];
+
+     if (rc < 0)
+        neDBG("poll failed: %s\n", strerror(errno));
+
+     else if (pfd.revents
+              && !(pfd.revents & POLLIN)) { // see POLLOUT in write_raw()
+        neDBG("poll got err-flags 0x%x\n", pfd.revents);
+        rc = -2;
+     }
+     else if (rc) {
+        ssize_t read_count = RECV(client_fd, buf, BUF_SIZE, MSG_DONTWAIT);
+        neDBG("read_count = %ld\n", read_count);
+
+        if (read_count < 0)
+           rc = -3;
+        else {
+           // success.  Not only did our poll() succeed in detecting
+           // the message that was sent before we called poll(),
+           // but we also successfully received that message.
+           buf[BUF_SIZE -1] = 0;
+           neDBG("recv() got string '%s'\n", buf);
+           rc = 0;              // succes
+        }
+     }
+     else
+        rc = -4;
+
+     break;
+  }
+
+
+  default:
+     neLOG("unknown test-number: %lld\n", test_num);
+     return -1;
+  };
+
+
+  // send RETURN with return-code
+  NEED_0( write_pseudo_packet(client_fd, CMD_RETURN, rc, NULL) );
+
+
+  // close socket
+  EXPECT_0( skt_close(handle) );
+
+  return 0;
+}
+
+#endif
 
 
 
@@ -1329,6 +1447,7 @@ void* server_thread(void* arg) {
      case CMD_CHOWN:
      case CMD_RENAME:
      case CMD_UNLINK:
+     case CMD_TEST:
         rc = read_fname(client_fd, fname, HDR_SIZE(hdr), FNAME_SIZE);
      };
   }
@@ -1347,6 +1466,10 @@ void* server_thread(void* arg) {
     case CMD_RENAME: rc = server_rename(ctx);  break;
     case CMD_UNLINK: rc = server_unlink(ctx);  break;
     case CMD_NOP:    rc = 0;                   break;
+
+#ifdef TEST_API
+    case CMD_TEST:   rc = server_test(ctx);    break;
+#endif
 
     default:
        neERR("unsupported op: '%s'\n", command_str(HDR_CMD(hdr)));

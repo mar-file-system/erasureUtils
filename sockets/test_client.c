@@ -61,13 +61,15 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 //
 //    ./configure --prefix=$MARFS_BUILD --enable-sockets=rdma --enable-debug=all  LDFLAGS="-L$MARFS_BUILD/lib"
 //
-// Then start a socket_fserver, maybe like this:
+// Then start a marfs_objd, maybe like this:
 //
-//    $MARFS_BUILD/bin/socket_fserver -p 400001 -d /dev/shm/rdma > foo 2>&1 &
+//    # on 192.168.0.1
+//    $MARFS_BUILD/bin/marfs_objd -p 400001 -d /dev/shm/rdma > foo 2>&1 &
 //    tail -f foo
 //
 // Then run the client:
 //
+//    # on 192.168.0.2
 //    echo foo | test_client -p 192.168.0.1:40001/dev/shm/rdma/foo
 //    test_client -g 192.168.0.1:40001/dev/shm/rdma/foo
 //
@@ -87,6 +89,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <string.h>             // strcpy()
 #include <errno.h>
 #include <sys/syscall.h>        // syscalls in test3_thr
+#include <sys/time.h>           // gettimeofday() in test6
 
 #include "skt_common.h"
 
@@ -138,6 +141,11 @@ SktAuth aws_ctx = NULL;
 #  define thrAUTH_INSTALL(HANDLEp, AWS_CTX)
 #  define    DO_AUTH(HANDLEp, CMD)
 #endif
+
+
+#   define MATCH(TEST_NO,STR)  ((strlen(TEST_NO) == strlen(STR)) && !strcmp((TEST_NO), (STR)))
+
+
 
 
 // ---------------------------------------------------------------------------
@@ -970,7 +978,7 @@ int client_test3c(const char* path) {
          pthread_join(thr[i], &rc);
          retval |= (ssize_t)rc;
          if (rc) {
-            neERR("thr %d returned non-zero\n", i);
+            cLOG("thr %d returned non-zero\n", i);
          }
       }
 
@@ -1179,12 +1187,18 @@ int client_test4(const char* path, int do_seteuid) {
 // We use client_test3_thr, which has had TC_RENAME added for us.
 // ---------------------------------------------------------------------------
 
-// Calls from bq_writer threads, running from pftool, are sometimes
+// QUES: Calls from bq_writer threads, running from pftool, are sometimes
 // segfaulting inside the calls to skt_rename() and skt_chown(), where they
 // call skt_close -> shut_down_handle -> rclose.  These two functions are
 // both "path" ops, meaning they conjure a custom handle, used only
 // internally.  These handles shouldn't be having any issues with rsockets
 // thread-safety.  They should NOT!  But, maybe they are?  This is a test.
+//
+// ANS: This was a bug in linux-rdm/rdma-core.  Fixed in these patches:
+//
+//   https://github.com/linux-rdma/rdma-core/commit/5ac0576d51ddfb9207e5632c71d27d14b3368143
+//   https://github.com/linux-rdma/rdma-core/commit/39a612257aacd77ed5bdd506968cf4e54bbe63b3
+
 
 ssize_t client_test5(const char* path) {
 
@@ -1244,6 +1258,130 @@ ssize_t client_test5(const char* path) {
       pthread_join(thr[i], &rc0);
       cLOG("thr%d returned %lld\n", i, (ssize_t)rc0);
       retval |= (ssize_t)rc0;
+   }
+
+   cLOG("done\n");
+   return retval;
+}
+
+
+
+// ---------------------------------------------------------------------------
+// This test uses the customizable "test" operation on the server,
+// designed to test custom low-level operations.
+//
+// NOTE: These tests require building the server with --enable-test-api
+//
+// Tests:
+//
+// (6a) calling rpoll() after a message has already been sent.  When we
+//      call write_init(CMD_TEST), the server-side starts up a
+//      server_test() thread.  We then send the test-number, and the
+//      server-thread begins a 5 second sleep.  We immediately send a
+//      string.  When the server-thread wakes up, it calls rpoll().  If the
+//      rpoll() returns an indication of our pending message (and the
+//      server-side is also able to successfully read it), then 6a is a
+//      success.
+//
+// (6b) calling rpoll() with a timeout before a message has been sent.
+//      When we call write_init(CMD_TEST), the server-side starts up a
+//      server_test() thread.  We then send the test-number, and the
+//      server-thread calls rpoll() with a 10-second timeout.  We sleep for
+//      5 seconds, then send a string.  We expect the server to see this
+//      immediately.  If so, it should respond immediately.  So, if we see
+//      the response after our 5-sec sleep, before the server-side's 10-sec
+//      timeout, we'll call that a success.
+//
+// ---------------------------------------------------------------------------
+
+ssize_t client_test6(const char* path, const char* test_no) {
+
+   ssize_t           retval = 0;
+
+   if (MATCH(test_no, "6a")) {       // --- test 6a
+
+      // open for comms
+      ssize_t bytes_moved;
+      NEED_GT0( skt_open(&handle,  path,  (O_WRONLY)) );
+      AUTH_INSTALL(&handle, aws_ctx);
+
+      // send command and fname
+      NEED_0( basic_init(&handle, CMD_TEST) );
+
+      // send the server-test number (server begins 5-second sleep)
+      NEED_0( write_pseudo_packet(handle.peer_fd, CMD_DATA, 1, NULL) );
+      
+      // send data that server will try to read when it wakes.
+      // The whole point of this test is to see whether it will see this
+      // packet in its rpoll(), even though we wrote it before the server
+      // entered the rpoll().
+      const char* buf = "this is a buffer for server-test: 1";
+      size_t len      = strlen(buf) +1;
+
+      // size_t len_buf  = hton64(len);
+      // NEED_0( write_raw(handle.peer_fd, (char*)&len_buf,  sizeof(len_buf)) );
+
+      NEED_0( write_raw(handle.peer_fd, (char*)buf, len) );
+
+
+      // read RETURN, providing return-code from the server-side.
+      PseudoPacketHeader hdr = {0};
+      NEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr, 0) );
+      NEED(   (HDR_CMD(&hdr)  == CMD_RETURN) );
+
+      cLOG("test returned %ld\n", HDR_SIZE(&hdr));
+      retval = HDR_SIZE(&hdr);
+
+      NEED_0( skt_close(&handle) );
+   }
+   else if (MATCH(test_no, "6b")) {       // --- test 6b
+
+      // open for comms
+      ssize_t bytes_moved;
+      NEED_GT0( skt_open(&handle,  path,  (O_WRONLY)) );
+      AUTH_INSTALL(&handle, aws_ctx);
+
+      // send command and fname
+      NEED_0( basic_init(&handle, CMD_TEST) );
+
+      // send the server-test number
+      // (server calls rpoll() with 10-second timeout)
+      NEED_0( write_pseudo_packet(handle.peer_fd, CMD_DATA, 2, NULL) );
+      
+      struct timeval before;
+      NEED_0( gettimeofday(&before, NULL) );
+
+      sleep(5);
+
+      // send data that should drop the server out of its 10-second poll() timeout.
+      const char* buf = "this is a buffer for server-test: 2";
+      size_t len      = strlen(buf) +1;
+
+      // size_t len_buf  = hton64(len);
+      // NEED_0( write_raw(handle.peer_fd, (char*)&len_buf,  sizeof(len_buf)) );
+
+      NEED_0( write_raw(handle.peer_fd, (char*)buf, len) );
+
+
+      // read RETURN, providing return-code from the server-side.
+      PseudoPacketHeader hdr = {0};
+      NEED_0( read_pseudo_packet_header(handle.peer_fd, &hdr, 0) );
+      NEED(   (HDR_CMD(&hdr)  == CMD_RETURN) );
+
+      cLOG("test returned %ld\n", HDR_SIZE(&hdr));
+      NEED( HDR_SIZE(&hdr) == 0 );
+
+      struct timeval after;
+      NEED_0( gettimeofday(&after, NULL) );
+
+      // check that server was awakened from rpoll() rather than timing-out
+      retval = (int)((after.tv_sec - before.tv_sec) < 2);
+
+      NEED_0( skt_close(&handle) );
+   }
+   else {
+      cLOG("unknown test '%s'\n", test_no);
+      return -1;                // errno is set
    }
 
    cLOG("done\n");
@@ -1411,22 +1549,22 @@ main(int argc, char* argv[]) {
   // --- start timer
   struct timespec start;
   if (clock_gettime(CLOCK_REALTIME, &start)) {
-    neERR("failed to get START timer '%s'\n", strerror(errno));
+    cLOG("failed to get START timer '%s'\n", strerror(errno));
     return -1;                // errno is set
   }
 
   // --- initialize authentication (iff S3_AUTH)
   if (user_name) {
      if (AUTH_INIT(user_name, &aws_ctx)) {
-        neERR("failed to read aws-config for user '%s': %s\n",
-              user_name, strerror(errno));
+        cLOG("failed to read aws-config for user '%s': %s\n",
+             user_name, strerror(errno));
         return -1;
      }
   }
   else if (AUTH_INIT(getenv("USER"), &aws_ctx)
            && AUTH_INIT(SKT_S3_USER, &aws_ctx)) {
-    neERR("failed to read aws-config for user '%s' or '%s': %s\n",
-          getenv("USER"), SKT_S3_USER, strerror(errno));
+    cLOG("failed to read aws-config for user '%s' or '%s': %s\n",
+         getenv("USER"), SKT_S3_USER, strerror(errno));
     return -1;
   }
 
@@ -1441,9 +1579,6 @@ main(int argc, char* argv[]) {
   case 'R':   bytes_moved = client_reap_read(file_spec); break;
 
   case 't': {
-    size_t  test_no_len = strlen(test_no);
-#   define MATCH(TEST_NO,STR)  ((test_no_len == strlen(STR)) && !strcmp((TEST_NO), (STR)))
-
     if (     MATCH(test_no, "1"))
       bytes_moved = client_test1(file_spec);
     else if (MATCH(test_no, "1b"))
@@ -1468,17 +1603,24 @@ main(int argc, char* argv[]) {
     //       bytes_moved = client_test4(file_spec);
     else if (MATCH(test_no, "5"))
       bytes_moved = client_test5(file_spec);
+    else if (test_no[0] == '6') {
+#ifdef TEST_API
+       bytes_moved = client_test6(file_spec, test_no);
+#else
+       cLOG("The '6'-series tests require the server to be built with --enable-test-api");
+       bytes_moved = -1;
+#endif
+    }
 
     else {
-      neERR("unknown test: %s\n", test_no);
+      cLOG("unknown test: %s\n", test_no);
       return -1;
     }
-#   undef MATCH
   }
     break;
       
   default:
-    neERR("unsupported command: %s\n", command_str(cmd));
+    cLOG("unsupported command: %s\n", command_str(cmd));
     return -1;
   }
 
@@ -1500,7 +1642,7 @@ main(int argc, char* argv[]) {
   if (bytes_moved) {
      struct timespec end;
      if (clock_gettime(CLOCK_REALTIME, &end)) {
-        neERR("failed to get END timer '%s'\n", strerror(errno));
+        cLOG("failed to get END timer '%s'\n", strerror(errno));
         return -1;                // errno is set
      }
      size_t nsec = (end.tv_sec - start.tv_sec) * 1000UL * 1000 * 1000;
