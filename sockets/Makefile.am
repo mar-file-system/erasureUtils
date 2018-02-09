@@ -77,10 +77,11 @@ AM_CPPFLAGS += -I${top_srcdir}/erasureLib
 AM_CPPFLAGS += -I${top_srcdir}/fast_timer
 
 
+
 if RDMA_SOCKETS
   # -D_GNU_SOURCE provides POLLRDHUP among the flags for poll()/rpoll()
   DEFS        += -DRDMA_SOCKETS -DUSE_RIOWRITE -D_GNU_SOURCE
-  LIBS        += -lrdmacm
+  # LIBS        += -lrdmacm    [configure.ac already added this]
 endif
 
 if USE_SYSLOG
@@ -145,7 +146,9 @@ bin_PROGRAMS = test_client marfs_objd
 
 
 marfs_objd_SOURCES = marfs_objd.c
-marfs_objd_LDADD = librdma_sockets.a
+marfs_objd_LDADD  = librdma_sockets.a
+marfs_objd_LDADD += ../fast_timer/libft.a
+
 #
 # # Various failed attempts to get autoconf to prefer static linking of
 # # libisal, if possible.  (Some of these assume libtool is selected in the
@@ -164,4 +167,5 @@ marfs_objd_LDADD = librdma_sockets.a
 
 
 test_client_SOURCES = test_client.c
-test_client_LDADD = librdma_sockets.a
+test_client_LDADD  = librdma_sockets.a
+test_client_LDADD += ../fast_timer/libft.a
