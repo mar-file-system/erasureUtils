@@ -133,7 +133,7 @@ typedef struct {
 int show_cpuid();
 
 
-extern int invariant_TSC;
+extern volatile int invariant_TSC;
 
 // call this once, before any threads try to call fast_timer_sec().
 // Returns 0 for success, negative for failure.
@@ -269,6 +269,7 @@ int fast_timer_stop_start(FastTimer* ft) {
 
 // convert the TSC ticks in ft->accum to elapsed time
 double fast_timer_sec(FastTimer* ft);
+double fast_timer_msec(FastTimer* ft);
 double fast_timer_usec(FastTimer* ft);
 double fast_timer_nsec(FastTimer* ft);
 

@@ -59,6 +59,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 // see: https://www.ccsl.carleton.ca/~jamuir/rdtscpm1.pdf
 // see: https://www.intel.com/content/dam/www/public/us/en/documents/white-papers/ia-32-ia-64-benchmark-code-execution-paper.pdf
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -66,6 +67,16 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #include "fast_timer.h"
 
+
+
+
+#ifdef __GNUC__
+#  define likely(x)      __builtin_expect(!!(x), 1)
+#  define unlikely(x)    __builtin_expect(!!(x), 0)
+#else
+#  define likely(x)      (x)
+#  define unlikely(x)    (x)
+#endif
 
 
 
@@ -86,6 +97,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
           CHAR_OR_DOT((reg>>24) & 0xff))
 
 
+#   define K   1000.f
 #   define M   1000000.f
 #   define G   1000000000.f
 
@@ -115,20 +127,26 @@ int show_cpuid() {
 }
 
 
-static double ticks_per_sec = -1;
-int           invariant_TSC = 0;
+static volatile double ticks_per_sec = -1;
+       volatile int    invariant_TSC = 0;
 
-// call this once, from a single-thread, before any threads try to call
-// fast_timer_sec().  Initializes ticks_per_sec.  Returns 0 for success,
-// negative for failure.
+// lock for access to reap_list[] elements
+pthread_mutex_t init_mtx = PTHREAD_MUTEX_INITIALIZER;
 
-// TBD: Check cpuid output for info on whether CPU supports consistent clock rate.
-//      This is the modern default, but we're just assuming, for now.
+
+// call this before calling fast_timer_*sec().
+//
+// Initializes ticks_per_sec.  Returns 0 for success, negative for failure.
+//
+// TBD: Check cpuid output for info on whether CPU supports consistent
+//      clock rate.  This is the modern default, but we're just assuming,
+//      for now.
+
 int fast_timer_inits() {
 
    int a, b, c, d;              // eax, ebx, ecx, edx
 
-   if (ticks_per_sec > 0)
+   if (likely(ticks_per_sec > 0))
       return 0;                 // already initialized
 
    // test proc brand-string supported
@@ -170,16 +188,26 @@ int fast_timer_inits() {
    sscanf(str, "%f", &normed);
    //   printf("normed: %f\n", normed);
 
+   // just locking around the updates means we allow a race for
+   // hypothetical different threads to do updates with their
+   // own values, but they are likely to compute similar
+   // values, and any future threads will avoid the problem
+   // because fast_timer_inits() will see that ticks_per_sec
+   // already has a value.
+
+   pthread_mutex_lock(&init_mtx);
+
    // --- set the static value, used in fast_timer_sec(), etc
    ticks_per_sec = normed * mult;
    //   printf("freq:   %f\n", ticks_per_sec);
-
-
 
    // --- "invariant TSC" means thread-migration across cores do not make
    //     the TSC invalid.  (Also means the rate
    __cpuid(0x80000007, a, b, c, d);
    invariant_TSC = (d & 0x100) >> 8;
+
+   pthread_mutex_unlock(&init_mtx);
+
 
 #ifndef ALLOW_VARIABLE_TSC
    if (! invariant_TSC) {
@@ -199,6 +227,9 @@ int fast_timer_inits() {
 
 double fast_timer_sec(FastTimer* ft) {
    return ((double)ft->accum / ticks_per_sec);
+}
+double fast_timer_msec(FastTimer* ft) {
+   return ((double)ft->accum / ticks_per_sec) * K;
 }
 double fast_timer_usec(FastTimer* ft) {
    return ((double)ft->accum / ticks_per_sec) * M;
