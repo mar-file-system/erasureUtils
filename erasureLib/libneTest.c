@@ -384,6 +384,7 @@ int main( int argc, const char* argv[] )
                                                  (PATH), (QUOR), (WIDTH))
 
 
+
    // -----------------------------------------------------------------
    // write
    // -----------------------------------------------------------------
@@ -450,10 +451,11 @@ int main( int argc, const char* argv[] )
 
       free(buff);
       close(filefd);
+
       PRINTout("libneTest: all writes completed\n");
       PRINTout("libneTest: total written = %llu\n", totdone );
-
    }
+
 
    // -----------------------------------------------------------------
    // read
@@ -709,7 +711,7 @@ int main( int argc, const char* argv[] )
 
 
    tmp = ne_close( handle );
-   PRINTout("%d\n",tmp);
+   PRINTout("close rc: %d\n",tmp);
    fflush(stdout);
    fflush(stderr);
 
