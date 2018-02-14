@@ -154,7 +154,7 @@ typedef void(*jHandlerType)(void* arg);
 #define SOCKET_NAME_PREFIX      "socket_"
 #define MAX_SOCKET_NAME_SIZE    (sizeof(SOCKET_NAME_PREFIX) + 10)
 
-#define MAX_SOCKET_CONNS        256  /* server-side */
+#define MAX_SOCKET_CONNS        512  /* server-side */
 
 #define FNAME_SIZE              512 /* incl final null */
 #define HOST_SIZE               128 /* incl final null */
@@ -209,6 +209,18 @@ typedef void(*jHandlerType)(void* arg);
 // #  define RD_TIMEOUT             10000
 #endif
 
+
+// timeout period, per poll  (in sec)
+//
+// rpoll() doesn't detect peer-HUP after rpoll() has already begun waiting.
+// We must rpoll() again to see the HUP.  Having this shorter than
+// RD_/WR_TIMOUT allows server-side to reclaim dropped connections more
+// quickly.
+#define POLL_PERIOD           2
+
+// max number of failed polls and/or incomplete-reads/writes,
+// in read_raw()/write_raw()
+#define MAX_POLLS           500
 
 
 // max seconds server-side date string can lag behind date-string generated

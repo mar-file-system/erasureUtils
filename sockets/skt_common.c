@@ -421,30 +421,35 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
    int        rc = 0;
 
    const int  wait_millis_tot = (RD_TIMEOUT * 1000L);
-   int        wait_millis     = wait_millis_tot;
-   FastTimer  timer           = {0};
+   int        period_millis   = (POLL_PERIOD * 1000L);
+   int        wait_millis     = period_millis;
+   if (unlikely(period_millis > wait_millis_tot))
+      wait_millis = wait_millis_tot;
 
+   FastTimer  timer           = {0};
    char*      buf1            = buf;
    size_t     size1           = size;
 
    fast_timer_start(&timer);
 
-   const int i_max = 500;           // if intr or partial-read > 500 times, just forget it
    int       i;
-   for (i=0; i<i_max; ++i) {
+   for (i=0; i<MAX_POLLS; ++i) {
 
       // --- wait for the fd to have data
       //     (see comment about race-condition)
+      //     Actually, we just get HUP, not RDHUP, if other end hung up
 
       int           interrupted = 0;
+      int           timed_out   = 0;
       ssize_t       read_count  = 0;
       struct pollfd pfd         = { .fd      = fd,
                                     .events  = (POLLIN | POLLRDHUP),
+                                    //         implicit: POLLERR|POLLHUP|POLLNVAL
                                     .revents = 0 };
 
-      neDBG("entering poll with a timeout of %d [iter: %d]\n", wait_millis, i);
+      neDBG("entering RD poll with a timeout of %d [iter: %d]\n", wait_millis, i);
       rc = POLL(&pfd, 1, wait_millis);
-      neDBG("poll returned %d [iter: %d]\n", rc, i);
+      neDBG("poll returned %d (revents: 0x%02x) [iter: %d]\n", rc, pfd.revents, i);
 
       if (rc < 0) {
          if (errno == EINTR)
@@ -456,7 +461,7 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
          }
       }
       else if (rc == 0) {
-         break;                 // timed out
+         timed_out = 1;
       }
       else if (! (pfd.revents & POLLIN)) { // see POLLOUT in write_raw()
          neERR("poll got err-flags 0x%x [iter: %d]\n", pfd.revents, i);
@@ -465,23 +470,32 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
       }
 
 
-      // --- do the read
-      neDBG("recv(%d, 0x%lx, %ld, 0x%02x) [iter: %d]\n",
-            fd, (size_t)buf1, size1, (peek_p ? MSG_PEEK : MSG_DONTWAIT), i);
-      read_count = RECV(fd, buf1, size1, (peek_p ? MSG_PEEK : MSG_DONTWAIT));
+
+      if (! interrupted) {
+
+         // --- do the read
+         //     NOTE: HUP also shows POLLIN.  RECV() then returns 0.
+         neDBG("recv(%d, 0x%lx, %ld, 0x%02x) [iter: %d]\n",
+               fd, (size_t)buf1, size1, (peek_p ? MSG_PEEK : MSG_DONTWAIT), i);
+         read_count = RECV(fd, buf1, size1, (peek_p ? MSG_PEEK : MSG_DONTWAIT));
+      }
+
 
 
       // --- analyze read-results
-      if (unlikely(interrupted)) {
+      if (unlikely(interrupted))
          neDBG("interrupted.  Will try again [iter: %d]\n", i);
-      }
+
+      //      else if (unlikely(timed_out))
+      //         neDBG("period time-out.  Will try again [iter: %d]\n", i);
+
       else if (likely(read_count == size1)) {
          neDBG("read OK [iter: %d]\n", i);
          return 0;
       }
       else if (! read_count) {
          neERR("read EOF [iter: %d]\n", i);
-         return -1;             // you called read_raw() expecting something
+         return -1;
       }
       else if (read_count > 0) {
          neERR("read %lld instead of %lld bytes [iter: %d]\n",
@@ -493,22 +507,24 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
       }
       else if ((errno != EAGAIN)
                && (errno != EWOULDBLOCK)) {
-         neERR("read failed [iter: %d]\n", i);
+         neERR("read failed [iter: %d]: %s\n", i, strerror(errno));
          return -1;
       }
 
 
       // --- compute remaining timeout for retry
       fast_timer_stop(&timer);
-      fast_timer_inits();
+      fast_timer_inits();       // first call computes ticks_per_sec
 
-      wait_millis -= fast_timer_msec(&timer);
-      if (wait_millis <= 0)
-         break;           // timed out
+      int remain_millis = wait_millis_tot - fast_timer_msec(&timer);
+      if (unlikely(remain_millis <= 0))
+         break;                 // timed out
+      else if (unlikely(remain_millis < period_millis))
+         wait_millis = remain_millis; // last ~period
+      else
+         wait_millis = period_millis;
 
       fast_timer_start(&timer);
-      
-      neERR("poll failed due to interrupt [iter: %d]\n", i);
    }
 
    neERR("timeout after %d sec\n", RD_TIMEOUT);
@@ -534,30 +550,34 @@ int write_raw(int fd, char* buf, size_t size) {
    int        rc = 0;
 
    const int  wait_millis_tot = (WR_TIMEOUT * 1000L);
-   int        wait_millis     = wait_millis_tot;
-   FastTimer  timer           = {0};
+   int        period_millis   = (POLL_PERIOD * 1000L);
+   int        wait_millis     = period_millis;
+   if (unlikely(period_millis > wait_millis_tot))
+      wait_millis = wait_millis_tot;
 
+   FastTimer  timer           = {0};
    char*      buf1            = buf;
    size_t     size1           = size;
 
    fast_timer_start(&timer);
 
-   const int i_max = 500;           // if intr or partial-read > 500 times, just forget it
    int       i;
-   for (i=0; i<i_max; ++i) {
+   for (i=0; i<MAX_POLLS; ++i) {
 
       // --- wait for the fd to have data
       //     (see comment about race-condition)
 
       int           interrupted = 0;
+      int           timed_out   = 0;
       ssize_t       write_count = 0;
       struct pollfd pfd         = { .fd      = fd,
-                                    .events  = (POLLOUT | POLLERR | POLLHUP | POLLNVAL),
+                                    .events  = (POLLOUT),
+                                    //         implicit: POLLERR|POLLHUP|POLLNVAL
                                     .revents = 0 };
 
-      neDBG("entering poll with a timeout of %d [iter: %d]\n", wait_millis, i);
+      neDBG("entering WR poll with a timeout of %d [iter: %d]\n", wait_millis, i);
       rc = POLL(&pfd, 1, wait_millis);
-      neDBG("poll returned %d [iter: %d]\n", rc, i);
+      neDBG("poll returned %d (revents: 0x%02x) [iter: %d]\n", rc, pfd.revents, i);
 
       if (rc < 0) {
          if (errno == EINTR)
@@ -569,7 +589,7 @@ int write_raw(int fd, char* buf, size_t size) {
          }
       }
       else if (rc == 0) {
-         break;                 // timed out
+         timed_out = 1;
       }
       else if (! (pfd.revents & POLLOUT)) { // I saw POLLHUP + POLLOUT ?
          neERR("poll got err-flags 0x%x [iter: %d]\n", pfd.revents, i);
@@ -578,16 +598,22 @@ int write_raw(int fd, char* buf, size_t size) {
       }
 
 
-      // --- do the write
-      neDBG("send(%d, 0x%lx, %ld, 0x%02x) [iter: %d]\n",
-            fd, (size_t)buf1, size1, MSG_DONTWAIT, i);
-      write_count = SEND(fd, buf1, size1, MSG_DONTWAIT);
+      if (! interrupted) {
+
+         // --- do the write
+         neDBG("send(%d, 0x%lx, %ld, 0x%02x) [iter: %d]\n",
+               fd, (size_t)buf1, size1, MSG_DONTWAIT, i);
+         write_count = SEND(fd, buf1, size1, MSG_DONTWAIT);
+      }
 
 
       // --- analyze write-results
-      if (unlikely(interrupted)) {
+      if (unlikely(interrupted))
          neDBG("interrupted.  Will try again [iter: %d]\n", i);
-      }
+
+      //      else if (unlikely(timed_out))
+      //         neDBG("period time-out.  Will try again [iter: %d]\n", i);
+
       else if (likely(write_count == size1)) {
          neDBG("write OK [iter: %d]\n", i);
          return 0;
@@ -606,22 +632,24 @@ int write_raw(int fd, char* buf, size_t size) {
       }
       else if ((errno != EAGAIN)
                && (errno != EWOULDBLOCK)) {
-         neERR("read failed [iter: %d]\n", i);
+         neERR("write failed [iter: %d]: %s\n", i, strerror(errno));
          return -1;
       }
 
 
       // --- compute remaining timeout for retry
       fast_timer_stop(&timer);
-      fast_timer_inits();
+      fast_timer_inits();       // first call computes ticks_per_sec
 
-      wait_millis -= fast_timer_msec(&timer);
-      if (wait_millis <= 0)
-         break;           // timed out
+      int remain_millis = wait_millis_tot - fast_timer_msec(&timer);
+      if (unlikely(remain_millis <= 0))
+         break;                 // timed out
+      else if (unlikely(remain_millis < period_millis))
+         wait_millis = remain_millis; // last ~period
+      else
+         wait_millis = period_millis;
 
       fast_timer_start(&timer);
-      
-      neERR("poll failed due to interrupt [iter: %d]\n", i);
    }
 
    neERR("timeout after %d sec\n", WR_TIMEOUT);
