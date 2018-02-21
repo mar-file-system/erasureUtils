@@ -1803,10 +1803,11 @@ main(int argc, char* argv[]) {
     REQUIRE_0( pthread_create(&reap_thr, NULL, reap_thread, NULL) );
 
   
-#if 1
-  // [copied here from below.  Maybe it will work (i.e. instead of
-  // rsetsockopt() silently ignoring the options) if we set these options
-  // on <socket_fd>, instead of <client_fd> ?]
+#if 0
+  // QUES: copied here from below.  Will it work (i.e. instead of
+  //     rsetsockopt() silently ignoring the options) if we set these options
+  //     on <socket_fd>, instead of <client_fd> ?
+  // ANS: Nope.  ENOTSUP, or ENOSYS, or something.
 
   // Change the timeouts, so the read() will return quickly if the
   // client is unresponsive (e.g. client already exited).
@@ -1818,16 +1819,45 @@ main(int argc, char* argv[]) {
   EXPECT_0( SETSOCKOPT(socket_fd, SOL_SOCKET, SO_SNDTIMEO, (const void*)&skt_tv, sizeof(skt_tv)) );
 #endif
 
+
   // receive connections and spin off threads to handle them
   while (1) {
+
+    // don't acquire the BUG_LOCK until we know it will only be held briefly
+    struct pollfd pfd = { .fd      = socket_fd,
+                          .events  = (POLLIN | POLLRDHUP),
+                          //         implicit: POLLERR|POLLHUP|POLLNVAL
+                          .revents = 0 };
+    int rc = POLL(&pfd, 1, (POLL_PERIOD * 1000));
+    if (rc < 0) {
+       if (errno == EINTR) {
+          neERR("poll interrupted\n");
+          continue;
+       }
+       else {
+          neERR("poll failed: %s\n", strerror(errno));
+          continue;
+       }
+    }
+    else if (rc == 0) {
+       continue;
+    }
+    else if (! (pfd.revents & POLLIN)) { // see POLLOUT in write_raw()
+       neERR("poll got err-flags 0x%x\n", pfd.revents);
+       errno = EIO;
+       return -1;
+    }
+
 
     BUG_LOCK();
     ///  int client_fd = ACCEPT(socket_fd, (struct sockaddr*)&c_addr, &c_addr_size);
     int client_fd = ACCEPT(socket_fd, NULL, 0);
     BUG_UNLOCK();
+
     if (client_fd < 0) {
-      neERR("failed accept: %s", strerror(errno));
-      continue;
+       // if ((errno != EAGAIN) && (errno != EWOUDBLOCK))
+       neERR("failed accept: %s", strerror(errno));
+       continue;
     }
 
     neDBG("main: connected fd=%d\n", client_fd);

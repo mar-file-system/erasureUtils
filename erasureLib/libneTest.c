@@ -420,8 +420,9 @@ int main( int argc, const char* argv[] )
 
          // write to erasure stripes
          PRINTdbg("libneTest: preparing to write %llu to erasure files...\n", nread );
-         if ( nread != ne_write( handle, buff, nread ) ) {
-            PRINTlog("libneTest: unexpected # of bytes written by ne_write\n" );
+         ssize_t nwritten = ne_write( handle, buff, nread );
+         if ( nwritten != nread ) {
+            PRINTlog("libneTest: unexpected # of bytes (%ld) written by ne_write (expected %ld)\n", nwritten, nread );
             return -1;
          }
          PRINTdbg("libneTest: write successful\n" );

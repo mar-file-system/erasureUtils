@@ -140,7 +140,7 @@ shut_down_handle(SocketHandle* handle) {
     SETSOCKOPT(handle->peer_fd, SOL_SOCKET, SO_RCVTIMEO, (const void*)&tv, sizeof(tv));
     SETSOCKOPT(handle->peer_fd, SOL_SOCKET, SO_SNDTIMEO, (const void*)&tv, sizeof(tv));
 
-#if 0
+#if 1
     // NOTE: As of librdmacm-1.0.21 (installed in our TOSS-2 RHEL6.9
     //       machines) rclose() calls rshutdown(), if needed.
     //       
@@ -159,6 +159,19 @@ shut_down_handle(SocketHandle* handle) {
     //    0x00000000004046da in server_thread (arg=0x60f5e8) at marfs_objd.c:748
     //    0x00002b9eb5452aa1 in start_thread (arg=0x2b9eb718a700) at pthread_create.c:301
     //    0x00002b9eb596593d in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:115
+    //
+    // UPDATE 2018-02-20:
+    //
+    // I'd bet that the deadlocking mentioned above was happening before we
+    // patched rdma-core.  If so, then rshutdown() should "just work", in
+    // implementations that include rdma-core after ~2017-09.  Meanwhile,
+    // for running on RHEL6 we use BUG_LOCK() to implement a work-around,
+    // which imposes locking around opens and closes.  I don't think we're
+    // seeing deadlocks in rshutdown(), but rclose() -> rshutdown() ->
+    // read() does take ~30 seconds to figure out that a killed peer is
+    // never going to respond.  Therefore, it seems like doing the
+    // rshutdown() outside BUG_LOCK/UNLOCK could avoid holding that lock
+    // all that time.  Trying it now ...
 
     neDBG("peer_fd %3d: shutdown\n", handle->peer_fd);
     dbg = SHUTDOWN(handle->peer_fd, SHUT_RDWR);
