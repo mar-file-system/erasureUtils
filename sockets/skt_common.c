@@ -446,7 +446,7 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
    fast_timer_start(&timer);
 
    int       i;
-   for (i=0; i<MAX_POLLS; ++i) {
+   for (i=0; i<MAX_RD_POLLS; ++i) {
 
       // --- wait for the fd to have data
       //     (see comment about race-condition)
@@ -537,6 +537,7 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
       else
          wait_millis = period_millis;
 
+      neDBG("accumulated time = %d sec\n", fast_timer_sec(&timer));
       fast_timer_start(&timer);
    }
 
@@ -575,7 +576,7 @@ int write_raw(int fd, char* buf, size_t size) {
    fast_timer_start(&timer);
 
    int       i;
-   for (i=0; i<MAX_POLLS; ++i) {
+   for (i=0; i<MAX_WR_POLLS; ++i) {
 
       // --- wait for the fd to have data
       //     (see comment about race-condition)

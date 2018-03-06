@@ -80,7 +80,6 @@ struct handle;
 
 // ne_handle stores these, which can be used by any uDAL implementation
 typedef struct GenericFD {
-   // ne_handle      hndl;      // pointer back to ne_handle
    struct handle*    hndl;      // pointer back to ne_handle
    union {
       int            fd;

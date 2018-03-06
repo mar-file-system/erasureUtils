@@ -195,18 +195,16 @@ typedef void(*jHandlerType)(void* arg);
 //     the server.
 
 #if DEBUG_SOCKETS
-// #  define WR_TIMEOUT          10000
-// #  define RD_TIMEOUT          10000
+#  define WR_TIMEOUT          10000
+#  define RD_TIMEOUT          10000
 
-// for debugging short-timeout probs, with logging enabled.
-#  define WR_TIMEOUT          30
-#  define RD_TIMEOUT          30
+// // for debugging short-timeout probs, with logging enabled.
+// #  define WR_TIMEOUT          30
+// #  define RD_TIMEOUT          30
 
 #else
 #  define WR_TIMEOUT             30
 #  define RD_TIMEOUT             30
-// #  define WR_TIMEOUT             10000
-// #  define RD_TIMEOUT             10000
 #endif
 
 
@@ -218,9 +216,14 @@ typedef void(*jHandlerType)(void* arg);
 // quickly.
 #define POLL_PERIOD           2
 
-// max number of failed polls and/or incomplete-reads/writes,
-// in read_raw()/write_raw()
-#define MAX_POLLS           500
+// max number of failed polls and/or incomplete-reads/writes, in
+// read_raw()/write_raw().  Intended to detect a crazy number of interrupts
+// in a short time.  read/write_raw() will exit when this condition, or
+// RD/WR_TIMEOUT, is reached, whichever comes first.  When the timeouts are
+// long (i.e. when debugging), this should be long.
+// #define MAX_POLLS           500
+#define MAX_RD_POLLS           (RD_TIMEOUT * 20)
+#define MAX_WR_POLLS           (WR_TIMEOUT * 20)
 
 
 // max seconds server-side date string can lag behind date-string generated
