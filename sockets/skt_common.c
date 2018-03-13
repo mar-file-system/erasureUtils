@@ -589,7 +589,7 @@ int write_raw(int fd, char* buf, size_t size) {
                                     //         implicit: POLLERR|POLLHUP|POLLNVAL
                                     .revents = 0 };
 
-      neDBG("entering WR poll with a timeout of %d [iter: %d]\n", wait_millis, i);
+      neDBG("entering WR poll with timeout %d ms [iter: %d]\n", wait_millis, i);
       rc = POLL(&pfd, 1, wait_millis);
       neDBG("poll returned %d (revents: 0x%02x) [iter: %d]\n", rc, pfd.revents, i);
 
@@ -654,6 +654,8 @@ int write_raw(int fd, char* buf, size_t size) {
       // --- compute remaining timeout for retry
       fast_timer_stop(&timer);
       fast_timer_inits();       // first call computes ticks_per_sec
+
+      neDBG("total wait, so far: %7.4f s [iter: %d]\n", fast_timer_msec(&timer), i);
 
       int remain_millis = wait_millis_tot - fast_timer_msec(&timer);
       if (unlikely(remain_millis <= 0))
