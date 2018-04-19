@@ -191,6 +191,7 @@ int main( int argc, const char* argv[] )
          fprintf( stdout, "libneTest: preparing to write %llu to erasure files...\n", nread );
          if ( nread != ne_write( handle, buff, nread ) ) {
             fprintf( stderr, "libneTest: unexpected # of bytes written by ne_write\n" );
+            perror("libneTest");
             return -1;
          }
          fprintf( stdout, "libneTest: write successful\n" );
@@ -247,6 +248,7 @@ int main( int argc, const char* argv[] )
 
          if( toread != tmp ) {
             fprintf( stderr, "libneTest: unexpected # of bytes read by ne_read\nlibneTest:  got %d but expected %llu\n", tmp, toread );
+            perror("libneTest");
             return -1;
          }
 

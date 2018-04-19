@@ -906,7 +906,7 @@ int ne_read( ne_handle handle, void *buffer, int nbytes, off_t offset )
 read:
 
    startstripe = (offset+llcounter) / (bsz*N);
-   startpart = (offset + llcounter - (startstripe*bsz*N))/bsz;
+   startpart = (offset + llcounter - ((off_t)startstripe*bsz*N))/bsz;
    startoffset = offset+llcounter - (startstripe*bsz*N) - (startpart*bsz);
 
    DBG_FPRINTF(stdout,"ne_read: read with rebuild from startstripe %d startpart %d and startoffset %d for nbytes %d\n",startstripe,startpart,startoffset,nbytes);
