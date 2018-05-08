@@ -1022,17 +1022,19 @@ ne_handle ne_open1( SnprintfFunc fn, void* state,
                     uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                     char *path, ne_mode mode, ... ) {
 
+   ne_handle ret;
    va_list vl;
    va_start(vl, mode);
-   return ne_open1_vl(fn, state, itype, auth, timing_flags, path, mode, vl);
+   ret = ne_open1_vl(fn, state, itype, auth, timing_flags, path, mode, vl);
    va_end(vl);
+   return ret;
 }
 
 
 // provide defaults for SprintfFunc, state, and SktAuth
 // so naive callers can continue to work (in some cases).
 ne_handle ne_open( char *path, ne_mode mode, ... ) {
-
+   ne_handle ret;
    // this is safe for builds with/without sockets enabled
    // and with/without socket-authentication enabled
    // However, if you do build with socket-authentication, this will require a read
@@ -1045,8 +1047,9 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
 
    va_list vl;
    va_start(vl, mode);
-   return ne_open1_vl(ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, path, mode, vl);
+   ret = ne_open1_vl(ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, path, mode, vl);
    va_end(vl);
+   return ret;
 }
 
 
@@ -2298,7 +2301,7 @@ int ne_close( ne_handle handle )
 
    if (handle->timing_flags) {
       fast_timer_stop(&handle->handle_timer);
-      show_handle_stats(handle);
+    //  show_handle_stats(handle);
    }
 
    if( (UNSAFE(handle) && handle->mode == NE_WRONLY) ) {
