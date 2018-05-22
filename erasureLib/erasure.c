@@ -2139,7 +2139,7 @@ int ne_close( ne_handle handle )
    time_t curtime;
    time(&curtime);
 
-
+   printf("NE_CLOSE: path %s\n", handle->path);
    if ( handle == NULL ) {
       PRINTerr( "ne_close: received a NULL handle\n" );
       errno = EINVAL;
