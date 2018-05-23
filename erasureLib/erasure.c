@@ -2103,6 +2103,41 @@ int show_handle_stats(ne_handle handle) {
    return 0;
 }
 
+char* extract_repo_name(char* path, int* pod_id)
+{
+	char* token;
+	char* path_ = strdup(path);
+	char* pod = NULL;
+	char* repo_name = NULL;
+	//walk through path to get information
+	token = strtok(path_, "/");
+	while (token != NULL)
+	{
+		printf("current token %s\n", token);
+		if ((pod = strstr(token, "pod")) != NULL)
+		{
+			//get the pod ID
+			int pod_ = atoi(pod+3);
+			printf("extracted pod number %d\n", pod_);
+		}
+		else if((repo_name = strstr(token, "_repo")) != NULL)
+		{
+			//got repo name
+			char* underscore = strstr(token, "_");
+			size_t len = underscore - token;
+			repo_name = (char*) malloc(len + 1);
+			memcpy(repo_name, token, len);
+			repo_name[len] = 0;
+			printf("repo_name %s\n", repo_name);
+			free(repo_name);
+		}
+		token = strtok(NULL, "/");
+	}
+
+	free(path_); //test
+	return NULL;
+}
+
 /**
  * Closes the erasure striping indicated by the provided handle and flushes
  * the handle buffer, if necessary.
@@ -2135,6 +2170,8 @@ int ne_close( ne_handle handle )
    int ret = 0;
    int tmp;
    unsigned char *zero_buff;
+
+   handle->repo_name = extract_repo_name(handle->path, handle->pod);
 
    time_t curtime;
    time(&curtime);

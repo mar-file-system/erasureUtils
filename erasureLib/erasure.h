@@ -352,6 +352,8 @@ struct handle {
    FastTimer      handle_timer;      /* pre-open to post-close, all threads complete */
    FastTimer      erasure_timer;
    LogHisto       erasure_h;
+   char*          repo_name;
+   int*           pod;
 };
 typedef struct handle* ne_handle;
 
