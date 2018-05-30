@@ -384,7 +384,11 @@ void *bq_writer(void *arg) {
 
   PRINTdbg("opened file %d\n", bq->block_number);
   if (handle->timing_flags & TF_OPEN)
+  {
      fast_timer_stop(&handle->stats[bq->block_number].open);
+     log_histo_add_interval(&handle->stats[bq->block_number].open_h,
+                                &handle->stats[bq->block_number].open);
+  }
   if (handle->timing_flags & TF_RW)
      fast_timer_start(&handle->stats[bq->block_number].read);
 
@@ -422,7 +426,11 @@ void *bq_writer(void *arg) {
       pthread_mutex_unlock(&bq->qlock);
 
       if (handle->timing_flags & TF_CLOSE)
+      {
          fast_timer_stop(&handle->stats[bq->block_number].close);
+         log_histo_add_interval(&handle->stats[bq->block_number].close_h,
+                                &handle->stats[bq->block_number].close);
+      }
       return NULL;
     }
 
@@ -498,8 +506,11 @@ void *bq_writer(void *arg) {
      fast_timer_start(&handle->stats[bq->block_number].close);
   int close_rc = HNDLOP(close, bq->file);
   if (handle->timing_flags & TF_CLOSE)
+  {
      fast_timer_stop(&handle->stats[bq->block_number].close);
-
+     log_histo_add_interval(&handle->stats[bq->block_number].close_h,
+                                &handle->stats[bq->block_number].close);
+  }
   if ( close_rc || (bq->flags & BQ_ERROR) ) {
     bq->flags |= BQ_ERROR;      // ensure the error was noted
     PRINTerr("error closing block %d\n", bq->block_number);
@@ -966,8 +977,6 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
        handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
 #endif
 
-       if (handle->timing_flags & TF_OPEN)
-          fast_timer_start(&handle->stats[counter].open);
 
       if( mode == NE_WRONLY ) {
          PRINTdbg( "   opening %s%s for write\n", file, WRITE_SFX );
@@ -985,8 +994,11 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
       }
 
       if (handle->timing_flags & TF_OPEN)
+      {
          fast_timer_stop(&handle->stats[counter].open);
-
+	 log_histo_add_interval(&handle->stats[bq->block_number].open_h,
+                                &handle->stats[bq->block_number].open);
+      }
       if ( FD_ERR(handle->FDArray[counter])  &&  handle->src_in_err[counter] == 0 ) {
          PRINTerr( "   failed to open file %s!\n", file );
          handle->src_err_list[handle->nerr] = counter;
@@ -2103,7 +2115,7 @@ int show_handle_stats(ne_handle handle) {
    return 0;
 }
 
-char* extract_repo_name(char* path, int* pod_id)
+void extract_repo_name(char* path, char* repo, int* pod_id)
 {
 	char* token;
 	char* path_ = strdup(path);
@@ -2117,25 +2129,35 @@ char* extract_repo_name(char* path, int* pod_id)
 		if ((pod = strstr(token, "pod")) != NULL)
 		{
 			//get the pod ID
-			int pod_ = atoi(pod+3);
-			printf("extracted pod number %d\n", pod_);
+			*pod_id = atoi(pod+3);
+			printf("extracted pod number %d\n", *pod_id);
 		}
 		else if((repo_name = strstr(token, "_repo")) != NULL)
 		{
 			//got repo name
 			char* underscore = strstr(token, "_");
 			size_t len = underscore - token;
-			repo_name = (char*) malloc(len + 1);
-			memcpy(repo_name, token, len);
-			repo_name[len] = 0;
-			printf("repo_name %s\n", repo_name);
-			free(repo_name);
+			memcpy(repo, token, len);
+			printf("repo_name %s\n", repo);
 		}
 		token = strtok(NULL, "/");
 	}
 
 	free(path_); //test
-	return NULL;
+}
+
+void copy_timing_stats(ne_handle handle)
+{
+	int i;
+	for(i = 0; i < handle->tot_stats; i++)
+	{
+		
+	}
+
+	if(handle->timing_flags & TF_OPEN)
+	{
+		//copy open
+	}
 }
 
 /**
@@ -2171,7 +2193,7 @@ int ne_close( ne_handle handle )
    int tmp;
    unsigned char *zero_buff;
 
-   handle->repo_name = extract_repo_name(handle->path, handle->pod);
+   extract_repo_name(handle->path, handle->repo, handle->pod_id);
 
    time_t curtime;
    time(&curtime);
@@ -2336,10 +2358,10 @@ int ne_close( ne_handle handle )
      free(handle->buffer);
    }
 
-   if (handle->timing_flags) {
-      fast_timer_stop(&handle->handle_timer);
-    //  show_handle_stats(handle);
-   }
+   //if (handle->timing_flags) {
+   //   fast_timer_stop(&handle->handle_timer);
+   //  show_handle_stats(handle);
+   //}
 
    if( (UNSAFE(handle) && handle->mode == NE_WRONLY) ) {
       PRINTdbg( "ne_close: detected unsafe error levels following write operation\n" );
@@ -2373,6 +2395,11 @@ int ne_close( ne_handle handle )
    
    if (handle->timing_flags & TF_HANDLE)
       fast_timer_stop(&handle->handle_timer); /* overall cost of this op */
+
+   if (handle->timing_flags)
+   {
+	copy_timing_stats(handle);
+   }
 
    free(handle);
    return ret;
