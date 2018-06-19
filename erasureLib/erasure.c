@@ -701,6 +701,7 @@ int init_bench_stats(BenchStats* stats) {
 
    fast_timer_reset(&stats->thread);
    fast_timer_reset(&stats->open);
+   log_histo_reset(&stats->open_h);
 
    fast_timer_reset(&stats->read);
    log_histo_reset(&stats->read_h);
@@ -709,6 +710,7 @@ int init_bench_stats(BenchStats* stats) {
    log_histo_reset(&stats->write_h);
 
    fast_timer_reset(&stats->close);
+   log_histo_reset(&stats->open_h);
    fast_timer_reset(&stats->rename);
 
    fast_timer_reset(&stats->stat);
@@ -996,8 +998,8 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
       if (handle->timing_flags & TF_OPEN)
       {
          fast_timer_stop(&handle->stats[counter].open);
-	 log_histo_add_interval(&handle->stats[bq->block_number].open_h,
-                                &handle->stats[bq->block_number].open);
+	 log_histo_add_interval(&handle->stats[counter].open_h,
+                                &handle->stats[counter].open);
       }
       if ( FD_ERR(handle->FDArray[counter])  &&  handle->src_in_err[counter] == 0 ) {
          PRINTerr( "   failed to open file %s!\n", file );
@@ -2125,12 +2127,10 @@ void extract_repo_name(char* path, char* repo, int* pod_id)
 	token = strtok(path_, "/");
 	while (token != NULL)
 	{
-		printf("current token %s\n", token);
 		if ((pod = strstr(token, "pod")) != NULL)
 		{
 			//get the pod ID
 			*pod_id = atoi(pod+3);
-			printf("extracted pod number %d\n", *pod_id);
 		}
 		else if((repo_name = strstr(token, "_repo")) != NULL)
 		{
@@ -2138,7 +2138,6 @@ void extract_repo_name(char* path, char* repo, int* pod_id)
 			char* underscore = strstr(token, "_");
 			size_t len = underscore - token;
 			memcpy(repo, token, len);
-			printf("repo_name %s\n", repo);
 		}
 		token = strtok(NULL, "/");
 	}
@@ -2148,15 +2147,86 @@ void extract_repo_name(char* path, char* repo, int* pod_id)
 
 void copy_timing_stats(ne_handle handle)
 {
-	int i;
-	for(i = 0; i < handle->tot_stats; i++)
-	{
-		
-	}
+	int i, j;
+	int total_blk = handle->N + handle->E;
+	char* open_cursor = handle->timing_stats;
+	//printf("libne open_cursor pointer %p\n", open_cursor);
+	char* read_cursor = handle->timing_stats + (3 + sizeof(double) * 65 * (handle->N + handle->E));
+	char* write_cursor = handle->timing_stats + 2 * (3 + sizeof(double) * 65 * (handle->N + handle->E));
+	char* close_cursor = handle->timing_stats + 3 * (3 + sizeof(double) * 65 * (handle->N + handle->E));
 
 	if(handle->timing_flags & TF_OPEN)
 	{
-		//copy open
+		//put open identifier
+		snprintf(open_cursor, 3, "OP");
+		//printf("open_cursor after snprintf %s\n", open_cursor);
+		open_cursor += 3;
+		for(i = 0; i < total_blk; i++)
+		{
+			double* blk = ((double*)open_cursor) + (65 * i);
+			for(j = 64; j; j--)
+			{
+				blk[j] += handle->stats[i].open_h.bin[j];
+				//printf("LIBNE OPEN blk %d j %d value %f\n", i, j, blk[j]);
+			}
+		}
+	}
+	else
+	{
+		snprintf(open_cursor, 3, "--");
+	}
+
+	if(handle->timing_flags & TF_RW)
+	{
+		//first accumulate read
+		snprintf(read_cursor, 3, "RD");
+		read_cursor += 3;
+		for(i = 0; i < total_blk; i++)
+		{
+			double* blk = ((double*)read_cursor) + (65 * i);
+			for(j = 64; j; j--)
+			{
+				blk[j] += handle->stats[i].read_h.bin[j];
+				//printf("LIBNE READ blk %d j %d value %f\n", i, j, blk[j]);
+			}
+		}
+
+		//then accumulate write
+		snprintf(write_cursor, 3, "WR");
+		write_cursor += 3;
+		for(i = 0; i < total_blk; i++)
+		{
+			double* blk = ((double*)write_cursor) + (65 * i);
+			for(j = 64; j; j--)
+			{
+				blk[j] += handle->stats[i].write_h.bin[j];
+				//printf("LIBNE WRITE blk %d j %d value %f\n", i, j, blk[j]);
+			}
+		}
+	}
+	else
+	{
+		snprintf(read_cursor, 3, "--");
+		snprintf(write_cursor, 3, "--");
+	}
+
+	if (handle->timing_flags & TF_CLOSE)
+	{
+		snprintf(close_cursor, 3, "CL");
+		close_cursor += 3;
+		for(i = 0; i < total_blk; i++)
+		{
+			double* blk = ((double*)close_cursor) + (65 * i);
+			for(j = 64; j; j--)
+			{
+				blk[j] += handle->stats[i].close_h.bin[j];
+			//	printf("LIBNE CLOSE blk %d j %d value %f\n", i, j, blk[j]);
+			}
+		}
+	}
+	else
+	{
+		snprintf(close_cursor, 3, "--");
 	}
 }
 
@@ -2192,13 +2262,11 @@ int ne_close( ne_handle handle )
    int ret = 0;
    int tmp;
    unsigned char *zero_buff;
-
-   extract_repo_name(handle->path, handle->repo, handle->pod_id);
+   //extract_repo_name(handle->path, handle->repo, handle->pod_id);
 
    time_t curtime;
    time(&curtime);
 
-   printf("NE_CLOSE: path %s\n", handle->path);
    if ( handle == NULL ) {
       PRINTerr( "ne_close: received a NULL handle\n" );
       errno = EINVAL;
@@ -2292,8 +2360,8 @@ int ne_close( ne_handle handle )
 
          if ( PATHOP( chown, handle->impl, handle->auth, file, handle->owner, handle->group) ) {
             PRINTerr( "ne_close: failed to chown rebuilt file\n" );
-            //no_rename = 1;
-            //ret = -1;
+            no_rename = 1;
+            ret = -1;
          }
 
          if ( handle->e_ready == 1  &&  no_rename == 0 ) {
@@ -2318,7 +2386,6 @@ int ne_close( ne_handle handle )
 
          }
          else{
-
             PRINTerr( "ne_close: cleaning up file %s from failed rebuild\n", file );
             PATHOP( unlink, handle->impl, handle->auth, file );
 
