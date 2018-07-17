@@ -65,9 +65,14 @@ AM_LDFLAGS =
 
 
 # number says how many buffers to fake reading from file, to send to server
-# for PUT (or to client for GET).  Each buffer is CLIENT_BUF_SIZE (default 1MB).
+# for PUT (or to fake writing to file, for client for GET), in order to
+# measure raw throughput on the socket transport (e.g. RDMA).  Each buffer
+# is CLIENT_BUF_SIZE (default 1MB).
 if SUPPRESS_FILE_IO
-  DEFS += -DSKIP_FILE_READS=1024
+  # DEFS += -DSKIP_FILE_READS=1024
+  # DEFS += -DSKIP_FILE_READS=1048576
+  # DEFS += -DSKIP_FILE_READS=10240
+  DEFS += -DSKIP_FILE_READS=40960
   DEFS += -DSKIP_FILE_WRITES
 endif
 
