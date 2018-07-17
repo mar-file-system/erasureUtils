@@ -384,7 +384,11 @@ void *bq_writer(void *arg) {
 
   PRINTdbg("opened file %d\n", bq->block_number);
   if (handle->timing_flags & TF_OPEN)
+  {
      fast_timer_stop(&handle->stats[bq->block_number].open);
+     log_histo_add_interval(&handle->stats[bq->block_number].open_h,
+                                &handle->stats[bq->block_number].open);
+  }
   if (handle->timing_flags & TF_RW)
      fast_timer_start(&handle->stats[bq->block_number].read);
 
@@ -422,7 +426,11 @@ void *bq_writer(void *arg) {
       pthread_mutex_unlock(&bq->qlock);
 
       if (handle->timing_flags & TF_CLOSE)
+      {
          fast_timer_stop(&handle->stats[bq->block_number].close);
+         log_histo_add_interval(&handle->stats[bq->block_number].close_h,
+                                &handle->stats[bq->block_number].close);
+      }
       return NULL;
     }
 
@@ -498,8 +506,11 @@ void *bq_writer(void *arg) {
      fast_timer_start(&handle->stats[bq->block_number].close);
   int close_rc = HNDLOP(close, bq->file);
   if (handle->timing_flags & TF_CLOSE)
+  {
      fast_timer_stop(&handle->stats[bq->block_number].close);
-
+     log_histo_add_interval(&handle->stats[bq->block_number].close_h,
+                                &handle->stats[bq->block_number].close);
+  }
   if ( close_rc || (bq->flags & BQ_ERROR) ) {
     bq->flags |= BQ_ERROR;      // ensure the error was noted
     PRINTerr("error closing block %d\n", bq->block_number);
@@ -690,6 +701,7 @@ int init_bench_stats(BenchStats* stats) {
 
    fast_timer_reset(&stats->thread);
    fast_timer_reset(&stats->open);
+   log_histo_reset(&stats->open_h);
 
    fast_timer_reset(&stats->read);
    log_histo_reset(&stats->read_h);
@@ -698,6 +710,7 @@ int init_bench_stats(BenchStats* stats) {
    log_histo_reset(&stats->write_h);
 
    fast_timer_reset(&stats->close);
+   log_histo_reset(&stats->open_h);
    fast_timer_reset(&stats->rename);
 
    fast_timer_reset(&stats->stat);
@@ -966,8 +979,6 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
        handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
 #endif
 
-       if (handle->timing_flags & TF_OPEN)
-          fast_timer_start(&handle->stats[counter].open);
 
       if( mode == NE_WRONLY ) {
          PRINTdbg( "   opening %s%s for write\n", file, WRITE_SFX );
@@ -985,8 +996,11 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
       }
 
       if (handle->timing_flags & TF_OPEN)
+      {
          fast_timer_stop(&handle->stats[counter].open);
-
+	 log_histo_add_interval(&handle->stats[counter].open_h,
+                                &handle->stats[counter].open);
+      }
       if ( FD_ERR(handle->FDArray[counter])  &&  handle->src_in_err[counter] == 0 ) {
          PRINTerr( "   failed to open file %s!\n", file );
          handle->src_err_list[handle->nerr] = counter;
@@ -1022,17 +1036,19 @@ ne_handle ne_open1( SnprintfFunc fn, void* state,
                     uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                     char *path, ne_mode mode, ... ) {
 
+   ne_handle ret;
    va_list vl;
    va_start(vl, mode);
-   return ne_open1_vl(fn, state, itype, auth, timing_flags, path, mode, vl);
+   ret = ne_open1_vl(fn, state, itype, auth, timing_flags, path, mode, vl);
    va_end(vl);
+   return ret;
 }
 
 
 // provide defaults for SprintfFunc, state, and SktAuth
 // so naive callers can continue to work (in some cases).
 ne_handle ne_open( char *path, ne_mode mode, ... ) {
-
+   ne_handle ret;
    // this is safe for builds with/without sockets enabled
    // and with/without socket-authentication enabled
    // However, if you do build with socket-authentication, this will require a read
@@ -1045,8 +1061,9 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
 
    va_list vl;
    va_start(vl, mode);
-   return ne_open1_vl(ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, path, mode, vl);
+   ret = ne_open1_vl(ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, path, mode, vl);
    va_end(vl);
+   return ret;
 }
 
 
@@ -2100,6 +2117,119 @@ int show_handle_stats(ne_handle handle) {
    return 0;
 }
 
+void extract_repo_name(char* path, char* repo, int* pod_id)
+{
+	char* token;
+	char* path_ = strdup(path);
+	char* pod = NULL;
+	char* repo_name = NULL;
+	//walk through path to get information
+	token = strtok(path_, "/");
+	while (token != NULL)
+	{
+		if ((pod = strstr(token, "pod")) != NULL)
+		{
+			//get the pod ID
+			*pod_id = atoi(pod+3);
+		}
+		else if((repo_name = strstr(token, "_repo")) != NULL)
+		{
+			//got repo name
+			char* underscore = strstr(token, "_");
+			size_t len = underscore - token;
+			memcpy(repo, token, len);
+		}
+		token = strtok(NULL, "/");
+	}
+
+	free(path_); //test
+}
+
+void copy_timing_stats(ne_handle handle)
+{
+	int i, j;
+	int total_blk = handle->N + handle->E;
+	char* open_cursor = handle->timing_stats;
+	//printf("libne open_cursor pointer %p\n", open_cursor);
+	char* read_cursor = handle->timing_stats + (3 + sizeof(double) * 65 * (handle->N + handle->E));
+	char* write_cursor = handle->timing_stats + 2 * (3 + sizeof(double) * 65 * (handle->N + handle->E));
+	char* close_cursor = handle->timing_stats + 3 * (3 + sizeof(double) * 65 * (handle->N + handle->E));
+
+	if(handle->timing_flags & TF_OPEN)
+	{
+		//put open identifier
+		snprintf(open_cursor, 3, "OP");
+		//printf("open_cursor after snprintf %s\n", open_cursor);
+		open_cursor += 3;
+		for(i = 0; i < total_blk; i++)
+		{
+			double* blk = ((double*)open_cursor) + (65 * i);
+			for(j = 64; j; j--)
+			{
+				blk[j] += handle->stats[i].open_h.bin[j];
+				//printf("LIBNE OPEN blk %d j %d value %f\n", i, j, blk[j]);
+			}
+		}
+	}
+	else
+	{
+		snprintf(open_cursor, 3, "--");
+	}
+
+	if(handle->timing_flags & TF_RW)
+	{
+		//first accumulate read
+		snprintf(read_cursor, 3, "RD");
+		read_cursor += 3;
+		for(i = 0; i < total_blk; i++)
+		{
+			double* blk = ((double*)read_cursor) + (65 * i);
+			for(j = 64; j; j--)
+			{
+				blk[j] += handle->stats[i].read_h.bin[j];
+				//printf("LIBNE READ blk %d j %d value %f\n", i, j, blk[j]);
+			}
+		}
+
+		//then accumulate write
+		snprintf(write_cursor, 3, "WR");
+		write_cursor += 3;
+		for(i = 0; i < total_blk; i++)
+		{
+			double* blk = ((double*)write_cursor) + (65 * i);
+			for(j = 64; j; j--)
+			{
+				blk[j] += handle->stats[i].write_h.bin[j];
+				//printf("LIBNE WRITE blk %d j %d value %f\n", i, j, blk[j]);
+			}
+		}
+	}
+	else
+	{
+		snprintf(read_cursor, 3, "--");
+		snprintf(write_cursor, 3, "--");
+	}
+
+	if (handle->timing_flags & TF_CLOSE)
+	{
+		snprintf(close_cursor, 3, "CL");
+		close_cursor += 3;
+		for(i = 0; i < total_blk; i++)
+		{
+			double* blk = ((double*)close_cursor) + (65 * i);
+			for(j = 64; j; j--)
+			{
+				blk[j] += handle->stats[i].close_h.bin[j];
+			//	printf("LIBNE CLOSE blk %d j %d value %f\n", i, j, blk[j]);
+			}
+		}
+	}
+	else
+	{
+		snprintf(close_cursor, 3, "--");
+	}
+}
+
 /**
  * Closes the erasure striping indicated by the provided handle and flushes
  * the handle buffer, if necessary.
@@ -2132,10 +2262,10 @@ int ne_close( ne_handle handle )
    int ret = 0;
    int tmp;
    unsigned char *zero_buff;
+   //extract_repo_name(handle->path, handle->repo, handle->pod_id);
 
    time_t curtime;
    time(&curtime);
-
 
    if ( handle == NULL ) {
       PRINTerr( "ne_close: received a NULL handle\n" );
@@ -2230,8 +2360,8 @@ int ne_close( ne_handle handle )
 
          if ( PATHOP( chown, handle->impl, handle->auth, file, handle->owner, handle->group) ) {
             PRINTerr( "ne_close: failed to chown rebuilt file\n" );
-            //no_rename = 1;
-            //ret = -1;
+            no_rename = 1;
+            ret = -1;
          }
 
          if ( handle->e_ready == 1  &&  no_rename == 0 ) {
@@ -2256,7 +2386,6 @@ int ne_close( ne_handle handle )
 
          }
          else{
-
             PRINTerr( "ne_close: cleaning up file %s from failed rebuild\n", file );
             PATHOP( unlink, handle->impl, handle->auth, file );
 
@@ -2296,10 +2425,10 @@ int ne_close( ne_handle handle )
      free(handle->buffer);
    }
 
-   if (handle->timing_flags) {
-      fast_timer_stop(&handle->handle_timer);
-      show_handle_stats(handle);
-   }
+   //if (handle->timing_flags) {
+   //   fast_timer_stop(&handle->handle_timer);
+   //  show_handle_stats(handle);
+   //}
 
    if( (UNSAFE(handle) && handle->mode == NE_WRONLY) ) {
       PRINTdbg( "ne_close: detected unsafe error levels following write operation\n" );
@@ -2333,6 +2462,11 @@ int ne_close( ne_handle handle )
    
    if (handle->timing_flags & TF_HANDLE)
       fast_timer_stop(&handle->handle_timer); /* overall cost of this op */
+
+   if (handle->timing_flags)
+   {
+	copy_timing_stats(handle);
+   }
 
    free(handle);
    return ret;
