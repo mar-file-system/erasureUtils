@@ -362,12 +362,15 @@ void *bq_writer(void *arg) {
     
     if(!(bq->flags & BQ_ERROR)) {
       pthread_mutex_unlock(&bq->qlock);
+// removing this since the newer NFS clients are better behaved
+/*
       if(written >= SYNC_SIZE) {
         if ( fsync(bq->file) ) {
           bq->flags |= BQ_ERROR;
         }
         written = 0;
       }
+*/
       DBG_FPRINTF(stdout, "Writing block %d\n", bq->block_number);
       u32 crc   = crc32_ieee(TEST_SEED, bq->buffers[bq->head], bq->buffer_size);
       error     = write(bq->file, bq->buffers[bq->head], bq->buffer_size);
