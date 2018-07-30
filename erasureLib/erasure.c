@@ -998,7 +998,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
       if (handle->timing_flags & TF_OPEN)
       {
          fast_timer_stop(&handle->stats[counter].open);
-	 log_histo_add_interval(&handle->stats[counter].open_h,
+         log_histo_add_interval(&handle->stats[counter].open_h,
                                 &handle->stats[counter].open);
       }
       if ( FD_ERR(handle->FDArray[counter])  &&  handle->src_in_err[counter] == 0 ) {
@@ -1049,6 +1049,7 @@ ne_handle ne_open1( SnprintfFunc fn, void* state,
 // so naive callers can continue to work (in some cases).
 ne_handle ne_open( char *path, ne_mode mode, ... ) {
    ne_handle ret;
+
    // this is safe for builds with/without sockets enabled
    // and with/without socket-authentication enabled
    // However, if you do build with socket-authentication, this will require a read
@@ -1059,10 +1060,11 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
       return NULL;
    }
 
-   va_list vl;
+   va_list   vl;
    va_start(vl, mode);
    ret = ne_open1_vl(ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, path, mode, vl);
    va_end(vl);
+
    return ret;
 }
 
@@ -2119,115 +2121,116 @@ int show_handle_stats(ne_handle handle) {
 
 void extract_repo_name(char* path, char* repo, int* pod_id)
 {
-	char* token;
-	char* path_ = strdup(path);
-	char* pod = NULL;
-	char* repo_name = NULL;
-	//walk through path to get information
-	token = strtok(path_, "/");
-	while (token != NULL)
-	{
-		if ((pod = strstr(token, "pod")) != NULL)
-		{
-			//get the pod ID
-			*pod_id = atoi(pod+3);
-		}
-		else if((repo_name = strstr(token, "_repo")) != NULL)
-		{
-			//got repo name
-			char* underscore = strstr(token, "_");
-			size_t len = underscore - token;
-			memcpy(repo, token, len);
-		}
-		token = strtok(NULL, "/");
-	}
+   char* token;
+   char* path_ = strdup(path);
+   char* pod = NULL;
+   char* repo_name = NULL;
+   //walk through path to get information
+   token = strtok(path_, "/");
+   while (token != NULL)
+   {
+      if ((pod = strstr(token, "pod")) != NULL)
+      {
+         //get the pod ID
+         *pod_id = atoi(pod+3);
+      }
+      else if((repo_name = strstr(token, "_repo")) != NULL)
+      {
+         //got repo name
+         char* underscore = strstr(token, "_");
+         size_t len = underscore - token;
+         memcpy(repo, token, len);
+      }
+      token = strtok(NULL, "/");
+   }
 
-	free(path_); //test
+   free(path_); //test
 }
 
 void copy_timing_stats(ne_handle handle)
 {
-	int i, j;
-	int total_blk = handle->N + handle->E;
-	char* open_cursor = handle->timing_stats;
-	//printf("libne open_cursor pointer %p\n", open_cursor);
-	char* read_cursor = handle->timing_stats + (3 + sizeof(double) * 65 * (handle->N + handle->E));
-	char* write_cursor = handle->timing_stats + 2 * (3 + sizeof(double) * 65 * (handle->N + handle->E));
-	char* close_cursor = handle->timing_stats + 3 * (3 + sizeof(double) * 65 * (handle->N + handle->E));
+   int i, j;
+   int total_blk = handle->N + handle->E;
+   char* open_cursor = handle->timing_stats;
+   //printf("libne open_cursor pointer %p\n", open_cursor);
+   char* read_cursor = handle->timing_stats + (3 + sizeof(double) * 65 * (handle->N + handle->E));
+   char* write_cursor = handle->timing_stats + 2 * (3 + sizeof(double) * 65 * (handle->N + handle->E));
+   char* close_cursor = handle->timing_stats + 3 * (3 + sizeof(double) * 65 * (handle->N + handle->E));
 
-	if(handle->timing_flags & TF_OPEN)
-	{
-		//put open identifier
-		snprintf(open_cursor, 3, "OP");
-		//printf("open_cursor after snprintf %s\n", open_cursor);
-		open_cursor += 3;
-		for(i = 0; i < total_blk; i++)
-		{
-			double* blk = ((double*)open_cursor) + (65 * i);
-			for(j = 64; j; j--)
-			{
-				blk[j] += handle->stats[i].open_h.bin[j];
-				//printf("LIBNE OPEN blk %d j %d value %f\n", i, j, blk[j]);
-			}
-		}
-	}
-	else
-	{
-		snprintf(open_cursor, 3, "--");
-	}
+   if(handle->timing_flags & TF_OPEN)
+   {
+      //put open identifier
+      snprintf(open_cursor, 3, "OP");
+      //printf("open_cursor after snprintf %s\n", open_cursor);
 
-	if(handle->timing_flags & TF_RW)
-	{
-		//first accumulate read
-		snprintf(read_cursor, 3, "RD");
-		read_cursor += 3;
-		for(i = 0; i < total_blk; i++)
-		{
-			double* blk = ((double*)read_cursor) + (65 * i);
-			for(j = 64; j; j--)
-			{
-				blk[j] += handle->stats[i].read_h.bin[j];
-				//printf("LIBNE READ blk %d j %d value %f\n", i, j, blk[j]);
-			}
-		}
+      open_cursor += 3;
+      for(i = 0; i < total_blk; i++)
+      {
+         double* blk = ((double*)open_cursor) + (65 * i);
+         for(j = 64; j; j--)
+         {
+            blk[j] += handle->stats[i].open_h.bin[j];
+            //printf("LIBNE OPEN blk %d j %d value %f\n", i, j, blk[j]);
+         }
+      }
+   }
+   else
+   {
+      snprintf(open_cursor, 3, "--");
+   }
 
-		//then accumulate write
-		snprintf(write_cursor, 3, "WR");
-		write_cursor += 3;
-		for(i = 0; i < total_blk; i++)
-		{
-			double* blk = ((double*)write_cursor) + (65 * i);
-			for(j = 64; j; j--)
-			{
-				blk[j] += handle->stats[i].write_h.bin[j];
-				//printf("LIBNE WRITE blk %d j %d value %f\n", i, j, blk[j]);
-			}
-		}
-	}
-	else
-	{
-		snprintf(read_cursor, 3, "--");
-		snprintf(write_cursor, 3, "--");
-	}
+   if(handle->timing_flags & TF_RW)
+   {
+      //first accumulate read
+      snprintf(read_cursor, 3, "RD");
+      read_cursor += 3;
+      for(i = 0; i < total_blk; i++)
+      {
+         double* blk = ((double*)read_cursor) + (65 * i);
+         for(j = 64; j; j--)
+         {
+            blk[j] += handle->stats[i].read_h.bin[j];
+            //printf("LIBNE READ blk %d j %d value %f\n", i, j, blk[j]);
+         }
+      }
 
-	if (handle->timing_flags & TF_CLOSE)
-	{
-		snprintf(close_cursor, 3, "CL");
-		close_cursor += 3;
-		for(i = 0; i < total_blk; i++)
-		{
-			double* blk = ((double*)close_cursor) + (65 * i);
-			for(j = 64; j; j--)
-			{
-				blk[j] += handle->stats[i].close_h.bin[j];
-			//	printf("LIBNE CLOSE blk %d j %d value %f\n", i, j, blk[j]);
-			}
-		}
-	}
-	else
-	{
-		snprintf(close_cursor, 3, "--");
-	}
+      //then accumulate write
+      snprintf(write_cursor, 3, "WR");
+      write_cursor += 3;
+      for(i = 0; i < total_blk; i++)
+      {
+         double* blk = ((double*)write_cursor) + (65 * i);
+         for(j = 64; j; j--)
+         {
+            blk[j] += handle->stats[i].write_h.bin[j];
+            //printf("LIBNE WRITE blk %d j %d value %f\n", i, j, blk[j]);
+         }
+      }
+   }
+   else
+   {
+      snprintf(read_cursor, 3, "--");
+      snprintf(write_cursor, 3, "--");
+   }
+
+   if (handle->timing_flags & TF_CLOSE)
+   {
+      snprintf(close_cursor, 3, "CL");
+      close_cursor += 3;
+      for(i = 0; i < total_blk; i++)
+      {
+         double* blk = ((double*)close_cursor) + (65 * i);
+         for(j = 64; j; j--)
+         {
+            blk[j] += handle->stats[i].close_h.bin[j];
+         // printf("LIBNE CLOSE blk %d j %d value %f\n", i, j, blk[j]);
+         }
+      }
+   }
+   else
+   {
+      snprintf(close_cursor, 3, "--");
+   }
 }
 
 /**
@@ -2464,9 +2467,7 @@ int ne_close( ne_handle handle )
       fast_timer_stop(&handle->handle_timer); /* overall cost of this op */
 
    if (handle->timing_flags)
-   {
-	copy_timing_stats(handle);
-   }
+      copy_timing_stats(handle);
 
    free(handle);
    return ret;
