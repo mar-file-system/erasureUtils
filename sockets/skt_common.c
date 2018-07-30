@@ -445,8 +445,9 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
 
    fast_timer_start(&timer);
 
-   int       i;
-   for (i=0; i<MAX_RD_POLLS; ++i) {
+   //   int       i;
+   //   for (i=0; i<MAX_RD_POLLS; ++i)
+   while (1) {
 
       // --- wait for the fd to have data
       //     (see comment about race-condition)
@@ -575,8 +576,9 @@ int write_raw(int fd, char* buf, size_t size) {
 
    fast_timer_start(&timer);
 
-   int       i;
-   for (i=0; i<MAX_WR_POLLS; ++i) {
+   //   int       i;
+   //   for (i=0; i<MAX_WR_POLLS; ++i)
+   while (1) {
 
       // --- wait for the fd to have data
       //     (see comment about race-condition)
