@@ -102,6 +102,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #   define G   1000000000.f
 
 
+
 int show_cpuid() {
 
    int a, b, c, d;              // eax, ebx, ecx, edx
@@ -127,8 +128,8 @@ int show_cpuid() {
 }
 
 
-static volatile double ticks_per_sec = -1;
-       volatile int    invariant_TSC = 0;
+static volatile double ticks_per_sec =  -1;
+       volatile int    invariant_TSC =   0;
 
 // lock for access to reap_list[] elements
 pthread_mutex_t init_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -157,7 +158,10 @@ int fast_timer_inits() {
       return -1;
    }
 
-   // parse funky reversed-order chars
+   // parse funky reversed-order chars.  They are reversed if you treat
+   // them as integers (i.e. low-order char in high-order byte), but if you
+   // look at the storage on a big-endian (i.e. bass-ackward) machine, the
+   // strings are in the correct order.
    //
    // NOTE: Our goal is to turn this number into a divisor such that TSC
    //       intervals can always be rendered in common units (e.g. nsec).
@@ -165,49 +169,85 @@ int fast_timer_inits() {
    //       TSC increments the clock.  (Alternatively, we could save the
    //       letter used in cpuid info, and show everything in that unit.)
    //      
-   __cpuid(0x80000004, a, b, c, d);
+   enum RegName {
+      A = 0,
+      B,
+      C,
+      D
+   };
+   const char* reg_name[4] = {"eax", "ebx", "ecx", "edx"};
+
+   uint32_t    eax_in;          // cpuid input
+   uint32_t    out_reg[4];      // cpuid output: eax, ebx, ecx, edx
+   for (eax_in=0x80000004; eax_in<=0x80000004; ++eax_in){
+
+      __cpuid(eax_in, out_reg[A], out_reg[B], out_reg[C], out_reg[D]);
+
+#if 0
+      // show 4x32-bit regs (converted by virtue of shared storage)
+      int reg;
+      for (reg=A; reg<=D; ++reg) {
+         printf("0x%08x   %s: '", eax_in, reg_name[reg]);
+
+         const char* reg_str = (char*)&out_reg[reg];
+         int i;
+         for (i=0; i<4; ++i)
+            printf("%c", reg_str[i]);
+
+         printf("'\n");
+      }
+#endif
+   }
+
+
+   const char* brand_str = (char*)&out_reg[0];
+   //   printf("tail-end of CPU brand-string: '%s'\n", brand_str);
+
+
+   // work our way back from "Hz"
+   const char* hz = strstr(brand_str, "Hz");
+   if (! hz) {
+      fprintf(stderr, "couldn't find 'Hz' in '%s'\n", brand_str);
+      return -1;
+   }
+
+
+   // we need at least the final " 2.40GHz" (for example) of the CPU Brand-String
+   const char* space;
+   const char* multiplier = hz -1;
+   for (space=multiplier; space>=brand_str; --space) {
+      if (*space == ' ')
+         break;
+   }
+   if (space < brand_str) {
+      fprintf(stderr, "not enough room in brand-str '%s'\n", brand_str);
+      return -1;
+   }
+
+   // parse out the multiplier
    float mult = 1;
-   switch (d & 0xff) {
+   switch (*multiplier) {
    case 'M': mult = M;   break;
    case 'G': mult = G;   break;
    default:
-      fprintf(stderr, "couldn't find multiplier in '%c'\n", d & 0xff);
+      fprintf(stderr, "couldn't find multiplier in '%c'\n", (*multiplier));
       return -1;
    }
-   //   printf("multiplier: '%c'\n", d & 0xff);
+   //   printf("multiplier: '%c'\n", *multiplier);
+
+   // the value (e.g. "2.40") is what comes before the multiplier
+   const char* number_str = space+1;
 
 
-   char str[] = { (char)(c       & 0xff),
-                  (char)((c>>8)  & 0xff),
-                  (char)((c>>16) & 0xff),
-                  (char)((c>>24) & 0xff),
-                  0 };
-   //   printf("str:    '%s'\n", (char*)str);
-
-   float normed;
-   sscanf(str, "%f", &normed);
+   float normed;                // e.g. "2.40", without the multiplier
+   sscanf(number_str, "%f", &normed);
    //   printf("normed: %f\n", normed);
 
-   // just locking around the updates means we allow a race for
-   // hypothetical different threads to do updates with their
-   // own values, but they are likely to compute similar
-   // values, and any future threads will avoid the problem
-   // because fast_timer_inits() will see that ticks_per_sec
-   // already has a value.
-
-   pthread_mutex_lock(&init_mtx);
-
-   // --- set the static value, used in fast_timer_sec(), etc
-   ticks_per_sec = normed * mult;
-   //   printf("freq:   %f\n", ticks_per_sec);
 
    // --- "invariant TSC" means thread-migration across cores do not make
-   //     the TSC invalid.  (Also means the rate
+   //     the TSC invalid.  (Also means the rate of the TSC can change.)
    __cpuid(0x80000007, a, b, c, d);
    invariant_TSC = (d & 0x100) >> 8;
-
-   pthread_mutex_unlock(&init_mtx);
-
 
 #ifndef ALLOW_VARIABLE_TSC
    if (! invariant_TSC) {
@@ -215,6 +255,22 @@ int fast_timer_inits() {
       exit(-1);                 // see fast_timer_stop()
    }
 #endif
+
+
+   // just locking around the updates means we allow a race for
+   // hypothetical different threads to do updates with their own values,
+   // but they are likely to compute similar values (could vary if we have
+   // a variable TSC), and any future threads will avoid the problem
+   // because fast_timer_inits() will see that ticks_per_sec already has a
+   // value.
+
+   pthread_mutex_lock(&init_mtx);
+
+   // --- set the static value, used in fast_timer_sec(), etc
+   ticks_per_sec = normed * mult;
+   //   printf("freq:   %f\n", ticks_per_sec);
+
+   pthread_mutex_unlock(&init_mtx);
 
    return 0;
 }
