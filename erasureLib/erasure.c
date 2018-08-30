@@ -1302,25 +1302,6 @@ read:
             handle->e_ready = 0; //indicate that erasure structs require re-initialization
          }
       }
-      //temporary addition to allow for the constant reading of erasure parts
-      for ( counter = N; counter < mtot; counter++ ) {
-         tmp = 0;
-         if ( handle->src_in_err[ counter ] == 0 ) {
-#ifdef INT_CRC
-            tmp = lseek(handle->FDArray[counter],(startstripe*( bsz+sizeof(u32) )),SEEK_SET);
-#else
-            tmp = lseek(handle->FDArray[counter],(startstripe*bsz),SEEK_SET);
-#endif
-         }
-         //note any errors, no need to restart though
-         if ( tmp < 0 ) {
-            handle->src_in_err[counter] = 1;
-            handle->src_err_list[handle->nerr] = counter;
-            handle->nerr++;
-            nsrcerr++;
-            handle->e_ready = 0; //indicate that erasure structs require re-initialization
-         }
-      }
       tmpchunk = startpart;
       tmpoffset = startoffset;
       error_in_stripe = 0;
@@ -3184,17 +3165,6 @@ static int reset_blocks(ne_handle handle, rebuild_err epat) {
         }
       }
       
-    }
-    if ( handle->src_in_err[block_index]  &&  epat->FDArray[block_index] != -1 ) {
-      DBG_FPRINTF(stdout,
-                  "ne_rebuild: performing seek to offset 0 for in-error file %d\n",
-                  block_index);
-      // always reattempt a seek of the original, so long as we have a FD
-      if ( lseek(epat->FDArray[block_index], 0, SEEK_SET) == -1 ) {
-        DBG_FPRINTF(stderr, "ne_rebuild: failed to seek in-error file %d\n", block_index );
-        // we skip updating the per-stripe errors here, as that will always be handled later on
-        epat->per_rebuild_err[ block_index ] = 1;
-      }
     }
 
     if ( handle->src_in_err[block_index]  &&  ! FD_ERR(epat->FDArray[block_index]) ) {
