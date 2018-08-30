@@ -702,6 +702,12 @@ echo "done"
 if [[ $CREATED_WRKDIR == 1 ]]; then
    echo -n "Deleting working directory..."
    rmdir $WORK_DIRECTORY
-   echo "done"
+   ret=$?
+   if [[ $ret -ne 0 ]]; then
+      echo -e "\033[0;31mfailure\033[0m"
+      echo "Failed to delete working directory!  Terminating anyway." >> $LOGFILE
+   else
+      echo "done"
+   fi
 fi
 

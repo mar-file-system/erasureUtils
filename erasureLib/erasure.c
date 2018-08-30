@@ -4380,7 +4380,7 @@ int ne_delete_block1(const uDAL* impl, SktAuth auth, const char *path) {
 
    int ret = PATHOP(unlink, impl, auth, path);
 
-#ifdef META_FILE
+#ifdef META_FILES
    if(ret == 0) {
       char meta_path[2048];
       strncpy(meta_path, path, 2048);
