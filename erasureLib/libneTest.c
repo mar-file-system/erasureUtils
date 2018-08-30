@@ -423,6 +423,7 @@ int main( int argc, const char* argv[] )
          ssize_t nwritten = ne_write( handle, buff, nread );
          if ( nwritten != nread ) {
             PRINTlog("libneTest: unexpected # of bytes (%ld) written by ne_write (expected %ld)\n", nwritten, nread );
+            perror("libneTest");
             return -1;
          }
          PRINTdbg("libneTest: write successful\n" );
