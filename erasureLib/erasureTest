@@ -172,7 +172,7 @@ while [[ $cnt -lt $ITER ]]; do
    echo >> $LIBTLOG
    echo "Generating $n+$e striping starting at file $start""..." >> $LOGFILE
 #   tcnt=$( date +%s%N )
-   { ret=$( time -p ./libneTest write $DATAFILE $EPAT $n $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.write
+   { ret=$( time -p ./libneTest write $DATAFILE $EPAT $n $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.write
 
 #   tcnt="`date +%s%N` - $tcnt"
 #   if [[ $BC -eq 0 ]]; then
@@ -280,22 +280,39 @@ while [[ $cnt -lt $ITER ]]; do
                fsize=$( stat $stfmt $efile )
                corr=$(( `od -N 4 -t uL -An /dev/urandom | awk '{print $1}'` % fsize ))
                offset=$(( `od -N 4 -t uL -An /dev/urandom | awk '{print $1}'` % ( fsize - corr ) ))
-               echo "      inserting $corr random bytes at offset $offset"
+               echo -n "      inserting $corr random bytes at offset $offset"
                echo "      inserting $corr random bytes at offset $offset" >> $LOGFILE
 
                corrmegab=$(( ($corr / 1048576) + 1 ))
-               dd if=/dev/urandom of="$efile".esource bs=1M count=$corrmegab > /dev/null 2>&1
+               dd if=/dev/urandom of="$efile".esource bs=1M count=1 > /dev/null 2>&1
 
                cp $efile $efile".tmp"
                diff=0
                while [[ $diff -eq 0 ]]; do
-                  dd if="$efile".esource of=$efile bs=1c count=$corr seek=$offset conv=notrunc > /dev/null 2>&1
+                  corr_done=$(( 1048576 - (offset % 1048576) ))
+                  if [[ $corr_done -gt $corr ]]; then corr_done=$corr; fi
+                  # insert enough to align our offset to megabyte boundaries
+                  dd if="$efile".esource of=$efile bs=1c count=$corr_done seek=$offset conv=notrunc > /dev/null 2>&1
+                  while [[ $corr_done -lt $corr ]]; do
+                     tocorr=1
+                     corrbs="1M"
+                     toffset=$(( (offset + corr_done) / 1048576 ))
+                     if [[ $(( $corr_done + 1048576 )) -gt $corr ]]; then
+                        tocorr=$(( corr - corr_done ))
+                        corrbs="1c"
+                        toffset=$(( offset + corr_done ))
+                     fi
+                     echo -n "."
+                     dd if="$efile".esource of=$efile bs=$corrbs count=$tocorr seek=$toffset conv=notrunc > /dev/null 2>&1
+                     corr_done=$(( corr_done + 1048576 ))
+                  done
                   diff $efile $efile".tmp" > /dev/null 2>&1
                   diff=$?
                   if [[ $diff -eq 0 ]]; then
                      echo "      corrption insertion did not alter file, retrying..."
                   fi
                done
+               echo "done"
                rm $efile".tmp"
                rm "$efile".esource
                echo "   creating backup of corrupted file..."
@@ -360,7 +377,7 @@ while [[ $cnt -lt $ITER ]]; do
          echo -n "Verifying corruption pattern (expecting pattern $stat)..."
          echo "Verifying corruption pattern (expecting pattern $stat)..." >> $LOGFILE
 
-         { ret=$( time -p ./libneTest status $EPAT 2>&1 | tail -n 1 ); } 2>>$TLOGPREF$$.status
+         { ret=$( time -p ./libneTest status $EPAT 2>&1 | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
 
          if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
             echo
@@ -388,7 +405,7 @@ while [[ $cnt -lt $ITER ]]; do
          
          RFAIL=0
 
-         { ret=$( time -p ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.read
+         { ret=$( time -p ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.read
          
          if [[ ! $ret =~ $re  ||  $ret -gt $tstat  ||  ( $ICRC -eq 1  &&  $ret -ne $tstat ) ]]; then
             echo
@@ -445,7 +462,7 @@ while [[ $cnt -lt $ITER ]]; do
             tN=$n
          fi
          
-         { ret=$( time -p ./libneTest read /dev/null $EPAT $tN $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>> $TLOGPREF$$.no_read
+         { ret=$( time -p ./libneTest read /dev/null $EPAT $tN $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.no_read
          
          if [[ ! $ret =~ $re  ||  $ret -gt $tstat  ||  ( $RFAIL -eq 0  &&  $ret -ne $tstat ) ]]; then
             echo
@@ -480,7 +497,7 @@ while [[ $cnt -lt $ITER ]]; do
                tN=$n
             fi
             
-            { ret=$( time -p ./libneTest rebuild $EPAT $tN $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>>$TLOGPREF$$.recovery
+            { ret=$( time -p ./libneTest rebuild $EPAT $tN $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.recovery
 
 
             if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
@@ -548,7 +565,7 @@ while [[ $cnt -lt $ITER ]]; do
          echo -n "Checking the striping for corruption..."
          echo "Checking the striping for corruption..." >> $LOGFILE
 
-         { ret=$( time -p ./libneTest status $EPAT 2>&1 | tee -a $LIBTLOG | tail -n 1 ); } 2>>$TLOGPREF$$.status
+         { ret=$( time -p ./libneTest status $EPAT 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
 
          if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
             echo
