@@ -315,7 +315,7 @@ int main( int argc, const char* argv[] )
    }
 
    else if ( strcmp( argv[1], "crc-status" ) == 0 ) {
-      printf("MAX-N: %d   MAX-E: %d\n", MAXN, MAXE);
+      PRINTout("MAX-N: %d   MAX-E: %d\n", MAXN, MAXE);
       return crc_status();
    }
 
@@ -621,7 +621,7 @@ int main( int argc, const char* argv[] )
 
       tmp = ne_rebuild( handle );
       if ( tmp < 0 ) {
-        printf("rebuild result %d, errno=%d (%s)\n", tmp, errno, strerror(errno));
+        PRINTout("rebuild result %d, errno=%d (%s)\n", tmp, errno, strerror(errno));
         PRINTlog("libneTest: rebuild failed!\n" );
          return -1;
       }
@@ -641,8 +641,9 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
-      PRINTout( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\nExtended Attribute Errors : ",
+      PRINTout( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
                 stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
+      PRINTout( "Extended Attribute Errors : ");
       for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
          PRINTout( "%d ", stat->xattr_status[tmp] );
       }
