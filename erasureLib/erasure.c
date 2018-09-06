@@ -1939,14 +1939,15 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
                    (unsigned long)readsize, totsize, handle->buff_rem );
          //memcpy ( handle->buffer + handle->buff_rem, buffer+totsize, readsize);
          int queue_result = bq_enqueue(&handle->blocks[counter], buffer+totsize, readsize);
-         if(queue_result == -1) {
-           // bq_enqueue will set errno.
-           return -1;
-         }
-         else if(queue_result != 0 && !handle->src_in_err[counter]) {
+         //if we failed to enqueue work for this block, note that the block is in error
+         if(queue_result != 0 && !handle->src_in_err[counter]) {
            handle->src_in_err[counter] = 1;
            handle->src_err_list[handle->nerr] = counter;
            handle->nerr++;
+         }
+         if(queue_result == -1) {
+           // bq_enqueue will set errno.
+           return -1;
          }
          
          PRINTdbg( "ne_write:   ...copy complete.\n");
