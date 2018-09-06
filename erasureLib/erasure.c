@@ -184,6 +184,7 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 #define HNDLOP(OP, GFD, ...)                (GFD).hndl->impl->OP(&(GFD), ## __VA_ARGS__)
 
 #define PATHOP(OP, IMPL, AUTH, PATH, ...)   (IMPL)->OP((AUTH), (PATH), ## __VA_ARGS__)
+
 #define UMASK(GFD, MASK)                    umask(MASK) /* TBD */
 #define DEFAULT_AUTH_INIT(AUTH)             skt_auth_init(SKT_S3_USER, &(AUTH))
 #define AUTH_INSTALL(FD, AUTH)              skt_auth_install((FD), (AUTH))
@@ -2345,12 +2346,12 @@ int ne_close( ne_handle handle )
             char timestamp[30];
 
             strftime( timestamp, 30, ".rebuild_bkp.%m%d%y-%H%M%S", localtime(&curtime) );
-
             strncat( file, timestamp, 30 );
             
             // perform the rename
             errno = 0;
-            if( rename( nfile, file )  &&  errno != ENOENT ) { //if there is no original, this is not an error
+            if( PATHOP( rename, handle->impl, handle->auth,  nfile, file )
+                && (errno != ENOENT) ) { //if there is no original, this is not an error
                PRINTerr( "ne_close: failed to rename original file \"%s\" to \"%s\"\n", nfile, file );
                ret = -1;
                no_rename = 1;
