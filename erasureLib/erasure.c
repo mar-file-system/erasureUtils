@@ -444,7 +444,7 @@ void *bq_writer(void *arg) {
       PRINTdbg("BQ finished\n");
       break;
     }
-    
+
 
     if(!(bq->flags & BQ_ERROR)) {
 
@@ -454,8 +454,8 @@ void *bq_writer(void *arg) {
       pthread_mutex_unlock(&bq->qlock);
       if(written >= SYNC_SIZE) {
          if ( HNDLOP(fsync, bq->file) )
-          bq->flags |= BQ_ERROR;
-        written = 0;
+            bq->flags |= BQ_ERROR;
+         written = 0;
       }
 
       PRINTdbg("Writing block %d\n", bq->block_number);
@@ -541,8 +541,10 @@ void *bq_writer(void *arg) {
   handle->snprintf( block_file_path, MAXNAME, handle->path,
                     (bq->block_number+handle->erasure_offset)%(handle->N+handle->E), handle->state );
 
+  PRINTdbg("bq_writer: renaming old:  %s\n", bq->path );
+  PRINTdbg("                    new:  %s\n", block_file_path );
   if( PATHOP( rename, handle->impl, handle->auth, bq->path, block_file_path ) != 0 ) {
-    PRINTerr("bq_writer: failed to rename written file %s\n", bq->path );
+    PRINTerr("bq_writer: rename failed: %s\n", strerror(errno) );
     bq->flags |= BQ_ERROR;
   }
 
@@ -550,9 +552,12 @@ void *bq_writer(void *arg) {
   // rename the META file too
   strncat( bq->path, META_SFX, strlen(META_SFX)+1 );
   strncat( block_file_path, META_SFX, strlen(META_SFX)+1 );
+
+  PRINTdbg("bq_writer: renaming meta old:  %s\n", bq->path );
+  PRINTdbg("                         new:  %s\n", block_file_path );
   if ( PATHOP( rename, handle->impl, handle->auth, bq->path, block_file_path ) != 0 ) {
-    PRINTerr("bq_writer: failed to rename written meta file %s\n", bq->path );
-    bq->flags |= BQ_ERROR;
+     PRINTerr("bq_writer: rename failed: %s\n", strerror(errno) );
+     bq->flags |= BQ_ERROR;
   }
 #endif
 
@@ -2317,7 +2322,8 @@ int ne_close( ne_handle handle )
 
            ret = -1;
            no_rename = 1;
-           PRINTdbg("ne_close: close failed for rebuild output file %d, aborting rename for that file\n", counter );
+           PRINTerr("ne_close: close failed for rebuild output file %d, "
+                    "aborting rename for that file\n", counter );
         }
 
         // insurance, to protect against further use
@@ -2350,11 +2356,17 @@ int ne_close( ne_handle handle )
             
             // perform the rename
             errno = 0;
+            PRINTdbg( "ne_close: renaming old: %s\n", nfile );
+            PRINTdbg( "                   new: %s\n", file );
             if( PATHOP( rename, handle->impl, handle->auth,  nfile, file )
                 && (errno != ENOENT) ) { //if there is no original, this is not an error
+
                PRINTerr( "ne_close: failed to rename original file \"%s\" to \"%s\"\n", nfile, file );
                ret = -1;
                no_rename = 1;
+            }
+            else if (errno) {
+               PRINTdbg( "ne_close: rename failed (not considered an error): %s\n", strerror(errno) );
             }
 
             strncpy( file, nfile, strlen(nfile) + 1);
@@ -2370,6 +2382,8 @@ int ne_close( ne_handle handle )
 
          if ( handle->e_ready == 1  &&  no_rename == 0 ) {
 
+            PRINTdbg( "ne_close: renaming old: %s\n", file );
+            PRINTdbg( "                   new: %s\n", nfile );
             if ( PATHOP( rename, handle->impl, handle->auth, file, nfile ) != 0 ) {
                PRINTerr( "ne_close: failed to rename rebuilt file\n" );
                // rebuild should fail even if only one file can't be renamed
@@ -2381,6 +2395,8 @@ int ne_close( ne_handle handle )
             strncat( file,  META_SFX, strlen(META_SFX)+1 );
             strncat( nfile, META_SFX, strlen(META_SFX)+1 );
 
+            PRINTdbg( "ne_close: renaming old: %s\n", file );
+            PRINTdbg( "                   new: %s\n", nfile );
             if ( PATHOP( rename, handle->impl, handle->auth, file, nfile ) != 0 ) {
                PRINTerr( "ne_close: failed to rename rebuilt meta file\n" );
                // rebuild should fail even if only one file can't be renamed
