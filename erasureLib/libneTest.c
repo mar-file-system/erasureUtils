@@ -422,7 +422,9 @@ int main( int argc, const char* argv[] )
          PRINTdbg("libneTest: preparing to write %llu to erasure files...\n", nread );
          ssize_t nwritten = ne_write( handle, buff, nread );
          if ( nwritten != nread ) {
-            PRINTlog("libneTest: unexpected # of bytes (%ld) written by ne_write (expected %ld)\n", nwritten, nread );
+            PRINTlog("libneTest: unexpected # of bytes (%ld) written by ne_write (expected %ld)\n",
+                     nwritten, nread );
+            perror("libneTest");
             return -1;
          }
          PRINTdbg("libneTest: write successful\n" );
@@ -444,7 +446,6 @@ int main( int argc, const char* argv[] )
 
       //      // if stat-flags were set, show collected stats
       //      show_handle_stats(handle);
-
       close(filefd);
       free(buff);
 
@@ -507,7 +508,7 @@ int main( int argc, const char* argv[] )
          // If the size for the read wasn't provided, use ne_stat() to find the
          // actual size of the file, and then read the whole thing.
 
-         TimingFlagsValue temp_timing_flags = timing_flags; /* don't use timing_flags during ... NE_STAT() */
+         TimingFlagsValue temp_timing_flags = timing_flags; /* don't use timing_flags during NE_STAT() */
          timing_flags = 0;
 
          PRINTout("libneTest: stat'ing to get total size.  path = '%s'\n", (char *)argv[2] );

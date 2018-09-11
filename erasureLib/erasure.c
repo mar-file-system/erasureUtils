@@ -452,6 +452,9 @@ void *bq_writer(void *arg) {
          fast_timer_start(&handle->stats[bq->block_number].write);
 
       pthread_mutex_unlock(&bq->qlock);
+
+// removing this since the newer NFS clients are better behaved
+/*
       if(written >= SYNC_SIZE) {
          if ( HNDLOP(fsync, bq->file) )
             bq->flags |= BQ_ERROR;
@@ -459,6 +462,8 @@ void *bq_writer(void *arg) {
       }
 
       PRINTdbg("Writing block %d\n", bq->block_number);
+*/
+
       u32 crc   = crc32_ieee(TEST_SEED, bq->buffers[bq->head], bq->buffer_size);
       error     = write_all(&bq->file, bq->buffers[bq->head], bq->buffer_size);
 #ifdef INT_CRC
@@ -1008,7 +1013,8 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
                                 &handle->stats[counter].open);
       }
       if ( FD_ERR(handle->FDArray[counter])  &&  handle->src_in_err[counter] == 0 ) {
-         PRINTerr( "   failed to open file %s!\n", file );
+         PRINTerr( "   failed to open file %s! '%s'\n", file, strerror(errno) );
+
          handle->src_err_list[handle->nerr] = counter;
          handle->nerr++;
          handle->src_in_err[counter] = 1;
@@ -1223,7 +1229,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset )
 read:
 
    startstripe = (offset+llcounter) / (bsz*N);
-   startpart = (offset + llcounter - (startstripe*bsz*N))/bsz;
+   startpart = (offset + llcounter - ((off_t)startstripe*bsz*N))/bsz;
    startoffset = offset+llcounter - (startstripe*bsz*N) - (startpart*bsz);
 
    PRINTdbg("ne_read: read with rebuild from startstripe %d startpart %d and startoffset %d for nbytes %d\n",
@@ -1314,6 +1320,25 @@ read:
             tmp = HNDLOP(lseek, handle->FDArray[counter], (startstripe*( bsz+sizeof(u32) )), SEEK_SET);
 #else
             tmp = HNDLOP(lseek, handle->FDArray[counter], (startstripe*bsz), SEEK_SET);
+#endif
+         }
+         //note any errors, no need to restart though
+         if ( tmp < 0 ) {
+            handle->src_in_err[counter] = 1;
+            handle->src_err_list[handle->nerr] = counter;
+            handle->nerr++;
+            nsrcerr++;
+            handle->e_ready = 0; //indicate that erasure structs require re-initialization
+         }
+      }
+      //temporary addition to allow for the constant reading of erasure parts
+      for ( counter = N; counter < mtot; counter++ ) {
+         tmp = 0;
+         if ( handle->src_in_err[ counter ] == 0 ) {
+#ifdef INT_CRC
+            tmp = lseek(handle->FDArray[counter],(startstripe*( bsz+sizeof(u32) )),SEEK_SET);
+#else
+            tmp = lseek(handle->FDArray[counter],(startstripe*bsz),SEEK_SET);
 #endif
          }
          //note any errors, no need to restart though
@@ -2276,6 +2301,7 @@ int ne_close( ne_handle handle )
    time_t curtime;
    time(&curtime);
 
+
    if ( handle == NULL ) {
       PRINTerr( "ne_close: received a NULL handle\n" );
       errno = EINVAL;
@@ -2308,34 +2334,36 @@ int ne_close( ne_handle handle )
    counter = 0;
    while (counter < N+E) {
 
-     char no_rename = 0;
-     if (handle->mode == NE_WRONLY ) {
-        bq_close(&handle->blocks[counter]);
-     }
-     else if (! FD_ERR(handle->FDArray[counter])) {
+      char no_rename = 0;
+      if (handle->mode == NE_WRONLY ) {
+         bq_close(&handle->blocks[counter]);
+      }
+      else if (! FD_ERR(handle->FDArray[counter])) {
 
-        // as this operation can only be read or rebuild, we only 
-        // really care if close fails for a rebuild output file
-        if (HNDLOP(close, handle->FDArray[counter])
-            && (handle->src_in_err[counter]  == 1)
-            &&  (handle->mode == NE_REBUILD)) {
+         // as this operation can only be read or rebuild, we only 
+         // really care if close fails for a rebuild output file
+         if (HNDLOP(close, handle->FDArray[counter])
+             && (handle->src_in_err[counter]  == 1)
+             && (handle->mode == NE_REBUILD)) {
 
-           ret = -1;
-           no_rename = 1;
-           PRINTerr("ne_close: close failed for rebuild output file %d, "
-                    "aborting rename for that file\n", counter );
-        }
+            ret = -1;
+            no_rename = 1;
+            PRINTerr("ne_close: close failed for rebuild output file %d, "
+                     "aborting rename for that file\n", counter );
+         }
 
-        // insurance, to protect against further use
-        FD_INIT(handle->FDArray[counter], handle); // set fd to -1
-     }
+         // insurance, to protect against further use
+         FD_INIT(handle->FDArray[counter], handle); // set fd to -1
+      }
 
      if (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1 ) {
+
          // if mode is NE_WRONLY this will be handled by the BQ thread.
          if(set_block_xattr(handle, counter) != 0) {
            no_rename = 1;
            ret = -1;
            PRINTerr( "ne_close: failed to set xattr for rebuilt file %d\n", counter );
+
            // isn't this dead code?
            if(handle->src_in_err[counter] == 0) {
              handle->src_in_err[counter] = 1;
@@ -2343,7 +2371,6 @@ int ne_close( ne_handle handle )
              handle->nerr++;
            }
          }
-         // sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
          handle->snprintf( file, MAXNAME, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
          strncpy( nfile, file, strlen(file) + 1);
 
@@ -2361,7 +2388,7 @@ int ne_close( ne_handle handle )
             if( PATHOP( rename, handle->impl, handle->auth,  nfile, file )
                 && (errno != ENOENT) ) { //if there is no original, this is not an error
 
-               PRINTerr( "ne_close: failed to rename original file \"%s\" to \"%s\"\n", nfile, file );
+               PRINTerr( "ne_close: failed to rename original file '%s' to '%s'\n", nfile, file );
                ret = -1;
                no_rename = 1;
             }
@@ -2966,9 +2993,15 @@ int xattr_check( ne_handle handle, char *path )
             continue; // break;
          }
 
-         // This bundle of spaghetti acts to individually verify each "important" xattr value and count matches amongst all files
+         // This bundle of spaghetti acts to individually verify each
+         // "important" xattr value and count matches amongst all files
          char nc = 1, ec = 1, of = 1, bc = 1, tc = 1;
-         if ( handle->mode != NE_STAT ) { nc = 0; ec = 0; of = 0; bc = 0; } //if these values are already initialized, skip setting them
+
+         //if these values are already initialized, skip setting them
+         if ( handle->mode != NE_STAT ) {
+            nc = 0; ec = 0; of = 0; bc = 0;
+         }
+
          for ( bcounter = 0;
                (( nc || ec || bc || tc || of )  &&  (bcounter < MAXPARTS));
                bcounter++ ) {
@@ -3190,13 +3223,18 @@ int xattr_check( ne_handle handle, char *path )
 
 // Rebuild functions begin here
 typedef struct rebuild_err_struct {
-   struct GenericFD FDArray[ MAXPARTS ]; // file descriptors for data/erasure parts in which an error was found
+
+   // file descriptors for data/erasure parts in which an error was found
+   struct GenericFD FDArray[ MAXPARTS ];
+
    // per-stripe error info
-   int nerr;
+   int           nerr;
    unsigned char src_in_err[ MAXPARTS ];
    unsigned char src_err_list[ MAXPARTS ];
+
    // per rebuild run error info
    unsigned char per_rebuild_err[ MAXPARTS ];
+
    // permanent error info
    unsigned char permanent_err[ MAXPARTS ];
 } *rebuild_err;
@@ -3314,11 +3352,23 @@ static int reset_blocks(ne_handle handle, rebuild_err epat) {
           return -1;
         }
         else {
-           PRINTerr( "ne_rebuild: encountered error while seeking file %d\n", block_index );
+           PRINTerr( "ne_rebuild: encountered error while seeking data/erasure file %d\n", block_index );
            reopen_for_rebuild(handle, block_index,epat);
            epat->per_rebuild_err[ block_index ] = 1;
           return 1;
         }
+      }
+      
+    }
+    if ( handle->src_in_err[block_index]  &&  epat->FDArray[block_index] != -1 ) {
+      DBG_FPRINTF(stdout,
+                  "ne_rebuild: performing seek to offset 0 for in-error file %d\n",
+                  block_index);
+      // always reattempt a seek of the original, so long as we have a FD
+      if ( lseek(epat->FDArray[block_index], 0, SEEK_SET) == -1 ) {
+        DBG_FPRINTF(stderr, "ne_rebuild: failed to seek in-error file %d\n", block_index );
+        // we skip updating the per-stripe errors here, as that will always be handled later on
+        epat->per_rebuild_err[ block_index ] = 1;
       }
     }
 
@@ -3402,12 +3452,14 @@ static int fill_buffers(ne_handle handle, u64 *csum, rebuild_err epat) {
         size_t written = HNDLOP(write, handle->FDArray[block_index],
                                 handle->buffs[block_index], BUFFER_SIZE);
         if( written != BUFFER_SIZE ) {
-          PRINTerr( "ne_rebuild: failed to write valid buffer to rebuilt file %d (critical error)\n", block_index );
-          handle->e_ready = 0;
-          epat->nerr = handle->N + handle->E;
-          return -1;
+           PRINTerr( "ne_rebuild: failed to write valid buffer to rebuilt file %d "
+                     "(critical error)\n", block_index );
+           handle->e_ready = 0;
+           epat->nerr = handle->N + handle->E;
+           return -1;
         }
         PRINTerr( "ne_rebuild: successfully wrote valid buffer out to rebuilt file %d\n", block_index );
+
         // update manifest values appropriately
         handle->csum[block_index]      += crc;
         handle->nsz[block_index]       += handle->bsz;
@@ -3486,13 +3538,13 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
   int tmp;
   char alloc_flag = 0;
   if( epat == NULL ) {
-    alloc_flag = 1;
-    epat = malloc( sizeof( struct rebuild_err_struct ) );
-    if ( epat == NULL ) {
-      errno = ENOMEM;
-      return -1;
-    }
-    memset(epat, 0, sizeof( struct rebuild_err_struct ));
+     alloc_flag = 1;
+     epat = malloc( sizeof( struct rebuild_err_struct ) );
+     if ( epat == NULL ) {
+        errno = ENOMEM;
+        return -1;
+     }
+     memset(epat, 0, sizeof( struct rebuild_err_struct ));
   }
 
   for ( block_index = 0; block_index < ERASURE_WIDTH; block_index++ ) {
@@ -3505,11 +3557,14 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
     }
     // clean up epat structures
     if( alloc_flag ) {
+
       // init the in-error FD array to -1 to avoid confusion
       FD_INIT(epat->FDArray[ block_index ], handle);
+
       // clear all permanent errors
       epat->permanent_err[ block_index ] = 0;
     }
+
     // rebuild now handles opening all output files
     if( handle->src_in_err[ block_index ] ) {
       epat->FDArray[ block_index ] = handle->FDArray[ block_index ];
@@ -3572,7 +3627,7 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
       // reopening the necessary files.
       if ( epat->nerr == (handle->N + handle->E) ) {
          PRINTerr( "ne_rebuild: detected a failure to write to an output file\n" );
-        return -1;
+         return -1;
       }
       rebuilt_size = 0;
       continue;
@@ -3595,8 +3650,7 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
 
     /* Check that errors are still recoverable */
     if( epat->nerr > handle->E ) {
-       PRINTerr("ne_rebuild: errors exceed regeneration "
-                  "capacity of erasure\n");
+       PRINTerr("ne_rebuild: errors exceed regeneration capacity of erasure\n");
       errno = ENODATA;
       handle->e_ready = 0;
       free_buffers(rebuild_buffs, ERASURE_WIDTH);
