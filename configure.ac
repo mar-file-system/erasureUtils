@@ -104,7 +104,7 @@ AXATTR_SET_FUNC_CHECK
 
 
 
-AC_CHECK_LIB([pthread], [pthread_create])
+AC_CHECK_LIB([pthread], [pthread_create], [], [AC_MSG_ERROR(["Could not locate libpthread!"])])
 
 # sockets subdir doesn't actually need this
 AC_CHECK_LIB([isal],    [crc32_ieee],
@@ -144,11 +144,11 @@ AM_CONDITIONAL([ANY_SOCKETS],   [test "$enable_sockets" != no ])
 AM_CONDITIONAL([RDMA_SOCKETS],  [test "$enable_sockets"  = rdma])
 
 AM_COND_IF([ANY_SOCKETS],
-           [AC_CHECK_LIB([pthread], [pthread_create])
-            AC_CHECK_LIB([rt], [aio_cancel]) ])
+            [ AC_CHECK_LIB([rt], [aio_cancel], [], [ AC_MSG_ERROR(["Could not locate librt!"]) ]) ])
+           #[AC_CHECK_LIB([pthread], [pthread_create])
 
 AM_COND_IF([RDMA_SOCKETS],
-           [AC_CHECK_LIB([rdmacm], [rdma_getaddrinfo]) ])
+           [AC_CHECK_LIB([rdmacm], [rdma_getaddrinfo], [], [ AC_MSG_ERROR(["Could not locate librdmacm!"]) ]) ])
 #           [AC_SEARCH_LIBS([rdma_getaddrinfo], [rdmacm :librdmacm.so.1]) ])
 
 
@@ -164,11 +164,11 @@ AC_ARG_ENABLE([auth],
 
 AM_CONDITIONAL([AUTH_SOCKETS],  [test "$enable_sockets" != no && test x"$enable_auth" != xno])
 AM_COND_IF([AUTH_SOCKETS],
-           [AC_CHECK_LIB([crypto],      [MD5_Init])
-            AC_CHECK_LIB([xml2],        [xmlReadMemory])
-            AC_CHECK_LIB([curl],        [curl_easy_cleanup])
-            AC_CHECK_LIB([aws4c],       [GetStringToSign])
-            AC_CHECK_LIB([aws4c_extra], [get_object_list]) ])
+           [AC_CHECK_LIB([crypto],      [MD5_Init],          [], [AC_MSG_ERROR(["Could not locate libcrypto!"])])
+            AC_CHECK_LIB([xml2],        [xmlReadMemory],     [], [AC_MSG_ERROR(["Could not locate libxml2!"])])
+            AC_CHECK_LIB([curl],        [curl_easy_cleanup], [], [AC_MSG_ERROR(["Could not locate libcurl!"])])
+            AC_CHECK_LIB([aws4c],       [GetStringToSign],   [], [AC_MSG_ERROR(["Could not locate libaws4c!  Make sure that the library has been built and is included in LDFLAGS."])])
+            AC_CHECK_LIB([aws4c_extra], [get_object_list],   [], [AC_MSG_ERROR(["Could not locate libaws4c_extra!  Was aws4c built improperly?"])]) ])
 
 
 
@@ -295,6 +295,5 @@ AM_CONDITIONAL([HAVE_C_BUFSIZE], [test x"$C_BUFSIZE" != x])
 AC_CONFIG_FILES([Makefile
                  fast_timer/Makefile
                  sockets/Makefile
-                 fileraid/Makefile
                  erasureLib/Makefile])
 AC_OUTPUT

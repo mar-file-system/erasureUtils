@@ -63,5 +63,5 @@ if ANY_SOCKETS
   MAYBE_SOCKETS = sockets
 endif
 
-SUBDIRS = fast_timer $(MAYBE_SOCKETS) erasureLib fileraid
+SUBDIRS = fast_timer $(MAYBE_SOCKETS) erasureLib
 

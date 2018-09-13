@@ -365,19 +365,25 @@ void *bq_writer(void *arg) {
   pthread_cleanup_push(bq_writer_finis, bq);
 
   // open the file.
-  mode_t mask = umask( 0000 );  /* N/A for RDMA impl of OPEN() */
   OPEN(bq->file, handle, bq->path, O_WRONLY|O_CREAT, 0666);
-  umask( mask );
 
   if(pthread_mutex_lock(&bq->qlock) != 0) {
+    PRINTerr("failed to lock queue lock: %s\n", strerror(error));
+    // this is a FATAL error
     if (handle->timing_flags & TF_THREAD)
        fast_timer_stop(&handle->stats[bq->block_number].thread);
-    exit(-1); // XXX: is this the appropriate response??
+    // set error, so that initialize_queues() will know to mark this block bad
+    // outside of critical section, but should be fine as flags aren't shared
+    bq->flags |= BQ_ERROR;
+    return NULL;
+    //exit(-1); // is this the appropriate response??
   }
   if(FD_ERR(bq->file)) {
     bq->flags |= BQ_ERROR;
   }
   else {
+    // note the file as having been successfully opened
+    // this will allow initialize_queues() to complete and ne_open to reset umask
     bq->flags |= BQ_OPEN;
   }
   pthread_cond_signal(&bq->empty);
@@ -399,10 +405,12 @@ void *bq_writer(void *arg) {
     // wait for FULL condition
     if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
       PRINTerr("failed to lock queue lock: %s\n", strerror(error));
-      // XXX: This is a FATAL error
+      // This is a FATAL error
       if (handle->timing_flags & TF_THREAD)
          fast_timer_stop(&handle->stats[bq->block_number].thread);
-      return (void *)-1;
+      // note the error, just in case
+      bq->flags |= BQ_ERROR;
+      return NULL;
     }
     while(bq->qdepth == 0 && !((bq->flags & BQ_FINISHED) || (bq->flags & BQ_ABORT))) {
       PRINTdbg("bq_writer[%d]: waiting for signal from ne_write\n", bq->block_number);
@@ -432,6 +440,8 @@ void *bq_writer(void *arg) {
          log_histo_add_interval(&handle->stats[bq->block_number].close_h,
                                 &handle->stats[bq->block_number].close);
       }
+      // though it shouldn't matter, make sure no one thinks we finished properly
+      bq->flags |= BQ_ERROR;
       return NULL;
     }
 
@@ -926,12 +936,15 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
    PRINTdbg( "ne_open: using stripe values (N=%d,E=%d,bsz=%d,offset=%d)\n", N,E,bsz,erasure_offset);
 
    if(handle->mode == NE_WRONLY) { // first cut: mutlti-threading only for writes.
+     // umask is process-wide, so we have to manipulate it outside of the threads
+     mode_t mask = umask(0000);
      if(initialize_queues(handle) < 0) {
        // all destruction/cleanup should be handled in initialize_queues()
        free(handle);
        errno = ENOMEM;
        return NULL;
      }
+     umask(mask);
      if( UNSAFE(handle) ) {
        int i;
        for(i = 0; i < handle->N + handle->E; i++) {
@@ -1968,14 +1981,15 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
                    (unsigned long)readsize, totsize, handle->buff_rem );
          //memcpy ( handle->buffer + handle->buff_rem, buffer+totsize, readsize);
          int queue_result = bq_enqueue(&handle->blocks[counter], buffer+totsize, readsize);
-         if(queue_result == -1) {
-           // bq_enqueue will set errno.
-           return -1;
-         }
-         else if(queue_result != 0 && !handle->src_in_err[counter]) {
+         //if we failed to enqueue work for this block, note that the block is in error
+         if(queue_result != 0 && !handle->src_in_err[counter]) {
            handle->src_in_err[counter] = 1;
            handle->src_err_list[handle->nerr] = counter;
            handle->nerr++;
+         }
+         if(queue_result == -1) {
+           // bq_enqueue will set errno.
+           return -1;
          }
          
          PRINTdbg( "ne_write:   ...copy complete.\n");
@@ -2311,6 +2325,8 @@ int ne_close( ne_handle handle )
    }
 
 
+   // set the umask here to catch all meta files and reset before returning
+   mode_t mask = umask(0000);
    /* Close file descriptors and free bufs and set xattrs for written files */
    counter = 0;
    while (counter < N+E) {
@@ -2344,13 +2360,6 @@ int ne_close( ne_handle handle )
            no_rename = 1;
            ret = -1;
            PRINTerr( "ne_close: failed to set xattr for rebuilt file %d\n", counter );
-
-           // isn't this dead code?
-           if(handle->src_in_err[counter] == 0) {
-             handle->src_in_err[counter] = 1;
-             handle->src_err_list[handle->nerr] = counter;
-             handle->nerr++;
-           }
          }
          handle->snprintf( file, MAXNAME, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
          strncpy( nfile, file, strlen(file) + 1);
@@ -2452,6 +2461,10 @@ int ne_close( ne_handle handle )
    else { // still need to do it the old way for non-writes
      free(handle->buffer);
    }
+
+   // all potential meta-file manipulation should be done now (threads have exited)
+   // should be safe to reset umask
+   umask(mask);
 
    //if (handle->timing_flags) {
    //   fast_timer_stop(&handle->handle_timer);
@@ -4312,9 +4325,8 @@ int ne_set_xattr1(const uDAL* impl, SktAuth auth,
    strcpy( meta_file, path );
    strncat( meta_file, META_SFX, strlen(META_SFX) + 1 );
 
-   mode_t mask = umask(0000);
+   // cannot set umask here as this is called within threads
    OPEN( fd, handle, meta_file, O_WRONLY | O_CREAT, 0666 );
-   umask(mask);
 
    if (FD_ERR(fd)) {
       PRINTerr( "ne_close: failed to open file %s\n", meta_file);
@@ -4529,7 +4541,7 @@ int ne_delete_block1(const uDAL* impl, SktAuth auth, const char *path) {
 
    int ret = PATHOP(unlink, impl, auth, path);
 
-#ifdef META_FILE
+#ifdef META_FILES
    if(ret == 0) {
       char meta_path[2048];
       strncpy(meta_path, path, 2048);

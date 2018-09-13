@@ -22,3 +22,13 @@ old/
 *.log
 commit.txt
 example_*
+
+Makefile
+autom4te.cache
+configure
+depcomp
+install-sh
+missing
+stamp-h1
+test-driver
+

@@ -422,8 +422,7 @@ int main( int argc, const char* argv[] )
          PRINTdbg("libneTest: preparing to write %llu to erasure files...\n", nread );
          ssize_t nwritten = ne_write( handle, buff, nread );
          if ( nwritten != nread ) {
-            PRINTlog("libneTest: unexpected # of bytes (%ld) written by ne_write (expected %ld)\n",
-                     nwritten, nread );
+            PRINTlog("libneTest: unexpected # of bytes (%ld) written by ne_write (expected %ld)\n", nwritten, nread );
             perror("libneTest");
             return -1;
          }
@@ -446,6 +445,7 @@ int main( int argc, const char* argv[] )
 
       //      // if stat-flags were set, show collected stats
       //      show_handle_stats(handle);
+
       close(filefd);
       free(buff);
 
