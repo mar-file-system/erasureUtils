@@ -364,19 +364,25 @@ void *bq_writer(void *arg) {
   pthread_cleanup_push(bq_writer_finis, bq);
 
   // open the file.
-  mode_t mask = umask( 0000 );  /* N/A for RDMA impl of OPEN() */
   OPEN(bq->file, handle, bq->path, O_WRONLY|O_CREAT, 0666);
-  umask( mask );
 
   if(pthread_mutex_lock(&bq->qlock) != 0) {
+    PRINTerr("failed to lock queue lock: %s\n", strerror(error));
+    // this is a FATAL error
     if (handle->timing_flags & TF_THREAD)
        fast_timer_stop(&handle->stats[bq->block_number].thread);
-    exit(-1); // XXX: is this the appropriate response??
+    // set error, so that initialize_queues() will know to mark this block bad
+    // outside of critical section, but should be fine as flags aren't shared
+    bq->flags |= BQ_ERROR;
+    return NULL;
+    //exit(-1); // is this the appropriate response??
   }
   if(FD_ERR(bq->file)) {
     bq->flags |= BQ_ERROR;
   }
   else {
+    // note the file as having been successfully opened
+    // this will allow initialize_queues() to complete and ne_open to reset umask
     bq->flags |= BQ_OPEN;
   }
   pthread_cond_signal(&bq->empty);
@@ -394,10 +400,12 @@ void *bq_writer(void *arg) {
     // wait for FULL condition
     if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
       PRINTerr("failed to lock queue lock: %s\n", strerror(error));
-      // XXX: This is a FATAL error
+      // This is a FATAL error
       if (handle->timing_flags & TF_THREAD)
          fast_timer_stop(&handle->stats[bq->block_number].thread);
-      return (void *)-1;
+      // note the error, just in case
+      bq->flags |= BQ_ERROR;
+      return NULL;
     }
     while(bq->qdepth == 0 && !((bq->flags & BQ_FINISHED) || (bq->flags & BQ_ABORT))) {
       PRINTdbg("bq_writer[%d]: waiting for signal from ne_write\n", bq->block_number);
@@ -423,6 +431,8 @@ void *bq_writer(void *arg) {
 
       if (handle->timing_flags & TF_CLOSE)
          fast_timer_stop(&handle->stats[bq->block_number].close);
+      // though it shouldn't matter, make sure no one thinks we finished properly
+      bq->flags |= BQ_ERROR;
       return NULL;
     }
 
@@ -904,12 +914,15 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
    PRINTdbg( "ne_open: using stripe values (N=%d,E=%d,bsz=%d,offset=%d)\n", N,E,bsz,erasure_offset);
 
    if(handle->mode == NE_WRONLY) { // first cut: mutlti-threading only for writes.
+     // umask is process-wide, so we have to manipulate it outside of the threads
+     mode_t mask = umask(0000);
      if(initialize_queues(handle) < 0) {
        // all destruction/cleanup should be handled in initialize_queues()
        free(handle);
        errno = ENOMEM;
        return NULL;
      }
+     umask(mask);
      if( UNSAFE(handle) ) {
        int i;
        for(i = 0; i < handle->N + handle->E; i++) {
@@ -2168,6 +2181,8 @@ int ne_close( ne_handle handle )
    }
 
 
+   // set the umask here to catch all meta files and reset before returning
+   mode_t mask = umask(0000);
    /* Close file descriptors and free bufs and set xattrs for written files */
    counter = 0;
    while (counter < N+E) {
@@ -2292,6 +2307,10 @@ int ne_close( ne_handle handle )
    else { // still need to do it the old way for non-writes
      free(handle->buffer);
    }
+
+   // all potential meta-file manipulation should be done now (threads have exited)
+   // should be safe to reset umask
+   umask(mask);
 
    if (handle->timing_flags) {
       fast_timer_stop(&handle->handle_timer);
@@ -4134,9 +4153,8 @@ int ne_set_xattr1(const uDAL* impl, SktAuth auth,
    strcpy( meta_file, path );
    strncat( meta_file, META_SFX, strlen(META_SFX) + 1 );
 
-   mode_t mask = umask(0000);
+   // cannot set umask here as this is called within threads
    OPEN( fd, handle, meta_file, O_WRONLY | O_CREAT, 0666 );
-   umask(mask);
 
    if (FD_ERR(fd)) {
       PRINTerr( "ne_close: failed to open file %s\n", meta_file);

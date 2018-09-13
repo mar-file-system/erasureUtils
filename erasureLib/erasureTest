@@ -85,14 +85,6 @@ if [[ $# -gt 1 ]]; then
    fi
 fi
 
-CREATED_WRKDIR=0
-
-if [[ ! -e $WORK_DIRECTORY ]]; then
-   echo -n "Creating working directory \"$WORK_DIRECTORY\"..."
-   mkdir -p $WORK_DIRECTORY
-   CREATED_WRKDIR=1
-   echo "done"
-fi
 
 echo
 echo "Testing erasure library functions..."
@@ -141,6 +133,16 @@ BC=$?
 
 if [[ $BC -ne 0 ]]; then
    echo "Note: command 'bc' could not be found.  Times will be displayed as ranges and averages will be skipped!"
+fi
+
+
+CREATED_WRKDIR=0
+
+if [[ ! -e $WORK_DIRECTORY ]]; then
+   echo -n "Creating working directory \"$WORK_DIRECTORY\"..."
+   mkdir -p $WORK_DIRECTORY
+   CREATED_WRKDIR=1
+   echo "done"
 fi
 
 echo "Generating input file '$DATAFILE' (this will take some time)..."
