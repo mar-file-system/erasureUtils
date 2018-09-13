@@ -125,7 +125,7 @@ libne_a_SOURCES = erasure.c erasure.h udal.c udal.h
 
 
 
-
+# ---
 bin_PROGRAMS = libneTest data_shredder
 
 libneTest_SOURCES = libneTest.c
@@ -136,7 +136,7 @@ data_shredder_SOURCES = data_shredder.c
 
 
 
-
+# ---
 check_PROGRAMS = test_read_offset testLink
 
 test_read_offset_SOURCES = test_read_offset.c

@@ -184,6 +184,7 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 #define HNDLOP(OP, GFD, ...)                (GFD).hndl->impl->OP(&(GFD), ## __VA_ARGS__)
 
 #define PATHOP(OP, IMPL, AUTH, PATH, ...)   (IMPL)->OP((AUTH), (PATH), ## __VA_ARGS__)
+
 #define UMASK(GFD, MASK)                    umask(MASK) /* TBD */
 #define DEFAULT_AUTH_INIT(AUTH)             skt_auth_init(SKT_S3_USER, &(AUTH))
 #define AUTH_INSTALL(FD, AUTH)              skt_auth_install((FD), (AUTH))
@@ -390,7 +391,11 @@ void *bq_writer(void *arg) {
 
   PRINTdbg("opened file %d\n", bq->block_number);
   if (handle->timing_flags & TF_OPEN)
+  {
      fast_timer_stop(&handle->stats[bq->block_number].open);
+     log_histo_add_interval(&handle->stats[bq->block_number].open_h,
+                                &handle->stats[bq->block_number].open);
+  }
   if (handle->timing_flags & TF_RW)
      fast_timer_start(&handle->stats[bq->block_number].read);
 
@@ -430,7 +435,11 @@ void *bq_writer(void *arg) {
       pthread_mutex_unlock(&bq->qlock);
 
       if (handle->timing_flags & TF_CLOSE)
+      {
          fast_timer_stop(&handle->stats[bq->block_number].close);
+         log_histo_add_interval(&handle->stats[bq->block_number].close_h,
+                                &handle->stats[bq->block_number].close);
+      }
       // though it shouldn't matter, make sure no one thinks we finished properly
       bq->flags |= BQ_ERROR;
       return NULL;
@@ -445,7 +454,7 @@ void *bq_writer(void *arg) {
       PRINTdbg("BQ finished\n");
       break;
     }
-    
+
 
     if(!(bq->flags & BQ_ERROR)) {
 
@@ -453,15 +462,18 @@ void *bq_writer(void *arg) {
          fast_timer_start(&handle->stats[bq->block_number].write);
 
       pthread_mutex_unlock(&bq->qlock);
+
 // removing this since the newer NFS clients are better behaved
 /*
       if(written >= SYNC_SIZE) {
          if ( HNDLOP(fsync, bq->file) )
-          bq->flags |= BQ_ERROR;
-        written = 0;
+            bq->flags |= BQ_ERROR;
+         written = 0;
       }
-*/
+
       PRINTdbg("Writing block %d\n", bq->block_number);
+*/
+
       u32 crc   = crc32_ieee(TEST_SEED, bq->buffers[bq->head], bq->buffer_size);
       error     = write_all(&bq->file, bq->buffers[bq->head], bq->buffer_size);
 #ifdef INT_CRC
@@ -510,8 +522,11 @@ void *bq_writer(void *arg) {
      fast_timer_start(&handle->stats[bq->block_number].close);
   int close_rc = HNDLOP(close, bq->file);
   if (handle->timing_flags & TF_CLOSE)
+  {
      fast_timer_stop(&handle->stats[bq->block_number].close);
-
+     log_histo_add_interval(&handle->stats[bq->block_number].close_h,
+                                &handle->stats[bq->block_number].close);
+  }
   if ( close_rc || (bq->flags & BQ_ERROR) ) {
     bq->flags |= BQ_ERROR;      // ensure the error was noted
     PRINTerr("error closing block %d\n", bq->block_number);
@@ -541,8 +556,10 @@ void *bq_writer(void *arg) {
   handle->snprintf( block_file_path, MAXNAME, handle->path,
                     (bq->block_number+handle->erasure_offset)%(handle->N+handle->E), handle->state );
 
+  PRINTdbg("bq_writer: renaming old:  %s\n", bq->path );
+  PRINTdbg("                    new:  %s\n", block_file_path );
   if( PATHOP( rename, handle->impl, handle->auth, bq->path, block_file_path ) != 0 ) {
-    PRINTerr("bq_writer: failed to rename written file %s\n", bq->path );
+    PRINTerr("bq_writer: rename failed: %s\n", strerror(errno) );
     bq->flags |= BQ_ERROR;
   }
 
@@ -550,9 +567,12 @@ void *bq_writer(void *arg) {
   // rename the META file too
   strncat( bq->path, META_SFX, strlen(META_SFX)+1 );
   strncat( block_file_path, META_SFX, strlen(META_SFX)+1 );
+
+  PRINTdbg("bq_writer: renaming meta old:  %s\n", bq->path );
+  PRINTdbg("                         new:  %s\n", block_file_path );
   if ( PATHOP( rename, handle->impl, handle->auth, bq->path, block_file_path ) != 0 ) {
-    PRINTerr("bq_writer: failed to rename written meta file %s\n", bq->path );
-    bq->flags |= BQ_ERROR;
+     PRINTerr("bq_writer: rename failed: %s\n", strerror(errno) );
+     bq->flags |= BQ_ERROR;
   }
 #endif
 
@@ -702,6 +722,7 @@ int init_bench_stats(BenchStats* stats) {
 
    fast_timer_reset(&stats->thread);
    fast_timer_reset(&stats->open);
+   log_histo_reset(&stats->open_h);
 
    fast_timer_reset(&stats->read);
    log_histo_reset(&stats->read_h);
@@ -710,6 +731,7 @@ int init_bench_stats(BenchStats* stats) {
    log_histo_reset(&stats->write_h);
 
    fast_timer_reset(&stats->close);
+   log_histo_reset(&stats->open_h);
    fast_timer_reset(&stats->rename);
 
    fast_timer_reset(&stats->stat);
@@ -981,8 +1003,6 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
        handle->buffs[counter] = handle->buffer + ( counter*bsz ); //make space for block
 #endif
 
-       if (handle->timing_flags & TF_OPEN)
-          fast_timer_start(&handle->stats[counter].open);
 
       if( mode == NE_WRONLY ) {
          PRINTdbg( "   opening %s%s for write\n", file, WRITE_SFX );
@@ -1000,10 +1020,14 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
       }
 
       if (handle->timing_flags & TF_OPEN)
+      {
          fast_timer_stop(&handle->stats[counter].open);
-
+         log_histo_add_interval(&handle->stats[counter].open_h,
+                                &handle->stats[counter].open);
+      }
       if ( FD_ERR(handle->FDArray[counter])  &&  handle->src_in_err[counter] == 0 ) {
-         PRINTerr( "   failed to open file %s! (%s)\n", file, strerror(errno) );
+         PRINTerr( "   failed to open file %s! '%s'\n", file, strerror(errno) );
+
          handle->src_err_list[handle->nerr] = counter;
          handle->nerr++;
          handle->src_in_err[counter] = 1;
@@ -1037,16 +1061,19 @@ ne_handle ne_open1( SnprintfFunc fn, void* state,
                     uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                     char *path, ne_mode mode, ... ) {
 
+   ne_handle ret;
    va_list vl;
    va_start(vl, mode);
-   return ne_open1_vl(fn, state, itype, auth, timing_flags, path, mode, vl);
+   ret = ne_open1_vl(fn, state, itype, auth, timing_flags, path, mode, vl);
    va_end(vl);
+   return ret;
 }
 
 
 // provide defaults for SprintfFunc, state, and SktAuth
 // so naive callers can continue to work (in some cases).
 ne_handle ne_open( char *path, ne_mode mode, ... ) {
+   ne_handle ret;
 
    // this is safe for builds with/without sockets enabled
    // and with/without socket-authentication enabled
@@ -1058,10 +1085,12 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
       return NULL;
    }
 
-   va_list vl;
+   va_list   vl;
    va_start(vl, mode);
-   return ne_open1_vl(ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, path, mode, vl);
+   ret = ne_open1_vl(ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, path, mode, vl);
    va_end(vl);
+
+   return ret;
 }
 
 
@@ -2116,6 +2145,120 @@ int show_handle_stats(ne_handle handle) {
    return 0;
 }
 
+void extract_repo_name(char* path, char* repo, int* pod_id)
+{
+   char* token;
+   char* path_ = strdup(path);
+   char* pod = NULL;
+   char* repo_name = NULL;
+   //walk through path to get information
+   token = strtok(path_, "/");
+   while (token != NULL)
+   {
+      if ((pod = strstr(token, "pod")) != NULL)
+      {
+         //get the pod ID
+         *pod_id = atoi(pod+3);
+      }
+      else if((repo_name = strstr(token, "_repo")) != NULL)
+      {
+         //got repo name
+         char* underscore = strstr(token, "_");
+         size_t len = underscore - token;
+         memcpy(repo, token, len);
+      }
+      token = strtok(NULL, "/");
+   }
+
+   free(path_); //test
+}
+
+void copy_timing_stats(ne_handle handle)
+{
+   int i, j;
+   int total_blk = handle->N + handle->E;
+   char* open_cursor = handle->timing_stats;
+   //printf("libne open_cursor pointer %p\n", open_cursor);
+   char* read_cursor = handle->timing_stats + (3 + sizeof(double) * 65 * (handle->N + handle->E));
+   char* write_cursor = handle->timing_stats + 2 * (3 + sizeof(double) * 65 * (handle->N + handle->E));
+   char* close_cursor = handle->timing_stats + 3 * (3 + sizeof(double) * 65 * (handle->N + handle->E));
+
+   if(handle->timing_flags & TF_OPEN)
+   {
+      //put open identifier
+      snprintf(open_cursor, 3, "OP");
+      //printf("open_cursor after snprintf %s\n", open_cursor);
+
+      open_cursor += 3;
+      for(i = 0; i < total_blk; i++)
+      {
+         double* blk = ((double*)open_cursor) + (65 * i);
+         for(j = 64; j; j--)
+         {
+            blk[j] += handle->stats[i].open_h.bin[j];
+            //printf("LIBNE OPEN blk %d j %d value %f\n", i, j, blk[j]);
+         }
+      }
+   }
+   else
+   {
+      snprintf(open_cursor, 3, "--");
+   }
+
+   if(handle->timing_flags & TF_RW)
+   {
+      //first accumulate read
+      snprintf(read_cursor, 3, "RD");
+      read_cursor += 3;
+      for(i = 0; i < total_blk; i++)
+      {
+         double* blk = ((double*)read_cursor) + (65 * i);
+         for(j = 64; j; j--)
+         {
+            blk[j] += handle->stats[i].read_h.bin[j];
+            //printf("LIBNE READ blk %d j %d value %f\n", i, j, blk[j]);
+         }
+      }
+
+      //then accumulate write
+      snprintf(write_cursor, 3, "WR");
+      write_cursor += 3;
+      for(i = 0; i < total_blk; i++)
+      {
+         double* blk = ((double*)write_cursor) + (65 * i);
+         for(j = 64; j; j--)
+         {
+            blk[j] += handle->stats[i].write_h.bin[j];
+            //printf("LIBNE WRITE blk %d j %d value %f\n", i, j, blk[j]);
+         }
+      }
+   }
+   else
+   {
+      snprintf(read_cursor, 3, "--");
+      snprintf(write_cursor, 3, "--");
+   }
+
+   if (handle->timing_flags & TF_CLOSE)
+   {
+      snprintf(close_cursor, 3, "CL");
+      close_cursor += 3;
+      for(i = 0; i < total_blk; i++)
+      {
+         double* blk = ((double*)close_cursor) + (65 * i);
+         for(j = 64; j; j--)
+         {
+            blk[j] += handle->stats[i].close_h.bin[j];
+         // printf("LIBNE CLOSE blk %d j %d value %f\n", i, j, blk[j]);
+         }
+      }
+   }
+   else
+   {
+      snprintf(close_cursor, 3, "--");
+   }
+}
+
 /**
  * Closes the erasure striping indicated by the provided handle and flushes
  * the handle buffer, if necessary.
@@ -2148,6 +2291,7 @@ int ne_close( ne_handle handle )
    int ret = 0;
    int tmp;
    unsigned char *zero_buff;
+   //extract_repo_name(handle->path, handle->repo, handle->pod_id);
 
    time_t curtime;
    time(&curtime);
@@ -2187,35 +2331,36 @@ int ne_close( ne_handle handle )
    counter = 0;
    while (counter < N+E) {
 
-     char no_rename = 0;
-     if (handle->mode == NE_WRONLY ) {
-        bq_close(&handle->blocks[counter]);
-     }
-     else if (! FD_ERR(handle->FDArray[counter])) {
+      char no_rename = 0;
+      if (handle->mode == NE_WRONLY ) {
+         bq_close(&handle->blocks[counter]);
+      }
+      else if (! FD_ERR(handle->FDArray[counter])) {
 
-        // as this operation can only be read or rebuild, we only 
-        // really care if close fails for a rebuild output file
-        if (HNDLOP(close, handle->FDArray[counter])
-            && (handle->src_in_err[counter]  == 1)
-            &&  (handle->mode == NE_REBUILD)) {
+         // as this operation can only be read or rebuild, we only 
+         // really care if close fails for a rebuild output file
+         if (HNDLOP(close, handle->FDArray[counter])
+             && (handle->src_in_err[counter]  == 1)
+             && (handle->mode == NE_REBUILD)) {
 
-           ret = -1;
-           no_rename = 1;
-           PRINTdbg("ne_close: close failed for rebuild output file %d, aborting rename for that file\n", counter );
-        }
+            ret = -1;
+            no_rename = 1;
+            PRINTerr("ne_close: close failed for rebuild output file %d, "
+                     "aborting rename for that file\n", counter );
+         }
 
-        // insurance, to protect against further use
-        FD_INIT(handle->FDArray[counter], handle); // set fd to -1
-     }
+         // insurance, to protect against further use
+         FD_INIT(handle->FDArray[counter], handle); // set fd to -1
+      }
 
      if (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1 ) {
+
          // if mode is NE_WRONLY this will be handled by the BQ thread.
          if(set_block_xattr(handle, counter) != 0) {
            no_rename = 1;
            ret = -1;
            PRINTerr( "ne_close: failed to set xattr for rebuilt file %d\n", counter );
          }
-         // sprintf( file, handle->path, (counter+handle->erasure_offset)%(N+E) );
          handle->snprintf( file, MAXNAME, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
          strncpy( nfile, file, strlen(file) + 1);
 
@@ -2224,15 +2369,21 @@ int ne_close( ne_handle handle )
             char timestamp[30];
 
             strftime( timestamp, 30, ".rebuild_bkp.%m%d%y-%H%M%S", localtime(&curtime) );
-
             strncat( file, timestamp, 30 );
             
             // perform the rename
             errno = 0;
-            if( rename( nfile, file )  &&  errno != ENOENT ) { //if there is no original, this is not an error
-               PRINTerr( "ne_close: failed to rename original file \"%s\" to \"%s\"\n", nfile, file );
+            PRINTdbg( "ne_close: renaming old: %s\n", nfile );
+            PRINTdbg( "                   new: %s\n", file );
+            if( PATHOP( rename, handle->impl, handle->auth,  nfile, file )
+                && (errno != ENOENT) ) { //if there is no original, this is not an error
+
+               PRINTerr( "ne_close: failed to rename original file '%s' to '%s'\n", nfile, file );
                ret = -1;
                no_rename = 1;
+            }
+            else if (errno) {
+               PRINTdbg( "ne_close: rename failed (not considered an error): %s\n", strerror(errno) );
             }
 
             strncpy( file, nfile, strlen(nfile) + 1);
@@ -2242,12 +2393,14 @@ int ne_close( ne_handle handle )
 
          if ( PATHOP( chown, handle->impl, handle->auth, file, handle->owner, handle->group) ) {
             PRINTerr( "ne_close: failed to chown rebuilt file\n" );
-            //no_rename = 1;
-            //ret = -1;
+            no_rename = 1;
+            ret = -1;
          }
 
          if ( handle->e_ready == 1  &&  no_rename == 0 ) {
 
+            PRINTdbg( "ne_close: renaming old: %s\n", file );
+            PRINTdbg( "                   new: %s\n", nfile );
             if ( PATHOP( rename, handle->impl, handle->auth, file, nfile ) != 0 ) {
                PRINTerr( "ne_close: failed to rename rebuilt file\n" );
                // rebuild should fail even if only one file can't be renamed
@@ -2259,6 +2412,8 @@ int ne_close( ne_handle handle )
             strncat( file,  META_SFX, strlen(META_SFX)+1 );
             strncat( nfile, META_SFX, strlen(META_SFX)+1 );
 
+            PRINTdbg( "ne_close: renaming old: %s\n", file );
+            PRINTdbg( "                   new: %s\n", nfile );
             if ( PATHOP( rename, handle->impl, handle->auth, file, nfile ) != 0 ) {
                PRINTerr( "ne_close: failed to rename rebuilt meta file\n" );
                // rebuild should fail even if only one file can't be renamed
@@ -2268,7 +2423,6 @@ int ne_close( ne_handle handle )
 
          }
          else{
-
             PRINTerr( "ne_close: cleaning up file %s from failed rebuild\n", file );
             PATHOP( unlink, handle->impl, handle->auth, file );
 
@@ -2312,10 +2466,10 @@ int ne_close( ne_handle handle )
    // should be safe to reset umask
    umask(mask);
 
-   if (handle->timing_flags) {
-      fast_timer_stop(&handle->handle_timer);
-      show_handle_stats(handle);
-   }
+   //if (handle->timing_flags) {
+   //   fast_timer_stop(&handle->handle_timer);
+   //  show_handle_stats(handle);
+   //}
 
    if( (UNSAFE(handle) && handle->mode == NE_WRONLY) ) {
       PRINTdbg( "ne_close: detected unsafe error levels following write operation\n" );
@@ -2349,6 +2503,9 @@ int ne_close( ne_handle handle )
    
    if (handle->timing_flags & TF_HANDLE)
       fast_timer_stop(&handle->handle_timer); /* overall cost of this op */
+
+   if (handle->timing_flags)
+      copy_timing_stats(handle);
 
    free(handle);
    return ret;
@@ -2830,9 +2987,15 @@ int xattr_check( ne_handle handle, char *path )
             continue; // break;
          }
 
-         // This bundle of spaghetti acts to individually verify each "important" xattr value and count matches amongst all files
+         // This bundle of spaghetti acts to individually verify each
+         // "important" xattr value and count matches amongst all files
          char nc = 1, ec = 1, of = 1, bc = 1, tc = 1;
-         if ( handle->mode != NE_STAT ) { nc = 0; ec = 0; of = 0; bc = 0; } //if these values are already initialized, skip setting them
+
+         //if these values are already initialized, skip setting them
+         if ( handle->mode != NE_STAT ) {
+            nc = 0; ec = 0; of = 0; bc = 0;
+         }
+
          for ( bcounter = 0;
                (( nc || ec || bc || tc || of )  &&  (bcounter < MAXPARTS));
                bcounter++ ) {
@@ -3054,13 +3217,18 @@ int xattr_check( ne_handle handle, char *path )
 
 // Rebuild functions begin here
 typedef struct rebuild_err_struct {
-   struct GenericFD FDArray[ MAXPARTS ]; // file descriptors for data/erasure parts in which an error was found
+
+   // file descriptors for data/erasure parts in which an error was found
+   struct GenericFD FDArray[ MAXPARTS ];
+
    // per-stripe error info
-   int nerr;
+   int           nerr;
    unsigned char src_in_err[ MAXPARTS ];
    unsigned char src_err_list[ MAXPARTS ];
+
    // per rebuild run error info
    unsigned char per_rebuild_err[ MAXPARTS ];
+
    // permanent error info
    unsigned char permanent_err[ MAXPARTS ];
 } *rebuild_err;
@@ -3178,7 +3346,7 @@ static int reset_blocks(ne_handle handle, rebuild_err epat) {
           return -1;
         }
         else {
-           PRINTerr( "ne_rebuild: encountered error while seeking file %d\n", block_index );
+           PRINTerr( "ne_rebuild: encountered error while seeking data/erasure file %d\n", block_index );
            reopen_for_rebuild(handle, block_index,epat);
            epat->per_rebuild_err[ block_index ] = 1;
           return 1;
@@ -3267,12 +3435,14 @@ static int fill_buffers(ne_handle handle, u64 *csum, rebuild_err epat) {
         size_t written = HNDLOP(write, handle->FDArray[block_index],
                                 handle->buffs[block_index], BUFFER_SIZE);
         if( written != BUFFER_SIZE ) {
-          PRINTerr( "ne_rebuild: failed to write valid buffer to rebuilt file %d (critical error)\n", block_index );
-          handle->e_ready = 0;
-          epat->nerr = handle->N + handle->E;
-          return -1;
+           PRINTerr( "ne_rebuild: failed to write valid buffer to rebuilt file %d "
+                     "(critical error)\n", block_index );
+           handle->e_ready = 0;
+           epat->nerr = handle->N + handle->E;
+           return -1;
         }
         PRINTerr( "ne_rebuild: successfully wrote valid buffer out to rebuilt file %d\n", block_index );
+
         // update manifest values appropriately
         handle->csum[block_index]      += crc;
         handle->nsz[block_index]       += handle->bsz;
@@ -3351,13 +3521,13 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
   int tmp;
   char alloc_flag = 0;
   if( epat == NULL ) {
-    alloc_flag = 1;
-    epat = malloc( sizeof( struct rebuild_err_struct ) );
-    if ( epat == NULL ) {
-      errno = ENOMEM;
-      return -1;
-    }
-    memset(epat, 0, sizeof( struct rebuild_err_struct ));
+     alloc_flag = 1;
+     epat = malloc( sizeof( struct rebuild_err_struct ) );
+     if ( epat == NULL ) {
+        errno = ENOMEM;
+        return -1;
+     }
+     memset(epat, 0, sizeof( struct rebuild_err_struct ));
   }
 
   for ( block_index = 0; block_index < ERASURE_WIDTH; block_index++ ) {
@@ -3370,11 +3540,14 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
     }
     // clean up epat structures
     if( alloc_flag ) {
+
       // init the in-error FD array to -1 to avoid confusion
       FD_INIT(epat->FDArray[ block_index ], handle);
+
       // clear all permanent errors
       epat->permanent_err[ block_index ] = 0;
     }
+
     // rebuild now handles opening all output files
     if( handle->src_in_err[ block_index ] ) {
       epat->FDArray[ block_index ] = handle->FDArray[ block_index ];
@@ -3437,7 +3610,7 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
       // reopening the necessary files.
       if ( epat->nerr == (handle->N + handle->E) ) {
          PRINTerr( "ne_rebuild: detected a failure to write to an output file\n" );
-        return -1;
+         return -1;
       }
       rebuilt_size = 0;
       continue;
@@ -3460,8 +3633,7 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
 
     /* Check that errors are still recoverable */
     if( epat->nerr > handle->E ) {
-      PRINTerr("ne_rebuild: errors exceed regeneration "
-                  "capacity of erasure\n");
+       PRINTerr("ne_rebuild: errors exceed regeneration capacity of erasure\n");
       errno = ENODATA;
       handle->e_ready = 0;
       free_buffers(rebuild_buffs, ERASURE_WIDTH);

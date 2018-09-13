@@ -235,6 +235,7 @@ typedef struct ne_stat_struct {
 typedef struct {
    FastTimer   thread;
    FastTimer   open;
+   LogHisto    open_h;
 
    FastTimer   read;
    LogHisto    read_h;
@@ -243,6 +244,7 @@ typedef struct {
    LogHisto    write_h;
 
    FastTimer   close;
+   LogHisto    close_h;
 
    FastTimer   rename;
    FastTimer   stat;
@@ -352,6 +354,9 @@ struct handle {
    FastTimer      handle_timer;      /* pre-open to post-close, all threads complete */
    FastTimer      erasure_timer;
    LogHisto       erasure_h;
+   //char*          repo;
+   char*          timing_stats;
+   //int*           pod_id;
 };
 typedef struct handle* ne_handle;
 
