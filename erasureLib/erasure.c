@@ -186,8 +186,7 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 #define PATHOP(OP, IMPL, AUTH, PATH, ...)   (IMPL)->OP((AUTH), (PATH), ## __VA_ARGS__)
 
 #define UMASK(GFD, MASK)                    umask(MASK) /* TBD */
-#define DEFAULT_AUTH_INIT(AUTH)             skt_auth_init(SKT_S3_USER, &(AUTH))
-#define AUTH_INSTALL(FD, AUTH)              skt_auth_install((FD), (AUTH))
+
 
 
 

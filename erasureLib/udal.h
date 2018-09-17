@@ -70,12 +70,24 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <fcntl.h>
 #include <unistd.h>
 
-// #include "erasure.h"            // ne_handle
+
 // forward-decls
 struct handle;
-// typedef struct handle* ne_handle;
 
-#include "skt_common.h"
+
+#ifdef SOCKETS
+#  include "skt_common.h"
+#  define DEFAULT_AUTH_INIT(AUTH)             skt_auth_init(SKT_S3_USER, &(AUTH))
+#  define AUTH_INSTALL(FD, AUTH)              skt_auth_install((FD), (AUTH))
+
+#else
+   typedef void*    SktAuth;      // always NULL
+   typedef int      SocketHandle; // unused
+#  define DEFAULT_AUTH_INIT(AUTH)             (AUTH) = NULL
+#  define AUTH_INSTALL(FD, AUTH)              0
+#endif
+
+
 
 
 // ne_handle stores these, which can be used by any uDAL implementation

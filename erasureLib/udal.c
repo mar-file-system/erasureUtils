@@ -226,6 +226,7 @@ const uDAL* udal_impl_posix = &posix_impl;
 // NOTE: We avoid naming conflicts with librdma_sockets implementations.
 // ---------------------------------------------------------------------------
 
+#ifdef SOCKETS
 
 
 #define SKT(GFD)   (&(GFD)->fds.skt)
@@ -398,6 +399,8 @@ static const uDAL sockets_impl = {
 const uDAL*  udal_impl_sockets = &sockets_impl;
 
 
+#endif // ifdef SOCKETS
+
 
 // ---------------------------------------------------------------------------
 // generic
@@ -408,8 +411,10 @@ get_impl(uDALType itype) {
 
    if (itype == UDAL_POSIX)
       return udal_impl_posix;
+#ifdef SOCKETS
    else if (itype == UDAL_SOCKETS)
       return udal_impl_sockets;
+#endif
    else {
       PRINTerr( "ne_open: invalid uDAL arg - %d\n", itype);
       errno = EINVAL;

@@ -63,6 +63,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <string.h>
 #include <sys/select.h>
 
+#define  NE_LOG_PREFIX   "libne_sockets"
+#include "ne_logging.h"
+
 #include "skt_common.h"
 #include "fast_timer.h"
 

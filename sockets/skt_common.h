@@ -72,10 +72,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #endif
 
 
-// allow override from erasure.h for its local use
-#ifndef NE_LOG_PREFIX
-#  define  NE_LOG_PREFIX   "libne_sockets"
-#endif
+// we further-refine output-destinations, based on debugging level
 #include "ne_logging.h"
 
 #define FAIL_STR   "* fail: "

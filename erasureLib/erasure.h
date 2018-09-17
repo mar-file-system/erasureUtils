@@ -73,18 +73,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 #define NE_LOG_PREFIX "libne"
-
-// #ifdef SOCKETS
-// #  include "skt_common.h"
-//    typedef SocketHandle  FileDesc;
-// #else
-// #  include "ne_logging.h"
-//    typedef int           FileDesc;
-//    typedef void*         SktAuth;
-// #endif
+#include "ne_logging.h"
 
 #include "udal.h"
-
 
 
 

@@ -73,9 +73,18 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <time.h>
 
 #include "erasure.h"
-// #include "erasure_internals.h"
 
-int crc_status();
+
+int crc_status() {
+#ifdef INT_CRC
+   printf("Intermediate-CRCs: Active\n");
+   return 0;
+#else
+   printf("Intermediate-CRCs: Inactive\n");
+   return 1;
+#endif
+}
+
 
 
 #ifdef SOCKETS
@@ -218,9 +227,13 @@ select_impl(const char* path) {
 
 SnprintfFunc
 select_snprintf(const char* path) {
+#ifdef SOCKETS
    return (strchr(path, ':')
            ? snprintf_for_vle      // MC over RDMA-sockets
            : ne_default_snprintf); // MC over NFS
+#else
+   return ne_default_snprintf; // MC over NFS
+#endif
 }
 
 
@@ -367,7 +380,11 @@ int main( int argc, const char* argv[] )
    ne_handle handle;
 
    SktAuth  auth;
-   skt_auth_init(SKT_S3_USER, &auth); /* this is safe, whether built with S3_AUTH, or not */
+   if (DEFAULT_AUTH_INIT(auth)) {
+      PRINTerr("failed to initialize default socket-authentication credentials\n");
+      return -1;
+   }
+
 
 
 
@@ -404,7 +421,7 @@ int main( int argc, const char* argv[] )
 
       handle = NE_OPEN( (char *)argv[3], NE_WRONLY, start, N, E );
       if ( handle == NULL ) {
-         PRINTlog("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
+         PRINTlog("libneTest: ne_open failed.  errno %d = '%s'\n", errno, strerror(errno) );
          return -1;
       }
 
@@ -494,7 +511,7 @@ int main( int argc, const char* argv[] )
          handle = NE_OPEN( (char *)argv[3], NE_RDONLY, start, N, E );
 
       if ( handle == NULL ) {
-         PRINTlog("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
+         PRINTlog("libneTest: ne_open failed.  errno %d = '%s'\n", errno, strerror(errno) );
          return -1;
       }
 
@@ -539,7 +556,7 @@ int main( int argc, const char* argv[] )
 
       handle = NE_OPEN( (char *)argv[3], NE_RDONLY, start, N, E );
       if ( handle == NULL ) {
-         PRINTlog("libneTest: ne_open failed\n   Errno: %d\n   Message: %s\n", errno, strerror(errno) );
+         PRINTlog("libneTest: ne_open failed.  errno %d = '%s'\n", errno, strerror(errno) );
          return -1;
       }
       PRINTout("did open()\n");
@@ -715,16 +732,4 @@ int main( int argc, const char* argv[] )
    return tmp;
 
 }
-
-
-int crc_status() {
-   #ifdef INT_CRC
-   printf("Intermediate-CRCs: Active\n");
-   return 0;
-   #else
-   printf("Intermediate-CRCs: Inactive\n");
-   return 1;
-   #endif
-}
-
 

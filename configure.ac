@@ -132,11 +132,11 @@ AC_ARG_ENABLE([sockets],
               AS_HELP_STRING([--enable-sockets],
                              [One of {rdma,ip,unix,no}.  File operations go to a server, via sockets.  Default: rdma]),
               [case "${enableval}" in
-                 rdma) enable_sockets=rdma ;;
+                 rdma)   enable_sockets=rdma ;;
                  # ip)   enable_sockets=ip ;;    # TBD
                  # unix) enable_sockets=unix ;;  # TBD
-                 no)   enable_sockets=no ;;
-                 *)    AC_MSG_FAILURE([enable-sockets={rdma,ip,unix,no}. Currently, only rdma is supported]) ;;
+                 no)     enable_sockets=no ;;
+                 *)      AC_MSG_FAILURE([enable-sockets={rdma,ip,unix,no}. Currently, only rdma is supported]) ;;
                esac],
               [enable_sockets=rdma])
 
