@@ -280,7 +280,7 @@ sig_handler(int sig) {
 
 
 
-#ifdef S3_AUTH
+#if S3_AUTH
 
 #include <pwd.h>
 #include <sys/syscall.h>
@@ -1421,7 +1421,7 @@ void* server_thread(void* arg) {
   neDBG("\n");
   neDBG("server thread: %s\n", command_str(HDR_CMD(hdr)));
 
-#ifdef S3_AUTH
+#if S3_AUTH
   // Part of the authentication includes specification of the command to be
   // performed, as well as the path.  This obviates the need for us to read
   // the path after authentication, and redefines the operation to perform.
@@ -1706,7 +1706,7 @@ main(int argc, char* argv[]) {
   umask(0000);
 
   // --- initialize the sockaddr struct
-#ifdef UNIX_SOCKETS
+#if (SOCKETS == SKT_unix)
   struct sockaddr_un  s_addr;
   struct sockaddr_un* s_addr_ptr = &s_addr;
   socklen_t           s_addr_len = sizeof(struct sockaddr_un);
@@ -1720,7 +1720,7 @@ main(int argc, char* argv[]) {
   s_addr.sun_family = AF_UNIX;
 
 
-#elif (defined RDMA_SOCKETS)
+#elif (SOCKETS == SKT_rdma)
   struct rdma_addrinfo  hints;
   struct rdma_addrinfo* res;
 

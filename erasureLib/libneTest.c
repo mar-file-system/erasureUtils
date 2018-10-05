@@ -87,7 +87,7 @@ int crc_status() {
 
 
 
-#ifdef SOCKETS
+#if (SOCKETS != SKT_none)
 
 // <dest> is the buffer to receive the snprintf'ed path
 // <size> is the size of that buffer
@@ -227,7 +227,7 @@ select_impl(const char* path) {
 
 SnprintfFunc
 select_snprintf(const char* path) {
-#ifdef SOCKETS
+#if (SOCKETS != SKT_none)
    return (strchr(path, ':')
            ? snprintf_for_vle      // MC over RDMA-sockets
            : ne_default_snprintf); // MC over NFS

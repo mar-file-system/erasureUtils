@@ -67,10 +67,10 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#ifdef S3_AUTH
+#include "skt_config.h"
+#if S3_AUTH
 #  include <aws4c.h>
 #endif
-
 
 // we further-refine output-destinations, based on debugging level
 #include "ne_logging.h"
@@ -259,42 +259,10 @@ typedef void*    SktAuth; // actually, AWSContext*
 
 
 /* -----------------------------------
- * UNIX sockets
- * ----------------------------------- */
-#ifdef UNIX_SOCKETS
-#  define SKT_FAMILY   AF_UNIX
-typedef struct sockaddr_un                   SockAddr;
-
-#  define SOCKET(...)           socket(__VA_ARGS__)
-#  define SETSOCKOPT(...)       setsockopt(__VA_ARGS__)
-#  define BIND(...)             bind(__VA_ARGS__)
-#  define LISTEN(...)           listen(__VA_ARGS__)
-#  define ACCEPT(...)           accept(__VA_ARGS__)
-#  define CONNECT(...)          connect(__VA_ARGS__)
-#  define CLOSE(...)            close(__VA_ARGS__)
-#  define WRITE(...)            write(__VA_ARGS__)
-#  define READ(...)             read(__VA_ARGS__)
-#  define SEND(...)             send(__VA_ARGS__)
-#  define RECV(...)             recv(__VA_ARGS__)
-#  define SHUTDOWN(...)         shutdown(__VA_ARGS__)
-#  define SELECT(...)           select(__VA_ARGS__)
-#  define POLL(...)             poll(__VA_ARGS__)
-
-#  define RIOMAP(...)
-#  define RIOUNMAP(...)
-#  define RSETSOCKOPT(...)
-
-#  define LOCK(LOCK)
-#  define UNLOCK(LOCK)
-
-#  define BUG_LOCK()
-#  define BUG_UNLOCK(LOCK)
-
-
-/* -----------------------------------
  * RDMA sockets
  * ----------------------------------- */
-#elif (defined RDMA_SOCKETS)
+#if (SOCKETS == SKT_rdma)
+
 #  include <rdma/rsocket.h>
 /// #  define SKT_FAMILY   AF_INET
 typedef struct rdma_addrinfo           SockAddr;
@@ -343,9 +311,10 @@ extern pthread_mutex_t rdma_bug_lock;
 
 
 /* -----------------------------------
- * IP sockets (default)
+ * IP sockets
  * ----------------------------------- */
-#else
+#elif (SOCKETS == SKT_ip)
+
 #  define SKT_FAMILY   AF_INET
 typedef struct sockaddr_in                   SockAddr;
 
@@ -374,6 +343,43 @@ typedef struct sockaddr_in                   SockAddr;
 #  define BUG_LOCK()
 #  define BUG_UNLOCK(LOCK)
 
+
+/* -----------------------------------
+ * UNIX sockets
+ * ----------------------------------- */
+#elif (SOCKETS == SKT_unix)
+
+#  define SKT_FAMILY   AF_UNIX
+typedef struct sockaddr_un                   SockAddr;
+
+#  define SOCKET(...)           socket(__VA_ARGS__)
+#  define SETSOCKOPT(...)       setsockopt(__VA_ARGS__)
+#  define BIND(...)             bind(__VA_ARGS__)
+#  define LISTEN(...)           listen(__VA_ARGS__)
+#  define ACCEPT(...)           accept(__VA_ARGS__)
+#  define CONNECT(...)          connect(__VA_ARGS__)
+#  define CLOSE(...)            close(__VA_ARGS__)
+#  define WRITE(...)            write(__VA_ARGS__)
+#  define READ(...)             read(__VA_ARGS__)
+#  define SEND(...)             send(__VA_ARGS__)
+#  define RECV(...)             recv(__VA_ARGS__)
+#  define SHUTDOWN(...)         shutdown(__VA_ARGS__)
+#  define SELECT(...)           select(__VA_ARGS__)
+#  define POLL(...)             poll(__VA_ARGS__)
+
+#  define RIOMAP(...)
+#  define RIOUNMAP(...)
+#  define RSETSOCKOPT(...)
+
+#  define LOCK(LOCK)
+#  define UNLOCK(LOCK)
+
+#  define BUG_LOCK()
+#  define BUG_UNLOCK(LOCK)
+
+
+#else
+#  error "skt_common.h requires SOCKETS to select socket-type.  This should agree with the value used when building libne"
 #endif
 
 

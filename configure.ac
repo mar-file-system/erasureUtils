@@ -128,19 +128,24 @@ AC_CHECK_LIB([isal],    [crc32_ieee],
  
 # optional build uses RDMA-sockets
 # The server must be deployed on remote hosts (after building) to support this mode.
+
+# *** WARNING: If not set, we leave the value as "none", instead of the usual "no"
+
 AC_ARG_ENABLE([sockets],
               AS_HELP_STRING([--enable-sockets],
                              [One of {rdma,ip,unix,no}.  File operations go to a server, via sockets.  Default: rdma]),
               [case "${enableval}" in
-                 rdma)   enable_sockets=rdma ;;
-                 # ip)   enable_sockets=ip ;;    # TBD
-                 # unix) enable_sockets=unix ;;  # TBD
-                 no)     enable_sockets=no ;;
+                 rdma)   ;;
+                 # ip)   ;;  # TBD
+                 # unix) ;;  # TBD
+                 none)   ;;
+                 no)     enable_sockets=none ;;
                  *)      AC_MSG_FAILURE([enable-sockets={rdma,ip,unix,no}. Currently, only rdma is supported]) ;;
                esac],
               [enable_sockets=rdma])
 
-AM_CONDITIONAL([ANY_SOCKETS],   [test "$enable_sockets" != no ])
+
+AM_CONDITIONAL([ANY_SOCKETS],   [test "$enable_sockets" != none ])
 AM_CONDITIONAL([RDMA_SOCKETS],  [test "$enable_sockets"  = rdma])
 
 AM_COND_IF([ANY_SOCKETS],
@@ -152,23 +157,54 @@ AM_COND_IF([RDMA_SOCKETS],
 #           [AC_SEARCH_LIBS([rdma_getaddrinfo], [rdmacm :librdmacm.so.1]) ])
 
 
+# --- (see comments in skt_config.h.in)
+
+# this is "SKT_" plus "$enable_sockets"
+AC_SUBST(SKT_none, [0])
+AC_SUBST(SKT_rdma, [1])
+AC_SUBST(SKT_ip,   [2])
+AC_SUBST(SKT_unix, [3])
+
+AC_SUBST(SOCKETS, [SKT_$enable_sockets])
+
+AS_IF([test "$enable_sockets"  = rdma],
+            [AC_SUBST(USE_RIOWRITE, [1])],
+            [AC_SUBST(USE_RIOWRITE, [0])])
 
 
-# whether an S3 authentication header is required/provided by client-functions to socket servers
-# libaws4c is used to generate authentication-headers for RDMA socket server
+
+            
+
+
+
+
+
+
+# whether an S3 authentication header is required/provided by client-functions to socket servers.
+# libaws4c is used to generate authentication-headers for RDMA socket server.
 AC_ARG_ENABLE([auth],
                AS_HELP_STRING([--disable-auth],
                               [Don't require RDMA client/server to use authentication.  (Avoids link with aws4c, curl, etc)]),
                [enable_auth=${enableval}],
                [enable_auth=yes])
 
-AM_CONDITIONAL([AUTH_SOCKETS],  [test "$enable_sockets" != no && test x"$enable_auth" != xno])
+AS_IF([test x"$enable_auth" != xyes && test x"$enable_sockets" == xnone],
+      [AC_MSG_ERROR(["Cannot --disable-auth  without --enable-sockets=..."])])
+
+AM_CONDITIONAL([AUTH_SOCKETS],  [test x"$enable_auth" != xno])
+
 AM_COND_IF([AUTH_SOCKETS],
            [AC_CHECK_LIB([crypto],      [MD5_Init],          [], [AC_MSG_ERROR(["Could not locate libcrypto!"])])
             AC_CHECK_LIB([xml2],        [xmlReadMemory],     [], [AC_MSG_ERROR(["Could not locate libxml2!"])])
             AC_CHECK_LIB([curl],        [curl_easy_cleanup], [], [AC_MSG_ERROR(["Could not locate libcurl!"])])
             AC_CHECK_LIB([aws4c],       [GetStringToSign],   [], [AC_MSG_ERROR(["Could not locate libaws4c!  Make sure that the library has been built and is included in LDFLAGS."])])
             AC_CHECK_LIB([aws4c_extra], [get_object_list],   [], [AC_MSG_ERROR(["Could not locate libaws4c_extra!  Was aws4c built improperly?"])]) ])
+
+
+# --- (see comments in skt_config.h.in)
+AS_IF([test x"$enable_auth" != xno],
+            [AC_SUBST(S3_AUTH, [1])],
+            [AC_SUBST(S3_AUTH, [0])])
 
 
 
@@ -295,5 +331,6 @@ AM_CONDITIONAL([HAVE_C_BUFSIZE], [test x"$C_BUFSIZE" != x])
 AC_CONFIG_FILES([Makefile
                  fast_timer/Makefile
                  sockets/Makefile
+                 sockets/skt_config.h:sockets/skt_config.h.in
                  erasureLib/Makefile])
 AC_OUTPUT

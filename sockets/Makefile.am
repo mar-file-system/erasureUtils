@@ -83,11 +83,21 @@ AM_CPPFLAGS += -I${top_srcdir}/fast_timer
 
 
 
-if RDMA_SOCKETS
-  # -D_GNU_SOURCE provides POLLRDHUP among the flags for poll()/rpoll()
-  DEFS        += -DRDMA_SOCKETS -DUSE_RIOWRITE -D_GNU_SOURCE
-  # LIBS        += -lrdmacm    [configure.ac already added this]
+# NOTE: skt_config.h is now generated with values for SOCKETS / USE_RIOWRITE
+#   These settings affect the sizes of structures in some of our .h files,
+#   which might be used by external systems, so we need to assure that these
+#   structures look the same, even for users that don't use our makefile.
+
+if ANY_SOCKETS
+  # # -D_GNU_SOURCE provides POLLRDHUP among the flags for poll()/rpoll()
+  # DEFS        += -DSOCKETS -DUSE_RIOWRITE -D_GNU_SOURCE
+  DEFS        += -D_GNU_SOURCE
 endif
+
+if AUTH_SOCKETS
+   AM_CPPFLAGS += -I$(AWS4C)
+endif
+
 
 if USE_SYSLOG
    DEBUG_SOCKETS_VALUE=2
@@ -95,7 +105,7 @@ else
    DEBUG_SOCKETS_VALUE=1
 endif
 
-
+# These don't affect .h files, so we can do this from the makefile
 if DEBUG_SOCKETS
   AM_CFLAGS    = -g -O0
   DEFS        += -DDEBUG_SOCKETS=$(DEBUG_SOCKETS_VALUE)
@@ -117,13 +127,6 @@ if GPROF
 endif
 
 
-
-if AUTH_SOCKETS
-   DEFS        += -DS3_AUTH
-   AM_CPPFLAGS += -I$(AWS4C)
-endif
-
-
 if HAVE_S_BUFSIZE
    DEFS        += -DSERVER_BUF_SIZE=$(S_BUFSIZE)
 endif
@@ -136,7 +139,7 @@ endif
 
 
 
-include_HEADERS = skt_common.h
+include_HEADERS = skt_config.h skt_common.h
 
 lib_LIBRARIES = librdma_sockets.a
 librdma_sockets_a_SOURCES = skt_common.c skt_common.h

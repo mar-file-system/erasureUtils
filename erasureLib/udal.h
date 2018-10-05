@@ -75,7 +75,10 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 struct handle;
 
 
-#ifdef SOCKETS
+// generated to #define SOCKETS, etc, based on configuration options.
+#include "skt_config.h"
+
+#if (SOCKETS != SKT_none)
 #  include "skt_common.h"
 #  define DEFAULT_AUTH_INIT(AUTH)             skt_auth_init(SKT_S3_USER, &(AUTH))
 #  define AUTH_INSTALL(FD, AUTH)              skt_auth_install((FD), (AUTH))

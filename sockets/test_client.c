@@ -101,7 +101,7 @@ static SocketHandle handle = {0};
 // makes it easy to find test output in the cluttered output of a debugging build.
 // Also makes it easy to disable all local logging, e.g. when running strace.
 //
-#ifdef DEBUG_SOCKETS
+#if DEBUG_SOCKETS
 #  define cLOG(FMT,...)  neLOG("--- " FMT, ##__VA_ARGS__)
 #else
 #  define cLOG(FMT,...)
@@ -127,7 +127,7 @@ sig_handler(int sig) {
 
 SktAuth aws_ctx = NULL;
 
-#ifdef S3_AUTH
+#if S3_AUTH
 // #  define AUTH_INIT(USER, AWS_CTX)           NEED_0( skt_auth_init((USER), (SktAuth*)(AWS_CTX)) )
 #  define    AUTH_INIT(USER, AWS_CTX)                   skt_auth_init((USER), (SktAuth*)(AWS_CTX))
 #  define    AUTH_INSTALL(HANDLEp, AWS_CTX)     NEED_0( skt_fcntl((HANDLEp), SKT_F_SETAUTH, (SktAuth)(AWS_CTX)) )

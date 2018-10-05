@@ -62,18 +62,19 @@ AM_LDFLAGS  =
 
 
 # Here's how to get automake to do an assignment based on two conditions
-SOCKET_DEFS =
 if RDMA_SOCKETS
-  SOCKET_DEFS += -DSOCKETS=RDMA
   SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
   SOCKET_LIB = ../sockets/librdma_sockets.a
   SOCKET_LD  = -L../sockets -lrdma_sockets
   # SOCKET_LD += -lrdmacm
 else
 if ANY_SOCKETS
-  SOCKET_DEFS += -DSOCKETS
   SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
 endif
+endif
+
+if AUTH_SOCKETS
+   AM_CPPFLAGS += -I$(AWS4C)
 endif
 
 
@@ -86,10 +87,10 @@ endif
 
 if DEBUG_NE
   AM_CFLAGS   += -g -O0
-  SOCKET_DEFS += -DDEBUG_NE=$(DEBUG_NE_VALUE)  -fstack-protector-all -fstack-check
+  DEFS        += -DDEBUG_NE=$(DEBUG_NE_VALUE)  -fstack-protector-all -fstack-check
 else
   AM_CFLAGS   += -g -O3
-  SOCKET_DEFS += -DDEBUG_NE=0
+  DEFS        += -DDEBUG_NE=0
 endif
 
 
@@ -111,7 +112,7 @@ TIMER_LIB      = ../fast_timer/libft.a
 # before 'make install' will have put ../sockets/skt_common.h into the
 # install directory.  So the following allows these executables to be
 # built.
-AM_CPPFLAGS += $(SOCKET_CPPFLAGS) $(TIMER_CPPFLAGS)   $(SOCKET_DEFS) $(TIMER_DEFS)
+AM_CPPFLAGS += $(SOCKET_CPPFLAGS) $(TIMER_CPPFLAGS)  $(TIMER_DEFS)
 AM_LDFLAGS += $(SOCKET_LD) $(TIMER_LD)
 
 

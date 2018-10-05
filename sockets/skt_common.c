@@ -120,7 +120,7 @@ void
 shut_down_handle(SocketHandle* handle) {
     int dbg;                    // check return values
 
-#if UNIX_SOCKETS
+#if (SOCKETS == SKT_unix)
   if (handle->flags & HNDL_FNAME) {
     neDBG("unlinking '%s'\n", handle->fname);
     unlink(handle->fname);
@@ -1321,7 +1321,7 @@ ssize_t copy_socket_to_file(SocketHandle* handle, int fd, char* buf, size_t size
 
 
 
-#ifdef S3_AUTH
+#if S3_AUTH
 
 // --- send S3 authentication request
 //
@@ -1491,7 +1491,7 @@ int client_s3_authenticate(SocketHandle* handle, int command) {
 
    int retval = client_s3_authenticate_internal(handle, command);
 
-#ifdef DEBUG_SOCKETS
+#if DEBUG_SOCKETS
    AWSContext*    aws_ctx = handle->aws_ctx;
    const char*    user_name = (aws_ctx ? aws_ctx->awsKeyID : SKT_S3_USER);
    PathSpec*      spec = &handle->path_spec;
@@ -1600,7 +1600,7 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
 
 
 
-#ifdef UNIX_SOCKETS
+#if (SOCKETS == SKT_unix)
   SockAddr          s_addr;
   struct sockaddr*  s_addr_ptr = (struct sockaddr*)&s_addr;
   socklen_t         s_addr_len = sizeof(SockAddr);
@@ -1613,7 +1613,7 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
   s_addr.sun_family = AF_UNIX;
 
 
-#elif (defined RDMA_SOCKETS)
+#elif (SOCKETS == SKT_rdma)
   struct rdma_addrinfo  hints;
   struct rdma_addrinfo* res;
 
@@ -1772,7 +1772,7 @@ int skt_fcntl(SocketHandle* handle, SocketFcntlCmd cmd, ...) {
       va_end( ap );
 
 
-#ifdef S3_AUTH
+#if S3_AUTH
 
       handle->aws_ctx = aws_ctx;
       return 0;
@@ -1816,7 +1816,7 @@ int skt_fcntl(SocketHandle* handle, SocketFcntlCmd cmd, ...) {
 
 int  skt_auth_init(const char* user, SktAuth* auth) {
 
-#ifdef S3_AUTH
+#if S3_AUTH
    const char*  aws_user = user;  // token 1 in ~/.awsAuth
    AWSContext*  aws_ctx  = aws_context_new();
    int          retval   = 0;

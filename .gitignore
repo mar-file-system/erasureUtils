@@ -14,14 +14,17 @@
 
 *~
 config.h
+skt_config.h
 foo*
 *.old
 old/
 *.tgz
 *.[ch].*
+!skt_config.h.in
 *.log
 commit.txt
 example_*
+core.*
 
 Makefile
 autom4te.cache
@@ -31,4 +34,3 @@ install-sh
 missing
 stamp-h1
 test-driver
-
