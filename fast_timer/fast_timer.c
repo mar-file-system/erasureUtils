@@ -324,9 +324,9 @@ int fast_timer_show(FastTimer* ft, int simple, const char* str) {
    //   printf("  elapsed: %7.5f  %s\n", ticks, (units[i] ? units[i] : "sec"));
 
    printf("  elapsed: ");
-   printf("%7.5f sec, ", fast_timer_sec(ft));
-   printf("%7.5f usec, ", fast_timer_usec(ft));
-   printf("%7.5f nsec\n", fast_timer_nsec(ft));
+   printf("%7.5lf sec, ", fast_timer_sec(ft));
+   printf("%7.5lf usec, ", fast_timer_usec(ft));
+   printf("%7.5lf nsec\n", fast_timer_nsec(ft));
 
    return 0;
 }
@@ -338,8 +338,8 @@ int fast_timer_show_details(FastTimer* ft, const char* str) {
    printf("  chip:    %d\n", ft->chip);
    printf("  core:    %d\n", ft->core);
    printf("  migr:    %u\n", ft->migrations);
-   printf("  ticks/s: %6.2f\n", ticks_per_sec);
-   printf("  CPU:     %5.3f GHz\n", ticks_per_sec / G);
+   printf("  ticks/s: %6.2lf\n", ticks_per_sec);
+   printf("  CPU:     %5.3lf GHz\n", ticks_per_sec / G);
    printf("\n");
 
    return 0;

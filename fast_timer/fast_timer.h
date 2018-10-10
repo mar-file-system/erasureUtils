@@ -57,6 +57,26 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 
+// ---------------------------------------------------------------------------
+// *** WARNING
+//
+// In order to allow start/stop and reporting operations to be as
+// lightweight as possible:
+//
+// (1) You MUST call fast_timer_reset() before using a given timer.  This
+//     wipes it to zeros.  You can optionally reset again, anytime the
+//     timer is not running, to reset the accumulator and the
+//     migrations-count, but after the first call, you can also choose to
+//     start/stop the timer multiple times without resets, to accumulate a
+//     total amount of time. across multiple intervals.
+//
+// (2) You MUST call fast_timer_inits() once in your program, at any time
+//     before calling any of the functions that report an amount of time
+//     (e.g. fast_timer_msec(), fast_timer_show(), log_histo_show(), etc)
+//
+// ---------------------------------------------------------------------------
+
+
 // NOTE: The TSC ticks at the "nominal" processor frequency (i.e. the
 // default freq, not counting changes in the actual processor freq
 // resulting from idling or turbo, etc.)  As wikipedia puts it: "TSC ticks
@@ -81,6 +101,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 #include <string.h>             // memset()
+#include <stdint.h>             // uint64_t, etc
 #include <stdlib.h>
 
 #ifdef __GNUC__
@@ -140,15 +161,12 @@ extern volatile int invariant_TSC;
 int fast_timer_inits();
 
 
-
-// You must do this before using a given timer.  Do it again, anytime the
-// timer is not running, to reset the accumulator, and the migrations-count
-
 static __attribute__((always_inline)) inline
 int fast_timer_reset(FastTimer* ft) {
    memset(ft, 0, sizeof(FastTimer));
 }
 
+// see "WARNING" above
 static __attribute__((always_inline)) inline
 int fast_timer_start(FastTimer* ft) {
    unsigned long int x;
