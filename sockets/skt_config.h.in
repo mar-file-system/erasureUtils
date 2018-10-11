@@ -75,11 +75,11 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 // ---------------------------------------------------------------------------
 // The reason we generate these settings at config-time (instead of just
 // supplying -Dfoo on the command-line at compile-time) is that this
-// library (part of libne) and its include files may be used by other
+// library (part of libne), and its include files, may be used by other
 // systems (e.g. MarFS), which do not know about what our generated
 // Makefiles are doing.
 //
-// There are structs in this library (e.g. GenericFC in udal.h, used in
+// There are structs in this library (e.g. GenericFD in udal.h, used in
 // ne_handle) that look different when they are built in a setup that is
 // configured to support sockets.  Therefore, an external system that
 // includes our include-files should be assured that it will use the same
@@ -111,6 +111,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 // same one used in the client.  However, those things are all built into
 // executables, at build time, so the values in the .h files can apparently
 // be safely allowed to diverge.
+//
+// #define DEBUG_SOCKETS ...
 
 
 
