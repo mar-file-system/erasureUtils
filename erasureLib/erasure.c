@@ -2568,6 +2568,7 @@ int ne_delete1( SnprintfFunc snprintf_fn, void* state,
    FastTimer  timer;            // we don't have an ne_handle
    if (timing_flags & TF_HANDLE) {
       fast_timer_inits();
+      fast_timer_reset(&timer); /* prepare timer for use */
       fast_timer_start(&timer); /* start overall timer */
    }
 

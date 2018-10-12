@@ -347,9 +347,8 @@ struct handle {
    FastTimer      handle_timer;      /* pre-open to post-close, all threads complete */
    FastTimer      erasure_timer;
    LogHisto       erasure_h;
-   //char*          repo;
-   char*          timing_stats;
-   //int*           pod_id;
+
+   char*          timing_stats;  /* ptr to block where timing data is to be copied at close */
 };
 typedef struct handle* ne_handle;
 
