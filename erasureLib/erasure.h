@@ -166,7 +166,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
 #endif
 
-#define UNSAFE(HANDLE) ((HANDLE)->nerr > (HANDLE)->E - MIN_PROTECTION)
+#define UNSAFE(HANDLE) ((HANDLE)->erasure_state->nerr > (HANDLE)->erasure_state->E - MIN_PROTECTION)
 
 typedef uint32_t u32;
 typedef uint64_t u64;
@@ -213,10 +213,13 @@ typedef struct buffer_queue {
 typedef struct ne_stat_struct {
    char xattr_status[ MAXPARTS ];
    char data_status[ MAXPARTS ];
+   char src_in_err[ MAXPARTS ];
+   int nerr;
    int N;
    int E;
    int start;
    unsigned int bsz;
+   char* path_fmt;
    u64 totsz;
 } *ne_stat;
 
@@ -286,14 +289,10 @@ struct GenericFD;   // fwd-decl  (udal.h)
 
 struct handle {
    /* Erasure Info */
-   int N;
-   int E;
-   unsigned int bsz;
-   char *path;
+   ne_stat erasure_state;
 
    /* Read/Write Info and Structures */
    ne_mode mode;
-   u64 totsz;
    void *buffer;
    unsigned char *buffs[ MAXPARTS ];
    unsigned long buff_rem;
@@ -312,14 +311,9 @@ struct handle {
    unsigned long ncompsz[ MAXPARTS ];
    off_t written[ MAXPARTS ];
 
-   /* Error Pattern Info */
-   int nerr;
-   int erasure_offset;
-   unsigned char e_ready;
-   unsigned char src_in_err[ MAXPARTS ];
-   unsigned char src_err_list[ MAXPARTS ];
-
    /* Erasure Manipulation Structures */
+   unsigned char e_ready;
+   unsigned char src_err_list[ MAXPARTS ];
    unsigned char *encode_matrix;
    unsigned char *decode_matrix;
    unsigned char *invert_matrix;
@@ -332,7 +326,7 @@ struct handle {
 
    /* path-printing technique provided by caller */
    SnprintfFunc   snprintf;
-   void*          state;        // caller-data to be provided to <snprintf>
+   void*          printf_state;        // caller-data to be provided to <snprintf>
 
    /* pass-through to RDMA/sockets impl */
    SktAuth        auth;

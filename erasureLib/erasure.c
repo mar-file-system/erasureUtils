@@ -233,11 +233,11 @@ int incomplete_write( ne_handle handle ) {
    int i;
    int err_cnt = 0;
 
-   for( i = 0; i < handle->nerr; i++ ) {
+   for( i = 0; i < handle->erasure_state->nerr; i++ ) {
       int block = handle->src_err_list[i];
-      handle->snprintf( fname, MAXNAME, handle->path,
-                        (handle->erasure_offset + block) % ( (handle->N) ? (handle->N + handle->E) : MAXPARTS ),
-                        handle->state);
+      handle->snprintf( fname, MAXNAME, handle->erasure_state->path_fmt,
+                        (handle->erasure_state->start + block) % ( (handle->erasure_state->N) ? (handle->erasure_state->N + handle->erasure_state->E) : MAXPARTS ),
+                        handle->printf_state);
       strcat( fname, WRITE_SFX );
       
 
@@ -293,7 +293,7 @@ int bq_init(BufferQueue *bq, int block_number, void **buffers, ne_handle handle)
   bq->tail         = 0;
   bq->flags        = 0;
   bq->csum         = 0;
-  bq->buffer_size  = handle->bsz;
+  bq->buffer_size  = handle->erasure_state->bsz;
   bq->handle       = handle;
   bq->offset       = 0;
 
@@ -550,10 +550,10 @@ void *bq_writer(void *arg) {
      fast_timer_start(&handle->stats[bq->block_number].rename);
 
   char block_file_path[MAXNAME];
-  //  sprintf( block_file_path, handle->path,
-  //           (bq->block_number+handle->erasure_offset)%(handle->N+handle->E) );
-  handle->snprintf( block_file_path, MAXNAME, handle->path,
-                    (bq->block_number+handle->erasure_offset)%(handle->N+handle->E), handle->state );
+  //  sprintf( block_file_path, handle->erasure_state->path_fmt,
+  //           (bq->block_number+handle->erasure_state->start)%(handle->erasure_state->N+handle->erasure_state->E) );
+  handle->snprintf( block_file_path, MAXNAME, handle->erasure_state->path_fmt,
+                    (bq->block_number+handle->erasure_state->start)%(handle->erasure_state->N+handle->erasure_state->E), handle->printf_state );
 
   PRINTdbg("bq_writer: renaming old:  %s\n", bq->path );
   PRINTdbg("                    new:  %s\n", block_file_path );
@@ -591,12 +591,12 @@ void *bq_writer(void *arg) {
  */
 static int initialize_queues(ne_handle handle) {
   int i;
-  int num_blocks = handle->N + handle->E;
+  int num_blocks = handle->erasure_state->N + handle->erasure_state->E;
 
   /* allocate buffers */
   for(i = 0; i < MAX_QDEPTH; i++) {
     int error = posix_memalign(&handle->buffer_list[i], 64,
-                               num_blocks * handle->bsz);
+                               num_blocks * handle->erasure_state->bsz);
     if(error == -1) {
       int j;
       // clean up previously allocated buffers and fail.
@@ -615,8 +615,8 @@ static int initialize_queues(ne_handle handle) {
     char path[MAXNAME];
     BufferQueue *bq = &handle->blocks[i];
     // generate the path
-    // sprintf(bq->path, handle->path, (i + handle->erasure_offset) % num_blocks);
-    handle->snprintf(bq->path, MAXNAME, handle->path, (i + handle->erasure_offset) % num_blocks, handle->state);
+    // sprintf(bq->path, handle->erasure_state->path_fmt, (i + handle->erasure_state->start) % num_blocks);
+    handle->snprintf(bq->path, MAXNAME, handle->erasure_state->path_fmt, (i + handle->erasure_state->start) % num_blocks, handle->printf_state);
 
     strcat(bq->path, WRITE_SFX);
 
@@ -624,7 +624,7 @@ static int initialize_queues(ne_handle handle) {
     void *buffers[MAX_QDEPTH];
     int j;
     for(j = 0; j < MAX_QDEPTH; j++) {
-      buffers[j] = handle->buffer_list[j] + i * handle->bsz;
+      buffers[j] = handle->buffer_list[j] + i * handle->erasure_state->bsz;
     }
     
     if(bq_init(bq, i, buffers, handle) < 0) {
@@ -646,7 +646,7 @@ static int initialize_queues(ne_handle handle) {
   for(i = 0; i < MAX_QDEPTH; i++) {
     int j;
     for(j = 0; j < num_blocks; j++) {
-      handle->block_buffs[i][j] = handle->buffer_list[i] + j * handle->bsz;
+      handle->block_buffs[i][j] = handle->buffer_list[i] + j * handle->erasure_state->bsz;
     }
   }
 
@@ -663,9 +663,9 @@ static int initialize_queues(ne_handle handle) {
 
     if(bq->flags & BQ_ERROR) {
       PRINTerr("open failed for block %d\n", i);
-      handle->src_in_err[i] = 1;
-      handle->src_err_list[handle->nerr] = i;
-      handle->nerr++;
+      handle->erasure_state->src_in_err[i] = 1;
+      handle->src_err_list[handle->erasure_state->nerr] = i;
+      handle->erasure_state->nerr++;
     }
     pthread_mutex_unlock(&bq->qlock);
   }
@@ -747,13 +747,13 @@ int init_bench_stats(BenchStats* stats) {
 // and your block-directories are named something like /path/to/block%d/more/path/filename,
 // and the name of the block 0 dir is /path/to/block0
 //
-// This is the default, for MC repos.  We ignore <state>
+// This is the default, for MC repos.  We ignore <printf_state>
 //
 // There's an opportunity for MC repos to handle e.g. non-zero naming, etc, by extending the
 // the default marfs configuration for MC repos, something like is done for MC_SOCKETS,
 // and passing that in as <stat>, here.
 
-int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, void* state) {
+int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, void* printf_state) {
   return snprintf(dest, size, format, block);
 }
 
@@ -762,10 +762,10 @@ int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, 
 /**
  * Opens a new handle for a specific erasure striping
  *
- * ne_open(path, mode, ...)  calls this with fn=ne_default_snprintf, and state=NULL
+ * ne_open(path, mode, ...)  calls this with fn=ne_default_snprintf, and printf_state=NULL
  *
- * @param SnprintfFunc : function takes block-number and <state> and produces per-block path from template.
- * @param state : optional state to be used by SnprintfFunc (e.g. configuration details)
+ * @param SnprintfFunc : function takes block-number and <printf_state> and produces per-block path from template.
+ * @param printf_state : optional printf_state to be used by SnprintfFunc (e.g. configuration details)
  * @param cred : optional credentials (actually AWSContext*) to authenticate socket connections (e.g. RDMA)
  * @param char* path : sprintf format-template for individual files of in each stripe.
  * @param ne_mode mode : Mode in which the file is to be opened.  Either NE_RDONLY, NE_WRONLY, or NE_REBUILD.
@@ -777,7 +777,7 @@ int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, 
  */
 
 
-ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
+ne_handle ne_open1_vl( SnprintfFunc fn, void* printf_state,
                        uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                        char *path, ne_mode mode, va_list ap )
 {
@@ -854,11 +854,14 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
    ne_handle handle = malloc( sizeof( struct handle ) );
    memset(handle, 0, sizeof(struct handle));
 
+   handle->erasure_state = malloc( sizeof( struct ne_stat_struct ) );
+   memset( handle->erasure_state, 0, sizeof( struct ne_stat_struct ) );
+
    /* initialize any non-zero handle members */
-   handle->N = N;
-   handle->E = E;
-   handle->bsz = bsz;
-   handle->erasure_offset = erasure_offset;
+   handle->erasure_state->N = N;
+   handle->erasure_state->E = E;
+   handle->erasure_state->bsz = bsz;
+   handle->erasure_state->start = erasure_offset;
 
    if ( counter < 2 ) {
       handle->mode = NE_STAT;
@@ -869,7 +872,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
    }
 
    handle->snprintf = fn;
-   handle->state    = state;
+   handle->printf_state    = printf_state;
    handle->auth     = auth;
    handle->impl     = get_impl(itype);
 
@@ -892,22 +895,22 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
 
    char* nfile = malloc( strlen(path) + 1 );
    strncpy( nfile, path, strlen(path) + 1 );
-   handle->path = nfile;
+   handle->erasure_state->path_fmt = nfile;
 
    if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
       ret = xattr_check(handle, path); // identify total data size of stripe
       if ((ret == 0) && (handle->mode == NE_STAT)) {
          PRINTdbg( "ne_open: resetting mode to %d\n", mode);
          handle->mode = mode;
-         while ( handle->nerr > 0 ) {
-            handle->nerr--;
-            handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
-            handle->src_err_list[handle->nerr] = 0;
+         while ( handle->erasure_state->nerr > 0 ) {
+            handle->erasure_state->nerr--;
+            handle->erasure_state->src_in_err[handle->src_err_list[handle->erasure_state->nerr]] = 0;
+            handle->src_err_list[handle->erasure_state->nerr] = 0;
          }
          ret = xattr_check(handle,path); //perform the check again, identifying mismatched values
       }
       PRINTdbg("ne_open: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d, TotSz = %llu\n",
-               handle->nerr, handle->N, handle->E, handle->erasure_offset, handle->totsz );
+               handle->erasure_state->nerr, handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->start, handle->erasure_state->totsz );
 
       if ( ret != 0 ) {
          if( incomplete_write( handle ) ) {
@@ -915,6 +918,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
             return NULL;
          }
          PRINTerr( "ne_open: extended attribute check has failed\n" );
+         free( handle->erasure_state );
          free( handle );
          errno = ENODATA;
          return NULL;
@@ -924,14 +928,15 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
    else if ( mode != NE_WRONLY ) { //reject improper mode arguments
       PRINTerr( "improper mode argument received - %d\n", mode );
       errno = EINVAL;
+      free( handle->erasure_state );
       free( handle );
       return NULL;
    }
 
-   N = handle->N;
-   E = handle->E;
-   bsz = handle->bsz;
-   erasure_offset = handle->erasure_offset;
+   N = handle->erasure_state->N;
+   E = handle->erasure_state->E;
+   bsz = handle->erasure_state->bsz;
+   erasure_offset = handle->erasure_state->start;
    PRINTdbg( "ne_open: using stripe values (N=%d,E=%d,bsz=%d,offset=%d)\n", N,E,bsz,erasure_offset);
 
    if(handle->mode == NE_WRONLY) { // first cut: mutlti-threading only for writes.
@@ -939,6 +944,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
      mode_t mask = umask(0000);
      if(initialize_queues(handle) < 0) {
        // all destruction/cleanup should be handled in initialize_queues()
+       free( handle->erasure_state );
        free(handle);
        errno = ENOMEM;
        return NULL;
@@ -946,7 +952,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
      umask(mask);
      if( UNSAFE(handle) ) {
        int i;
-       for(i = 0; i < handle->N + handle->E; i++) {
+       for(i = 0; i < handle->erasure_state->N + handle->erasure_state->E; i++) {
          bq_abort(&handle->blocks[i]);
          // just detach and let the OS clean up. We don't care about the return any more.
          pthread_detach(handle->threads[i]);
@@ -988,7 +994,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
 
        bzero( file, MAXNAME );
        u32 blk_i = (counter+erasure_offset)%(N+E); // absolute index of block to be written, within pod
-       handle->snprintf(file, MAXNAME, path, blk_i, handle->state);
+       handle->snprintf(file, MAXNAME, path, blk_i, handle->printf_state);
        
 #ifdef INT_CRC
        if ( counter > N ) {
@@ -1008,7 +1014,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
          OPEN(handle->FDArray[counter], handle,
               strncat( file, WRITE_SFX, strlen(WRITE_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
       }
-//      else if ( mode == NE_REBUILD  &&  handle->src_in_err[counter] == 1 ) {
+//      else if ( mode == NE_REBUILD  &&  handle->erasure_state->src_in_err[counter] == 1 ) {
 //         PRINTdbg( "   opening %s%s for write\n", file, REBUILD_SFX );
 //         OPEN(handle->FDArray[counter], handle,
 //              strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
@@ -1024,13 +1030,13 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
          log_histo_add_interval(&handle->stats[counter].open_h,
                                 &handle->stats[counter].open);
       }
-      if ( FD_ERR(handle->FDArray[counter])  &&  handle->src_in_err[counter] == 0 ) {
+      if ( FD_ERR(handle->FDArray[counter])  &&  handle->erasure_state->src_in_err[counter] == 0 ) {
          PRINTerr( "   failed to open file %s! '%s'\n", file, strerror(errno) );
 
-         handle->src_err_list[handle->nerr] = counter;
-         handle->nerr++;
-         handle->src_in_err[counter] = 1;
-         if ( handle->nerr > E ) { //if errors are unrecoverable, terminate
+         handle->src_err_list[handle->erasure_state->nerr] = counter;
+         handle->erasure_state->nerr++;
+         handle->erasure_state->src_in_err[counter] = 1;
+         if ( handle->erasure_state->nerr > E ) { //if errors are unrecoverable, terminate
            errno = ENODATA;
            return NULL;
          }
@@ -1056,20 +1062,20 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
 
 // caller (e.g. MC-sockets DAL) specifies SprintfFunc, stat, and SktAuth
 // New: caller also provides flags that control whether stats are collected
-ne_handle ne_open1( SnprintfFunc fn, void* state,
+ne_handle ne_open1( SnprintfFunc fn, void* printf_state,
                     uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                     char *path, ne_mode mode, ... ) {
 
    ne_handle ret;
    va_list vl;
    va_start(vl, mode);
-   ret = ne_open1_vl(fn, state, itype, auth, timing_flags, path, mode, vl);
+   ret = ne_open1_vl(fn, printf_state, itype, auth, timing_flags, path, mode, vl);
    va_end(vl);
    return ret;
 }
 
 
-// provide defaults for SprintfFunc, state, and SktAuth
+// provide defaults for SprintfFunc, printf_state, and SktAuth
 // so naive callers can continue to work (in some cases).
 ne_handle ne_open( char *path, ne_mode mode, ... ) {
    ne_handle ret;
@@ -1144,8 +1150,8 @@ ssize_t read_all(GenericFD* fd, void* buffer, size_t nbytes) {
  */
 ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) 
 {
-   int mtot = (handle->N)+(handle->E);
-   int minNerr = handle->N+1;  // greater than N
+   int mtot = (handle->erasure_state->N)+(handle->erasure_state->E);
+   int minNerr = handle->erasure_state->N+1;  // greater than N
    int maxNerr = -1;   // less than N
    int nsrcerr = 0;
    int counter;
@@ -1154,9 +1160,9 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset )
    char error_in_stripe;
    unsigned char *temp_buffs[ MAXPARTS ];
    int            temp_buffs_alloc = 0;
-   int N = handle->N;
-   int E = handle->E;
-   unsigned int bsz = handle->bsz;
+   int N = handle->erasure_state->N;
+   int E = handle->erasure_state->E;
+   unsigned int bsz = handle->erasure_state->bsz;
    int nerr = 0;
    unsigned long datasz[ MAXPARTS ] = {0};
    ssize_t ret_in;
@@ -1189,9 +1195,9 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset )
       return -1;
    }
 
-   if ( (offset + nbytes) > handle->totsz ) {
+   if ( (offset + nbytes) > handle->erasure_state->totsz ) {
       PRINTdbg("ne_read: read would extend beyond EOF, resizing read request...\n");
-      nbytes = handle->totsz - offset;
+      nbytes = handle->erasure_state->totsz - offset;
       if ( nbytes <= 0 ) {
          PRINTerr( "ne_read: offset is beyond filesize\n" );
          // return -1;             /* pread() would just return 0 in this case */
@@ -1220,7 +1226,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset )
 
    //determine min/max errors and allocate temporary buffers
    for ( counter = 0; counter < mtot; counter++ ) {
-      if ( handle->src_in_err[counter] ) {
+      if ( handle->erasure_state->src_in_err[counter] ) {
          nerr++;
          if ( counter < N ) { 
             nsrcerr++;
@@ -1230,8 +1236,8 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset )
       }
    }
 
-   if ( handle->nerr != nerr ) {
-      PRINTerr( "ne_read: iconsistent internal state : handle->nerr and handle->src_in_err\n" );
+   if ( handle->erasure_state->nerr != nerr ) {
+      PRINTerr( "ne_read: iconsistent internal state : handle->erasure_state->nerr and handle->erasure_state->src_in_err\n" );
       errno = ENOTRECOVERABLE;
       return -1;
    }
@@ -1281,7 +1287,7 @@ read:
          if (handle->timing_flags & TF_RW)
             fast_timer_start(&handle->stats[counter].read);
 
-         if( handle->src_in_err[counter] == 0 ) {
+         if( handle->erasure_state->src_in_err[counter] == 0 ) {
             if ( counter >= N ) {
 #ifdef INT_CRC
                seekamt += ( bsz+sizeof(u32) );
@@ -1302,9 +1308,9 @@ read:
             if ( tmp != seekamt ) {
                if ( counter > maxNerr )  maxNerr = counter;
                if ( counter < minNerr )  minNerr = counter;
-               handle->src_in_err[counter] = 1;
-               handle->src_err_list[handle->nerr] = counter;
-               handle->nerr++;
+               handle->erasure_state->src_in_err[counter] = 1;
+               handle->src_err_list[handle->erasure_state->nerr] = counter;
+               handle->erasure_state->nerr++;
                nsrcerr++;
                handle->e_ready = 0; //indicate that erasure structs require re-initialization
 
@@ -1327,7 +1333,7 @@ read:
       //temporary addition to allow for the constant reading of erasure parts
       for ( counter = N; counter < mtot; counter++ ) {
          tmp = 0;
-         if ( handle->src_in_err[ counter ] == 0 ) {
+         if ( handle->erasure_state->src_in_err[ counter ] == 0 ) {
 #ifdef INT_CRC
             tmp = HNDLOP(lseek, handle->FDArray[counter], (startstripe*( bsz+sizeof(u32) )), SEEK_SET);
 #else
@@ -1336,9 +1342,9 @@ read:
          }
          //note any errors, no need to restart though
          if ( tmp < 0 ) {
-            handle->src_in_err[counter] = 1;
-            handle->src_err_list[handle->nerr] = counter;
-            handle->nerr++;
+            handle->erasure_state->src_in_err[counter] = 1;
+            handle->src_err_list[handle->erasure_state->nerr] = counter;
+            handle->erasure_state->nerr++;
             nsrcerr++;
             handle->e_ready = 0; //indicate that erasure structs require re-initialization
          }
@@ -1354,7 +1360,7 @@ read:
       PRINTdbg("startpart = %d, endchunk = %d\n   This stripe contains corrupted blocks...\n", startpart, endchunk);
       while (counter < mtot) {
 
-         if( handle->src_in_err[counter] == 0 ) {
+         if( handle->erasure_state->src_in_err[counter] == 0 ) {
 
             if (handle->timing_flags & TF_RW)
                fast_timer_start(&handle->stats[counter].read);
@@ -1369,9 +1375,9 @@ read:
             if ( tmp < 0 ) {
                if ( counter > maxNerr )  maxNerr = counter;
                if ( counter < minNerr )  minNerr = counter;
-               handle->src_in_err[counter] = 1;
-               handle->src_err_list[handle->nerr] = counter;
-               handle->nerr++;
+               handle->erasure_state->src_in_err[counter] = 1;
+               handle->src_err_list[handle->erasure_state->nerr] = counter;
+               handle->erasure_state->nerr++;
                nsrcerr++;
                handle->e_ready = 0; //indicate that erasure structs require re-initialization
                counter++;
@@ -1425,7 +1431,7 @@ read:
    /**** output each data stipe, regenerating as necessary ****/
    while ( llcounter < nbytes ) {
 
-      if( handle->nerr > handle->E ) {
+      if( handle->erasure_state->nerr > handle->erasure_state->E ) {
          PRINTerr("ne_read: errors exceed erasure limits\n");
          errno=ENODATA;
          return llcounter;
@@ -1464,7 +1470,7 @@ read:
 
          readsize = bsz-tmpoffset;
 
-         if ( handle->src_in_err[counter] == 1 ) {  //this data chunk is invalid
+         if ( handle->erasure_state->src_in_err[counter] == 1 ) {  //this data chunk is invalid
             PRINTdbg("ne_read: ignoring data for faulty chunk %d\n",counter);
             if ( firstchunk == 0 ) {
                llcounter += readsize;
@@ -1523,9 +1529,9 @@ read:
                          counter, readsize, ret_in);
                if ( counter > maxNerr )  maxNerr = counter;
                if ( counter < minNerr )  minNerr = counter;
-               handle->src_in_err[counter] = 1;
-               handle->src_err_list[handle->nerr] = counter;
-               handle->nerr++;
+               handle->erasure_state->src_in_err[counter] = 1;
+               handle->src_err_list[handle->erasure_state->nerr] = counter;
+               handle->erasure_state->nerr++;
                nsrcerr++;
                handle->e_ready = 0; //indicate that erasure structs require re-initialization
                ret_in = 0;
@@ -1563,9 +1569,9 @@ read:
                   PRINTerr( "ne_read: mismatch of int-crc for file %d while reading with rebuild\n", counter);
                   if ( counter > maxNerr )  maxNerr = counter;
                   if ( counter < minNerr )  minNerr = counter;
-                  handle->src_in_err[counter] = 1;
-                  handle->src_err_list[handle->nerr] = counter;
-                  handle->nerr++;
+                  handle->erasure_state->src_in_err[counter] = 1;
+                  handle->src_err_list[handle->erasure_state->nerr] = counter;
+                  handle->erasure_state->nerr++;
                   nsrcerr++;
                   handle->e_ready = 0; //indicate that erasure structs require re-initialization
                   counter--;
@@ -1617,7 +1623,7 @@ read:
          readsize = bsz; //may want to limit later
 #endif
 
-         if ( handle->src_in_err[counter] == 0 ) {
+         if ( handle->erasure_state->src_in_err[counter] == 0 ) {
 
             PRINTdbg("ne_read: reading %d from erasure %d\n",readsize,counter);
             if (handle->timing_flags & TF_RW)
@@ -1637,9 +1643,9 @@ read:
                   ret_in = 0;
                }
 
-               handle->src_in_err[counter] = 1;
-               handle->src_err_list[handle->nerr] = counter;
-               handle->nerr++;
+               handle->erasure_state->src_in_err[counter] = 1;
+               handle->src_err_list[handle->erasure_state->nerr] = counter;
+               handle->erasure_state->nerr++;
                handle->e_ready = 0; //indicate that erasure structs require re-initialization
 
               // error_in_stripe = 1;
@@ -1671,9 +1677,9 @@ read:
                   PRINTerr("ne_read: mismatch of int-crc for file %d (erasure)\n", counter);
                   if ( counter > maxNerr )  maxNerr = counter;
                   if ( counter < minNerr )  minNerr = counter;
-                  handle->src_in_err[counter] = 1;
-                  handle->src_err_list[handle->nerr] = counter;
-                  handle->nerr++;
+                  handle->erasure_state->src_in_err[counter] = 1;
+                  handle->src_err_list[handle->erasure_state->nerr] = counter;
+                  handle->erasure_state->nerr++;
                   nsrcerr++;
                   handle->e_ready = 0; //indicate that erasure structs require re-initialization
                   //error_in_stripe = 1;
@@ -1705,8 +1711,8 @@ read:
             ec_init_tables(N, E, &(handle->encode_matrix[N * N]), handle->g_tbls);
 
             ret_in = gf_gen_decode_matrix( handle->encode_matrix, handle->decode_matrix,
-                  handle->invert_matrix, decode_index, handle->src_err_list, handle->src_in_err,
-                  handle->nerr, nsrcerr, N, mtot);
+                  handle->invert_matrix, decode_index, handle->src_err_list, handle->erasure_state->src_in_err,
+                  handle->erasure_state->nerr, nsrcerr, N, mtot);
 
             if (ret_in != 0) {
                PRINTerr("ne_read: failure to generate decode matrix, errors may exceed erasure limits\n");
@@ -1728,13 +1734,13 @@ read:
             }
 
             PRINTdbg( "ne_read: init erasure tables nsrcerr = %d e_ready = %d...\n", nsrcerr, handle->e_ready );
-            ec_init_tables(N, handle->nerr, handle->decode_matrix, handle->g_tbls);
+            ec_init_tables(N, handle->erasure_state->nerr, handle->decode_matrix, handle->g_tbls);
 
             handle->e_ready = 1; //indicate that rebuild structures are initialized
          }
          PRINTdbg( "ne_read: performing regeneration from erasure...\n" );
 
-         ec_encode_data(bsz, N, handle->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
+         ec_encode_data(bsz, N, handle->erasure_state->nerr, handle->g_tbls, handle->recov, &temp_buffs[N]);
 
          if (handle->timing_flags & TF_ERASURE) {
             fast_timer_stop(&handle->erasure_timer);
@@ -1762,7 +1768,7 @@ read:
          if (handle->timing_flags & TF_RW)
             fast_timer_start(&handle->stats[counter].write);
 
-         if ( handle->src_in_err[counter] == 0 ) {
+         if ( handle->erasure_state->src_in_err[counter] == 0 ) {
             PRINTdbg( "ne_read: performing write of %d from chunk %d data\n", readsize, counter );
 
 #ifdef INT_CRC
@@ -1781,7 +1787,7 @@ read:
          else {
 
             for ( tmp = 0; counter != handle->src_err_list[tmp]; tmp++ ) {
-               if ( tmp == handle->nerr ) {
+               if ( tmp == handle->erasure_state->nerr ) {
                   PRINTerr( "ne_read: improperly definded erasure structs, failed to locate %d in src_err_list\n", tmp );
                   errno = ENOTRECOVERABLE;
 
@@ -1843,9 +1849,9 @@ read:
    //copy regenerated blocks and note length of cached stripe
    for ( counter = 0; counter < mtot; counter++ ) {
       if ( error_in_stripe == 1  &&  counter < N ) {
-         if ( handle->src_in_err[counter] == 1 ) {
+         if ( handle->erasure_state->src_in_err[counter] == 1 ) {
             for ( tmp = 0; counter != handle->src_err_list[tmp]; tmp++ ) {
-               if ( tmp == handle->nerr ) {
+               if ( tmp == handle->erasure_state->nerr ) {
                   PRINTerr( "ne_read: improperly definded erasure structs, failed to locate %d in src_err_list while caching\n", tmp );
                   mtot=0;
                   tmp=0;
@@ -1874,18 +1880,18 @@ read:
 void sync_file(ne_handle handle, int block_index) {
 #if 0
   char path[MAXNAME];
-  int  block_number = ((handle->erasure_offset + block_index)
-                       % (handle->N + handle->E));
-  handle->snprintf(path, MAXNAME, handle->path, block_number, handle->state);
+  int  block_number = ((handle->erasure_state->start + block_index)
+                       % (handle->erasure_state->N + handle->erasure_state->E));
+  handle->snprintf(path, MAXNAME, handle->erasure_state->path_fmt, block_number, handle->printf_state);
   strcat(path, WRITE_SFX);
 
   HNDLOP(close, handle->FDArray[block_index]);
   OPEN(handle->FDArray[block_index], handle, path, O_WRONLY);
   if(FD_ERR(handle->FDArray[block_index])) {
     PRINTerr( "failed to reopen file\n");
-    handle->src_in_err[block_index] = 1;
-    handle->src_err_list[handle->nerr] = block_index;
-    handle->nerr++;
+    handle->erasure_state->src_in_err[block_index] = 1;
+    handle->src_err_list[handle->erasure_state->nerr] = block_index;
+    handle->erasure_state->nerr++;
     return;
   }
 
@@ -1894,9 +1900,9 @@ void sync_file(ne_handle handle, int block_index) {
                       SEEK_SET);
   if(seek < handle->written[block_index]) {
     PRINTerr( "failed to seek reopened file\n");
-    handle->src_in_err[block_index] = 1;
-    handle->src_err_list[handle->nerr] = block_index;
-    handle->nerr++;
+    handle->erasure_state->src_in_err[block_index] = 1;
+    handle->src_err_list[handle->erasure_state->nerr] = block_index;
+    handle->erasure_state->nerr++;
     HNDLOP(close, handle->FDArray[block_index]);
     return;
   }
@@ -1943,9 +1949,9 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
      return -1;
    }
 
-   N = handle->N;
-   E = handle->E;
-   bsz = handle->bsz;
+   N = handle->erasure_state->N;
+   E = handle->erasure_state->E;
+   bsz = handle->erasure_state->bsz;
 
    mtot=N+E;
 
@@ -1981,10 +1987,10 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
          //memcpy ( handle->buffer + handle->buff_rem, buffer+totsize, readsize);
          int queue_result = bq_enqueue(&handle->blocks[counter], buffer+totsize, readsize);
          //if we failed to enqueue work for this block, note that the block is in error
-         if(queue_result != 0 && !handle->src_in_err[counter]) {
-           handle->src_in_err[counter] = 1;
-           handle->src_err_list[handle->nerr] = counter;
-           handle->nerr++;
+         if(queue_result != 0 && !handle->erasure_state->src_in_err[counter]) {
+           handle->erasure_state->src_in_err[counter] = 1;
+           handle->src_err_list[handle->erasure_state->nerr] = counter;
+           handle->erasure_state->nerr++;
          }
          if(queue_result == -1) {
            // bq_enqueue will set errno.
@@ -2047,7 +2053,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
       // Need to lock the two buffers here.
       int i;
       int buffer_index;
-      for(i = N; i < handle->N + handle->E; i++) {
+      for(i = N; i < handle->erasure_state->N + handle->erasure_state->E; i++) {
         BufferQueue *bq = &handle->blocks[i];
         if(pthread_mutex_lock(&bq->qlock) != 0) {
           PRINTerr("Failed to acquire lock for erasure blocks\n");
@@ -2074,7 +2080,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
                                 &handle->erasure_timer);
       }
 
-      for(i = N; i < handle->N + handle->E; i++) {
+      for(i = N; i < handle->erasure_state->N + handle->erasure_state->E; i++) {
         BufferQueue *bq = &handle->blocks[i];
         bq->qdepth++;
         bq->tail = (bq->tail + 1) % MAX_QDEPTH;
@@ -2087,7 +2093,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
       //now that we have written out all data, reset buffer
       handle->buff_rem = 0; 
    }
-   handle->totsz += totsize; //as it is impossible to write at an offset, the sum of writes will be the total size
+   handle->erasure_state->totsz += totsize; //as it is impossible to write at an offset, the sum of writes will be the total size
 
    // If the errors exceed the minimum protection threshold number of
    // errrors then fail the write.
@@ -2117,8 +2123,8 @@ int show_handle_stats(ne_handle handle) {
       printf("\n");
          
       int i;
-      int N = handle->N;
-      int E = handle->E;
+      int N = handle->erasure_state->N;
+      int E = handle->erasure_state->E;
       for (i=0; i<N+E; ++i) {
          printf("-- block %d\n", i);
 
@@ -2175,12 +2181,12 @@ void extract_repo_name(char* path, char* repo, int* pod_id)
 void copy_timing_stats(ne_handle handle)
 {
    int i, j;
-   int total_blk = handle->N + handle->E;
+   int total_blk = handle->erasure_state->N + handle->erasure_state->E;
    char* open_cursor = handle->timing_stats;
    //printf("libne open_cursor pointer %p\n", open_cursor);
-   char* read_cursor = handle->timing_stats + (3 + sizeof(double) * 65 * (handle->N + handle->E));
-   char* write_cursor = handle->timing_stats + 2 * (3 + sizeof(double) * 65 * (handle->N + handle->E));
-   char* close_cursor = handle->timing_stats + 3 * (3 + sizeof(double) * 65 * (handle->N + handle->E));
+   char* read_cursor = handle->timing_stats + (3 + sizeof(double) * 65 * (handle->erasure_state->N + handle->erasure_state->E));
+   char* write_cursor = handle->timing_stats + 2 * (3 + sizeof(double) * 65 * (handle->erasure_state->N + handle->erasure_state->E));
+   char* close_cursor = handle->timing_stats + 3 * (3 + sizeof(double) * 65 * (handle->erasure_state->N + handle->erasure_state->E));
 
    if(handle->timing_flags & TF_OPEN)
    {
@@ -2290,7 +2296,7 @@ int ne_close( ne_handle handle )
    int ret = 0;
    int tmp;
    unsigned char *zero_buff;
-   //extract_repo_name(handle->path, handle->repo, handle->pod_id);
+   //extract_repo_name(handle->erasure_state->path_fmt, handle->repo, handle->pod_id);
 
    time_t curtime;
    time(&curtime);
@@ -2301,9 +2307,9 @@ int ne_close( ne_handle handle )
       errno = EINVAL;
       return -1;
    }
-   N = handle->N;
-   E = handle->E;
-   bsz = handle->bsz;
+   N = handle->erasure_state->N;
+   E = handle->erasure_state->E;
+   bsz = handle->erasure_state->bsz;
 
 
    /* flush the handle buffer if necessary */
@@ -2319,7 +2325,7 @@ int ne_close( ne_handle handle )
          ret = -1;
       }
 
-      handle->totsz -= tmp;
+      handle->erasure_state->totsz -= tmp;
       free( zero_buff );
    }
 
@@ -2339,7 +2345,7 @@ int ne_close( ne_handle handle )
          // as this operation can only be read or rebuild, we only 
          // really care if close fails for a rebuild output file
          if (HNDLOP(close, handle->FDArray[counter])
-             && (handle->src_in_err[counter]  == 1)
+             && (handle->erasure_state->src_in_err[counter]  == 1)
              && (handle->mode == NE_REBUILD)) {
 
             ret = -1;
@@ -2352,7 +2358,7 @@ int ne_close( ne_handle handle )
          FD_INIT(handle->FDArray[counter], handle); // set fd to -1
       }
 
-     if (handle->mode == NE_REBUILD && handle->src_in_err[counter] == 1 ) {
+     if (handle->mode == NE_REBUILD && handle->erasure_state->src_in_err[counter] == 1 ) {
 
          // if mode is NE_WRONLY this will be handled by the BQ thread.
          if(set_block_xattr(handle, counter) != 0) {
@@ -2360,7 +2366,7 @@ int ne_close( ne_handle handle )
            ret = -1;
            PRINTerr( "ne_close: failed to set xattr for rebuilt file %d\n", counter );
          }
-         handle->snprintf( file, MAXNAME, handle->path, (counter+handle->erasure_offset)%(N+E), handle->state );
+         handle->snprintf( file, MAXNAME, handle->erasure_state->path_fmt, (counter+handle->erasure_state->start)%(N+E), handle->printf_state );
          strncpy( nfile, file, strlen(file) + 1);
 
          // save the original file
@@ -2441,13 +2447,13 @@ int ne_close( ne_handle handle )
    if(handle->mode == NE_WRONLY) {
      int i;
      /* wait for the threads */
-     for(i = 0; i < handle->N + handle->E; i++) {
+     for(i = 0; i < handle->erasure_state->N + handle->erasure_state->E; i++) {
        pthread_join(handle->threads[i], NULL);
        /* add up the errors */
-       if((handle->blocks[i].flags & BQ_ERROR) && !handle->src_in_err[i]) {
-         handle->src_in_err[i] = 1;
-         handle->src_err_list[handle->nerr] = i;
-         handle->nerr++;
+       if((handle->blocks[i].flags & BQ_ERROR) && !handle->erasure_state->src_in_err[i]) {
+         handle->erasure_state->src_in_err[i] = 1;
+         handle->src_err_list[handle->erasure_state->nerr] = i;
+         handle->erasure_state->nerr++;
        }
        bq_destroy(&handle->blocks[i]);
      }
@@ -2478,7 +2484,7 @@ int ne_close( ne_handle handle )
       PRINTdbg( "ne_close: detected an incomplete/failed rebuild process\n" );
       ret = -1;
    }
-   else if ( handle->nerr > handle->E  &&  handle->mode == NE_RDONLY ) { /* for non-writes */
+   else if ( handle->erasure_state->nerr > handle->erasure_state->E  &&  handle->mode == NE_RDONLY ) { /* for non-writes */
       PRINTdbg( "ne_close: detected excessive errors following a read operation\n" );
       ret = -1;
    }
@@ -2486,14 +2492,14 @@ int ne_close( ne_handle handle )
       PRINTdbg( "ne_close: encoding error pattern in return value...\n" );
       /* Encode any file errors into the return status */
       for( counter = 0; counter < N+E; counter++ ) {
-         if ( handle->src_in_err[counter] ) {
-            ret += ( 1 << ((counter + handle->erasure_offset) % (N+E)) );
+         if ( handle->erasure_state->src_in_err[counter] ) {
+            ret += ( 1 << ((counter + handle->erasure_state->start) % (N+E)) );
          }
       }
    }
 
-   if ( handle->path != NULL )
-      free(handle->path);
+   if ( handle->erasure_state->path_fmt != NULL )
+      free(handle->erasure_state->path_fmt);
 
    free(handle->encode_matrix);
    free(handle->decode_matrix);
@@ -2506,6 +2512,7 @@ int ne_close( ne_handle handle )
    if (handle->timing_flags)
       copy_timing_stats(handle);
 
+   free( handle->erasure_state );
    free(handle);
    return ret;
 }
@@ -2546,13 +2553,13 @@ int parent_dir_missing(uDALType itype, SktAuth auth, char* path, int max_length 
 /**
  * Deletes the erasure striping of the specified width with the specified path format
  *
- * ne_delete(path, width)  calls this with fn=ne_default_snprintf, and state=NULL
+ * ne_delete(path, width)  calls this with fn=ne_default_snprintf, and printf_state=NULL
  *
  * @param char* path : Name structure for the files of the desired striping.  This should contain a single "%d" field.
  * @param int width : Total width of the erasure striping (i.e. N+E)
  * @return int : 0 on success and -1 on failure
  */
-int ne_delete1( SnprintfFunc snprintf_fn, void* state,
+int ne_delete1( SnprintfFunc snprintf_fn, void* printf_state,
                 uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                 char* path, int width ) {
 
@@ -2576,9 +2583,9 @@ int ne_delete1( SnprintfFunc snprintf_fn, void* state,
       parent_missing = -2;
       bzero( file, sizeof(file) );
 
-      snprintf_fn( file,    MAXNAME, path, counter, state );
+      snprintf_fn( file,    MAXNAME, path, counter, printf_state );
 
-      snprintf_fn( partial, MAXNAME, path, counter, state );
+      snprintf_fn( partial, MAXNAME, path, counter, printf_state );
       strncat( partial, WRITE_SFX, MAXNAME - strlen(partial) );
 
       // unlink the file or the unfinished file.  If both fail, check
@@ -2627,7 +2634,7 @@ int ne_delete(char* path, int width ) {
 // provide the appropriate template as the path, including ".meta", if they
 // want meta.  libneTest will do this.
 
-off_t ne_size1( SnprintfFunc snprintf_fn, void* state,
+off_t ne_size1( SnprintfFunc snprintf_fn, void* printf_state,
                 uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                 const char* ptemplate, int quorum, int max_stripe_width ) {
 
@@ -2664,7 +2671,7 @@ off_t ne_size1( SnprintfFunc snprintf_fn, void* state,
    int   i;
 
    for( i = 0; i < max_stripe_width  &&  match < quorum; i++ ) {
-      snprintf_fn( file, MAXNAME, ptemplate, i, state );
+      snprintf_fn( file, MAXNAME, ptemplate, i, printf_state );
 
       PRINTdbg("ne_size: opening file %s\n", file);
       OPEN( fd, handle, file, O_RDONLY );
@@ -2777,10 +2784,10 @@ int xattr_check( ne_handle handle, char *path )
    char xattrncompsize[20];    /* general char for xattr manipulation */
    char xattrnsum[50];         /* char array to get xattr sum from xattr */
    char xattrtotsize[160];
-   int N = handle->N;
-   int E = handle->E;
-   int erasure_offset = handle->erasure_offset;
-   unsigned int bsz = handle->bsz;
+   int N = handle->erasure_state->N;
+   int E = handle->erasure_state->E;
+   int erasure_offset = handle->erasure_state->start;
+   unsigned int bsz = handle->erasure_state->bsz;
    unsigned long nsz;
    unsigned long ncompsz;
    char goodfile = 0;
@@ -2822,7 +2829,7 @@ int xattr_check( ne_handle handle, char *path )
 
    for ( counter = 0; counter < lN+lE; counter++ ) {
       bzero(file,sizeof(file));
-      handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_offset)%(lN+lE), handle->state );
+      handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_state->start)%(lN+lE), handle->printf_state );
 
       if (handle->timing_flags & TF_STAT)
          fast_timer_start(&handle->stats[counter].stat);
@@ -2837,9 +2844,9 @@ int xattr_check( ne_handle handle, char *path )
       handle->csum[counter]=0; //reset csum to make results clearer
       if ( ret != 0 ) {
          PRINTerr( "xattr_check: file %s: failure of stat\n", file );
-         handle->src_in_err[counter] = 1;
-         handle->src_err_list[handle->nerr] = counter;
-         handle->nerr++;
+         handle->erasure_state->src_in_err[counter] = 1;
+         handle->src_err_list[handle->erasure_state->nerr] = counter;
+         handle->erasure_state->nerr++;
          continue;
       }
       handle->owner = partstat->st_uid;
@@ -2857,9 +2864,9 @@ int xattr_check( ne_handle handle, char *path )
 
       if (ret < 0) {
          PRINTerr( "xattr_check: failure of xattr retrieval for file %s\n", file);
-         handle->src_in_err[counter] = 1;
-         handle->src_err_list[handle->nerr] = counter;
-         handle->nerr++;
+         handle->erasure_state->src_in_err[counter] = 1;
+         handle->src_err_list[handle->erasure_state->nerr] = counter;
+         handle->erasure_state->nerr++;
          continue;
       }
       PRINTdbg("xattr_check: file %d (%s) xattr returned \"%s\"\n",counter,file,xattrval);
@@ -2875,9 +2882,9 @@ int xattr_check( ne_handle handle, char *path )
                    xattrtotsize);
       if (ret != 8) {
          PRINTerr( "xattr_check: sscanf parsed only %d values in MD from '%s'\n", ret, file);
-         handle->src_in_err[counter] = 1;
-         handle->src_err_list[handle->nerr] = counter;
-         handle->nerr++;
+         handle->erasure_state->src_in_err[counter] = 1;
+         handle->src_err_list[handle->erasure_state->nerr] = counter;
+         handle->erasure_state->nerr++;
          continue;
       }
 
@@ -2897,32 +2904,32 @@ int xattr_check( ne_handle handle, char *path )
       if ( handle->mode != NE_STAT ) { // for 'stat' these handle values will be uninitialized
 
          /* verify xattr */
-         if ( N != handle->N ) {
-            PRINTerr( "xattr_check: filexattr N = %d did not match handle value  %d\n", N, handle->N); 
-            handle->src_in_err[counter] = 1;
-            handle->src_err_list[handle->nerr] = counter;
-            handle->nerr++;
+         if ( N != handle->erasure_state->N ) {
+            PRINTerr( "xattr_check: filexattr N = %d did not match handle value  %d\n", N, handle->erasure_state->N); 
+            handle->erasure_state->src_in_err[counter] = 1;
+            handle->src_err_list[handle->erasure_state->nerr] = counter;
+            handle->erasure_state->nerr++;
             continue;
          }
-         else if ( E != handle->E ) {
-            PRINTerr( "xattr_check: filexattr E = %d did not match handle value  %d\n", E, handle->E); 
-            handle->src_in_err[counter] = 1;
-            handle->src_err_list[handle->nerr] = counter;
-            handle->nerr++;
+         else if ( E != handle->erasure_state->E ) {
+            PRINTerr( "xattr_check: filexattr E = %d did not match handle value  %d\n", E, handle->erasure_state->E); 
+            handle->erasure_state->src_in_err[counter] = 1;
+            handle->src_err_list[handle->erasure_state->nerr] = counter;
+            handle->erasure_state->nerr++;
             continue;
          }
-         else if ( bsz != handle->bsz ) {
-            PRINTerr( "xattr_check: filexattr bsz = %d did not match handle value  %d\n", bsz, handle->bsz); 
-            handle->src_in_err[counter] = 1;
-            handle->src_err_list[handle->nerr] = counter;
-            handle->nerr++;
+         else if ( bsz != handle->erasure_state->bsz ) {
+            PRINTerr( "xattr_check: filexattr bsz = %d did not match handle value  %d\n", bsz, handle->erasure_state->bsz); 
+            handle->erasure_state->src_in_err[counter] = 1;
+            handle->src_err_list[handle->erasure_state->nerr] = counter;
+            handle->erasure_state->nerr++;
             continue;
          }
-         else if ( erasure_offset != handle->erasure_offset ) {
-            PRINTerr( "xattr_check: filexattr offset = %d did not match handle value  %d\n", erasure_offset, handle->erasure_offset); 
-            handle->src_in_err[counter] = 1;
-            handle->src_err_list[handle->nerr] = counter;
-            handle->nerr++;
+         else if ( erasure_offset != handle->erasure_state->start ) {
+            PRINTerr( "xattr_check: filexattr offset = %d did not match handle value  %d\n", erasure_offset, handle->erasure_state->start); 
+            handle->erasure_state->src_in_err[counter] = 1;
+            handle->src_err_list[handle->erasure_state->nerr] = counter;
+            handle->erasure_state->nerr++;
             continue;
          }
 
@@ -2936,23 +2943,23 @@ int xattr_check( ne_handle handle, char *path )
 #endif
       {
          PRINTerr( "xattr_check: filexattr nsize = %lu did not match stat value %zd (possible missing internal crcs)\n", nsz, partstat->st_size); 
-         handle->src_in_err[counter] = 1;
-         handle->src_err_list[handle->nerr] = counter;
-         handle->nerr++;
+         handle->erasure_state->src_in_err[counter] = 1;
+         handle->src_err_list[handle->erasure_state->nerr] = counter;
+         handle->erasure_state->nerr++;
          continue;
       }
       else if ( (nsz % bsz) != 0 ) {
          PRINTerr( "xattr_check: filexattr nsize = %lu is inconsistent with block size %d \n", nsz, bsz); 
-         handle->src_in_err[counter] = 1;
-         handle->src_err_list[handle->nerr] = counter;
-         handle->nerr++;
+         handle->erasure_state->src_in_err[counter] = 1;
+         handle->src_err_list[handle->erasure_state->nerr] = counter;
+         handle->erasure_state->nerr++;
          continue;
       }
       else if ( (N + E) <= erasure_offset ) {
          PRINTerr( "xattr_check: filexattr offset = %d is inconsistent with stripe width %d\n", erasure_offset, (N+E)); 
-         handle->src_in_err[counter] = 1;
-         handle->src_err_list[handle->nerr] = counter;
-         handle->nerr++;
+         handle->erasure_state->src_in_err[counter] = 1;
+         handle->src_err_list[handle->erasure_state->nerr] = counter;
+         handle->erasure_state->nerr++;
          continue;
       }
       else if
@@ -2963,16 +2970,16 @@ int xattr_check( ne_handle handle, char *path )
 #endif
       {
          PRINTerr( "xattr_check: filexattr ncompsize = %lu did not match stat value %zd (possible missing crcs)\n", ncompsz, partstat->st_size); 
-         handle->src_in_err[counter] = 1;
-         handle->src_err_list[handle->nerr] = counter;
-         handle->nerr++;
+         handle->erasure_state->src_in_err[counter] = 1;
+         handle->src_err_list[handle->erasure_state->nerr] = counter;
+         handle->erasure_state->nerr++;
          continue;
       }
       else if ( ((ncompsz * N) - totsz) >= bsz*N ) {
          PRINTerr( "xattr_check: filexattr total_size = %llu is inconsistent with ncompsz %lu\n", (unsigned long long)totsz, ncompsz); 
-         handle->src_in_err[counter] = 1;
-         handle->src_err_list[handle->nerr] = counter;
-         handle->nerr++;
+         handle->erasure_state->src_in_err[counter] = 1;
+         handle->src_err_list[handle->erasure_state->nerr] = counter;
+         handle->erasure_state->nerr++;
          continue;
       }
       else {
@@ -2981,8 +2988,8 @@ int xattr_check( ne_handle handle, char *path )
          if ( handle->mode == NE_RDONLY ) {
 
             //only set the file size if it is not already set (i.e. by a call with mode=NE_STAT)
-            if( ! handle->totsz )
-               handle->totsz = totsz;
+            if( ! handle->erasure_state->totsz )
+               handle->erasure_state->totsz = totsz;
 
             continue; // break;
          }
@@ -3109,7 +3116,7 @@ int xattr_check( ne_handle handle, char *path )
             ret = 1;
       }
       if ( match != -1 )
-         handle->totsz = totsz_list[match];
+         handle->erasure_state->totsz = totsz_list[match];
       else {
          PRINTerr( "xattr_check: failed to locate any matching totsz xattr vals!\n" );
          errno = ENODATA;
@@ -3131,7 +3138,7 @@ int xattr_check( ne_handle handle, char *path )
                ret = 1;
          }
          if ( match != -1 )
-            handle->N = N_list[match];
+            handle->erasure_state->N = N_list[match];
          else {
             PRINTerr( "xattr_check: failed to locate any matching N xattr vals!\n" );
             errno = ENODATA;
@@ -3151,7 +3158,7 @@ int xattr_check( ne_handle handle, char *path )
                ret = 1;
          }
          if ( match != -1 )
-            handle->E = E_list[match];
+            handle->erasure_state->E = E_list[match];
          else {
             PRINTerr( "xattr_check: failed to locate any matching E xattr vals!\n" );
             errno = ENODATA;
@@ -3171,7 +3178,7 @@ int xattr_check( ne_handle handle, char *path )
                ret = 1;
          }
          if ( match != -1 )
-            handle->erasure_offset = O_list[match];
+            handle->erasure_state->start = O_list[match];
          else {
             PRINTerr( "xattr_check: failed to locate any matching offset xattr vals!\n" );
             errno = ENODATA;
@@ -3191,7 +3198,7 @@ int xattr_check( ne_handle handle, char *path )
                ret = 1;
          }
          if ( match != -1 )
-            handle->bsz = bsz_list[match];
+            handle->erasure_state->bsz = bsz_list[match];
          else {
             PRINTerr( "xattr_check: failed to locate any matching bsz xattr vals!\n" );
             errno = ENODATA;
@@ -3202,7 +3209,7 @@ int xattr_check( ne_handle handle, char *path )
    }
 
    /* If no usable file was located or the number of errors is too great, notify of failure */
-   if ( handle->mode != NE_STAT  &&  handle->nerr > handle->E ) {
+   if ( handle->mode != NE_STAT  &&  handle->erasure_state->nerr > handle->erasure_state->E ) {
       errno = ENODATA;
       return -1;
    }
@@ -3279,9 +3286,9 @@ int rebuild_err_reset( rebuild_err epat, int stripe_width ) {
 static int reopen_for_rebuild(ne_handle handle, int block, rebuild_err epat) {
   char file[MAXNAME];
 
-  handle->snprintf(file, MAXNAME, handle->path,
-                   (block+handle->erasure_offset)%(handle->N+handle->E),
-                   handle->state);
+  handle->snprintf(file, MAXNAME, handle->erasure_state->path_fmt,
+                   (block+handle->erasure_state->start)%(handle->erasure_state->N+handle->erasure_state->E),
+                   handle->printf_state);
 
   PRINTdbg( "   stashing handle for %s\n", &file[0] );
   epat->FDArray[block] = handle->FDArray[block];
@@ -3301,18 +3308,18 @@ static int reopen_for_rebuild(ne_handle handle, int block, rebuild_err epat) {
   }
 
   // if the error has already been set, just return
-  if( handle->src_in_err[block] )
+  if( handle->erasure_state->src_in_err[block] )
     return 0;
 
-  handle->src_in_err[block] = 1;
+  handle->erasure_state->src_in_err[block] = 1;
 
   //ensure that sources are listed in order
   int i, tmp;
-  for ( i = 0; i < handle->nerr; i++ ) {
+  for ( i = 0; i < handle->erasure_state->nerr; i++ ) {
     if ( handle->src_err_list[i] > block)
       break;
   }
-  while ( i < handle->nerr ) {
+  while ( i < handle->erasure_state->nerr ) {
     // re-sort the error list.
     tmp = handle->src_err_list[i];
     handle->src_err_list[i] = block;
@@ -3320,8 +3327,8 @@ static int reopen_for_rebuild(ne_handle handle, int block, rebuild_err epat) {
     i++;
   }
 
-  handle->src_err_list[handle->nerr] = block;
-  handle->nerr++;
+  handle->src_err_list[handle->erasure_state->nerr] = block;
+  handle->erasure_state->nerr++;
   handle->e_ready = 0; //indicate that erasure structs require re-initialization
 
   return 0;
@@ -3333,14 +3340,14 @@ static int reopen_for_rebuild(ne_handle handle, int block, rebuild_err epat) {
 // return 0 on success.
 static int reset_blocks(ne_handle handle, rebuild_err epat) {
   int block_index;
-  for(block_index = 0; block_index < handle->N + handle->E; block_index++) {
+  for(block_index = 0; block_index < handle->erasure_state->N + handle->erasure_state->E; block_index++) {
 
     //seek all non-errored files and all rebuild output files
-    if(handle->mode != NE_STAT || handle->src_in_err[block_index] == 0) {
+    if(handle->mode != NE_STAT || handle->erasure_state->src_in_err[block_index] == 0) {
       PRINTdbg( "ne_rebuild: performing seek to offset 0 for file %d\n",
                 block_index);
       if (HNDLOP(lseek, handle->FDArray[block_index], 0, SEEK_SET) == -1) {
-        if(handle->src_in_err[block_index]) {
+        if(handle->erasure_state->src_in_err[block_index]) {
            PRINTerr( "ne_rebuild: failed to seek ouput file %d (critical error)\n", block_index );
           handle->e_ready = 0;
           return -1;
@@ -3355,7 +3362,7 @@ static int reset_blocks(ne_handle handle, rebuild_err epat) {
       
     }
 
-    if ( handle->src_in_err[block_index]  &&  ! FD_ERR(epat->FDArray[block_index]) ) {
+    if ( handle->erasure_state->src_in_err[block_index]  &&  ! FD_ERR(epat->FDArray[block_index]) ) {
        PRINTdbg( "ne_rebuild: performing seek to offset 0 for in-error file %d\n",
                  block_index);
        // always reattempt a seek of the original, so long as we have a FD
@@ -3374,16 +3381,16 @@ static int reset_blocks(ne_handle handle, rebuild_err epat) {
 static int fill_buffers(ne_handle handle, u64 *csum, rebuild_err epat) {
   int          block_index;
   u32          crc;
-  const int    ERASURE_WIDTH = handle->N + handle->E;
+  const int    ERASURE_WIDTH = handle->erasure_state->N + handle->erasure_state->E;
 #ifdef INT_CRC
-  const size_t BUFFER_SIZE   = handle->bsz + sizeof(crc);
+  const size_t BUFFER_SIZE   = handle->erasure_state->bsz + sizeof(crc);
 #else
-  const size_t BUFFER_SIZE   = handle->bsz;
+  const size_t BUFFER_SIZE   = handle->erasure_state->bsz;
 #endif
 
   for(block_index = 0; block_index < ERASURE_WIDTH; block_index++) {
     GenericFD* readFD = &handle->FDArray[block_index];
-    if ( handle->src_in_err[ block_index ] ) {
+    if ( handle->erasure_state->src_in_err[ block_index ] ) {
       readFD = &epat->FDArray[ block_index ];
       if( epat->src_in_err[ block_index ] == 0  &&  FD_ERR(*readFD) ) {
         epat->permanent_err[ block_index ] = 1;
@@ -3404,7 +3411,7 @@ static int fill_buffers(ne_handle handle, u64 *csum, rebuild_err epat) {
                    block_index);
 
         epat->per_rebuild_err[ block_index ] = 1;
-        if ( handle->src_in_err[ block_index ] == 0 ) {
+        if ( handle->erasure_state->src_in_err[ block_index ] == 0 ) {
           reopen_for_rebuild(handle, block_index,epat);
           return -1;
         }
@@ -3412,16 +3419,16 @@ static int fill_buffers(ne_handle handle, u64 *csum, rebuild_err epat) {
         handle->e_ready = 0; // force reinit of erasure structs
         continue; //added here to avoid writing to rebuild file
       }
-      crc = crc32_ieee( TEST_SEED, handle->buffs[block_index], handle->bsz);
+      crc = crc32_ieee( TEST_SEED, handle->buffs[block_index], handle->erasure_state->bsz);
       csum[block_index] += crc;
 
 #ifdef INT_CRC
       // verify the stored crc
-      u32 *buff_crc = (u32*)(handle->buffs[block_index] + (handle->bsz));
+      u32 *buff_crc = (u32*)(handle->buffs[block_index] + (handle->erasure_state->bsz));
       if(*buff_crc != crc) {
         PRINTerr( "ne_rebuild: mismatch of int-crc for file %d\n",
                 block_index);
-        if ( handle->src_in_err[ block_index ] == 0 ) {
+        if ( handle->erasure_state->src_in_err[ block_index ] == 0 ) {
           reopen_for_rebuild(handle, block_index,epat);
           return -1;
         }
@@ -3430,7 +3437,7 @@ static int fill_buffers(ne_handle handle, u64 *csum, rebuild_err epat) {
         continue; //added here to avoid writing to rebuild file
       }
 #endif
-      if( handle->src_in_err[ block_index ]  &&  handle->mode != NE_STAT ) {
+      if( handle->erasure_state->src_in_err[ block_index ]  &&  handle->mode != NE_STAT ) {
         // this is ugly, but due to the structure of the handle buffers, we have to write out this good data block/crc before reading another
         size_t written = HNDLOP(write, handle->FDArray[block_index],
                                 handle->buffs[block_index], BUFFER_SIZE);
@@ -3438,15 +3445,15 @@ static int fill_buffers(ne_handle handle, u64 *csum, rebuild_err epat) {
            PRINTerr( "ne_rebuild: failed to write valid buffer to rebuilt file %d "
                      "(critical error)\n", block_index );
            handle->e_ready = 0;
-           epat->nerr = handle->N + handle->E;
+           epat->nerr = handle->erasure_state->N + handle->erasure_state->E;
            return -1;
         }
         PRINTerr( "ne_rebuild: successfully wrote valid buffer out to rebuilt file %d\n", block_index );
 
         // update manifest values appropriately
         handle->csum[block_index]      += crc;
-        handle->nsz[block_index]       += handle->bsz;
-        handle->ncompsz[block_index]   += handle->bsz;
+        handle->nsz[block_index]       += handle->erasure_state->bsz;
+        handle->ncompsz[block_index]   += handle->erasure_state->bsz;
       }
     }
   }
@@ -3458,24 +3465,24 @@ static int write_buffers(ne_handle handle, unsigned char *rebuild_buffs[], rebui
   int i;
   int written, total_written = 0;
 #ifdef INT_CRC
-  const size_t BUFFER_SIZE = handle->bsz + sizeof(crc);
+  const size_t BUFFER_SIZE = handle->erasure_state->bsz + sizeof(crc);
 #else
-  const size_t BUFFER_SIZE = handle->bsz;
+  const size_t BUFFER_SIZE = handle->erasure_state->bsz;
 #endif
 
   for(i = 0; i < epat->nerr; i++) {
     // if we hit an error for this stripe, use the rebuilt buffer to generate a crc
-    crc = crc32_ieee(TEST_SEED, rebuild_buffs[handle->N+i], handle->bsz);
+    crc = crc32_ieee(TEST_SEED, rebuild_buffs[handle->erasure_state->N+i], handle->erasure_state->bsz);
 #ifdef INT_CRC
-    u32 *buf_crc = (u32*)(rebuild_buffs[handle->N+i] + (handle->bsz));
+    u32 *buf_crc = (u32*)(rebuild_buffs[handle->erasure_state->N+i] + (handle->erasure_state->bsz));
     *buf_crc = crc;
 #endif
 
     if(handle->mode != NE_STAT) {
        // written = HNDLOP(write, handle->FDArray[epat->src_err_list[i]],
-       //                  rebuild_buffs[handle->N+i], BUFFER_SIZE);
+       //                  rebuild_buffs[handle->erasure_state->N+i], BUFFER_SIZE);
        written = write_all(&handle->FDArray[epat->src_err_list[i]],
-                           rebuild_buffs[handle->N+i], BUFFER_SIZE);
+                           rebuild_buffs[handle->erasure_state->N+i], BUFFER_SIZE);
 
       if(written < BUFFER_SIZE) {
          PRINTerr("failed to write %llu bytes to fd %d\n",
@@ -3486,9 +3493,9 @@ static int write_buffers(ne_handle handle, unsigned char *rebuild_buffs[], rebui
                BUFFER_SIZE, FD_NUM(handle->FDArray[handle->src_err_list[i]]));
     }
     handle->csum[epat->src_err_list[i]]      += crc;
-    handle->nsz[epat->src_err_list[i]]       += handle->bsz;
-    handle->ncompsz[epat->src_err_list[i]]   += handle->bsz;
-    total_written                            += handle->bsz;
+    handle->nsz[epat->src_err_list[i]]       += handle->erasure_state->bsz;
+    handle->ncompsz[epat->src_err_list[i]]   += handle->erasure_state->bsz;
+    total_written                            += handle->erasure_state->bsz;
   }
   // have to be careful that this return value does not over-inflate the rebuilt total
   return total_written;
@@ -3511,11 +3518,11 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
   u64            csum[ MAXPARTS ];
   u32            crc;
 
-  const int      ERASURE_WIDTH = handle->N + handle->E;
+  const int      ERASURE_WIDTH = handle->erasure_state->N + handle->erasure_state->E;
 #ifdef INT_CRC
-  const size_t   BUFFER_SIZE = handle->bsz + sizeof(crc);
+  const size_t   BUFFER_SIZE = handle->erasure_state->bsz + sizeof(crc);
 #else
-  const size_t   BUFFER_SIZE = handle->bsz;
+  const size_t   BUFFER_SIZE = handle->erasure_state->bsz;
 #endif
 
   int tmp;
@@ -3549,7 +3556,7 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
     }
 
     // rebuild now handles opening all output files
-    if( handle->src_in_err[ block_index ] ) {
+    if( handle->erasure_state->src_in_err[ block_index ] ) {
       epat->FDArray[ block_index ] = handle->FDArray[ block_index ];
       if( handle->mode == NE_STAT ) {
         FD_INIT(handle->FDArray[ block_index ], handle);
@@ -3563,7 +3570,7 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
   PRINTdbg( "ne_rebuild: initiating rebuild operation...\n" );
 
   // loop over all the data to complete the rebuild.
-  while(rebuilt_size < handle->totsz) {
+  while(rebuilt_size < handle->erasure_state->totsz) {
 
     // (re)starting the rebuild. reset checksums. reset position in
     // blocks.
@@ -3574,7 +3581,7 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
         epat->src_err_list[ block_index ] = 0;
         epat->per_rebuild_err[ block_index ] = 0;
 
-        if( handle->src_in_err[block_index] == 0 ) {
+        if( handle->erasure_state->src_in_err[block_index] == 0 ) {
           csum[block_index] = 0;
         }
         else {
@@ -3608,7 +3615,7 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
     if(fill_buffers(handle, csum, epat) != 0) {
       // failed to read something. Fill_buffers took care of
       // reopening the necessary files.
-      if ( epat->nerr == (handle->N + handle->E) ) {
+      if ( epat->nerr == (handle->erasure_state->N + handle->erasure_state->E) ) {
          PRINTerr( "ne_rebuild: detected a failure to write to an output file\n" );
          return -1;
       }
@@ -3622,17 +3629,17 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
         // Zero buffers for faulty blocks
         PRINTdbg( "ne_rebuild: zeroing data for faulty_file %d\n",
                    block_index);
-        if(block_index < handle->N) { nsrcerr++; }
+        if(block_index < handle->erasure_state->N) { nsrcerr++; }
         // We don't actually care about int-crcs at this point,
         // those were verified when read.  The erasure will only
         // take place over the data blocks.
-        bzero(handle->buffs[block_index], handle->bsz);
-        bzero(rebuild_buffs[block_index], handle->bsz);
+        bzero(handle->buffs[block_index], handle->erasure_state->bsz);
+        bzero(rebuild_buffs[block_index], handle->erasure_state->bsz);
       }
     }
 
     /* Check that errors are still recoverable */
-    if( epat->nerr > handle->E ) {
+    if( epat->nerr > handle->erasure_state->E ) {
        PRINTerr("ne_rebuild: errors exceed regeneration capacity of erasure\n");
       errno = ENODATA;
       handle->e_ready = 0;
@@ -3646,12 +3653,12 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
       // Generate encode matrix encode_matrix. The matrix generated by
       // gf_gen_rs_matrix is not always invertable.
       PRINTdbg("ne_rebuild: initializing erasure structs...\n");
-      gf_gen_rs_matrix(handle->encode_matrix, handle->N + handle->E,
-                       handle->N);
+      gf_gen_rs_matrix(handle->encode_matrix, handle->erasure_state->N + handle->erasure_state->E,
+                       handle->erasure_state->N);
 
       // Generate g_tbls from encode matrix encode_matrix
-      ec_init_tables(handle->N, handle->E,
-                     &(handle->encode_matrix[handle->N * handle->N]),
+      ec_init_tables(handle->erasure_state->N, handle->erasure_state->E,
+                     &(handle->encode_matrix[handle->erasure_state->N * handle->erasure_state->N]),
                      handle->g_tbls);
 
       int decode_result = gf_gen_decode_matrix( handle->encode_matrix,
@@ -3662,8 +3669,8 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
                                                 epat->src_in_err,
                                                 epat->nerr,
                                                 nsrcerr,
-                                                handle->N,
-                                                handle->N + handle->E);
+                                                handle->erasure_state->N,
+                                                handle->erasure_state->N + handle->erasure_state->E);
       if(decode_result != 0) {
         PRINTerr( "ne_rebuild: failure to generate decode matrix\n");
         errno = ENODATA;
@@ -3672,20 +3679,20 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
       }
 
       int i;
-      for(i = 0; i < handle->N; i++) {
+      for(i = 0; i < handle->erasure_state->N; i++) {
         handle->recov[i] = handle->buffs[decode_index[i]];
       }
 
       PRINTdbg( "ne_rebuild: init erasure tables nsrcerr = %d...\n", nsrcerr);
-      ec_init_tables(handle->N, epat->nerr,
+      ec_init_tables(handle->erasure_state->N, epat->nerr,
                      handle->decode_matrix, handle->g_tbls);
       handle->e_ready = 1; // indicate that rebuild structures are initialized
     }
 
     PRINTdbg("ne_rebuild: performing regeneration from erasure...\n" );
 
-    ec_encode_data(handle->bsz, handle->N, epat->nerr,
-                   handle->g_tbls, handle->recov, &rebuild_buffs[handle->N]);
+    ec_encode_data(handle->erasure_state->bsz, handle->erasure_state->N, epat->nerr,
+                   handle->g_tbls, handle->recov, &rebuild_buffs[handle->erasure_state->N]);
     size_t size_written;
     if((size_written = write_buffers(handle, rebuild_buffs, epat)) < 0) {
       free_buffers(rebuild_buffs, ERASURE_WIDTH);
@@ -3693,13 +3700,13 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
     }
 
     PRINTdbg( "ne_rebuild: stripe regeneration complete\n" );
-    rebuilt_size += handle->N * handle->bsz;
+    rebuilt_size += handle->erasure_state->N * handle->erasure_state->bsz;
   }
 
   // verify block-level crcs
   int retry = 0;
   for (block_index = 0; block_index < ERASURE_WIDTH; block_index++) {
-    if(handle->src_in_err[block_index] == 0
+    if(handle->erasure_state->src_in_err[block_index] == 0
        && handle->csum[block_index] != csum[block_index]) {
       PRINTerr( "ne_rebuild: mismatch of crc sum for file %d, "
                   "handle:%llu data:%llu\n", block_index,
@@ -3716,7 +3723,7 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
 
   if(retry && handle->mode != NE_STAT) {
     // protect from an infinite recursion
-    if( epat->nerr > handle->E ) {
+    if( epat->nerr > handle->erasure_state->E ) {
       PRINTerr( "ne_rebuild: errors exceed regeneration capacity of erasure\n");
       free_buffers(rebuild_buffs, ERASURE_WIDTH);
       errno = ENODATA;
@@ -3729,7 +3736,7 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
     }
   }
 
-  for ( tmp = 0; tmp < handle->nerr; tmp++ ) {
+  for ( tmp = 0; tmp < handle->erasure_state->nerr; tmp++ ) {
     int block = handle->src_err_list[ tmp ];
     if( ! FD_ERR(epat->FDArray[ block ]) ) {
        HNDLOP(close, epat->FDArray[ block ]); // we don't really care if this fails
@@ -3768,7 +3775,7 @@ int ne_rebuild( ne_handle handle ) {
    int rebuild_result = do_rebuild(handle,NULL);
    umask(mask);
 
-   return ((rebuild_result) ? -1 : handle->nerr);
+   return ((rebuild_result) ? -1 : handle->erasure_state->nerr);
 }
 
 
@@ -3805,9 +3812,9 @@ int ne_flush( ne_handle handle ) {
       errno = EINVAL;
    }
 
-   N = handle->N;
-   E = handle->E;
-   bsz = handle->bsz;
+   N = handle->erasure_state->N;
+   E = handle->erasure_state->E;
+   bsz = handle->erasure_state->bsz;
 
    if ( handle->buff_rem == 0 ) {
       PRINTdbg( "ne_flush: handle buffer is empty, nothing to be done.\n" );
@@ -3817,17 +3824,17 @@ int ne_flush( ne_handle handle ) {
 //   rem_back = handle->buff_rem;
 //
 //   // store the seek positions for each file
-//   for ( counter = 0; counter < (handle->N + handle->E); counter++ ) {
+//   for ( counter = 0; counter < (handle->erasure_state->N + handle->erasure_state->E); counter++ ) {
 //      pos[counter] = HNDLOP(lseek, handle->FDArray[counter], 0, SEEK_CUR);
 //      if ( pos[counter] == -1 ) {
 //         PRINTerr( "ne_flush: failed to obtain current seek position for file %d\n", counter );
 //         return -1;
 //      }
-//      if ( (rem_back/(handle->bsz)) == counter ) {
-//         pos[counter] += rem_back % handle->bsz;
+//      if ( (rem_back/(handle->erasure_state->bsz)) == counter ) {
+//         pos[counter] += rem_back % handle->erasure_state->bsz;
 //      }
-//      else if ( (rem_back/(handle->bsz)) > counter ) {
-//         pos[counter] += handle->bsz;
+//      else if ( (rem_back/(handle->erasure_state->bsz)) > counter ) {
+//         pos[counter] += handle->erasure_state->bsz;
 //      }
 //      fprintf(stdout, "    got seek pos for file %d as %zd ( rem = %d )\n", counter, pos[counter], rem_back );//REMOVE
 //   }
@@ -3845,7 +3852,7 @@ int ne_flush( ne_handle handle ) {
    }
 
 //   // reset the seek positions for each file
-//   for ( counter = 0; counter < (handle->N + handle->E); counter++ ) {
+//   for ( counter = 0; counter < (handle->erasure_state->N + handle->erasure_state->E); counter++ ) {
 //      if ( HNDLOP(lseek, handle->FDArray[counter], pos[counter], SEEK_SET ) == -1 ) {
 //         PRINTerr( "ne_flush: failed to reset seek position for file %d\n", counter );
 //         return -1;
@@ -3855,7 +3862,7 @@ int ne_flush( ne_handle handle ) {
 //   handle->buff_rem = rem_back;
 
    //reset various handle properties
-   handle->totsz -= tmp;
+   handle->erasure_state->totsz -= tmp;
    free( zero_buff );
 
    return ret;
@@ -4027,10 +4034,10 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
  * @return int : Status code.  Success is indicated by 0 and failure by -1
  */
 int ne_noxattr_rebuild(ne_handle handle) {
-   while ( handle->nerr > 0 ) {
-      handle->nerr--;
-      handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
-      handle->src_err_list[handle->nerr] = 0;
+   while ( handle->erasure_state->nerr > 0 ) {
+      handle->erasure_state->nerr--;
+      handle->erasure_state->src_in_err[handle->src_err_list[handle->erasure_state->nerr]] = 0;
+      handle->src_err_list[handle->erasure_state->nerr] = 0;
    }
    return ne_rebuild( handle ); 
 }
@@ -4040,10 +4047,10 @@ int ne_noxattr_rebuild(ne_handle handle) {
  * Retrieves the health and parameters for the erasure striping
  * indicated by the provided path and offset
  *
- * ne_status(path) calls this with fn=ne_default_snprintf, and state=NULL
+ * ne_status(path) calls this with fn=ne_default_snprintf, and printf_state=NULL
  *
- * @param SnprintfFunc fn : function takes block-number and <state> and produces per-block path from template.
- * @param void* state : optional state to be used by SnprintfFunc (e.g. configuration details)
+ * @param SnprintfFunc fn : function takes block-number and <printf_state> and produces per-block path from template.
+ * @param void* printf_state : optional printf_state to be used by SnprintfFunc (e.g. configuration details)
  * @param SktAuth auth : authentication may be required for RDMA uDALTypes
  * @param TimingFlagsValue flags : flags control the collection of statistics.
  * @param uDALType itype : select the underlying file-system implementation (RDMA versus POSIX).
@@ -4055,7 +4062,7 @@ int ne_noxattr_rebuild(ne_handle handle) {
  *                  parts (E), and blocksize (bsz) for the stripe.
  */
 
-ne_stat ne_status1( SnprintfFunc fn, void* state,
+ne_stat ne_status1( SnprintfFunc fn, void* printf_state,
                     uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                     char *path )
 {
@@ -4077,6 +4084,9 @@ ne_stat ne_status1( SnprintfFunc fn, void* state,
    }
    memset(handle, 0, sizeof(struct handle));
 
+   handle->erasure_state = malloc( sizeof( struct ne_stat_struct ) );
+   memset( handle->erasure_state, 0, sizeof( struct ne_stat_struct ) );
+
    handle->impl = get_impl(itype);
 
    // flags control collection of timing stats
@@ -4096,40 +4106,41 @@ ne_stat ne_status1( SnprintfFunc fn, void* state,
       handle->csum[counter] = 0;
       handle->nsz[counter] = 0;
       handle->ncompsz[counter] = 0;
-      handle->src_in_err[counter] = 0;
+      handle->erasure_state->src_in_err[counter] = 0;
       handle->src_err_list[counter] = 0;
       stat->data_status[counter] = 0;
       stat->xattr_status[counter] = 0;
    }
-   handle->nerr           = 0;
-   handle->totsz          = 0;
-   handle->N              = 0;
-   handle->E              = 0;
-   handle->bsz            = 0;
-   handle->erasure_offset = 0;
+   handle->erasure_state->nerr           = 0;
+   handle->erasure_state->totsz          = 0;
+   handle->erasure_state->N              = 0;
+   handle->erasure_state->E              = 0;
+   handle->erasure_state->bsz            = 0;
+   handle->erasure_state->start = 0;
    handle->mode           = NE_STAT;
    handle->e_ready        = 0;
    handle->buff_offset    = 0;
    handle->buff_rem       = 0;
 
    handle->snprintf = fn;
-   handle->state    = state;
+   handle->printf_state    = printf_state;
    handle->auth     = auth;
 
    char* nfile = malloc( strlen(path) + 1 );
    strncpy( nfile, path, strlen(path) + 1 );
-   handle->path = nfile;
+   handle->erasure_state->path_fmt = nfile;
 
    ret = xattr_check(handle, path); // identify total data size of stripe
    if( ret == -1 ) {
       PRINTerr( "ne_status: extended attribute check has failed\n" );
+      free( handle->erasure_state );
       free( handle );
       return NULL;
    }
-   while ( handle->nerr > 0 ) {
-      handle->nerr--;
-      handle->src_in_err[handle->src_err_list[handle->nerr]] = 0;
-      handle->src_err_list[handle->nerr] = 0;
+   while ( handle->erasure_state->nerr > 0 ) {
+      handle->erasure_state->nerr--;
+      handle->erasure_state->src_in_err[handle->src_err_list[handle->erasure_state->nerr]] = 0;
+      handle->src_err_list[handle->erasure_state->nerr] = 0;
    }
 
    // verify the stripe, now that values have been established
@@ -4140,47 +4151,48 @@ ne_stat ne_status1( SnprintfFunc fn, void* state,
    ret = xattr_check(handle, path);
    if ( ret == -1 ) {
       PRINTerr( "ne_status: extended attribute check has failed\n" );
+      free( handle->erasure_state );
       free( handle );
       return NULL;
    }
    handle->mode = NE_STAT;
 
    PRINTdbg( "ne_status: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d, TotSz = %llu\n",
-             handle->nerr, handle->N, handle->E, handle->erasure_offset, handle->totsz );
+             handle->erasure_state->nerr, handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->start, handle->erasure_state->totsz );
 
-   stat->N = handle->N;
-   stat->E = handle->E;
-   stat->bsz = handle->bsz;
-   stat->totsz = handle->totsz;
-   stat->start = handle->erasure_offset;
+   stat->N = handle->erasure_state->N;
+   stat->E = handle->erasure_state->E;
+   stat->bsz = handle->erasure_state->bsz;
+   stat->totsz = handle->erasure_state->totsz;
+   stat->start = handle->erasure_state->start;
 
    // store xattr failures to stat struct and reset error data
-   for ( counter = 0; counter < ( handle->N + handle->E ); counter++ ) {
-      if ( counter < handle->nerr ) {
+   for ( counter = 0; counter < ( handle->erasure_state->N + handle->erasure_state->E ); counter++ ) {
+      if ( counter < handle->erasure_state->nerr ) {
          stat->xattr_status[handle->src_err_list[counter]] = 1;
          handle->src_err_list[counter] = 0;
       }
-      handle->src_in_err[counter] = 0;
+      handle->erasure_state->src_in_err[counter] = 0;
    }
-   handle->nerr = 0;
+   handle->erasure_state->nerr = 0;
 
    /* allocate a big buffer for all the N chunks plus a bit extra for reading in crcs */
 #ifdef INT_CRC
    crccount = 1;
-   if ( handle->E > 0 )
-      crccount = handle->E;
+   if ( handle->erasure_state->E > 0 )
+      crccount = handle->erasure_state->E;
 
    // add space for intermediate checksum
    ret = posix_memalign( &(handle->buffer), 64,
-                         ((handle->N+handle->E)*bsz) + (sizeof(u32)*crccount) );
+                         ((handle->erasure_state->N+handle->erasure_state->E)*bsz) + (sizeof(u32)*crccount) );
    PRINTdbg("ne_stat: Allocated handle buffer of size %zd for bsz=%d, N=%d, E=%d\n",
-            ((handle->N+handle->E)*bsz) + (sizeof(u32)*crccount),
-            handle->bsz, handle->N, handle->E);
+            ((handle->erasure_state->N+handle->erasure_state->E)*bsz) + (sizeof(u32)*crccount),
+            handle->erasure_state->bsz, handle->erasure_state->N, handle->erasure_state->E);
 #else
    ret = posix_memalign( &(handle->buffer), 64,
-                         ((handle->N+handle->E)*bsz) );
+                         ((handle->erasure_state->N+handle->erasure_state->E)*bsz) );
    PRINTdbg("ne_stat: Allocated handle buffer of size %d for bsz=%d, N=%d, E=%d\n",
-            (handle->N+handle->E)*bsz, handle->bsz, handle->N, handle->E);
+            (handle->erasure_state->N+handle->erasure_state->E)*bsz, handle->erasure_state->bsz, handle->erasure_state->N, handle->erasure_state->E);
 #endif
    if ( ret != 0 ) {
       PRINTerr( "ne_status: failed to allocate handle buffer\n" );
@@ -4199,13 +4211,13 @@ ne_stat ne_status1( SnprintfFunc fn, void* state,
       loop through and open up all the input data-files, initilize per part info, and allocate buffers */
    counter = 0;
    PRINTdbg( "ne_status: opening file descriptors...\n" );
-   while ( counter < (handle->N+handle->E) ) {
+   while ( counter < (handle->erasure_state->N+handle->erasure_state->E) ) {
       bzero( file, MAXNAME );
-      handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_offset)%(handle->N+handle->E), handle->state );
+      handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_state->start)%(handle->erasure_state->N+handle->erasure_state->E), handle->printf_state );
 
 #ifdef INT_CRC
-      if ( counter > handle->N ) {
-         crccount = counter - handle->N;
+      if ( counter > handle->erasure_state->N ) {
+         crccount = counter - handle->erasure_state->N;
          handle->buffs[counter] = handle->buffer + ( counter*bsz ) + ( crccount * sizeof(u32) ); //make space for block and erasure crc
       }
       else {
@@ -4218,11 +4230,11 @@ ne_stat ne_status1( SnprintfFunc fn, void* state,
       PRINTdbg( "ne_status:    opening %s for read\n", file );
       OPEN(handle->FDArray[counter], handle, file, O_RDONLY);
 
-      if ( FD_ERR(handle->FDArray[counter])  &&  handle->src_in_err[counter] == 0 ) {
+      if ( FD_ERR(handle->FDArray[counter])  &&  handle->erasure_state->src_in_err[counter] == 0 ) {
          PRINTerr( "ne_status:    failed to open file %s!\n", file );
-         handle->src_err_list[handle->nerr] = counter;
-         handle->nerr++;
-         handle->src_in_err[counter] = 1;
+         handle->src_err_list[handle->erasure_state->nerr] = counter;
+         handle->erasure_state->nerr++;
+         handle->erasure_state->src_in_err[counter] = 1;
          counter++;
 
          continue;
@@ -4236,7 +4248,7 @@ ne_stat ne_status1( SnprintfFunc fn, void* state,
    }
 
    // store data failures to stat struct
-   for ( counter = 0; counter < handle->nerr; counter++ ) {
+   for ( counter = 0; counter < handle->erasure_state->nerr; counter++ ) {
       stat->data_status[handle->src_err_list[counter]] = 1;
    }
 
@@ -4244,9 +4256,9 @@ ne_stat ne_status1( SnprintfFunc fn, void* state,
    /* Close file descriptors and free bufs */
    PRINTdbg( "ne_status: closing file descriptors...\n" );
    counter = 0;
-   while (counter < (handle->N+handle->E) ) {
+   while (counter < (handle->erasure_state->N+handle->erasure_state->E) ) {
 
-      if ( handle->src_in_err[counter] == 0  &&  ! FD_ERR(handle->FDArray[counter]) ) {
+      if ( handle->erasure_state->src_in_err[counter] == 0  &&  ! FD_ERR(handle->FDArray[counter]) ) {
         HNDLOP(close, handle->FDArray[counter]);
       }
 
@@ -4264,7 +4276,8 @@ ne_stat ne_status1( SnprintfFunc fn, void* state,
       fast_timer_stop(&handle->handle_timer);
       show_handle_stats(handle);
    }
-   free(handle->path);
+   free(handle->erasure_state->path_fmt);
+   free( handle->erasure_state );
    free(handle);
 
    PRINTdbg( "ne_status: done.\n" );
@@ -4492,18 +4505,18 @@ static int set_block_xattr(ne_handle handle, int block) {
   int tmp = 0;
   char xattrval[1024];
   sprintf(xattrval,"%d %d %d %d %lu %lu %llu %llu",
-          handle->N, handle->E, handle->erasure_offset,
-          handle->bsz, handle->nsz[block],
+          handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->start,
+          handle->erasure_state->bsz, handle->nsz[block],
           handle->ncompsz[block], (unsigned long long)handle->csum[block],
-          (unsigned long long)handle->totsz);
+          (unsigned long long)handle->erasure_state->totsz);
 
   PRINTdbg( "ne_close: setting file %d xattr = \"%s\"\n",
             block, xattrval );
 
   char block_file_path[2048];
-  handle->snprintf(block_file_path, MAXNAME, handle->path,
-                   (block+handle->erasure_offset)%(handle->N + handle->E),
-                   handle->state);
+  handle->snprintf(block_file_path, MAXNAME, handle->erasure_state->path_fmt,
+                   (block+handle->erasure_state->start)%(handle->erasure_state->N + handle->erasure_state->E),
+                   handle->printf_state);
 
    if ( handle->mode == NE_REBUILD )
       strncat( block_file_path, REBUILD_SFX, strlen(REBUILD_SFX)+1 );
