@@ -7,6 +7,22 @@
 
 #define PATH_TEMPLATE "testLink_file.%d"
 
+
+// This currenntly uses the default libne function-interface.  That means
+// all of the internal libne transport will default to the UDAL_POSIX
+// implementation (i.e. it will assume that object-paths correspond with
+// NFS mounts).
+//
+// In order to support both NFS and RDMA transports, the code should call
+// ne_open1(), etc, providing a specific uDALType. The desired uDALType
+// could be specified on the command-line, or could possibly be computed
+// from MarFS metadata.  For example, a script driving this program could
+// invoke 'marfs_config' to look at metadata and identify the DAL to be
+// used for a given repo, and then could call this program with some
+// argument the indicates the corresponding uDAL type.
+
+
+
 int main(int argc, char **argv) {
    ne_handle h = ne_open(PATH_TEMPLATE, NE_WRONLY, 10,10,2);
    assert(h != NULL);

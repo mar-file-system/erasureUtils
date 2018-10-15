@@ -45,7 +45,9 @@
 #MarFS was reviewed and released by LANL under Los Alamos Computer Code identifier:
 #LA-CC-15-039.
 #
-#These erasure utilites make use of the Intel Intelligent Storage Acceleration Library (Intel ISA-L), which can be found at https://github.com/01org/isa-l and is under its own license.
+#These erasure utilites make use of the Intel Intelligent Storage
+#Acceleration Library (Intel ISA-L), which can be found at
+#https://github.com/01org/isa-l and is under its own license.
 #
 #MarFS uses libaws4c for Amazon S3 object communication. The original version
 #is at https://aws.amazon.com/code/Amazon-S3/2601 and under the LGPL license.
@@ -56,41 +58,16 @@
 
 
 # automake requires '=' before '+=', even for these built-in vars
-AM_CPPFLAGS =
-AM_CFLAGS   =
-AM_LDFLAGS  =
+AM_CFLAGS =
+AM_LDFLAGS =
 
 
-# Here's how to get automake to do an assignment based on two conditions
-if RDMA_SOCKETS
-  SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
-  SOCKET_LIB = ../sockets/librdma_sockets.a
-  SOCKET_LD  = -L../sockets -lrdma_sockets
-  # SOCKET_LD += -lrdmacm
-else
-if ANY_SOCKETS
-  SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
-endif
-endif
-
-if AUTH_SOCKETS
-   AM_CPPFLAGS += -I$(AWS4C)
-endif
-
-
-if USE_SYSLOG
-   DEBUG_NE_VALUE=2
-else
-   DEBUG_NE_VALUE=1
-endif
-
-
-if DEBUG_NE
+if DEBUG_FT
   AM_CFLAGS   += -g -O0
-  DEFS        += -DDEBUG_NE=$(DEBUG_NE_VALUE)  -fstack-protector-all -fstack-check
+  DEFS        += -DDEBUG_FT=1
 else
   AM_CFLAGS   += -g -O3
-  DEFS        += -DDEBUG_NE=0
+  DEFS        += -DDEBUG_FT=0
 endif
 
 
@@ -100,53 +77,19 @@ if GPROF
 endif
 
 
-TIMER_CPPFLAGS = -I${top_srcdir}/fast_timer
-# TIMER_DEFS   = -DNE_STAT_FLAGS=@enable_stats@
-TIMER_LD       = -L../fast_timer -lft
-TIMER_LIB      = ../fast_timer/libft.a
+
+
+include_HEADERS = fast_timer.h
+
+lib_LIBRARIES = libft.a
+libft_a_SOURCES = fast_timer.c fast_timer.h
 
 
 
+bin_PROGRAMS = test_fast_timer test_histogram
 
-# erasure.h includes "skt_common.h".  Programs in this dir are built
-# before 'make install' will have put ../sockets/skt_common.h into the
-# install directory.  So the following allows these executables to be
-# built.
-AM_CPPFLAGS += $(SOCKET_CPPFLAGS) $(TIMER_CPPFLAGS)  $(TIMER_DEFS)
-AM_LDFLAGS += $(SOCKET_LD) $(TIMER_LD)
+test_fast_timer_SOURCES = test_fast_timer.c
+test_fast_timer_LDADD = libft.a
 
-
-
-
-include_HEADERS = erasure.h ne_logging.h udal.h
-
-
-lib_LIBRARIES = libne.a
-libne_a_SOURCES = erasure.c erasure.h udal.c udal.h
-
-
-
-# ---
-bin_PROGRAMS = libneTest data_shredder
-
-libneTest_SOURCES = libneTest.c
-libneTest_LDFLAGS =
-libneTest_LDADD = libne.a $(SOCKET_LD) $(TIMER_LD)
-
-data_shredder_SOURCES = data_shredder.c
-
-
-
-# ---
-check_PROGRAMS = test_read_offset testLink
-
-test_read_offset_SOURCES = test_read_offset.c
-test_read_offset_LDADD = libne.a
-test_read_offset_LDFLAGS = -lisal
-
-testLink_SOURCES = testLink.c
-testLink_LDADD = libne.a
-testLink_LDFLAGS = -lisal
-
-TESTS=erasureTest test_read_offset testLink
-
+test_histogram_SOURCES = test_histogram.c
+test_histogram_LDADD = libft.a

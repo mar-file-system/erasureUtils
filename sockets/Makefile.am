@@ -45,7 +45,9 @@
 #MarFS was reviewed and released by LANL under Los Alamos Computer Code identifier:
 #LA-CC-15-039.
 #
-#These erasure utilites make use of the Intel Intelligent Storage Acceleration Library (Intel ISA-L), which can be found at https://github.com/01org/isa-l and is under its own license.
+#These erasure utilites make use of the Intel Intelligent Storage
+#Acceleration Library (Intel ISA-L), which can be found at
+#https://github.com/01org/isa-l and is under its own license.
 #
 #MarFS uses libaws4c for Amazon S3 object communication. The original version
 #is at https://aws.amazon.com/code/Amazon-S3/2601 and under the LGPL license.
@@ -55,22 +57,41 @@
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
-# automake requires '=' before '+=', even for these built-in vars
 AM_CPPFLAGS =
-AM_CFLAGS   =
-AM_LDFLAGS  =
+AM_LDFLAGS =
+
+#AM_LDFLAGS += -lrt
+#AM_LDFLAGS += -static
 
 
-# Here's how to get automake to do an assignment based on two conditions
-if RDMA_SOCKETS
-  SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
-  SOCKET_LIB = ../sockets/librdma_sockets.a
-  SOCKET_LD  = -L../sockets -lrdma_sockets
-  # SOCKET_LD += -lrdmacm
-else
-if ANY_SOCKETS
-  SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
+# number says how many buffers to fake reading from file, to send to server
+# for PUT (or to fake writing to file, for client for GET), in order to
+# measure raw throughput on the socket transport (e.g. RDMA).  Each buffer
+# is CLIENT_BUF_SIZE (default 1MB).
+if SUPPRESS_FILE_IO
+  # DEFS += -DSKIP_FILE_READS=1024
+  # DEFS += -DSKIP_FILE_READS=1048576
+  # DEFS += -DSKIP_FILE_READS=10240
+  DEFS += -DSKIP_FILE_READS=40960
+  DEFS += -DSKIP_FILE_WRITES
 endif
+
+
+# at build-time, we want the versions in the source-tree
+AM_CPPFLAGS += -I${top_srcdir}/erasureLib
+AM_CPPFLAGS += -I${top_srcdir}/fast_timer
+
+
+
+# NOTE: skt_config.h is now generated with values for SOCKETS / USE_RIOWRITE
+#   These settings affect the sizes of structures in some of our .h files,
+#   which might be used by external systems, so we need to assure that these
+#   structures look the same, even for users that don't use our makefile.
+
+if ANY_SOCKETS
+  # # -D_GNU_SOURCE provides POLLRDHUP among the flags for poll()/rpoll()
+  # DEFS        += -DSOCKETS -DUSE_RIOWRITE -D_GNU_SOURCE
+  DEFS        += -D_GNU_SOURCE
 endif
 
 if AUTH_SOCKETS
@@ -79,18 +100,24 @@ endif
 
 
 if USE_SYSLOG
-   DEBUG_NE_VALUE=2
+   DEBUG_SOCKETS_VALUE=2
 else
-   DEBUG_NE_VALUE=1
+   DEBUG_SOCKETS_VALUE=1
+endif
+
+# These don't affect .h files, so we can do this from the makefile
+if DEBUG_SOCKETS
+  AM_CFLAGS    = -g -O0
+  DEFS        += -DDEBUG_SOCKETS=$(DEBUG_SOCKETS_VALUE)
+  AM_CPPFLAGS += -fstack-protector-all -fstack-check
+else
+  AM_CFLAGS    = -g -O3
+  DEFS        += -DDEBUG_SOCKETS=0
 endif
 
 
-if DEBUG_NE
-  AM_CFLAGS   += -g -O0
-  DEFS        += -DDEBUG_NE=$(DEBUG_NE_VALUE)  -fstack-protector-all -fstack-check
-else
-  AM_CFLAGS   += -g -O3
-  DEFS        += -DDEBUG_NE=0
+if TEST_API
+  DEFS        += -DTEST_API
 endif
 
 
@@ -100,53 +127,53 @@ if GPROF
 endif
 
 
-TIMER_CPPFLAGS = -I${top_srcdir}/fast_timer
-# TIMER_DEFS   = -DNE_STAT_FLAGS=@enable_stats@
-TIMER_LD       = -L../fast_timer -lft
-TIMER_LIB      = ../fast_timer/libft.a
+if HAVE_S_BUFSIZE
+   DEFS        += -DSERVER_BUF_SIZE=$(S_BUFSIZE)
+endif
+
+if HAVE_C_BUFSIZE
+   DEFS        += -CLIENT_BUF_SIZE=$(C_BUFSIZE)
+endif
 
 
 
 
-# erasure.h includes "skt_common.h".  Programs in this dir are built
-# before 'make install' will have put ../sockets/skt_common.h into the
-# install directory.  So the following allows these executables to be
-# built.
-AM_CPPFLAGS += $(SOCKET_CPPFLAGS) $(TIMER_CPPFLAGS)  $(TIMER_DEFS)
-AM_LDFLAGS += $(SOCKET_LD) $(TIMER_LD)
+
+include_HEADERS = skt_config.h skt_common.h
+
+lib_LIBRARIES = librdma_sockets.a
+librdma_sockets_a_SOURCES = skt_common.c skt_common.h
+if AUTH_SOCKETS
+   librdma_sockets_a_SOURCES += auth.c
+endif
 
 
 
 
-include_HEADERS = erasure.h ne_logging.h udal.h
+bin_PROGRAMS = test_client marfs_objd
 
 
-lib_LIBRARIES = libne.a
-libne_a_SOURCES = erasure.c erasure.h udal.c udal.h
+marfs_objd_SOURCES = marfs_objd.c
+marfs_objd_LDADD  = librdma_sockets.a
+marfs_objd_LDADD += ../fast_timer/libft.a
+
+#
+# # Various failed attempts to get autoconf to prefer static linking of
+# # libisal, if possible.  (Some of these assume libtool is selected in the
+# # configure.ac.)  Otherwise, we have to deploy libisal to all the storage
+# # servers, so they can run marfs_objd.  However, it seems autotools
+# # is violently opposed to allowing that sort of control.  Better
+# # approach: realize that we don't even need libisal.  Take that out of
+# # the top-level configure.ac, and let erasureLib/Makefile.am add it in
+# # locally.
+# 
+# marfs_objd_LDFLAGS = -lpthread $(AM_LDFLAGS)
+# marfs_objd_LDFLAGS = -lpthread -static
+# marfs_objd_LDFLAGS = -all-static -lisal
+# marfs_objd_LDFLAGS = "-Wl,-Bstatic -lisal -Wl,-Bdynamic"
 
 
 
-# ---
-bin_PROGRAMS = libneTest data_shredder
-
-libneTest_SOURCES = libneTest.c
-libneTest_LDFLAGS =
-libneTest_LDADD = libne.a $(SOCKET_LD) $(TIMER_LD)
-
-data_shredder_SOURCES = data_shredder.c
-
-
-
-# ---
-check_PROGRAMS = test_read_offset testLink
-
-test_read_offset_SOURCES = test_read_offset.c
-test_read_offset_LDADD = libne.a
-test_read_offset_LDFLAGS = -lisal
-
-testLink_SOURCES = testLink.c
-testLink_LDADD = libne.a
-testLink_LDFLAGS = -lisal
-
-TESTS=erasureTest test_read_offset testLink
-
+test_client_SOURCES = test_client.c
+test_client_LDADD  = librdma_sockets.a
+test_client_LDADD += ../fast_timer/libft.a

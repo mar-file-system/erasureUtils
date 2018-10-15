@@ -1,0 +1,172 @@
+#!/bin/bash
+#
+# marfs_obj  This shell script takes care of starting and stopping marfs_objd.
+#
+# ### chkconfig: [TBD]
+
+
+### BEGIN INIT INFO
+### adapted from ntpd
+# Provides: marfs_obj
+# Required-Start: $network $local_fs $remote_fs
+# Required-Stop: $network $local_fs $remote_fs
+# Should-Start: $syslog $named ntpdate
+# Should-Stop: $syslog $named
+# Short-Description: start and stop marfs_objd
+# Description: marfs_objd supports MarFS by allowing direct access
+#              to object-files using RDMA over IB via rsockets.
+### END INIT INFO
+
+# Source function library.
+. /etc/init.d/functions
+
+# Source networking configuration.
+. /etc/sysconfig/network
+
+
+dir=/usr/sbin
+executable=marfs_objd
+init=marfs_obj
+
+
+prog=${dir}/$executable
+config_file=/etc/sysconfig/marfs/${executable}.conf
+logfile=/tmp/${executable}.log
+lockfile=/var/lock/subsys/$executable
+
+
+
+start() {
+        # WARNING: The default 'daemon' invocation causes this script
+        #     to fail to return when running 'ssh host <this_script> start'
+        #     The problem is that the program has output.
+        #     Redirecting to a log-file (or /dev/null) allows ssh to return.
+        #     We assume that the definition of OPTIONS in the config-file looks
+        #     something like this:  "... > my_log_file 2>&1 &"
+
+        [ "$EUID" != "0" ] && exit 4
+        [ "$NETWORKING" = "no" ] && exit 1
+
+        if ! [ -e $config_file ]; then
+            echo "Didn't find $config_file"
+            exit 1
+        fi
+        . $config_file
+
+        # Allow running server under valgrind
+        # valgrind diagnostics will go wherever $config_file redirects output
+        #
+        # NOTE: Invocation can supply extra options:
+        #           start callgrind --separate-threads=yes"
+        #
+        if [ "$1" == "memcheck" ]; then
+            OPTIONS="--tool=memcheck --fair-sched=try --track-origins=yes --leak-check=full ${@:2}  $prog $OPTIONS"
+            prog=valgrind
+            AFTER="\nuse '$0 stop memcheck' to terminate service\noutput will appear in standard out, after you stop the service"
+
+        elif [ "$1" == "callgrind" ]; then
+            OPTIONS="--tool=callgrind --fair-sched=try ${@:2}  $prog $OPTIONS"
+            prog=valgrind
+            AFTER="\nuse '$0 stop callgrind' to terminate service\nafterwards: 'callgrind_annotate --tree=both --inclusive=yes callgrind.out.xxxx'"
+        fi
+
+        # Start daemons.
+        # The "[OK]" from 'daemon' would get printed at column 60, overwriting this text.
+        # So, don't bother with "echo -n"
+        echo -e "Starting: $prog $OPTIONS $AFTER"
+
+        echo "Starting: $prog $OPTIONS $AFTER" > $logfile
+
+        # TBD: Add '--user=mcadmin'.  This would start the service as user
+        # "mcadmin".  However, that would also presume that this user had
+        # access to all the directories in which object-files are stored,
+        # as well to the object-files themselves.
+
+        ### daemon --user=mcadmin $prog $OPTIONS >> $logfile 2>&1 &
+        daemon $prog $OPTIONS >> $logfile 2>&1 &
+
+        RETVAL=$?
+        echo
+        [ $RETVAL -eq 0 ] && touch $lockfile
+        return $RETVAL
+}
+
+
+stop() {
+        [ "$EUID" != "0" ] && exit 4
+
+        # Allow running server under valgrind
+        # valgrind diagnostics will go wherever $config_file redirects output
+        if [ -n "$1" ]; then
+            case "$1" in
+                memcache)  ;&
+                callgrind) ;&
+                valgrind)
+                    prog=valgrind
+                    ;;
+
+                *)
+                    echo "unknown stop-option '$1'"
+                    exit 1
+            esac
+        fi
+
+        echo -n $"Shutting down $prog: "
+        killproc $prog
+        RETVAL=$?
+        echo
+        [ $RETVAL -eq 0 ] && rm -f $lockfile
+        return $RETVAL
+}
+
+
+
+
+
+# See how we were called.
+case "$1" in
+
+  start)
+        # Careful, if you're starting a valgrind-related process, it
+        # doesn't stop when you simply "stop" the service.
+        start "${@:2}"
+        ;;
+
+  stop)
+        # to stop a valgrind-related process, you can use any of
+        # "stop memcheck" "stop callgrind" or "stop valgrind"
+        stop "${@:2}"
+        ;;
+
+  status)
+        status $prog
+        ;;
+
+  restart)
+        stop
+        start
+        ;;
+
+  try-restart)
+        if status $prog > /dev/null; then
+            stop
+            start
+        fi
+        ;;
+
+  reload)
+        exit 3
+        ;;
+
+  *)
+        echo "Usage: $0 [ command [options] ]"
+        echo "  start { callgrind | memcheck } [ valgrind_option ... ]"
+        echo "  stop  { callgrind | memcheck | valgrind }"
+        echo "  status"
+        echo "  restart          [NOTE: does not re-apply callgrind/memcheck args]"
+        echo "  try-restart      [NOTE: does not re-apply callgrind/memcheck args]"
+        echo 
+        echo "You can add extra valgrind options:"
+        echo "  start memcheck --separate-threads=yes"
+        exit 2
+esac
