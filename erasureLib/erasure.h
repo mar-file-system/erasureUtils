@@ -197,8 +197,8 @@ typedef struct buffer_queue {
   size_t             offset;             /* amount of partial block that has
                                             been stored in the buffer[tail] */
   u64                csum;               /* checksum for all data written */
-  pthread_cond_t     full;               /* cv signals there is a full slot */
-  pthread_cond_t     empty;              /* cv signals there is an empty slot */
+  pthread_cond_t     have_work;          /* cv signals there is a full slot */
+  pthread_cond_t     have_space;         /* cv signals there is an empty slot */
   int                qdepth;             /* number of elements in the queue */
   int                head;               /* next full position */  
   int                tail;               /* next empty position */

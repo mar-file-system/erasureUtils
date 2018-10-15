@@ -277,8 +277,8 @@ int incomplete_write( ne_handle handle ) {
 void bq_destroy(BufferQueue *bq) {
   // XXX: Should technically check these for errors (ie. still locked)
   pthread_mutex_destroy(&bq->qlock);
-  pthread_cond_destroy(&bq->full);
-  pthread_cond_destroy(&bq->empty);
+  pthread_cond_destroy(&bq->have_work);
+  pthread_cond_destroy(&bq->have_space);
 }
 
 int bq_init(BufferQueue *bq, int block_number, void **buffers, ne_handle handle) {
@@ -303,16 +303,16 @@ int bq_init(BufferQueue *bq, int block_number, void **buffers, ne_handle handle)
     PRINTerr("failed to initialize mutex for qlock\n");
     return -1;
   }
-  if(pthread_cond_init(&bq->full, NULL)) {
-    PRINTerr("failed to initialize cv for full\n");
+  if(pthread_cond_init(&bq->have_work, NULL)) {
+    PRINTerr("failed to initialize cv for have_work\n");
     // should also destroy the mutex
     pthread_mutex_destroy(&bq->qlock);
     return -1;
   }
-  if(pthread_cond_init(&bq->empty, NULL)) {
-    PRINTerr("failed to initialize cv for empty\n");
+  if(pthread_cond_init(&bq->have_space, NULL)) {
+    PRINTerr("failed to initialize cv for have_space\n");
     pthread_mutex_destroy(&bq->qlock);
-    pthread_cond_destroy(&bq->full);
+    pthread_cond_destroy(&bq->have_work);
     return -1;
   }
 
@@ -323,7 +323,7 @@ void bq_signal(BufferQueue*bq, BufferQueue_Flags sig) {
   pthread_mutex_lock(&bq->qlock);
   PRINTdbg("signalling 0x%x to block %d\n", (uint32_t)sig, bq->block_number);
   bq->flags |= sig;
-  pthread_cond_signal(&bq->full);
+  pthread_cond_signal(&bq->have_work);
   pthread_mutex_unlock(&bq->qlock);  
 }
 
@@ -385,7 +385,7 @@ void *bq_writer(void *arg) {
     // this will allow initialize_queues() to complete and ne_open to reset umask
     bq->flags |= BQ_OPEN;
   }
-  pthread_cond_signal(&bq->empty);
+  pthread_cond_signal(&bq->have_space);
   pthread_mutex_unlock(&bq->qlock);
 
   PRINTdbg("opened file %d\n", bq->block_number);
@@ -413,7 +413,7 @@ void *bq_writer(void *arg) {
     }
     while(bq->qdepth == 0 && !((bq->flags & BQ_FINISHED) || (bq->flags & BQ_ABORT))) {
       PRINTdbg("bq_writer[%d]: waiting for signal from ne_write\n", bq->block_number);
-      pthread_cond_wait(&bq->full, &bq->qlock);
+      pthread_cond_wait(&bq->have_work, &bq->qlock);
     }
 
     if (handle->timing_flags & TF_RW) {
@@ -510,7 +510,7 @@ void *bq_writer(void *arg) {
     bq->head = (bq->head + 1) % MAX_QDEPTH;
     bq->qdepth--;
 
-    pthread_cond_signal(&bq->empty);
+    pthread_cond_signal(&bq->have_space);
     pthread_mutex_unlock(&bq->qlock);
   }
   pthread_mutex_unlock(&bq->qlock);
@@ -659,7 +659,7 @@ static int initialize_queues(ne_handle handle) {
 
     // wait for the queue to be ready.
     while(!(bq->flags & BQ_OPEN) && !(bq->flags & BQ_ERROR))
-      pthread_cond_wait(&bq->empty, &bq->qlock);
+      pthread_cond_wait(&bq->have_space, &bq->qlock);
 
     if(bq->flags & BQ_ERROR) {
       PRINTerr("open failed for block %d\n", i);
@@ -683,7 +683,7 @@ int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
   }
 
   while(bq->qdepth == MAX_QDEPTH)
-    pthread_cond_wait(&bq->empty, &bq->qlock);
+    pthread_cond_wait(&bq->have_space, &bq->qlock);
 
   // NOTE: _Might_ be able to get away with not locking here, since
   // access is controled by the qdepth var, which will not allow a
@@ -707,7 +707,7 @@ int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
       ret = 1;
     }
     PRINTdbg("queued complete buffer for block %d\n", bq->block_number);
-    pthread_cond_signal(&bq->full);
+    pthread_cond_signal(&bq->have_work);
   }
   pthread_mutex_unlock(&bq->qlock);
 
@@ -2054,7 +2054,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
           return -1;
         }
         while(bq->qdepth == MAX_QDEPTH) {
-          pthread_cond_wait(&bq->empty, &bq->qlock);
+          pthread_cond_wait(&bq->have_space, &bq->qlock);
         }
         if(i == N) {
           buffer_index = bq->tail;
@@ -2078,7 +2078,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
         BufferQueue *bq = &handle->blocks[i];
         bq->qdepth++;
         bq->tail = (bq->tail + 1) % MAX_QDEPTH;
-        pthread_cond_signal(&bq->full);
+        pthread_cond_signal(&bq->have_work);
         pthread_mutex_unlock(&bq->qlock);
         handle->nsz[i] += bsz;
         handle->ncompsz[i] += bsz;
