@@ -473,13 +473,9 @@ void *bq_writer(void *arg) {
       PRINTdbg("Writing block %d\n", bq->block_number);
 */
 
-      u32 crc   = crc32_ieee(TEST_SEED, bq->buffers[bq->head], bq->buffer_size);
-      error     = write_all(&bq->file, bq->buffers[bq->head], bq->buffer_size);
-#ifdef INT_CRC
-      if (error == bq->buffer_size)
-         error += write_all(&bq->file, &crc, sizeof(u32)); // XXX: super small write... could degrade performance
-#endif
-      bq->csum += crc;
+      *(u32*)( bq->buffers[bq->head] + bq->buffer_size )   = crc32_ieee(TEST_SEED, bq->buffers[bq->head], bq->buffer_size);
+      error     = write_all(&bq->file, bq->buffers[bq->head], write_size);
+      bq->csum += *(u32*)( bq->buffers[bq->head] + bq->buffer_size );
       pthread_mutex_lock(&bq->qlock);
 
       PRINTdbg("write done for block %d\n", bq->block_number);
@@ -596,7 +592,7 @@ static int initialize_queues(ne_handle handle) {
   /* allocate buffers */
   for(i = 0; i < MAX_QDEPTH; i++) {
     int error = posix_memalign(&handle->buffer_list[i], 64,
-                               num_blocks * handle->erasure_state->bsz);
+                               num_blocks * ( handle->erasure_state->bsz + sizeof( u32 ) ) );
     if(error == -1) {
       int j;
       // clean up previously allocated buffers and fail.
@@ -624,7 +620,7 @@ static int initialize_queues(ne_handle handle) {
     void *buffers[MAX_QDEPTH];
     int j;
     for(j = 0; j < MAX_QDEPTH; j++) {
-      buffers[j] = handle->buffer_list[j] + i * handle->erasure_state->bsz;
+      buffers[j] = handle->buffer_list[j] + ( i * ( handle->erasure_state->bsz + sizeof( u32 ) ) );
     }
     
     if(bq_init(bq, i, buffers, handle) < 0) {
@@ -646,7 +642,7 @@ static int initialize_queues(ne_handle handle) {
   for(i = 0; i < MAX_QDEPTH; i++) {
     int j;
     for(j = 0; j < num_blocks; j++) {
-      handle->block_buffs[i][j] = handle->buffer_list[i] + j * handle->erasure_state->bsz;
+      handle->block_buffs[i][j] = handle->buffer_list[i] + ( j * ( handle->erasure_state->bsz + sizeof( u32 ) ) );
     }
   }
 
