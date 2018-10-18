@@ -2666,8 +2666,9 @@ int print_timing_data(TimingData* timing, const char* hdr, int use_syslog)
 
    fast_timer_inits();
 
+   // "erasure_h" is currently the longest timing-stat name
 #define MAKE_HEADER(STAT)                        \
-   snprintf(tail, remain, " %s ", #STAT);        \
+   snprintf(tail, remain, " %-10s ", #STAT);     \
    tail_len = strlen(tail);                      \
    tail2    = tail + tail_len;                   \
    remain2  = remain - tail_len;
@@ -2675,10 +2676,12 @@ int print_timing_data(TimingData* timing, const char* hdr, int use_syslog)
 #define PRINT_TIMERS(TIMING, STAT)                                      \
    MAKE_HEADER(STAT);                                                   \
    for (i=0; i<(TIMING)->blk_count; ++i) {                              \
-      snprintf(tail2, remain2, "blk %2d  ", i);                         \
+      snprintf(tail2, remain2, "blk %2d   ", i);                        \
       fast_timer_show(&(TIMING)->stats[i].STAT, 1, header, use_syslog); \
    }
 
+   // histo elements are printed "%2d", and high-order bin is typically 0,
+   // so one-less space in the header lines up better with timer values.
 #define PRINT_HISTOS(TIMING, STAT)                                      \
    MAKE_HEADER(STAT);                                                   \
    for (i=0; i<(TIMING)->blk_count; ++i) {                              \
