@@ -388,16 +388,20 @@ int main( int argc, const char* argv[] )
 
 
 
-#  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, timing_flags, \
+#  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, \
+                                                 timing_flags, NULL,    \
                                                  (PATH), (MODE), ##__VA_ARGS__ )
 
-#  define NE_DELETE(PATH, WIDTH)      ne_delete1(select_snprintf(PATH), NULL, select_impl(PATH), auth, timing_flags, \
+#  define NE_DELETE(PATH, WIDTH)      ne_delete1(select_snprintf(PATH), NULL, select_impl(PATH), auth, \
+                                                 timing_flags, NULL,    \
                                                  (PATH), (WIDTH))
 
-#  define NE_STATUS(PATH)             ne_status1(select_snprintf(PATH), NULL, select_impl(PATH), auth, timing_flags, \
+#  define NE_STATUS(PATH)             ne_status1(select_snprintf(PATH), NULL, select_impl(PATH), auth, \
+                                                 timing_flags, NULL,    \
                                                  (PATH))
 
-#  define NE_SIZE(PATH, QUOR, WIDTH)  ne_size1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, timing_flags, \
+#  define NE_SIZE(PATH, QUOR, WIDTH)  ne_size1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, \
+                                                 timing_flags, NULL,    \
                                                  (PATH), (QUOR), (WIDTH))
 
 

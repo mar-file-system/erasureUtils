@@ -63,6 +63,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <syslog.h>
 #include <errno.h>
 
 #include "fast_timer.h"
@@ -277,8 +278,6 @@ int fast_timer_inits() {
 
 
 
-
-
 // convert the value in ft->accum to seconds or nsec
 
 double fast_timer_sec(FastTimer* ft) {
@@ -296,11 +295,14 @@ double fast_timer_nsec(FastTimer* ft) {
 
 
 
-int fast_timer_show(FastTimer* ft, int simple, const char* str) {
+int fast_timer_show(FastTimer* ft, int simple, const char* str, int use_syslog) {
    const char* str1 = ((str) ? str : "");
 
    if (simple) {
-      printf("%s%7.5f sec\n",  str1, fast_timer_sec(ft));
+      if (use_syslog)
+         syslog(LOG_INFO, "%s%7.5f sec\n",  str1, fast_timer_sec(ft));
+      else
+         printf("%s%7.5f sec\n",  str1, fast_timer_sec(ft));
       return 0;
    }
    
@@ -359,7 +361,6 @@ int log_histo_reset(LogHisto* hist) {
 }
 
 
-
 // print out the contents of a log-histo.
 //
 // <pretty> aims for somewhat more human-readability.  Non-pretty could
@@ -379,29 +380,55 @@ int log_histo_reset(LogHisto* hist) {
 //    However, we're printing them out in big-endian order (i.e. bin[64] first).
 //    Thus, the display shows bins in order descending by significance.
 
-int log_histo_show(LogHisto* hist, int simple, const char* str) {
+int log_histo_show(LogHisto* hist, int simple, const char* str, int use_syslog) {
+   static const size_t PRINTED_UINT16 = 10;
+   static const size_t BUF_SIZE = 512 + (65 * PRINTED_UINT16);
+
+   char  buf[BUF_SIZE];
+   char* buf_p  = buf;
+   int   remain = BUF_SIZE;
+
+#define PRINTF(FMT, ...)                              \
+   do {                                               \
+      int rc = snprintf(buf_p, remain, FMT, ##__VA_ARGS__);  \
+      if (rc < 0)                                     \
+         return -1;                                   \
+      if (rc >= remain)                               \
+         return -1;                                   \
+      buf_p  += rc;                                   \
+      remain -= rc;                                   \
+   } while (0)
+
+
+   // --- generate string to be printed
    int i;
    const char* str1 = ((str) ? str : "");
 
-   printf(str1);
+   PRINTF(str1);
    if (!simple)
-      printf("\n\t");
+      PRINTF("\n\t");
 
    for (i=0; i<65; ++i) {
 
       // spacing and newlines
       if (i && !(i%4))
-         printf("  ");
+         PRINTF("  ");
       if ((i && !(i%16)) && (! simple))
-         printf("\n\t");
+         PRINTF("\n\t");
 
       if ((hist->bin[64 - i]) || simple)
-         printf("%2d ", hist->bin[64 - i]);
+         PRINTF("%2d ", hist->bin[64 - i]);
       else
-         printf("-- ");
+         PRINTF("-- ");
    }
-   printf("\n");
+   PRINTF("\n");
 
    if (! simple)
-      printf("\n");
+      PRINTF("\n");
+
+   // --- send to syslog or stdout
+   if (use_syslog)
+      syslog(LOG_INFO, buf);
+   else
+      printf(buf);
 }
