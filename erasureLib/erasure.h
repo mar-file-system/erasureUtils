@@ -211,17 +211,25 @@ typedef struct buffer_queue {
 } BufferQueue;
 
 typedef struct ne_stat_struct {
+   // health of striping
    char xattr_status[ MAXPARTS ];
    char data_status[ MAXPARTS ];
    char src_in_err[ MAXPARTS ];
    int nerr;
+
+   // erasure structure definition
    int N;
    int E;
    int start;
    unsigned int bsz;
    char* path_fmt;
    u64 totsz;
-} *ne_stat;
+
+   // per-part info
+   u64 csum[ MAXPARTS ];
+   unsigned long nsz[ MAXPARTS ];
+   unsigned long ncompsz[ MAXPARTS ];
+} *e_status;
 
 
 // One of these for each channel.
@@ -289,7 +297,7 @@ struct GenericFD;   // fwd-decl  (udal.h)
 
 struct handle {
    /* Erasure Info */
-   ne_stat erasure_state;
+   e_status erasure_state;
 
    /* Read/Write Info and Structures */
    ne_mode mode;
@@ -306,10 +314,10 @@ struct handle {
    BufferQueue blocks[MAXPARTS];
 
    /* Per-part Info */
-   u64 csum[ MAXPARTS ];
-   unsigned long nsz[ MAXPARTS ];
-   unsigned long ncompsz[ MAXPARTS ];
-   off_t written[ MAXPARTS ];
+   //u64 csum[ MAXPARTS ];
+   //unsigned long nsz[ MAXPARTS ];
+   //unsigned long ncompsz[ MAXPARTS ];
+   //off_t written[ MAXPARTS ];
 
    /* Erasure Manipulation Structures */
    unsigned char e_ready;
@@ -375,7 +383,7 @@ int       ne_delete1( SnprintfFunc func, void* state,
                       uDALType itype, SktAuth auth, TimingFlagsValue flags, 
                       char *path, int width );
 
-ne_stat   ne_status1( SnprintfFunc func, void* state,
+e_status   ne_status1( SnprintfFunc func, void* state,
                       uDALType itype, SktAuth auth, TimingFlagsValue flags,
                       char *path );
 
@@ -402,7 +410,7 @@ int       ne_link_block1  ( const uDAL* impl, SktAuth auth,
 // expectations of the default MarFS NFS-based multi-component implementation
 ne_handle ne_open  ( char *path, ne_mode mode, ... );
 int       ne_delete( char* path, int width );
-ne_stat   ne_status( char* path);
+e_status   ne_status( char* path);
 off_t     ne_size  ( const char* path, int quorum, int max_stripe_width );
 
 int       ne_set_xattr   ( const char *path, const char *xattrval, size_t len );

@@ -530,7 +530,7 @@ int main( int argc, const char* argv[] )
 
          PRINTout("libneTest: stat'ing to get total size.  path = '%s'\n", (char *)argv[2] );
 
-         ne_stat stat = NE_STATUS( (char *)argv[3] );
+         e_status stat = NE_STATUS( (char *)argv[3] );
          if ( stat == NULL ) {
             PRINTlog("libneTest: ne_status failed!\n" );
             return -1;
@@ -653,7 +653,7 @@ int main( int argc, const char* argv[] )
 
    else if ( wr == 3 ) {
       PRINTout("libneTest: retrieving status of erasure striping with path \"%s\"\n", (char *)argv[2] );
-      ne_stat stat = NE_STATUS( (char *)argv[2] );
+      e_status stat = NE_STATUS( (char *)argv[2] );
       if ( stat == NULL ) {
          PRINTlog("libneTest: ne_status failed!\n" );
          return -1;

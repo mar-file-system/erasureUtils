@@ -530,7 +530,7 @@ void *bq_writer(void *arg) {
     return NULL; // don't bother trying to rename
   }
 
-  handle->csum[bq->block_number] = bq->csum;
+  handle->erasure_state->csum[bq->block_number] = bq->csum;
   if(set_block_xattr(bq->handle, bq->block_number) != 0) {
     bq->flags |= BQ_ERROR;
     // if we failed to set the xattr, don't bother with the rename.
@@ -2004,18 +2004,8 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
             break;
          }
 
-#ifdef INT_CRC
-         writesize += sizeof(crc);
-#endif
-
-         handle->written[counter] += writesize;
-
-#ifdef INT_CRC
-         writesize -= sizeof(crc);
-#endif
-
-         handle->nsz[counter] += writesize;
-         handle->ncompsz[counter] += writesize;
+         handle->erasure_state->nsz[counter] += writesize;
+         handle->erasure_state->ncompsz[counter] += writesize;
          
          counter++;
       } //end of writes for N
@@ -2082,8 +2072,8 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
         bq->tail = (bq->tail + 1) % MAX_QDEPTH;
         pthread_cond_signal(&bq->have_work);
         pthread_mutex_unlock(&bq->qlock);
-        handle->nsz[i] += bsz;
-        handle->ncompsz[i] += bsz;
+        handle->erasure_state->nsz[i] += bsz;
+        handle->erasure_state->ncompsz[i] += bsz;
       }
 
       //now that we have written out all data, reset buffer
@@ -2755,6 +2745,7 @@ off_t ne_size( const char* path, int quorum, int max_stripe_width ) {
 
 
 
+
 /**
  * Internal helper function intended to access xattrs for the purpose of validating/identifying handle information
  * @param ne_handle handle : The handle for the current erasure striping
@@ -2837,7 +2828,7 @@ int xattr_check( ne_handle handle, char *path )
 
 
       PRINTdbg( "xattr_check: stat of file %s returns %d\n", file, ret );
-      handle->csum[counter]=0; //reset csum to make results clearer
+      handle->erasure_state->csum[counter]=0; //reset csum to make results clearer
       if ( ret != 0 ) {
          PRINTerr( "xattr_check: file %s: failure of stat\n", file );
          handle->erasure_state->src_in_err[counter] = 1;
@@ -2980,7 +2971,7 @@ int xattr_check( ne_handle handle, char *path )
       }
       else {
          PRINTdbg( "setting csum for file %d to %llu\n", counter, (unsigned long long)csum);
-         handle->csum[counter] = csum;
+         handle->erasure_state->csum[counter] = csum;
          if ( handle->mode == NE_RDONLY ) {
 
             //only set the file size if it is not already set (i.e. by a call with mode=NE_STAT)
@@ -3447,9 +3438,9 @@ static int fill_buffers(ne_handle handle, u64 *csum, rebuild_err epat) {
         PRINTerr( "ne_rebuild: successfully wrote valid buffer out to rebuilt file %d\n", block_index );
 
         // update manifest values appropriately
-        handle->csum[block_index]      += crc;
-        handle->nsz[block_index]       += handle->erasure_state->bsz;
-        handle->ncompsz[block_index]   += handle->erasure_state->bsz;
+        handle->erasure_state->csum[block_index]      += crc;
+        handle->erasure_state->nsz[block_index]       += handle->erasure_state->bsz;
+        handle->erasure_state->ncompsz[block_index]   += handle->erasure_state->bsz;
       }
     }
   }
@@ -3488,9 +3479,9 @@ static int write_buffers(ne_handle handle, unsigned char *rebuild_buffs[], rebui
       PRINTdbg("wrote %llu bytes to fd %d\n",
                BUFFER_SIZE, FD_NUM(handle->FDArray[handle->src_err_list[i]]));
     }
-    handle->csum[epat->src_err_list[i]]      += crc;
-    handle->nsz[epat->src_err_list[i]]       += handle->erasure_state->bsz;
-    handle->ncompsz[epat->src_err_list[i]]   += handle->erasure_state->bsz;
+    handle->erasure_state->csum[epat->src_err_list[i]]      += crc;
+    handle->erasure_state->nsz[epat->src_err_list[i]]       += handle->erasure_state->bsz;
+    handle->erasure_state->ncompsz[epat->src_err_list[i]]   += handle->erasure_state->bsz;
     total_written                            += handle->erasure_state->bsz;
   }
   // have to be careful that this return value does not over-inflate the rebuilt total
@@ -3581,9 +3572,9 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
           csum[block_index] = 0;
         }
         else {
-          handle->csum[ block_index ] =    0;
-          handle->nsz[ block_index ] =     0;
-          handle->ncompsz[ block_index ] = 0;
+          handle->erasure_state->csum[ block_index ] =    0;
+          handle->erasure_state->nsz[ block_index ] =     0;
+          handle->erasure_state->ncompsz[ block_index ] = 0;
         }
       }
 
@@ -3703,10 +3694,10 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
   int retry = 0;
   for (block_index = 0; block_index < ERASURE_WIDTH; block_index++) {
     if(handle->erasure_state->src_in_err[block_index] == 0
-       && handle->csum[block_index] != csum[block_index]) {
+       && handle->erasure_state->csum[block_index] != csum[block_index]) {
       PRINTerr( "ne_rebuild: mismatch of crc sum for file %d, "
                   "handle:%llu data:%llu\n", block_index,
-                  (unsigned long long)handle->csum[block_index],
+                  (unsigned long long)handle->erasure_state->csum[block_index],
                   (unsigned long long)csum[block_index]);
       reopen_for_rebuild(handle, block_index,epat);
       // if we've hit a block-level crc error, we never want to trust that file again
@@ -4058,7 +4049,7 @@ int ne_noxattr_rebuild(ne_handle handle) {
  *                  parts (E), and blocksize (bsz) for the stripe.
  */
 
-ne_stat ne_status1( SnprintfFunc fn, void* printf_state,
+e_status ne_status1( SnprintfFunc fn, void* printf_state,
                     uDALType itype, SktAuth auth, TimingFlagsValue timing_flags,
                     char *path )
 {
@@ -4072,7 +4063,7 @@ ne_stat ne_status1( SnprintfFunc fn, void* printf_state,
    unsigned int bsz = BLKSZ;
 #endif
 
-   ne_stat   stat   = malloc( sizeof( struct ne_stat_struct ) );
+   e_status   stat   = malloc( sizeof( struct ne_stat_struct ) );
    ne_handle handle = malloc( sizeof( struct handle ) );
    if ( stat == NULL  ||  handle == NULL ) {
       PRINTerr( "ne_status: failed to allocate stat/handle structures!\n" );
@@ -4099,9 +4090,9 @@ ne_stat ne_status1( SnprintfFunc fn, void* printf_state,
 
    /* initialize stored info */
    for ( counter=0; counter < MAXPARTS; counter++ ) {
-      handle->csum[counter] = 0;
-      handle->nsz[counter] = 0;
-      handle->ncompsz[counter] = 0;
+      handle->erasure_state->csum[counter] = 0;
+      handle->erasure_state->nsz[counter] = 0;
+      handle->erasure_state->ncompsz[counter] = 0;
       handle->erasure_state->src_in_err[counter] = 0;
       handle->src_err_list[counter] = 0;
       stat->data_status[counter] = 0;
@@ -4280,7 +4271,7 @@ ne_stat ne_status1( SnprintfFunc fn, void* printf_state,
    return stat;
 }
 
-ne_stat ne_status(char *path) {
+e_status ne_status(char *path) {
 
    // this is safe for builds with/without sockets and/or socket-authentication enabled
    // However, if you do build with socket-authentication, this will require a read
@@ -4502,8 +4493,8 @@ static int set_block_xattr(ne_handle handle, int block) {
   char xattrval[1024];
   sprintf(xattrval,"%d %d %d %d %lu %lu %llu %llu",
           handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->start,
-          handle->erasure_state->bsz, handle->nsz[block],
-          handle->ncompsz[block], (unsigned long long)handle->csum[block],
+          handle->erasure_state->bsz, handle->erasure_state->nsz[block],
+          handle->erasure_state->ncompsz[block], (unsigned long long)handle->erasure_state->csum[block],
           (unsigned long long)handle->erasure_state->totsz);
 
   PRINTdbg( "ne_close: setting file %d xattr = \"%s\"\n",
