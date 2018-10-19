@@ -281,8 +281,9 @@ const char* timing_flag_name(TimingFlags flags);
 
 typedef struct {
    TimingFlags    flags;
-   int            blk_count;         /* (fka "total_blk") */
    int            pod_id;            /* pod-number for this set of stats */
+   int            blk_count;         /* (fka "total_blk") */
+   int            event_count;       /* number of accum events, so we can compute average */
 
    FastTimer      handle_timer;      /* from pre-open to post-close, all threads complete */
    FastTimer      erasure;           /* single-threaded, across all blocks */
@@ -299,7 +300,7 @@ typedef struct {
 ssize_t export_timing_data(TimingData* const timing_data, char*       buffer, size_t buf_size);
 int     import_timing_data(TimingData*       timing_data, char* const buffer, size_t buf_size);
 int     accumulate_timing_data(TimingData* dest, TimingData* src);
-int     print_timing_data(TimingData* timing_data, const char* header, int use_syslog);
+int     print_timing_data(TimingData* timing_data, const char* header, int avg, int use_syslog);
 
 
 // This allows ne_open() and other functions to perform arbitrary

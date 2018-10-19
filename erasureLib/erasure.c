@@ -2209,11 +2209,12 @@ const char* timing_flag_name(TimingFlags flag) {
    }
 }
 
-// copy active parts of TimingData into buffer.  This could be used for
+// copy active parts of TimingData into a buffer.  This could be used for
 // moving data between MPI ranks.  Note that in this case, there is no need
 // to translate the data into network-byte-order, as we can assume that
 // both hosts have the same host-byte-order.  We can also assume that they
-// are both using the same compiled image of TimingData.
+// are both using the same compiled image of TimingData (so no worries
+// about relative struct-member alignment, etc).
 //
 // return amount of data installed, or -1 if we ran out of room in the buffer.
 // 
@@ -2543,7 +2544,9 @@ ssize_t accumulate_timing_data2(TimingData* timing, char* const buffer, size_t b
 #endif
 
 
-
+// accumulate timings in <src> into <dest>.  Currently, pftool uses this to
+// accumulate timing data across copy-operations that occur in one
+// reporting interval.  
 int accumulate_timing_data(TimingData* dest, TimingData* src)
 {
    int i;
@@ -2554,6 +2557,9 @@ int accumulate_timing_data(TimingData* dest, TimingData* src)
       dest->blk_count  = src->blk_count;
       dest->pod_id     = src->pod_id;
    }
+
+   // counting the number of accumulation-events allows us to compute averages
+   dest->event_count += 1;
 
 #define ADD_TIMERS(DST, SRC, STAT)                                      \
    for (i=0; i<(SRC)->blk_count; ++i) {                                 \
@@ -2645,7 +2651,11 @@ int accumulate_timing_data(TimingData* dest, TimingData* src)
 }
 
 
-int print_timing_data(TimingData* timing, const char* hdr, int use_syslog)
+// <avg> non-zero means show timer-values as averages (across multiple
+// events).  In this case, we still print histograms without averaging, to
+// avoid hiding single outlier elements.
+//
+int print_timing_data(TimingData* timing, const char* hdr, int avg, int use_syslog)
 {
    static const size_t HEADER_SIZE = 512;
    char header[HEADER_SIZE];
@@ -2653,6 +2663,11 @@ int print_timing_data(TimingData* timing, const char* hdr, int use_syslog)
    header[0] = 0;
    strncat(header, hdr, HEADER_SIZE);
    header[HEADER_SIZE -1] = 0;  // manpage wrong.  strncat() doesn't assure terminal-NULL
+   int   do_avg = (avg && (timing->event_count > 1));
+
+   // keep things simple for parsers of our log-output
+   const char* avg_str_not = "-----"; // i.e. no averaging was done on this value
+   const char* avg_str     = (avg ? "(avg)" : avg_str_not);
 
    size_t header_len = strlen(header);
    size_t remain     = HEADER_SIZE - header_len -1;
@@ -2661,29 +2676,35 @@ int print_timing_data(TimingData* timing, const char* hdr, int use_syslog)
    char*  tail2      = tail;
    size_t remain2    = 0;
 
+   // number of accumulation-events (e.g. file-closures resulting in
+   // TimingData being accumulated).  Divide by this to get averages.
+   int event_count = timing->event_count;
+
    int i;
    int flag_count = 0;
 
    fast_timer_inits();
 
    // "erasure_h" is currently the longest timing-stat name
-#define MAKE_HEADER(STAT)                        \
-   snprintf(tail, remain, " %-10s ", #STAT);     \
-   tail_len = strlen(tail);                      \
-   tail2    = tail + tail_len;                   \
+#define MAKE_HEADER(STAT, AVG_STR)                                      \
+   snprintf(tail, remain, " evt %2d %-10s %s ", event_count, #STAT, AVG_STR); \
+   tail_len = strlen(tail);                                             \
+   tail2    = tail + tail_len;                                          \
    remain2  = remain - tail_len;
 
 #define PRINT_TIMERS(TIMING, STAT)                                      \
-   MAKE_HEADER(STAT);                                                   \
+   MAKE_HEADER(STAT, avg_str);                                          \
    for (i=0; i<(TIMING)->blk_count; ++i) {                              \
       snprintf(tail2, remain2, "blk %2d   ", i);                        \
+      if (do_avg) /* side-effect ... */                                 \
+         fast_timer_div(&(TIMING)->stats[i].STAT, timing->event_count); \
       fast_timer_show(&(TIMING)->stats[i].STAT, 1, header, use_syslog); \
    }
 
    // histo elements are printed "%2d", and high-order bin is typically 0,
    // so one-less space in the header lines up better with timer values.
 #define PRINT_HISTOS(TIMING, STAT)                                      \
-   MAKE_HEADER(STAT);                                                   \
+   MAKE_HEADER(STAT, avg_str_not);                                      \
    for (i=0; i<(TIMING)->blk_count; ++i) {                              \
       snprintf(tail2, remain2, "blk %2d  ", i);                         \
       log_histo_show(&(TIMING)->stats[i].STAT, 1, header, use_syslog);  \
@@ -2745,17 +2766,22 @@ int print_timing_data(TimingData* timing, const char* hdr, int use_syslog)
          break;
 
 
+
       case TF_ERASURE:        // not per-thread
-         MAKE_HEADER(erasure);
+         MAKE_HEADER(erasure, avg_str);
+         if (do_avg)
+            fast_timer_div(&timing->erasure, timing->event_count);
          fast_timer_show(&timing->erasure,  1, header,   use_syslog);
 
-         MAKE_HEADER(erasure_h);
+         MAKE_HEADER(erasure_h, avg_str_not);
          log_histo_show(&timing->erasure_h, 1, header, use_syslog);
          ++flag_count;
          break;
 
       case TF_HANDLE:         // not per-thread
-         MAKE_HEADER(handle);
+         MAKE_HEADER(handle, avg_str);
+         if (do_avg)
+            fast_timer_div(&timing->handle_timer, timing->event_count);
          fast_timer_show(&timing->handle_timer, 1, header, use_syslog);
          ++flag_count;
          break;

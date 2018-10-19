@@ -294,6 +294,11 @@ void fast_timer_add2(FastTimer* dest, uint64_t* src) {
 }
 
 
+static __attribute__((always_inline)) inline
+void fast_timer_div (FastTimer* dest, uint64_t by) {
+   dest->accum /= by;
+}
+
 // convert the TSC ticks in ft->accum to elapsed time
 double fast_timer_sec(FastTimer* ft);
 double fast_timer_msec(FastTimer* ft);
