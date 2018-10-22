@@ -537,7 +537,7 @@ int main( int argc, const char* argv[] )
          }
 
          PRINTout("after ne_status() -- N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
-                 stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
+                 stat->N, stat->E, stat->bsz, stat->O, (unsigned long long)stat->totsz );
 
          timing_flags = temp_timing_flags; /* restore timing_flags for NE_READ() */
 
@@ -548,7 +548,7 @@ int main( int argc, const char* argv[] )
             E = stat->E;
 
          if (! start)
-            start = stat->start;
+            start = stat->O;
 
          if (! size_arg)
             tbd_bytes = stat->totsz;
@@ -660,10 +660,10 @@ int main( int argc, const char* argv[] )
       }
 
       PRINTout( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
-                stat->N, stat->E, stat->bsz, stat->start, (unsigned long long)stat->totsz );
+                stat->N, stat->E, stat->bsz, stat->O, (unsigned long long)stat->totsz );
       PRINTout( "Extended Attribute Errors : ");
       for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
-         PRINTout( "%d ", stat->xattr_status[tmp] );
+         PRINTout( "%d ", stat->manifest_status[tmp] );
       }
       PRINTout( "\n" );
 
@@ -684,8 +684,8 @@ int main( int argc, const char* argv[] )
       /* Encode any file errors into the return status */
       tmp=0;
       for( filefd = 0; filefd < stat->N+stat->E; filefd++ ) {
-         if ( stat->data_status[filefd] || stat->xattr_status[filefd] ) {
-            tmp += ( 1 << ((filefd + stat->start) % (stat->N+stat->E)) );
+         if ( stat->data_status[filefd] || stat->manifest_status[filefd] ) {
+            tmp += ( 1 << ((filefd + stat->O) % (stat->N+stat->E)) );
          }
       }
       free(stat);

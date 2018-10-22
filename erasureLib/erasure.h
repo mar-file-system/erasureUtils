@@ -211,23 +211,25 @@ typedef struct buffer_queue {
 } BufferQueue;
 
 typedef struct ne_stat_struct {
-   // health of striping
-   char xattr_status[ MAXPARTS ];
+   // erasure structure
+   int N;
+   int E;
+   int O;
+   unsigned int bsz;
+   char* path_fmt;
+
+   // striping size
+   u64 totsz;
+   unsigned long nsz;
+
+   // striping health
+   char manifest_status[ MAXPARTS ];
    char data_status[ MAXPARTS ];
    char src_in_err[ MAXPARTS ];
    int nerr;
 
-   // erasure structure definition
-   int N;
-   int E;
-   int start;
-   unsigned int bsz;
-   char* path_fmt;
-   u64 totsz;
-
    // per-part info
    u64 csum[ MAXPARTS ];
-   unsigned long nsz[ MAXPARTS ];
    unsigned long ncompsz[ MAXPARTS ];
 } *e_status;
 

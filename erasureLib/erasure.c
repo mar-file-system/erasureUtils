@@ -236,7 +236,7 @@ int incomplete_write( ne_handle handle ) {
    for( i = 0; i < handle->erasure_state->nerr; i++ ) {
       int block = handle->src_err_list[i];
       handle->snprintf( fname, MAXNAME, handle->erasure_state->path_fmt,
-                        (handle->erasure_state->start + block) % ( (handle->erasure_state->N) ? (handle->erasure_state->N + handle->erasure_state->E) : MAXPARTS ),
+                        (handle->erasure_state->O + block) % ( (handle->erasure_state->N) ? (handle->erasure_state->N + handle->erasure_state->E) : MAXPARTS ),
                         handle->printf_state);
       strcat( fname, WRITE_SFX );
       
@@ -547,9 +547,9 @@ void *bq_writer(void *arg) {
 
   char block_file_path[MAXNAME];
   //  sprintf( block_file_path, handle->erasure_state->path_fmt,
-  //           (bq->block_number+handle->erasure_state->start)%(handle->erasure_state->N+handle->erasure_state->E) );
+  //           (bq->block_number+handle->erasure_state->O)%(handle->erasure_state->N+handle->erasure_state->E) );
   handle->snprintf( block_file_path, MAXNAME, handle->erasure_state->path_fmt,
-                    (bq->block_number+handle->erasure_state->start)%(handle->erasure_state->N+handle->erasure_state->E), handle->printf_state );
+                    (bq->block_number+handle->erasure_state->O)%(handle->erasure_state->N+handle->erasure_state->E), handle->printf_state );
 
   PRINTdbg("bq_writer: renaming old:  %s\n", bq->path );
   PRINTdbg("                    new:  %s\n", block_file_path );
@@ -611,8 +611,8 @@ static int initialize_queues(ne_handle handle) {
     char path[MAXNAME];
     BufferQueue *bq = &handle->blocks[i];
     // generate the path
-    // sprintf(bq->path, handle->erasure_state->path_fmt, (i + handle->erasure_state->start) % num_blocks);
-    handle->snprintf(bq->path, MAXNAME, handle->erasure_state->path_fmt, (i + handle->erasure_state->start) % num_blocks, handle->printf_state);
+    // sprintf(bq->path, handle->erasure_state->path_fmt, (i + handle->erasure_state->O) % num_blocks);
+    handle->snprintf(bq->path, MAXNAME, handle->erasure_state->path_fmt, (i + handle->erasure_state->O) % num_blocks, handle->printf_state);
 
     strcat(bq->path, WRITE_SFX);
 
@@ -857,7 +857,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* printf_state,
    handle->erasure_state->N = N;
    handle->erasure_state->E = E;
    handle->erasure_state->bsz = bsz;
-   handle->erasure_state->start = erasure_offset;
+   handle->erasure_state->O = erasure_offset;
 
    if ( counter < 2 ) {
       handle->mode = NE_STAT;
@@ -906,7 +906,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* printf_state,
          ret = xattr_check(handle,path); //perform the check again, identifying mismatched values
       }
       PRINTdbg("ne_open: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d, TotSz = %llu\n",
-               handle->erasure_state->nerr, handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->start, handle->erasure_state->totsz );
+               handle->erasure_state->nerr, handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->O, handle->erasure_state->totsz );
 
       if ( ret != 0 ) {
          if( incomplete_write( handle ) ) {
@@ -932,7 +932,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* printf_state,
    N = handle->erasure_state->N;
    E = handle->erasure_state->E;
    bsz = handle->erasure_state->bsz;
-   erasure_offset = handle->erasure_state->start;
+   erasure_offset = handle->erasure_state->O;
    PRINTdbg( "ne_open: using stripe values (N=%d,E=%d,bsz=%d,offset=%d)\n", N,E,bsz,erasure_offset);
 
    if(handle->mode == NE_WRONLY) { // first cut: mutlti-threading only for writes.
@@ -1876,7 +1876,7 @@ read:
 void sync_file(ne_handle handle, int block_index) {
 #if 0
   char path[MAXNAME];
-  int  block_number = ((handle->erasure_state->start + block_index)
+  int  block_number = ((handle->erasure_state->O + block_index)
                        % (handle->erasure_state->N + handle->erasure_state->E));
   handle->snprintf(path, MAXNAME, handle->erasure_state->path_fmt, block_number, handle->printf_state);
   strcat(path, WRITE_SFX);
@@ -2004,7 +2004,6 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
             break;
          }
 
-         handle->erasure_state->nsz[counter] += writesize;
          handle->erasure_state->ncompsz[counter] += writesize;
          
          counter++;
@@ -2056,6 +2055,8 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
         }
       }
 
+      handle->erasure_state->nsz += bsz;
+
       ec_encode_data(bsz, N, E, handle->g_tbls,
                      (unsigned char **)handle->block_buffs[buffer_index],
                      (unsigned char **)&(handle->block_buffs[buffer_index][N]));
@@ -2072,7 +2073,6 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
         bq->tail = (bq->tail + 1) % MAX_QDEPTH;
         pthread_cond_signal(&bq->have_work);
         pthread_mutex_unlock(&bq->qlock);
-        handle->erasure_state->nsz[i] += bsz;
         handle->erasure_state->ncompsz[i] += bsz;
       }
 
@@ -2352,7 +2352,7 @@ int ne_close( ne_handle handle )
            ret = -1;
            PRINTerr( "ne_close: failed to set xattr for rebuilt file %d\n", counter );
          }
-         handle->snprintf( file, MAXNAME, handle->erasure_state->path_fmt, (counter+handle->erasure_state->start)%(N+E), handle->printf_state );
+         handle->snprintf( file, MAXNAME, handle->erasure_state->path_fmt, (counter+handle->erasure_state->O)%(N+E), handle->printf_state );
          strncpy( nfile, file, strlen(file) + 1);
 
          // save the original file
@@ -2479,7 +2479,7 @@ int ne_close( ne_handle handle )
       /* Encode any file errors into the return status */
       for( counter = 0; counter < N+E; counter++ ) {
          if ( handle->erasure_state->src_in_err[counter] ) {
-            ret += ( 1 << ((counter + handle->erasure_state->start) % (N+E)) );
+            ret += ( 1 << ((counter + handle->erasure_state->O) % (N+E)) );
          }
       }
    }
@@ -2744,8 +2744,6 @@ off_t ne_size( const char* path, int quorum, int max_stripe_width ) {
 }
 
 
-
-
 /**
  * Internal helper function intended to access xattrs for the purpose of validating/identifying handle information
  * @param ne_handle handle : The handle for the current erasure striping
@@ -2773,7 +2771,7 @@ int xattr_check( ne_handle handle, char *path )
    char xattrtotsize[160];
    int N = handle->erasure_state->N;
    int E = handle->erasure_state->E;
-   int erasure_offset = handle->erasure_state->start;
+   int erasure_offset = handle->erasure_state->O;
    unsigned int bsz = handle->erasure_state->bsz;
    unsigned long nsz;
    unsigned long ncompsz;
@@ -2816,7 +2814,7 @@ int xattr_check( ne_handle handle, char *path )
 
    for ( counter = 0; counter < lN+lE; counter++ ) {
       bzero(file,sizeof(file));
-      handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_state->start)%(lN+lE), handle->printf_state );
+      handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_state->O)%(lN+lE), handle->printf_state );
 
       if (handle->timing_flags & TF_STAT)
          fast_timer_start(&handle->stats[counter].stat);
@@ -2912,8 +2910,8 @@ int xattr_check( ne_handle handle, char *path )
             handle->erasure_state->nerr++;
             continue;
          }
-         else if ( erasure_offset != handle->erasure_state->start ) {
-            PRINTerr( "xattr_check: filexattr offset = %d did not match handle value  %d\n", erasure_offset, handle->erasure_state->start); 
+         else if ( erasure_offset != handle->erasure_state->O ) {
+            PRINTerr( "xattr_check: filexattr offset = %d did not match handle value  %d\n", erasure_offset, handle->erasure_state->O); 
             handle->erasure_state->src_in_err[counter] = 1;
             handle->src_err_list[handle->erasure_state->nerr] = counter;
             handle->erasure_state->nerr++;
@@ -3165,7 +3163,7 @@ int xattr_check( ne_handle handle, char *path )
                ret = 1;
          }
          if ( match != -1 )
-            handle->erasure_state->start = O_list[match];
+            handle->erasure_state->O = O_list[match];
          else {
             PRINTerr( "xattr_check: failed to locate any matching offset xattr vals!\n" );
             errno = ENODATA;
@@ -3200,6 +3198,12 @@ int xattr_check( ne_handle handle, char *path )
       errno = ENODATA;
       return -1;
    }
+
+   float tot_blocks = ( handle->erasure_state->totsz / (float)handle->erasure_state->N ) / handle->erasure_state->bsz;
+   if ( ( tot_blocks - (int)tot_blocks ) > 0 ) {
+      tot_blocks++;
+   }
+   handle->erasure_state->nsz = handle->erasure_state->bsz * (int)tot_blocks;
 
    if ( ret != 0 ) {
       PRINTerr( "xattr_check: mismatched xattr values were detected, but not identified!" );
@@ -3274,7 +3278,7 @@ static int reopen_for_rebuild(ne_handle handle, int block, rebuild_err epat) {
   char file[MAXNAME];
 
   handle->snprintf(file, MAXNAME, handle->erasure_state->path_fmt,
-                   (block+handle->erasure_state->start)%(handle->erasure_state->N+handle->erasure_state->E),
+                   (block+handle->erasure_state->O)%(handle->erasure_state->N+handle->erasure_state->E),
                    handle->printf_state);
 
   PRINTdbg( "   stashing handle for %s\n", &file[0] );
@@ -3439,7 +3443,6 @@ static int fill_buffers(ne_handle handle, u64 *csum, rebuild_err epat) {
 
         // update manifest values appropriately
         handle->erasure_state->csum[block_index]      += crc;
-        handle->erasure_state->nsz[block_index]       += handle->erasure_state->bsz;
         handle->erasure_state->ncompsz[block_index]   += handle->erasure_state->bsz;
       }
     }
@@ -3480,7 +3483,6 @@ static int write_buffers(ne_handle handle, unsigned char *rebuild_buffs[], rebui
                BUFFER_SIZE, FD_NUM(handle->FDArray[handle->src_err_list[i]]));
     }
     handle->erasure_state->csum[epat->src_err_list[i]]      += crc;
-    handle->erasure_state->nsz[epat->src_err_list[i]]       += handle->erasure_state->bsz;
     handle->erasure_state->ncompsz[epat->src_err_list[i]]   += handle->erasure_state->bsz;
     total_written                            += handle->erasure_state->bsz;
   }
@@ -3573,7 +3575,6 @@ int do_rebuild(ne_handle handle, rebuild_err epat) {
         }
         else {
           handle->erasure_state->csum[ block_index ] =    0;
-          handle->erasure_state->nsz[ block_index ] =     0;
           handle->erasure_state->ncompsz[ block_index ] = 0;
         }
       }
@@ -4091,19 +4092,19 @@ e_status ne_status1( SnprintfFunc fn, void* printf_state,
    /* initialize stored info */
    for ( counter=0; counter < MAXPARTS; counter++ ) {
       handle->erasure_state->csum[counter] = 0;
-      handle->erasure_state->nsz[counter] = 0;
       handle->erasure_state->ncompsz[counter] = 0;
       handle->erasure_state->src_in_err[counter] = 0;
       handle->src_err_list[counter] = 0;
       stat->data_status[counter] = 0;
-      stat->xattr_status[counter] = 0;
+      stat->manifest_status[counter] = 0;
    }
    handle->erasure_state->nerr           = 0;
    handle->erasure_state->totsz          = 0;
    handle->erasure_state->N              = 0;
    handle->erasure_state->E              = 0;
+   handle->erasure_state->O              = 0;
    handle->erasure_state->bsz            = 0;
-   handle->erasure_state->start = 0;
+   handle->erasure_state->nsz            = 0;
    handle->mode           = NE_STAT;
    handle->e_ready        = 0;
    handle->buff_offset    = 0;
@@ -4145,18 +4146,18 @@ e_status ne_status1( SnprintfFunc fn, void* printf_state,
    handle->mode = NE_STAT;
 
    PRINTdbg( "ne_status: Post xattr_check() -- NERR = %d, N = %d, E = %d, Start = %d, TotSz = %llu\n",
-             handle->erasure_state->nerr, handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->start, handle->erasure_state->totsz );
+             handle->erasure_state->nerr, handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->O, handle->erasure_state->totsz );
 
    stat->N = handle->erasure_state->N;
    stat->E = handle->erasure_state->E;
    stat->bsz = handle->erasure_state->bsz;
    stat->totsz = handle->erasure_state->totsz;
-   stat->start = handle->erasure_state->start;
+   stat->O = handle->erasure_state->O;
 
    // store xattr failures to stat struct and reset error data
    for ( counter = 0; counter < ( handle->erasure_state->N + handle->erasure_state->E ); counter++ ) {
       if ( counter < handle->erasure_state->nerr ) {
-         stat->xattr_status[handle->src_err_list[counter]] = 1;
+         stat->manifest_status[handle->src_err_list[counter]] = 1;
          handle->src_err_list[counter] = 0;
       }
       handle->erasure_state->src_in_err[counter] = 0;
@@ -4200,7 +4201,7 @@ e_status ne_status1( SnprintfFunc fn, void* printf_state,
    PRINTdbg( "ne_status: opening file descriptors...\n" );
    while ( counter < (handle->erasure_state->N+handle->erasure_state->E) ) {
       bzero( file, MAXNAME );
-      handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_state->start)%(handle->erasure_state->N+handle->erasure_state->E), handle->printf_state );
+      handle->snprintf( file, MAXNAME, path, (counter+handle->erasure_state->O)%(handle->erasure_state->N+handle->erasure_state->E), handle->printf_state );
 
 #ifdef INT_CRC
       if ( counter > handle->erasure_state->N ) {
@@ -4492,8 +4493,8 @@ static int set_block_xattr(ne_handle handle, int block) {
   int tmp = 0;
   char xattrval[1024];
   sprintf(xattrval,"%d %d %d %d %lu %lu %llu %llu",
-          handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->start,
-          handle->erasure_state->bsz, handle->erasure_state->nsz[block],
+          handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->O,
+          handle->erasure_state->bsz, handle->erasure_state->nsz,
           handle->erasure_state->ncompsz[block], (unsigned long long)handle->erasure_state->csum[block],
           (unsigned long long)handle->erasure_state->totsz);
 
@@ -4502,7 +4503,7 @@ static int set_block_xattr(ne_handle handle, int block) {
 
   char block_file_path[2048];
   handle->snprintf(block_file_path, MAXNAME, handle->erasure_state->path_fmt,
-                   (block+handle->erasure_state->start)%(handle->erasure_state->N + handle->erasure_state->E),
+                   (block+handle->erasure_state->O)%(handle->erasure_state->N + handle->erasure_state->E),
                    handle->printf_state);
 
    if ( handle->mode == NE_REBUILD )
