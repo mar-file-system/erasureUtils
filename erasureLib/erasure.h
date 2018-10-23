@@ -196,19 +196,20 @@ typedef struct buffer_queue {
   void              *buffers[MAX_QDEPTH];
   size_t             offset;             /* amount of partial block that has
                                             been stored in the buffer[tail] */
-  u64                csum;               /* checksum for all data written */
   pthread_cond_t     have_work;          /* cv signals there is a full slot */
   pthread_cond_t     have_space;         /* cv signals there is an empty slot */
   int                qdepth;             /* number of elements in the queue */
   int                head;               /* next full position */  
   int                tail;               /* next empty position */
+  BufferQueue_Flags  flags;
+  size_t             buffer_size;
   struct GenericFD   file;               /* file descriptor */
   char               path[2048];         /* path to the file */
   int                block_number;
   struct handle     *handle;
-  BufferQueue_Flags  flags;
-  size_t             buffer_size;
 } BufferQueue;
+
+
 
 typedef struct ne_stat_struct {
    // erasure structure

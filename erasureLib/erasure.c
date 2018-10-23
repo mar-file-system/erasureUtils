@@ -292,7 +292,6 @@ int bq_init(BufferQueue *bq, int block_number, void **buffers, ne_handle handle)
   bq->head         = 0;
   bq->tail         = 0;
   bq->flags        = 0;
-  bq->csum         = 0;
   bq->buffer_size  = handle->erasure_state->bsz;
   bq->handle       = handle;
   bq->offset       = 0;
@@ -428,9 +427,8 @@ void *bq_writer(void *arg) {
       if (handle->timing_flags & TF_CLOSE)
          fast_timer_start(&handle->stats[bq->block_number].close);
 
-      if(HNDLOP(close, bq->file) == 0) {
-         PATHOP(unlink, handle->impl, handle->auth, bq->path); // try to clean up after ourselves.
-      }
+      HNDLOP(close, bq->file); // don't think we care about return codes in this case
+      PATHOP(unlink, handle->impl, handle->auth, bq->path); // try to clean up after ourselves.
       pthread_mutex_unlock(&bq->qlock);
 
       if (handle->timing_flags & TF_CLOSE)
@@ -475,7 +473,7 @@ void *bq_writer(void *arg) {
 
       *(u32*)( bq->buffers[bq->head] + bq->buffer_size )   = crc32_ieee(TEST_SEED, bq->buffers[bq->head], bq->buffer_size);
       error     = write_all(&bq->file, bq->buffers[bq->head], write_size);
-      bq->csum += *(u32*)( bq->buffers[bq->head] + bq->buffer_size );
+      handle->erasure_state->csum[bq->block_number] += *(u32*)( bq->buffers[bq->head] + bq->buffer_size );
       pthread_mutex_lock(&bq->qlock);
 
       PRINTdbg("write done for block %d\n", bq->block_number);
@@ -530,7 +528,6 @@ void *bq_writer(void *arg) {
     return NULL; // don't bother trying to rename
   }
 
-  handle->erasure_state->csum[bq->block_number] = bq->csum;
   if(set_block_xattr(bq->handle, bq->block_number) != 0) {
     bq->flags |= BQ_ERROR;
     // if we failed to set the xattr, don't bother with the rename.
