@@ -72,8 +72,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 // forward-decls
-struct handle;
-
+typedef struct uDALImpl uDAL;
 
 // generated to #define SOCKETS, etc, based on configuration options.
 #include "skt_config.h"
@@ -95,7 +94,9 @@ struct handle;
 
 // ne_handle stores these, which can be used by any uDAL implementation
 typedef struct GenericFD {
-   struct handle*    hndl;      // pointer back to ne_handle
+   //struct handle*    hndl;      // pointer back to ne_handle
+   SktAuth           auth;
+   const uDAL*       impl;
    union {
       int            fd;
       SocketHandle   skt;

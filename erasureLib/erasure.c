@@ -145,7 +145,11 @@ extern uint32_t      crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len)
 extern void          ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 #endif
 
-int xattr_check( ne_handle handle, char *path );
+int ne_set_xattr   ( const char *path, const char *xattrval, size_t len );
+int ne_get_xattr   ( const char *path, char *xattrval, size_t len );
+int ne_delete_block( const char *path );
+int ne_link_block  ( const char *link_path, const char *target );
+int xattr_check    ( ne_handle handle, char *path );
 static int gf_gen_decode_matrix(unsigned char *encode_matrix,
                                 unsigned char *decode_matrix,
                                 unsigned char *invert_matrix,
@@ -160,8 +164,8 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 // run-time selection of sockets vs file, for uDAL
 
 #define FD_INIT(GFD, HANDLE)                (HANDLE)->impl->fd_init(&(GFD))
-#define FD_ERR(GFD)                         (GFD).hndl->impl->fd_err(&(GFD))
-#define FD_NUM(GFD)                         (GFD).hndl->impl->fd_num(&(GFD))
+#define FD_ERR(GFD)                         (GFD).impl->fd_err(&(GFD))
+#define FD_NUM(GFD)                         (GFD).impl->fd_num(&(GFD))
 
 // This is opening a file (not a handle), using the impl in the handle.
 // Save the ne_handle into the GFD at open-time, so:
@@ -177,11 +181,12 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 //      are currently using a "fake" handle just to use OPEN() include
 //      ne_size(), and ne_set_attr1().
 //
-#define OPEN(GFD, HANDLE, ...)              do { (GFD).hndl = (HANDLE); \
-                                                 (HANDLE)->impl->open(&(GFD), ## __VA_ARGS__); } while(0)
+#define OPEN(GFD, AUTH, IMPL, ...)              do { (GFD).auth = (AUTH); \
+                                                     (GFD).impl = (IMPL); \
+                                                 (IMPL)->open(&(GFD), ## __VA_ARGS__); } while(0)
 
-#define pHNDLOP(OP, GFDp, ...)              (GFDp)->hndl->impl->OP((GFDp), ## __VA_ARGS__)
-#define HNDLOP(OP, GFD, ...)                (GFD).hndl->impl->OP(&(GFD), ## __VA_ARGS__)
+#define pHNDLOP(OP, GFDp, ...)              (GFDp)->impl->OP((GFDp), ## __VA_ARGS__)
+#define HNDLOP(OP, GFD, ...)                (GFD).impl->OP(&(GFD), ## __VA_ARGS__)
 
 #define PATHOP(OP, IMPL, AUTH, PATH, ...)   (IMPL)->OP((AUTH), (PATH), ## __VA_ARGS__)
 
@@ -291,7 +296,8 @@ int bq_init(BufferQueue *bq, int block_number, void **buffers, ne_handle handle)
   bq->qdepth       = 0;
   bq->head         = 0;
   bq->tail         = 0;
-  bq->flags        = 0;
+  bq->con_flags    = 0;
+  bq->state_flags  = 0;
   bq->buffer_size  = handle->erasure_state->bsz;
   bq->handle       = handle;
   bq->offset       = 0;
@@ -318,10 +324,10 @@ int bq_init(BufferQueue *bq, int block_number, void **buffers, ne_handle handle)
   return 0;
 }
 
-void bq_signal(BufferQueue*bq, BufferQueue_Flags sig) {
+void bq_signal(BufferQueue* bq, BQ_Control_Flags sig) {
   pthread_mutex_lock(&bq->qlock);
   PRINTdbg("signalling 0x%x to block %d\n", (uint32_t)sig, bq->block_number);
-  bq->flags |= sig;
+  bq->con_flags |= sig;
   pthread_cond_signal(&bq->have_work);
   pthread_mutex_unlock(&bq->qlock);  
 }
@@ -363,7 +369,7 @@ void *bq_writer(void *arg) {
   pthread_cleanup_push(bq_writer_finis, bq);
 
   // open the file.
-  OPEN(bq->file, handle, bq->path, O_WRONLY|O_CREAT, 0666);
+  OPEN(bq->file, handle->auth, handle->impl, bq->path, O_WRONLY|O_CREAT, 0666);
 
   if(pthread_mutex_lock(&bq->qlock) != 0) {
     PRINTerr("failed to lock queue lock: %s\n", strerror(error));
@@ -372,17 +378,17 @@ void *bq_writer(void *arg) {
        fast_timer_stop(&handle->stats[bq->block_number].thread);
     // set error, so that initialize_queues() will know to mark this block bad
     // outside of critical section, but should be fine as flags aren't shared
-    bq->flags |= BQ_ERROR;
+    bq->state_flags |= BQ_ERROR;
     return NULL;
     //exit(-1); // is this the appropriate response??
   }
   if(FD_ERR(bq->file)) {
-    bq->flags |= BQ_ERROR;
+    bq->state_flags |= BQ_ERROR;
   }
   else {
     // note the file as having been successfully opened
     // this will allow initialize_queues() to complete and ne_open to reset umask
-    bq->flags |= BQ_OPEN;
+    bq->state_flags |= BQ_OPEN;
   }
   pthread_cond_signal(&bq->have_space);
   pthread_mutex_unlock(&bq->qlock);
@@ -407,10 +413,10 @@ void *bq_writer(void *arg) {
       if (handle->timing_flags & TF_THREAD)
          fast_timer_stop(&handle->stats[bq->block_number].thread);
       // note the error, just in case
-      bq->flags |= BQ_ERROR;
+      bq->state_flags |= BQ_ERROR;
       return NULL;
     }
-    while(bq->qdepth == 0 && !((bq->flags & BQ_FINISHED) || (bq->flags & BQ_ABORT))) {
+    while(bq->qdepth == 0 && !((bq->con_flags & BQ_FINISHED) || (bq->con_flags & BQ_ABORT))) {
       PRINTdbg("bq_writer[%d]: waiting for signal from ne_write\n", bq->block_number);
       pthread_cond_wait(&bq->have_work, &bq->qlock);
     }
@@ -422,7 +428,7 @@ void *bq_writer(void *arg) {
     }
 
     // check for flags that might tell us to quit
-    if(bq->flags & BQ_ABORT) {
+    if(bq->con_flags & BQ_ABORT) {
       PRINTerr("aborting buffer queue\n");
       if (handle->timing_flags & TF_CLOSE)
          fast_timer_start(&handle->stats[bq->block_number].close);
@@ -438,11 +444,11 @@ void *bq_writer(void *arg) {
                                 &handle->stats[bq->block_number].close);
       }
       // though it shouldn't matter, make sure no one thinks we finished properly
-      bq->flags |= BQ_ERROR;
+      bq->state_flags |= BQ_ERROR;
       return NULL;
     }
 
-    if((bq->qdepth == 0) && (bq->flags & BQ_FINISHED)) {       // then we are done.
+    if((bq->qdepth == 0) && (bq->con_flags & BQ_FINISHED)) {       // then we are done.
       // // TBD: ?
       // PRINTerr("closing buffer queue\n");
       // HNDLOP(close, bq->file);
@@ -453,7 +459,7 @@ void *bq_writer(void *arg) {
     }
 
 
-    if(!(bq->flags & BQ_ERROR)) {
+    if(!(bq->state_flags & BQ_ERROR)) {
 
       if (handle->timing_flags & TF_RW)
          fast_timer_start(&handle->stats[bq->block_number].write);
@@ -464,7 +470,7 @@ void *bq_writer(void *arg) {
 /*
       if(written >= SYNC_SIZE) {
          if ( HNDLOP(fsync, bq->file) )
-            bq->flags |= BQ_ERROR;
+            bq->state_flags |= BQ_ERROR;
          written = 0;
       }
 
@@ -489,7 +495,7 @@ void *bq_writer(void *arg) {
     }
 
     if(error < write_size) {
-      bq->flags |= BQ_ERROR;
+      bq->state_flags |= BQ_ERROR;
     }
     else {
       written += error;
@@ -520,8 +526,8 @@ void *bq_writer(void *arg) {
      log_histo_add_interval(&handle->stats[bq->block_number].close_h,
                                 &handle->stats[bq->block_number].close);
   }
-  if ( close_rc || (bq->flags & BQ_ERROR) ) {
-    bq->flags |= BQ_ERROR;      // ensure the error was noted
+  if ( close_rc || (bq->state_flags & BQ_ERROR) ) {
+    bq->state_flags |= BQ_ERROR;      // ensure the error was noted
     PRINTerr("error closing block %d\n", bq->block_number);
     if (handle->timing_flags & TF_THREAD)
        fast_timer_stop(&handle->stats[bq->block_number].thread);
@@ -529,7 +535,7 @@ void *bq_writer(void *arg) {
   }
 
   if(set_block_xattr(bq->handle, bq->block_number) != 0) {
-    bq->flags |= BQ_ERROR;
+    bq->state_flags |= BQ_ERROR;
     // if we failed to set the xattr, don't bother with the rename.
     PRINTerr("error setting xattr for block %d\n", bq->block_number);
     if (handle->timing_flags & TF_THREAD)
@@ -552,7 +558,7 @@ void *bq_writer(void *arg) {
   PRINTdbg("                    new:  %s\n", block_file_path );
   if( PATHOP( rename, handle->impl, handle->auth, bq->path, block_file_path ) != 0 ) {
     PRINTerr("bq_writer: rename failed: %s\n", strerror(errno) );
-    bq->flags |= BQ_ERROR;
+    bq->state_flags |= BQ_ERROR;
   }
 
 #ifdef META_FILES
@@ -564,7 +570,7 @@ void *bq_writer(void *arg) {
   PRINTdbg("                         new:  %s\n", block_file_path );
   if ( PATHOP( rename, handle->impl, handle->auth, bq->path, block_file_path ) != 0 ) {
      PRINTerr("bq_writer: rename failed: %s\n", strerror(errno) );
-     bq->flags |= BQ_ERROR;
+     bq->state_flags |= BQ_ERROR;
   }
 #endif
 
@@ -651,10 +657,10 @@ static int initialize_queues(ne_handle handle) {
     pthread_mutex_lock(&bq->qlock);
 
     // wait for the queue to be ready.
-    while(!(bq->flags & BQ_OPEN) && !(bq->flags & BQ_ERROR))
+    while(!(bq->state_flags & BQ_OPEN) && !(bq->state_flags & BQ_ERROR))
       pthread_cond_wait(&bq->have_space, &bq->qlock);
 
-    if(bq->flags & BQ_ERROR) {
+    if(bq->state_flags & BQ_ERROR) {
       PRINTerr("open failed for block %d\n", i);
       handle->erasure_state->src_in_err[i] = 1;
       handle->src_err_list[handle->erasure_state->nerr] = i;
@@ -696,7 +702,7 @@ int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
     bq->offset = 0;
     bq->qdepth++;
     bq->tail = (bq->tail + 1) % MAX_QDEPTH;
-    if(bq->flags & BQ_ERROR) {
+    if(bq->state_flags & BQ_ERROR) {
       ret = 1;
     }
     PRINTdbg("queued complete buffer for block %d\n", bq->block_number);
@@ -1004,7 +1010,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* printf_state,
 
       if( mode == NE_WRONLY ) {
          PRINTdbg( "   opening %s%s for write\n", file, WRITE_SFX );
-         OPEN(handle->FDArray[counter], handle,
+         OPEN(handle->FDArray[counter], handle->auth, handle->impl,
               strncat( file, WRITE_SFX, strlen(WRITE_SFX)+1 ), O_WRONLY | O_CREAT, 0666 );
       }
 //      else if ( mode == NE_REBUILD  &&  handle->erasure_state->src_in_err[counter] == 1 ) {
@@ -1014,7 +1020,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* printf_state,
 //      }
       else {
          PRINTdbg( "   opening %s for read\n", file );
-         OPEN(handle->FDArray[counter], handle, file, O_RDONLY );
+         OPEN(handle->FDArray[counter], handle->auth, handle->impl, file, O_RDONLY );
       }
 
       if (handle->timing_flags & TF_OPEN)
@@ -1879,7 +1885,7 @@ void sync_file(ne_handle handle, int block_index) {
   strcat(path, WRITE_SFX);
 
   HNDLOP(close, handle->FDArray[block_index]);
-  OPEN(handle->FDArray[block_index], handle, path, O_WRONLY);
+  OPEN(handle->FDArray[block_index], handle->auth, handle->impl, path, O_WRONLY);
   if(FD_ERR(handle->FDArray[block_index])) {
     PRINTerr( "failed to reopen file\n");
     handle->erasure_state->src_in_err[block_index] = 1;
@@ -2433,7 +2439,7 @@ int ne_close( ne_handle handle )
      for(i = 0; i < handle->erasure_state->N + handle->erasure_state->E; i++) {
        pthread_join(handle->threads[i], NULL);
        /* add up the errors */
-       if((handle->blocks[i].flags & BQ_ERROR) && !handle->erasure_state->src_in_err[i]) {
+       if((handle->blocks[i].state_flags & BQ_ERROR) && !handle->erasure_state->src_in_err[i]) {
          handle->erasure_state->src_in_err[i] = 1;
          handle->src_err_list[handle->erasure_state->nerr] = i;
          handle->erasure_state->nerr++;
@@ -2657,7 +2663,7 @@ off_t ne_size1( SnprintfFunc snprintf_fn, void* printf_state,
       snprintf_fn( file, MAXNAME, ptemplate, i, printf_state );
 
       PRINTdbg("ne_size: opening file %s\n", file);
-      OPEN( fd, handle, file, O_RDONLY );
+      OPEN( fd, handle->auth, handle->impl, file, O_RDONLY );
       if ( FD_ERR(fd) ) { 
          PRINTerr("ne_size: failed to open file %s\n", file);
          continue;
@@ -3290,7 +3296,7 @@ static int reopen_for_rebuild(ne_handle handle, int block, rebuild_err epat) {
   }
   else {
      PRINTdbg( "   opening %s for write\n", file );
-     OPEN(handle->FDArray[block], handle,
+     OPEN(handle->FDArray[block], handle->auth, handle->impl,
           strncat( file, REBUILD_SFX, strlen(REBUILD_SFX)+1 ),
           O_WRONLY | O_CREAT, 0666 );
   }
@@ -4213,7 +4219,7 @@ e_status ne_status1( SnprintfFunc fn, void* printf_state,
 #endif
 
       PRINTdbg( "ne_status:    opening %s for read\n", file );
-      OPEN(handle->FDArray[counter], handle, file, O_RDONLY);
+      OPEN(handle->FDArray[counter], handle->auth, handle->impl, file, O_RDONLY);
 
       if ( FD_ERR(handle->FDArray[counter])  &&  handle->erasure_state->src_in_err[counter] == 0 ) {
          PRINTerr( "ne_status:    failed to open file %s!\n", file );
@@ -4324,7 +4330,7 @@ int ne_set_xattr1(const uDAL* impl, SktAuth auth,
    strncat( meta_file, META_SFX, strlen(META_SFX) + 1 );
 
    // cannot set umask here as this is called within threads
-   OPEN( fd, handle, meta_file, O_WRONLY | O_CREAT, 0666 );
+   OPEN( fd, handle->auth, handle->impl, meta_file, O_WRONLY | O_CREAT, 0666 );
 
    if (FD_ERR(fd)) {
       PRINTerr( "ne_close: failed to open file %s\n", meta_file);
@@ -4350,7 +4356,7 @@ int ne_set_xattr1(const uDAL* impl, SktAuth auth,
    // The problem is that fgetxattr/fsetxattr are not yet implemented.
 #   error "xattr metadata is not functional with new thread model"
 
-   OPEN( fd, handle, path, O_RDONLY );
+   OPEN( fd, handle->auth, handle->impl, path, O_RDONLY );
    if (FD_ERR(fd)) { 
       PRINTerr("ne_set_xattr: failed to open file %s\n", path);
       ret = -1;
@@ -4413,7 +4419,7 @@ int ne_get_xattr1( const uDAL* impl, SktAuth auth,
    strncpy(meta_file_path, path, 2048);
    strncat(meta_file_path, META_SFX, strlen(META_SFX)+1);
 
-   OPEN( fd, handle, meta_file_path, O_RDONLY );
+   OPEN( fd, handle->auth, handle->impl, meta_file_path, O_RDONLY );
    if (FD_ERR(fd)) {
       ret = -1;
       PRINTerr("ne_get_xattr: failed to open file %s\n", meta_file_path);
@@ -4448,7 +4454,7 @@ int ne_get_xattr1( const uDAL* impl, SktAuth auth,
    // looks like the stuff below might conceivably work with threads.
 #   error "xattr metadata is not functional with new thread model"
 
-   OPEN( fd, handle, path, O_RDONLY );
+   OPEN( fd, handle->auth, handle->impl, path, O_RDONLY );
    if (FD_ERR(fd)) { 
       PRINTerr("ne_get_xattr: failed to open file %s\n", path);
       ret = -1;

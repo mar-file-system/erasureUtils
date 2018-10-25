@@ -171,69 +171,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 typedef uint32_t u32;
 typedef uint64_t u64;
 
-typedef enum {
-  NE_RDONLY = 0,
-  NE_WRONLY,
-  NE_REBUILD,
-  NE_STAT,
-  NE_NOINFO = 4,
-  NE_SETBSZ = 8
-} ne_mode;
-
-#define MAX_QDEPTH 5
-
-typedef enum {
-  BQ_ERROR    = 0x01 << 0,
-  BQ_FINISHED = 0x01 << 1,
-  BQ_ABORT    = 0x01 << 2,
-  BQ_OPEN     = 0x01 << 3,
-} BufferQueue_Flags;
-
-struct handle; // forward decl.
-
-typedef struct buffer_queue {
-  pthread_mutex_t    qlock;
-  void              *buffers[MAX_QDEPTH];
-  size_t             offset;             /* amount of partial block that has
-                                            been stored in the buffer[tail] */
-  pthread_cond_t     have_work;          /* cv signals there is a full slot */
-  pthread_cond_t     have_space;         /* cv signals there is an empty slot */
-  int                qdepth;             /* number of elements in the queue */
-  int                head;               /* next full position */  
-  int                tail;               /* next empty position */
-  BufferQueue_Flags  flags;
-  size_t             buffer_size;
-  struct GenericFD   file;               /* file descriptor */
-  char               path[2048];         /* path to the file */
-  int                block_number;
-  struct handle     *handle;
-} BufferQueue;
-
-
-
-typedef struct ne_stat_struct {
-   // erasure structure
-   int N;
-   int E;
-   int O;
-   unsigned int bsz;
-   char* path_fmt;
-
-   // striping size
-   u64 totsz;
-   unsigned long nsz;
-
-   // striping health
-   char manifest_status[ MAXPARTS ];
-   char data_status[ MAXPARTS ];
-   char src_in_err[ MAXPARTS ];
-   int nerr;
-
-   // per-part info
-   u64 csum[ MAXPARTS ];
-   unsigned long ncompsz[ MAXPARTS ];
-} *e_status;
-
 
 // One of these for each channel.
 // A channel that is opened O_WRONLY still does "reads"
@@ -298,7 +235,77 @@ int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, 
 struct FileSysImpl; // fwd-decl  (udal.h)
 struct GenericFD;   // fwd-decl  (udal.h)
 
-struct handle {
+typedef enum {
+  NE_RDONLY = 0,
+  NE_WRONLY,
+  NE_REBUILD,
+  NE_STAT,
+  NE_NOINFO = 4,
+  NE_SETBSZ = 8
+} ne_mode;
+
+#define MAX_QDEPTH 5
+
+typedef enum {
+  BQ_FINISHED = 0x01 << 0,
+  BQ_ABORT    = 0x01 << 1,
+  BQ_HALT     = 0x01 << 2
+} BQ_Control_Flags;
+
+typedef enum {
+  BQ_OPEN     = 0x01 << 0,
+  BQ_ERROR    = 0x01 << 1,
+  BQ_HALTED   = 0x01 << 2
+} BQ_State_Flags;
+
+struct handle; // forward decl.
+
+
+typedef struct buffer_queue {
+  pthread_mutex_t    qlock;
+  void              *buffers[MAX_QDEPTH];
+  size_t             offset;             /* amount of partial block that has
+                                            been stored in the buffer[tail] */
+  pthread_cond_t     have_work;          /* cv signals there is a full slot */
+  pthread_cond_t     have_space;         /* cv signals there is an empty slot */
+  int                qdepth;             /* number of elements in the queue */
+  int                head;               /* next full position */  
+  int                tail;               /* next empty position */
+  BQ_Control_Flags   con_flags;          /* meant for sending thread commands */
+  BQ_State_Flags     state_flags;        /* meant for signaling thread status */
+  size_t             buffer_size;        /* size of an individual data buffer */
+  struct GenericFD   file;               /* file descriptor */
+  char               path[2048];         /* path to the file */
+  int                block_number;
+  struct handle*     handle;
+} BufferQueue;
+
+
+typedef struct ne_stat_struct {
+   // erasure structure
+   int N;
+   int E;
+   int O;
+   unsigned int bsz;
+   char* path_fmt;
+
+   // striping size
+   u64 totsz;
+   unsigned long nsz;
+
+   // striping health
+   char manifest_status[ MAXPARTS ];
+   char data_status[ MAXPARTS ];
+   char src_in_err[ MAXPARTS ];
+   int nerr;
+
+   // per-part info
+   u64 csum[ MAXPARTS ];
+   unsigned long ncompsz[ MAXPARTS ];
+} *e_status;
+
+
+typedef struct handle {
    /* Erasure Info */
    e_status erasure_state;
 
@@ -352,10 +359,8 @@ struct handle {
    FastTimer      handle_timer;      /* pre-open to post-close, all threads complete */
    FastTimer      erasure_timer;
    LogHisto       erasure_h;
-
    char*          timing_stats;  /* ptr to block where timing data is to be copied at close */
-};
-typedef struct handle* ne_handle;
+} *ne_handle;
 
 
 
@@ -411,15 +416,10 @@ int       ne_link_block1  ( const uDAL* impl, SktAuth auth,
 
 // these interfaces provide a default SnprintfFunc, which supports the
 // expectations of the default MarFS NFS-based multi-component implementation
-ne_handle ne_open  ( char *path, ne_mode mode, ... );
-int       ne_delete( char* path, int width );
+ne_handle  ne_open  ( char *path, ne_mode mode, ... );
+int        ne_delete( char* path, int width );
 e_status   ne_status( char* path);
-off_t     ne_size  ( const char* path, int quorum, int max_stripe_width );
-
-int       ne_set_xattr   ( const char *path, const char *xattrval, size_t len );
-int       ne_get_xattr   ( const char *path, char *xattrval, size_t len );
-int       ne_delete_block( const char *path );
-int       ne_link_block  ( const char *link_path, const char *target );
+off_t      ne_size  ( const char* path, int quorum, int max_stripe_width );
 
 
 

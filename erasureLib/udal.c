@@ -280,7 +280,7 @@ int udal_skt_open(GenericFD* gfd, const char* path, int flags, ...) {
 
    if (rc > 0) {
       // install SktAuth (which was stored on our ne_handle) onto the skt_handle
-      SktAuth auth = gfd->hndl->auth;
+      SktAuth auth = gfd->auth;
       if (skt_fcntl(skt, SKT_F_SETAUTH, auth))
          return -1;             /* should skt_fcntl() failure be okay? */
    }
