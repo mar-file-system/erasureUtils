@@ -284,6 +284,20 @@ int fast_timer_stop_start(FastTimer* ft) {
 }
 
 
+static __attribute__((always_inline)) inline
+void fast_timer_add (FastTimer* dest, FastTimer* src) {
+   dest->accum += src->accum;
+}
+static __attribute__((always_inline)) inline
+void fast_timer_add2(FastTimer* dest, uint64_t* src) {
+   dest->accum += *src;
+}
+
+
+static __attribute__((always_inline)) inline
+void fast_timer_div (FastTimer* dest, uint64_t by) {
+   dest->accum /= by;
+}
 
 // convert the TSC ticks in ft->accum to elapsed time
 double fast_timer_sec(FastTimer* ft);
@@ -293,7 +307,7 @@ double fast_timer_nsec(FastTimer* ft);
 
 
 // print timer stats
-int fast_timer_show(FastTimer* ft, int simple, const char* str);
+int fast_timer_show(FastTimer* ft, int simple, const char* str, int use_syslog);
 int fast_timer_show_details(FastTimer* ft, const char* str);
 
 
@@ -443,17 +457,22 @@ int log_histo_add_accum(LogHisto* hist, FastTimer* ft) {
 // dest += src
 // TBD: Drop LogHisto to 64 elements, aligned appropriately, and do this with SIMD intrinsics.
 static __attribute__((always_inline)) inline
-int log_histo_add(LogHisto* dest, LogHisto* src) {
+void log_histo_add(LogHisto* dest, LogHisto* src) {
    int i;
    for (i=0; i<65; ++i) {
       dest->bin[i] += src->bin[i];
    }
-   return 0;
+}
+static __attribute__((always_inline)) inline
+void log_hist0_add2(LogHisto* dest, uint16_t* src) {
+   int i;
+   for (i=0; i<65; ++i)
+      dest->bin[i] += src[i];
 }
 
 
 
-int log_histo_show(LogHisto* hist, int simple, const char* str);
+int log_histo_show(LogHisto* hist, int simple, const char* str, int use_syslog);
 
 
 
