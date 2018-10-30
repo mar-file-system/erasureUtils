@@ -388,22 +388,26 @@ int main( int argc, const char* argv[] )
 
 
 
-#  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, timing_flags, \
+#  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, \
+                                                 timing_flags, NULL,    \
                                                  (PATH), (MODE), ##__VA_ARGS__ )
 
-#  define NE_DELETE(PATH, WIDTH)      ne_delete1(select_snprintf(PATH), NULL, select_impl(PATH), auth, timing_flags, \
+#  define NE_DELETE(PATH, WIDTH)      ne_delete1(select_snprintf(PATH), NULL, select_impl(PATH), auth, \
+                                                 timing_flags, NULL,    \
                                                  (PATH), (WIDTH))
 
-#  define NE_STATUS(PATH)             ne_status1(select_snprintf(PATH), NULL, select_impl(PATH), auth, timing_flags, \
+#  define NE_STATUS(PATH)             ne_status1(select_snprintf(PATH), NULL, select_impl(PATH), auth, \
+                                                 timing_flags, NULL,    \
                                                  (PATH))
 
-#  define NE_SIZE(PATH, QUOR, WIDTH)  ne_size1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, timing_flags, \
+#  define NE_SIZE(PATH, QUOR, WIDTH)  ne_size1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, \
+                                                 timing_flags, NULL,    \
                                                  (PATH), (QUOR), (WIDTH))
 
 
 
    // -----------------------------------------------------------------
-   // write
+   // write / put
    // -----------------------------------------------------------------
 
    if ( wr == 1 ) {
@@ -472,23 +476,25 @@ int main( int argc, const char* argv[] )
 
 
    // -----------------------------------------------------------------
-   // read
+   // read / get
    // -----------------------------------------------------------------
 
    else if ( wr == 0 ) {
+
+      const char*        local_file = argv[2];
 
       // if <size_arg> wasn't provided, read the whole thing
       uint64_t           tbd_bytes;         // total data to be moved
       uint64_t           totbytes_per_iter; // buf-size
 
       PRINTout("libneTest: reading %llu bytes from erasure striping "
-               "(N=%d,E=%d,offset=%d) to file %s\n", totbytes, N, E, start, argv[2] );
+               "(N=%d,E=%d,offset=%d) to file %s\n", totbytes, N, E, start, local_file );
       buff = malloc( sizeof(char) * totbytes );
       PRINTout("libneTest: allocated buffer of size %llu\n", sizeof(char) * totbytes );
 
-      filefd = open( argv[2], O_WRONLY | O_CREAT, 0644 );
+      filefd = open( local_file, O_WRONLY | O_CREAT, 0644 );
       if ( filefd == -1 ) {
-         PRINTlog("libneTest: failed to open file %s\n", argv[2] );
+         PRINTlog("libneTest: failed to open file %s\n", local_file );
          return -1;
       }
 
@@ -528,14 +534,13 @@ int main( int argc, const char* argv[] )
          TimingFlagsValue temp_timing_flags = timing_flags; /* don't use timing_flags during NE_STAT() */
          timing_flags = 0;
 
-         PRINTout("libneTest: stat'ing to get total size.  path = '%s'\n", (char *)argv[2] );
+         PRINTout("libneTest: stat'ing to get total size.  path = '%s'\n", (char *)argv[3] );
 
          e_status stat = NE_STATUS( (char *)argv[3] );
          if ( stat == NULL ) {
             PRINTlog("libneTest: ne_status failed!\n" );
             return -1;
          }
-
          PRINTout("after ne_status() -- N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
                  stat->N, stat->E, stat->bsz, stat->O, (unsigned long long)stat->totsz );
 
@@ -590,14 +595,24 @@ int main( int argc, const char* argv[] )
             }
 
             tmp = ne_read( handle, buff, toread, totdone );
-            if ( toread != tmp ) {
+            if ( tmp != toread ) {
                // couldn't this happen without there being an error (?)
                PRINTlog("libneTest: ne_read got %d but expected %llu\n", tmp, toread );
                return -1;
             }
 
             PRINTdbg("libneTest: ...done.  Writing %llu to output file.\n", toread );
-            write( filefd, buff, toread );
+            ssize_t wrote = write( filefd, buff, toread );
+            if (wrote < 0) {
+               PRINTlog("libneTest: write() to %s failed.  errno %d = '%s'\n",
+                        local_file, errno, strerror(errno) );
+               return -1;
+            }
+            else if (wrote != toread) {
+               PRINTlog("libneTest: wrote %lld bytes to %s, instead of %lld\n",
+                        wrote, local_file, toread );
+               return -1;
+            }
 
             totbytes -= toread;
             totdone  += toread;

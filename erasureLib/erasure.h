@@ -1,6 +1,10 @@
 #ifndef __NE_H__
 #define __NE_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
 Copyright (c) 2015, Los Alamos National Security, LLC
 All rights reserved.
@@ -200,6 +204,7 @@ typedef struct {
 
 
 // (co-maintain help message in libneTest)
+// (co-maintain timing_flag_name() in erasure.c)
 typedef enum {
    TF_OPEN    =  0x0001,
    TF_RW      =  0x0002,    /* each individual read/write, in given stream */
@@ -207,9 +212,10 @@ typedef enum {
    TF_RENAME  =  0x0008,
    TF_STAT    =  0x0010,
    TF_XATTR   =  0x0020,
-   TF_ERASURE =  0x0040,
-   TF_CRC     =  0x0080,
-   TF_THREAD  =  0x0100,    /* from beginning to end  */
+   TF_CRC     =  0x0040,
+   TF_THREAD  =  0x0080,    /* from beginning to end  */
+
+   TF_ERASURE =  0x0100,    /* single-thread */
    TF_HANDLE  =  0x0200,    /* from start to stop, all threads, in 1 handle */
    TF_SIMPLE  =  0x0400,    /* diagnostic output uses terse numeric formats */
 
@@ -217,6 +223,35 @@ typedef enum {
 } TimingFlags;
 
 typedef  uint16_t  TimingFlagsValue;
+
+const char* timing_flag_name(TimingFlags flags);
+
+
+// The TimingData in ne_handle can be superseded by an alternative, for
+// use by pftool, to accumulate data across multiple handles, over time.
+
+typedef struct {
+   TimingFlags    flags;
+   int            pod_id;            /* pod-number for this set of stats */
+   int            blk_count;         /* (fka "total_blk") */
+   int            event_count;       /* number of accum events, so we can compute average */
+
+   FastTimer      handle_timer;      /* from pre-open to post-close, all threads complete */
+   FastTimer      erasure;           /* single-threaded, across all blocks */
+   LogHisto       erasure_h;
+   LogHisto       misc_h;            /* handle-less ops (e.g. unlink) */
+
+   BenchStats     agg_stats;         /* aggregated across "threads", O_RDONLY */
+   BenchStats     stats[ MAXPARTS ]; /* ops w/in each thread */
+} TimingData;
+
+
+// insert/extract the useful portion of TimingStats to/from buffer
+// (e.g. for transport via MPI)
+ssize_t export_timing_data(TimingData* const timing_data, char*       buffer, size_t buf_size);
+int     import_timing_data(TimingData*       timing_data, char* const buffer, size_t buf_size);
+int     accumulate_timing_data(TimingData* dest, TimingData* src);
+int     print_timing_data(TimingData* timing_data, const char* header, int avg, int use_syslog);
 
 
 // This allows ne_open() and other functions to perform arbitrary
@@ -353,13 +388,9 @@ typedef struct handle {
    const uDAL*    impl;
 
    /* optional timing/benchmarking */
-   TimingFlags    timing_flags;      /* initialized at build-time */
-   BenchStats     stats[ MAXPARTS ]; /* ops w/in each thread */
-   BenchStats     agg_stats;         /* ops across "threads", O_RDONLY */
-   FastTimer      handle_timer;      /* pre-open to post-close, all threads complete */
-   FastTimer      erasure_timer;
-   LogHisto       erasure_h;
-   char*          timing_stats;  /* ptr to block where timing data is to be copied at close */
+   TimingData     timing_data;
+   TimingData*    timing_data_ptr;  /* caller of ne_open() can provide their own TimingData
+                                       (e.g. so data can survive ne_close()) */
 } *ne_handle;
 
 
@@ -384,19 +415,23 @@ typedef struct handle {
 //       work can be done using the RDMA uDAL.
 
 ne_handle ne_open1  ( SnprintfFunc func, void* state,
-                      uDALType itype, SktAuth auth, TimingFlagsValue flags,
+                      uDALType itype, SktAuth auth,
+                      TimingFlagsValue flags, TimingData* timing_data,
                       char *path, ne_mode mode, ... );
 
 int       ne_delete1( SnprintfFunc func, void* state,
-                      uDALType itype, SktAuth auth, TimingFlagsValue flags, 
+                      uDALType itype, SktAuth auth,
+                      TimingFlagsValue flags, TimingData* timing_data,
                       char *path, int width );
 
 e_status   ne_status1( SnprintfFunc func, void* state,
-                      uDALType itype, SktAuth auth, TimingFlagsValue flags,
+                      uDALType itype, SktAuth auth,
+                      TimingFlagsValue flags, TimingData* timing_data,
                       char *path );
 
 off_t     ne_size1  ( SnprintfFunc func, void* state,
-                      uDALType itype, SktAuth auth, TimingFlagsValue flags,
+                      uDALType itype, SktAuth auth,
+                      TimingFlagsValue flags, TimingData* timing_data,
                       const char* path, int quorum, int max_stripe_width );
 
 
@@ -432,5 +467,10 @@ int       ne_rebuild( ne_handle handle );
 int       ne_noxattr_rebuild( ne_handle handle );
 int       ne_flush( ne_handle handle );
 
+
+
+#ifdef __cplusplus
+}
 #endif
 
+#endif

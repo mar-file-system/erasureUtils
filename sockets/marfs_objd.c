@@ -1627,7 +1627,7 @@ int push_thread(int client_fd) {
 
 
 void usage(const char* progname) {
-  neERR("Usage: %s -p <port> -d <dir> [ -r ]\n", progname);
+  neERR("Usage: %s [-h] -p <port> -d <dir> [-u] [-r <seep_sec>]\n", progname);
   neERR("\n");
   neERR("  -h               help\n");
   neERR("  -p <port>        port on which the server should listen\n");

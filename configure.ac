@@ -309,7 +309,6 @@ AM_CONDITIONAL([GPROF], [test x$enable_gprof = xyes])
 
 # We depend on a number of environment variables
 AC_ARG_VAR(AWS4C, [The location of the aws4c installation])
-AC_ARG_VAR(LIBAWS4C, [The location of the aws4c library installation (probably the same as AWS4C)])
 
 # Customization of server-side buffer-size
 AC_ARG_VAR([S_BUFSIZE],
