@@ -280,6 +280,7 @@ typedef enum {
 } ne_mode;
 
 #define MAX_QDEPTH 5
+#define MAX_RD_QDEPTH 3
 
 typedef enum {
   BQ_FINISHED = 0x01 << 0,
@@ -298,11 +299,10 @@ struct handle; // forward decl.
 
 typedef struct buffer_queue {
   pthread_mutex_t    qlock;
-  void              *buffers[MAX_QDEPTH];
-  size_t             offset;             /* amount of partial block that has
-                                            been stored in the buffer[tail] */
+  void*              buffers[MAX_QDEPTH];
   pthread_cond_t     have_work;          /* cv signals there is a full slot */
   pthread_cond_t     have_space;         /* cv signals there is an empty slot */
+  pthread_cond_t     unpaused;           /* cv signals the thread to resume */
   int                qdepth;             /* number of elements in the queue */
   int                head;               /* next full position */  
   int                tail;               /* next empty position */
@@ -311,9 +311,25 @@ typedef struct buffer_queue {
   size_t             buffer_size;        /* size of an individual data buffer */
   struct GenericFD   file;               /* file descriptor */
   char               path[2048];         /* path to the file */
-  int                block_number;
-  struct handle*     handle;
+  int                block_number;       /* block num of the file for this queue */
+  struct handle*     handle;             /* pointer back up to the ne_handle */
+  size_t             offset;             /* for write - amount of partial block 
+                                             that has been stored in the buffer[tail]
+                                            for read - current offset within the 
+                                             block file */
 } BufferQueue;
+
+
+// This struct is intended to allow read threads to pass
+// meta-file/xattr info back to the ne_open() function
+typedef struct read_meta_buffer_struct {
+   int N;
+   int E;
+   int O;
+   unsigned int bsz;
+   unsigned long nsz;
+   u64 totsz;
+}* read_meta_buffer;
 
 
 typedef struct ne_stat_struct {
@@ -325,8 +341,8 @@ typedef struct ne_stat_struct {
    char* path_fmt;
 
    // striping size
-   u64 totsz;
    unsigned long nsz;
+   u64 totsz;
 
    // striping health
    char manifest_status[ MAXPARTS ];

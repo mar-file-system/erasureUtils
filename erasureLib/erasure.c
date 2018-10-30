@@ -591,7 +591,15 @@ void* bq_reader(void* arg) {
    BufferQueue* bq      = (BufferQueue *)arg;
    ne_handle    handle  = bq->handle;
    TimingData*  timing  = handle->timing_data_ptr;
-   int      stripe_num  = 0;
+   int          error   = 0;
+   char xattrN[5];            /* char array to get n parts from xattr */
+   char xattrE[5];            /* char array to get erasure parts from xattr */
+   char xattrO[5];            /* char array to get erasure_offset from xattr */
+   char xattrbsz[20];         /* char array to get chunksize from xattr */
+   char xattrnsize[20];       /* char array to get total size from xattr */
+   char xattrncompsize[20];   /* char array to get ncompsz from xattr */
+   char xattrcsum[50];        /* char array to get check-sum from xattr */
+   char xattrtotsize[160];    /* char array to get totsz from xattr */
 
 #ifdef INT_CRC
    const int write_size = bq->buffer_size + sizeof(u32);
@@ -601,45 +609,131 @@ void* bq_reader(void* arg) {
 
    if (timing->flags & TF_THREAD)
       fast_timer_start(&timing->stats[bq->block_number].thread);
-   if (timing->flags & TF_OPEN)
-      fast_timer_start(&timing->stats[bq->block_number].open);
   
    // debugging, assure we see thread entry/exit, even via cancellation
    PRINTdbg("entering thread for block %d, in %s\n", bq->block_number, bq->path);
    pthread_cleanup_push(bq_finish, bq);
 
+// ---------------------- READ META INFO ----------------------
+
+   // we will use the first of our buffers as a container for our manifest values
+   read_meta_buffer meta_buf = (read_meta_buffer) bq->buffers[0];
+   // initialize all values to indicate errors
+   meta_buf->N = 0;
+   meta_buf->E = -1;
+   meta_buf->O = -1;
+   meta_buf->bsz = 0;
+   meta_buf->nsz = 0;
+   meta_buf->totsz = 0;
+
+   // pull the meta info for this thread's block
    char xattrval[XATTRLEN];
    if ( ne_get_xattr1( handle->impl, handle->auth, bq->path, xattrval, XATTRLEN ) ) {
       PRINTerr( "bq_reader: failed to retrieve meta info for file \"%s\"\n", bq->path );
       handle->erasure_state->manifest_status[ bq->block_number ] = 1;
-      bq->state_flags |= BQ_ERROR;
+      // Note: we don't set BQ_ERROR here, as it would short-circuit the initialize_queues() function
+   }
+   else {
+      // only process the xattr if we successfully retreived it
+      int ret = sscanf(xattrval,"%4s %4s %4s %19s %19s %19s %49s %159s",
+            xattrN,
+            xattrE,
+            xattrO,
+            xattrbsz,
+            xattrnsize,
+            xattrncompsize,
+            xattrcsum,
+            xattrtotsize);
+      if (ret != 8) {
+         PRINTerr( "bq_reader: sscanf parsed only %d values from manifest of block %d: \"%s\"\n", ret, bq->block_number, xattrval);
+         handle->erasure_state->manifest_status[ bq->block_number ] = 1;
+      }
+
+      // simple macro to save some lines for parsing all meta values
+#define PARSE_VALUE( VAL, STR, GT_VAL, PARSE_FUNC, TYPE ) \
+      if ( ret > GT_VAL ) { \
+         TYPE tmp_val = (TYPE) PARSE_FUNC ( STR, &(endptr), 10 ); \
+         if ( *(endptr) == '\0'  &&  (tmp_val > VAL ) ) { \
+            VAL = tmp_val; \
+         } \
+         else { \
+            PRINTerr( "bq_reader: failed to parse manifest value at position %d for block %d: \"%s\"\n", GT_VAL, bq->block_number, STR ); \
+            handle->erasure_state->manifest_status[ bq->block_number ] = 1; \
+         } \
+      }
+      char* endptr;
+      // N, E, O, bsz, and nsz are global values, and thus need to go in the meta_buf
+      PARSE_VALUE( meta_buf->N, xattrN, 0, strtol, int )
+      PARSE_VALUE( meta_buf->E, xattrE, 1, strtol, int )
+      PARSE_VALUE( meta_buf->O, xattrO, 2, strtol, int )
+      PARSE_VALUE( meta_buf->bsz, xattrbsz, 3, strtoul, unsigned int )
+      PARSE_VALUE( meta_buf->nsz, xattrnsize, 4, strtoul, unsigned int )
+      // ncompsz and csum are considered 'per-part' info, and thus can just be stored to the handle struct
+      PARSE_VALUE( handle->erasure_state->ncompsz[ bq->block_number ], xattrncompsize, 5, strtoul, unsigned int )
+      PARSE_VALUE( handle->erasure_state->csum[ bq->block_number ], xattrcsum, 6, strtoull, u64 )
+      // totsz is global, so this needs to go into the meta_buf
+      PARSE_VALUE( meta_buf->totsz, xattrtotsize, 7, strtoull, u64 )
    }
 
-   // READ META INFO
-   
+// ---------------------- OPEN DATA FILE ----------------------
+
+   if (timing->flags & TF_OPEN)
+      fast_timer_start(&timing->stats[bq->block_number].open);
+
+   OPEN( bq->file, handle->auth, handle->impl, bq->path, O_RDONLY );
+
+   if (timing->flags & TF_OPEN)
+   {
+      fast_timer_stop(&timing->stats[bq->block_number].open);
+      log_histo_add_interval(&timing->stats[bq->block_number].open_h,
+                            &timing->stats[bq->block_number].open);
+   }
+
+   // attempt to lock the queue before beginning the main loop
+   if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
+      PRINTerr("bq_reader: failed to lock queue lock: %s\n", strerror(error));
+      // This is a FATAL error
+      if (timing->flags & TF_THREAD)
+         fast_timer_stop(&timing->stats[bq->block_number].thread);
+      // note the error, just in case
+      bq->state_flags |= BQ_ERROR;
+      // perhaps attempting to close the file is a good idea, to prevent FD leaks
+      HNDLOP(close, bq->file);
+      return NULL;
+   }
+   // only set BQ_OPEN or BQ_ERROR after aquiring the queue lock
+   // this is intended to avoid any oddities from instruction re-ordering
+   if(FD_ERR(bq->file)) {
+      PRINTerr( "bq_reader: failed to open data file for block %d: \"%s\"\n", bq->block_number, bq->path );
+      bq->state_flags |= BQ_ERROR;
+   }
+   else {
+      // note the file as having been successfully opened
+      // this will allow initialize_queues() to complete and ne_open to reset umask
+      bq->state_flags |= BQ_OPEN;
+   }
+
+   PRINTdbg("bq_reader: opened file %d\n", bq->block_number);
+
+// ---------------------- BEGIN MAIN PROCESS LOOP ----------------------
+
+   while (1) { // the thread should always be holding its queue lock at this point
+
+// ---------------------- CHECK FOR SPECIAL CONDITIONS ----------------------
 
 
-   // MAIN PROCESS LOOP
+
+// ---------------------- READ FROM DATA FILE ----------------------
 
 
 
-   // CHECK FOR HALT CONDITION
+// ---------------------- STORE DATA TO BUFFER QUEUE ----------------------
 
 
 
-   // CHECK FOR ABORT CONDITION
+// ---------------------- END OF MAIN PROCESS LOOP ----------------------
 
-   
-
-   // READ FROM DATA FILE
-
-
-
-   // STORE TO BUFFER QUEUE
-
-
-
-   // END OF MAIN LOOP
+   }
 
    pthread_cleanup_pop(1);
    return NULL;
