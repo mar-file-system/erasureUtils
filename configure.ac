@@ -133,16 +133,16 @@ AC_CHECK_LIB([isal],    [crc32_ieee],
 
 AC_ARG_ENABLE([sockets],
               AS_HELP_STRING([--enable-sockets],
-                             [One of {rdma,ip,unix,no}.  File operations go to a server, via sockets.  Default: rdma]),
+                             [One of {rdma,ip,unix,no}.  Default=no. File operations go to a server, via sockets.]),
               [case "${enableval}" in
-                 rdma)   ;;
-                 # ip)   ;;  # TBD
-                 # unix) ;;  # TBD
-                 none)   ;;
-                 no)     enable_sockets=none ;;
-                 *)      AC_MSG_FAILURE([enable-sockets={rdma,ip,unix,no}. Currently, only rdma is supported]) ;;
+                 (rdma)   ;;
+                 # (ip)   ;;  # TBD
+                 # (unix) ;;  # TBD
+                 (none)   ;;
+                 (no)     enable_sockets=none ;;
+                 (*)      AC_MSG_FAILURE([enable-sockets={rdma,ip,unix,no}. Currently, only rdma is supported]) ;;
                esac],
-              [enable_sockets=rdma])
+               [enable_sockets=none])
 
 
 AM_CONDITIONAL([ANY_SOCKETS],   [test "$enable_sockets" != none ])

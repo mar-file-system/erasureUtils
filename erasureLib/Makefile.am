@@ -61,16 +61,12 @@ AM_CFLAGS   =
 AM_LDFLAGS  =
 
 
-# Here's how to get automake to do an assignment based on two conditions
+# even non-socket builds need this, to find skt_config.h
+SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
+
 if RDMA_SOCKETS
-  SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
   SOCKET_LIB = ../sockets/librdma_sockets.a
   SOCKET_LD  = -L../sockets -lrdma_sockets
-  # SOCKET_LD += -lrdmacm
-else
-if ANY_SOCKETS
-  SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
-endif
 endif
 
 if AUTH_SOCKETS

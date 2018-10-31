@@ -226,10 +226,17 @@ const uDAL* udal_impl_posix = &posix_impl;
 // NOTE: We avoid naming conflicts with librdma_sockets implementations.
 // ---------------------------------------------------------------------------
 
-#if (SOCKETS != SKT_none)
 
 
-#define SKT(GFD)   (&(GFD)->fds.skt)
+#if (SOCKETS == SKT_none)
+   // unused function makes it easy for external builds (e.g. marfs)
+   // to determine how we were built
+   int udal_non_socket_build() {}
+
+
+#else
+
+#  define SKT(GFD)   (&(GFD)->fds.skt)
 
 
 
@@ -302,16 +309,16 @@ int     udal_skt_close(GenericFD* gfd) {
 }
 
 
-#if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
+#  if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
 int     udal_skt_fsetxattr(GenericFD* gfd, const char* name, const void* value, size_t size, int flags) {
    return skt_fsetxattr(SKT(gfd), name, value, size, flags);
 }
 
-#else
+#  else
 int     udal_skt_fsetxattr(GenericFD* gfd, const char *name, const void *value, size_t size, u_int32_t position, int options) {
    return skt_fsetxattr(SKT(gfd), name, value, size, position, options);
 }
-#endif
+#  endif
 
 
 // #if (AXATTR_GET_FUNC == 4)
