@@ -354,6 +354,7 @@ void *bq_writer(void *arg) {
   TimingData*  timing = handle->timing_data_ptr;
   size_t       written = 0;
   int          error;
+  char         aborted = 0; // set to 1 on abort and 2 on pthread lock error
 
 #ifdef INT_CRC
   const int write_size = bq->buffer_size + sizeof(u32);
@@ -363,26 +364,38 @@ void *bq_writer(void *arg) {
 
   if (timing->flags & TF_THREAD)
      fast_timer_start(&timing->stats[bq->block_number].thread);
-  if (timing->flags & TF_OPEN)
-     fast_timer_start(&timing->stats[bq->block_number].open);
   
   // debugging, assure we see thread entry/exit, even via cancellation
   PRINTdbg("entering thread for block %d, in %s\n", bq->block_number, bq->path);
   pthread_cleanup_push(bq_finish, bq);
 
+  if (timing->flags & TF_OPEN)
+     fast_timer_start(&timing->stats[bq->block_number].open);
+
   // open the file.
   OPEN(bq->file, handle->auth, handle->impl, bq->path, O_WRONLY|O_CREAT, 0666);
 
+  if (timing->flags & TF_OPEN)
+  {
+     fast_timer_stop(&timing->stats[bq->block_number].open);
+     log_histo_add_interval(&timing->stats[bq->block_number].open_h,
+                            &timing->stats[bq->block_number].open);
+  }
+
+  PRINTdbg("opened file %d\n", bq->block_number);
+
+  // use 'read' to time how long we spend waiting to pull work off our queue
+  // I've moved this outside the critical section, partially to spend less time
+  // holding the queue lock, and partially because time spent waiting for our 
+  // queue lock to be released is indicative of ne_write() copying into our queue.
+  if (timing->flags & TF_RW)
+     fast_timer_start(&timing->stats[bq->block_number].read);
+
   if(pthread_mutex_lock(&bq->qlock) != 0) {
     PRINTerr("failed to lock queue lock: %s\n", strerror(error));
-    // this is a FATAL error
-    if (timing->flags & TF_THREAD)
-       fast_timer_stop(&timing->stats[bq->block_number].thread);
-    // set error, so that initialize_queues() will know to mark this block bad
     // outside of critical section, but should be fine as flags aren't shared
     bq->state_flags |= BQ_ERROR;
-    return NULL;
-    //exit(-1); // is this the appropriate response??
+    aborted = 2;
   }
   if(FD_ERR(bq->file)) {
     bq->state_flags |= BQ_ERROR;
@@ -392,72 +405,43 @@ void *bq_writer(void *arg) {
     // this will allow initialize_queues() to complete and ne_open to reset umask
     bq->state_flags |= BQ_OPEN;
   }
+  // this is to indicate to initialize_queues() that we have started and set our condition
   pthread_cond_signal(&bq->have_space);
-  pthread_mutex_unlock(&bq->qlock);
-
-  PRINTdbg("opened file %d\n", bq->block_number);
-  if (timing->flags & TF_OPEN)
-  {
-     fast_timer_stop(&timing->stats[bq->block_number].open);
-     log_histo_add_interval(&timing->stats[bq->block_number].open_h,
-                            &timing->stats[bq->block_number].open);
-  }
-  if (timing->flags & TF_RW)
-     fast_timer_start(&timing->stats[bq->block_number].read);
+  // We want the lock as soon as we hit the main loop, so don't bother releasing it
 
   
-  while(1) {
+  while( !(aborted) ) { //condition check used only to skip the main loop if we failed to get the lock above
 
-    // aquire the lock, then wait on the have_work condition
-    if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
-      PRINTerr("failed to lock queue lock: %s\n", strerror(error));
-      // This is a FATAL error
-      if (timing->flags & TF_THREAD)
-         fast_timer_stop(&timing->stats[bq->block_number].thread);
-      // note the error, just in case
-      bq->state_flags |= BQ_ERROR;
-      return NULL;
-    }
+    // wait on the have_work condition
     while(bq->qdepth == 0 && !((bq->con_flags & BQ_FINISHED) || (bq->con_flags & BQ_ABORT))) {
       PRINTdbg("bq_writer[%d]: waiting for signal from ne_write\n", bq->block_number);
       pthread_cond_wait(&bq->have_work, &bq->qlock);
     }
 
+    // check for flags that might tell us to quit
+    if(bq->con_flags & BQ_ABORT) {
+      PRINTerr("aborting buffer queue\n");
+      // make sure no one thinks we finished properly
+      bq->state_flags |= BQ_ERROR;
+      pthread_mutex_unlock(&bq->qlock);
+      // note that we should unlink the destination
+      aborted = 1;
+      // let the post-loop code cleanup after us
+      break;
+    }
+
+    if((bq->qdepth == 0) && (bq->con_flags & BQ_FINISHED)) {       // then we are done.
+      PRINTdbg("BQ finished\n");
+      pthread_mutex_unlock(&bq->qlock);
+      break;
+    }
+    pthread_mutex_unlock(&bq->qlock);
+
+    // stop the 'read' timer once we have work to do
     if (timing->flags & TF_RW) {
        fast_timer_stop(&timing->stats[bq->block_number].read);
        log_histo_add_interval(&timing->stats[bq->block_number].read_h,
                               &timing->stats[bq->block_number].read);
-    }
-
-    // check for flags that might tell us to quit
-    if(bq->con_flags & BQ_ABORT) {
-      PRINTerr("aborting buffer queue\n");
-      if (timing->flags & TF_CLOSE)
-         fast_timer_start(&timing->stats[bq->block_number].close);
-
-      HNDLOP(close, bq->file); // don't think we care about return codes in this case
-      PATHOP(unlink, handle->impl, handle->auth, bq->path); // try to clean up after ourselves.
-      pthread_mutex_unlock(&bq->qlock);
-
-      if (timing->flags & TF_CLOSE)
-      {
-         fast_timer_stop(&timing->stats[bq->block_number].close);
-         log_histo_add_interval(&timing->stats[bq->block_number].close_h,
-                                &timing->stats[bq->block_number].close);
-      }
-      // though it shouldn't matter, make sure no one thinks we finished properly
-      bq->state_flags |= BQ_ERROR;
-      return NULL;
-    }
-
-    if((bq->qdepth == 0) && (bq->con_flags & BQ_FINISHED)) {       // then we are done.
-      // // TBD: ?
-      // PRINTerr("closing buffer queue\n");
-      // HNDLOP(close, bq->file);
-      // pthread_mutex_unlock(&bq->qlock);
-
-      PRINTdbg("BQ finished\n");
-      break;
     }
 
 
@@ -465,8 +449,6 @@ void *bq_writer(void *arg) {
 
       if (timing->flags & TF_RW)
          fast_timer_start(&timing->stats[bq->block_number].write);
-
-      pthread_mutex_unlock(&bq->qlock);
 
 // removing this since the newer NFS clients are better behaved
 /*
@@ -482,7 +464,6 @@ void *bq_writer(void *arg) {
       *(u32*)( bq->buffers[bq->head] + bq->buffer_size )   = crc32_ieee(TEST_SEED, bq->buffers[bq->head], bq->buffer_size);
       error     = write_all(&bq->file, bq->buffers[bq->head], write_size);
       handle->erasure_state->csum[bq->block_number] += *(u32*)( bq->buffers[bq->head] + bq->buffer_size );
-      pthread_mutex_lock(&bq->qlock);
 
       PRINTdbg("write done for block %d\n", bq->block_number);
       if (timing->flags & TF_RW) {
@@ -503,22 +484,42 @@ void *bq_writer(void *arg) {
       written += error;
     }
 
-    // even if there was an error, say we wrote the block and move on.
-    // the producer thread is responsible for checking the error flag
-    // and killing us if needed.
+    // use 'read' to time how long it takes us to receive work
     if (timing->flags & TF_RW)
        fast_timer_start(&timing->stats[bq->block_number].read);
 
+    // get the queue lock so that we can adjust the head position
+    if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
+      PRINTerr("failed to lock queue lock: %s\n", strerror(error));
+      // note the error
+      bq->state_flags |= BQ_ERROR;
+      // set the aborted flag, for consistency
+      aborted = 2;
+      // let the post-loop code cleanup after us
+      break;
+    }
+
+    // even if there was an error, say we wrote the block and move on.
+    // the producer thread is responsible for checking the error flag
+    // and killing us if needed.
+
     bq->head = (bq->head + 1) % MAX_QDEPTH;
     bq->qdepth--;
+    PRINTdbg( "completed a work buffer, set queue depth to %d and queue head to %d\n", bq->qdepth, bq->head );
 
-    pthread_cond_signal(&bq->have_space);
-    pthread_mutex_unlock(&bq->qlock);
+    if ( bq->qdepth == MAX_QDEPTH - 1 )
+       pthread_cond_signal(&bq->have_space);
   }
-  pthread_mutex_unlock(&bq->qlock);
+  // should have already relinquished the queue lock before breaking out
 
+  // stop the 'read' timer, which will still be running after any loop breakout
+  if (timing->flags & TF_RW) {
+    fast_timer_stop(&timing->stats[bq->block_number].read);
+    log_histo_add_interval(&timing->stats[bq->block_number].read_h,
+                           &timing->stats[bq->block_number].read);
+  }
 
-  // close the file and terminate if any errors were encountered
+  // for whatever reason, this thread's work is done.  close the file
   if (timing->flags & TF_CLOSE)
      fast_timer_start(&timing->stats[bq->block_number].close);
   int close_rc = HNDLOP(close, bq->file);
@@ -528,11 +529,24 @@ void *bq_writer(void *arg) {
      log_histo_add_interval(&timing->stats[bq->block_number].close_h,
                             &timing->stats[bq->block_number].close);
   }
+  // this should catch any errors from close or within the main loop
   if ( close_rc || (bq->state_flags & BQ_ERROR) ) {
+    if ( close_rc ) {
+       PRINTerr("error closing block %d\n", bq->block_number);
+    }
+    else {
+       PRINTerr("early termination due to error for block %d\n", bq->block_number);
+    }
+
     bq->state_flags |= BQ_ERROR;      // ensure the error was noted
-    PRINTerr("error closing block %d\n", bq->block_number);
+
+    // check if the write has been aborted
+    if ( aborted == 1 )
+      PATHOP(unlink, handle->impl, handle->auth, bq->path); // try to clean up after ourselves.
+
     if (timing->flags & TF_THREAD)
        fast_timer_stop(&timing->stats[bq->block_number].thread);
+
     return NULL; // don't bother trying to rename
   }
 
