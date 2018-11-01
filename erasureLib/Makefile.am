@@ -61,10 +61,11 @@ AM_CFLAGS   =
 AM_LDFLAGS  =
 
 
-# even non-socket builds need this, to find skt_config.h
-SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
+# even non-socket builds need this, in order to find config/udal_config.h
+UDAL_CPPFLAGS = -I${top_srcdir}/config
 
 if RDMA_SOCKETS
+  SOCKET_CPPFLAGS = -I${top_srcdir}/sockets
   SOCKET_LIB = ../sockets/librdma_sockets.a
   SOCKET_LD  = -L../sockets -lrdma_sockets
 endif
@@ -108,7 +109,7 @@ TIMER_LIB      = ../fast_timer/libft.a
 # before 'make install' will have put ../sockets/skt_common.h into the
 # install directory.  So the following allows these executables to be
 # built.
-AM_CPPFLAGS += $(SOCKET_CPPFLAGS) $(TIMER_CPPFLAGS)  $(TIMER_DEFS)
+AM_CPPFLAGS += $(UDAL_CPPFLAGS) $(SOCKET_CPPFLAGS) $(TIMER_CPPFLAGS)  $(TIMER_DEFS)
 AM_LDFLAGS += $(SOCKET_LD) $(TIMER_LD)
 
 

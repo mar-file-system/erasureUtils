@@ -329,7 +329,8 @@ AM_CONDITIONAL([HAVE_C_BUFSIZE], [test x"$C_BUFSIZE" != x])
 
 AC_CONFIG_FILES([Makefile
                  fast_timer/Makefile
+                 config/udal_config.h:config/udal_config.h.in
+                 config/Makefile
                  sockets/Makefile
-                 sockets/skt_config.h:sockets/skt_config.h.in
                  erasureLib/Makefile])
 AC_OUTPUT
