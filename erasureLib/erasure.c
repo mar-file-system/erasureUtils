@@ -287,11 +287,11 @@ void bq_destroy(BufferQueue *bq) {
   pthread_cond_destroy(&bq->have_space);
 }
 
-int bq_init(BufferQueue *bq, int block_number, void **buffers, ne_handle handle) {
-  int i;
-  for(i = 0; i < MAX_QDEPTH; i++) {
-    bq->buffers[i] = buffers[i];
-  }
+int bq_init(BufferQueue *bq, int block_number, ne_handle handle) {
+//  int i;
+//  for(i = 0; i < MAX_QDEPTH; i++) {
+//    bq->buffers[i] = buffers[i];
+//  }
 
   bq->block_number = block_number;
   bq->qdepth       = 0;
@@ -369,6 +369,8 @@ void *bq_writer(void *arg) {
   PRINTdbg("entering thread for block %d, in %s\n", bq->block_number, bq->path);
   pthread_cleanup_push(bq_finish, bq);
 
+// ---------------------- OPEN DATA FILE ----------------------
+
   if (timing->flags & TF_OPEN)
      fast_timer_start(&timing->stats[bq->block_number].open);
 
@@ -384,10 +386,12 @@ void *bq_writer(void *arg) {
 
   PRINTdbg("opened file %d\n", bq->block_number);
 
+// ---------------------- INITIALIZE MAIN PROCESS LOOP ----------------------
+
   // use 'read' to time how long we spend waiting to pull work off our queue
   // I've moved this outside the critical section, partially to spend less time
   // holding the queue lock, and partially because time spent waiting for our 
-  // queue lock to be released is indicative of ne_write() copying into our queue.
+  // queue lock to be released is indicative of ne_write() copying data around
   if (timing->flags & TF_RW)
      fast_timer_start(&timing->stats[bq->block_number].read);
 
@@ -397,6 +401,8 @@ void *bq_writer(void *arg) {
     bq->state_flags |= BQ_ERROR;
     aborted = 2;
   }
+  // only set BQ_OPEN or BQ_ERROR after aquiring the queue lock
+  // this is intended to avoid any oddities from instruction re-ordering
   if(FD_ERR(bq->file)) {
     bq->state_flags |= BQ_ERROR;
   }
@@ -405,12 +411,14 @@ void *bq_writer(void *arg) {
     // this will allow initialize_queues() to complete and ne_open to reset umask
     bq->state_flags |= BQ_OPEN;
   }
-  // this is to indicate to initialize_queues() that we have started and set our condition
-  pthread_cond_signal(&bq->have_space);
   // We want the lock as soon as we hit the main loop, so don't bother releasing it
-
   
   while( !(aborted) ) { //condition check used only to skip the main loop if we failed to get the lock above
+
+
+// ---------------------- CHECK FOR SPECIAL CONDITIONS ----------------------
+
+    // the thread should always be holding its queue lock at this point
 
     // wait on the have_work condition
     while(bq->qdepth == 0 && !((bq->con_flags & BQ_FINISHED) || (bq->con_flags & BQ_ABORT))) {
@@ -446,6 +454,8 @@ void *bq_writer(void *arg) {
 
 
     if(!(bq->state_flags & BQ_ERROR)) {
+
+// ---------------------- WRITE TO THE DATA FILE ----------------------
 
       if (timing->flags & TF_RW)
          fast_timer_start(&timing->stats[bq->block_number].write);
@@ -484,6 +494,8 @@ void *bq_writer(void *arg) {
       written += error;
     }
 
+// ---------------------- CLEAR ENTRY FROM THE BUFFER QUEUE ----------------------
+
     // use 'read' to time how long it takes us to receive work
     if (timing->flags & TF_RW)
        fast_timer_start(&timing->stats[bq->block_number].read);
@@ -510,6 +522,9 @@ void *bq_writer(void *arg) {
     if ( bq->qdepth == MAX_QDEPTH - 1 )
        pthread_cond_signal(&bq->have_space);
   }
+
+// ---------------------- END OF MAIN PROCESS LOOP ----------------------
+
   // should have already relinquished the queue lock before breaking out
 
   // stop the 'read' timer, which will still be running after any loop breakout
@@ -550,6 +565,8 @@ void *bq_writer(void *arg) {
     return NULL; // don't bother trying to rename
   }
 
+// ---------------------- STORE META INFO ----------------------
+
   if(set_block_xattr(bq->handle, bq->block_number) != 0) {
     bq->state_flags |= BQ_ERROR;
     // if we failed to set the xattr, don't bother with the rename.
@@ -559,6 +576,7 @@ void *bq_writer(void *arg) {
     return NULL;
   }
 
+// ---------------------- RENAME OUTPUT FILES TO FINAL LOCATIONS ----------------------
 
   // rename
   if (timing->flags & TF_RENAME)
@@ -606,14 +624,6 @@ void* bq_reader(void* arg) {
    ne_handle    handle  = bq->handle;
    TimingData*  timing  = handle->timing_data_ptr;
    int          error   = 0;
-   char xattrN[5];            /* char array to get n parts from xattr */
-   char xattrE[5];            /* char array to get erasure parts from xattr */
-   char xattrO[5];            /* char array to get erasure_offset from xattr */
-   char xattrbsz[20];         /* char array to get chunksize from xattr */
-   char xattrnsize[20];       /* char array to get total size from xattr */
-   char xattrncompsize[20];   /* char array to get ncompsz from xattr */
-   char xattrcsum[50];        /* char array to get check-sum from xattr */
-   char xattrtotsize[160];    /* char array to get totsz from xattr */
 
 #ifdef INT_CRC
    const int write_size = bq->buffer_size + sizeof(u32);
@@ -648,6 +658,16 @@ void* bq_reader(void* arg) {
       // Note: we don't set BQ_ERROR here, as it would short-circuit the initialize_queues() function
    }
    else {
+      // declared here so that the compiler can hopefully free up this memory outside of the 'else' block
+      char xattrN[5];            /* char array to get n parts from xattr */
+      char xattrE[5];            /* char array to get erasure parts from xattr */
+      char xattrO[5];            /* char array to get erasure_offset from xattr */
+      char xattrbsz[20];         /* char array to get chunksize from xattr */
+      char xattrnsize[20];       /* char array to get total size from xattr */
+      char xattrncompsize[20];   /* char array to get ncompsz from xattr */
+      char xattrcsum[50];        /* char array to get check-sum from xattr */
+      char xattrtotsize[160];    /* char array to get totsz from xattr */
+
       // only process the xattr if we successfully retreived it
       int ret = sscanf(xattrval,"%4s %4s %4s %19s %19s %19s %49s %159s",
             xattrN,
@@ -663,6 +683,7 @@ void* bq_reader(void* arg) {
          handle->erasure_state->manifest_status[ bq->block_number ] = 1;
       }
 
+      char* endptr;
       // simple macro to save some lines for parsing all meta values
 #define PARSE_VALUE( VAL, STR, GT_VAL, PARSE_FUNC, TYPE ) \
       if ( ret > GT_VAL ) { \
@@ -675,7 +696,6 @@ void* bq_reader(void* arg) {
             handle->erasure_state->manifest_status[ bq->block_number ] = 1; \
          } \
       }
-      char* endptr;
       // N, E, O, bsz, and nsz are global values, and thus need to go in the meta_buf
       PARSE_VALUE( meta_buf->N, xattrN, 0, strtol, int )
       PARSE_VALUE( meta_buf->E, xattrE, 1, strtol, int )
@@ -703,17 +723,18 @@ void* bq_reader(void* arg) {
                             &timing->stats[bq->block_number].open);
    }
 
+   PRINTdbg("bq_reader: opened file %d\n", bq->block_number);
+
+// ---------------------- INITIALIZE MAIN PROCESS LOOP ----------------------
+
+   char         aborted = 0; // set to 1 on abort or pthread lock error
+
    // attempt to lock the queue before beginning the main loop
    if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
       PRINTerr("bq_reader: failed to lock queue lock: %s\n", strerror(error));
-      // This is a FATAL error
-      if (timing->flags & TF_THREAD)
-         fast_timer_stop(&timing->stats[bq->block_number].thread);
-      // note the error, just in case
+      // note the error
       bq->state_flags |= BQ_ERROR;
-      // perhaps attempting to close the file is a good idea, to prevent FD leaks
-      HNDLOP(close, bq->file);
-      return NULL;
+      aborted = 1;
    }
    // only set BQ_OPEN or BQ_ERROR after aquiring the queue lock
    // this is intended to avoid any oddities from instruction re-ordering
@@ -727,14 +748,11 @@ void* bq_reader(void* arg) {
       bq->state_flags |= BQ_OPEN;
    }
 
-   PRINTdbg("bq_reader: opened file %d\n", bq->block_number);
-
-// ---------------------- BEGIN MAIN PROCESS LOOP ----------------------
-
-   while (1) { // the thread should always be holding its queue lock at this point
+   while ( !(aborted) ) { // condition check used just to skip the main loop if we failed to get the queue lock
 
 // ---------------------- CHECK FOR SPECIAL CONDITIONS ----------------------
 
+      // the thread should always be holding its queue lock at this point
 
 
 // ---------------------- READ FROM DATA FILE ----------------------
@@ -744,10 +762,10 @@ void* bq_reader(void* arg) {
 // ---------------------- STORE DATA TO BUFFER QUEUE ----------------------
 
 
+   }
 
 // ---------------------- END OF MAIN PROCESS LOOP ----------------------
 
-   }
 
    pthread_cleanup_pop(1);
    return NULL;
@@ -760,87 +778,128 @@ void* bq_reader(void* arg) {
  * @return -1 on failure, 0 on success.
  */
 static int initialize_queues(ne_handle handle) {
-  int i;
-  int num_blocks = handle->erasure_state->N + handle->erasure_state->E;
+   int i;
+   int num_blocks = handle->erasure_state->N + handle->erasure_state->E;
+   char init_meta = 0; //set to 1 if we need to initialize N, E, O, etc. based on meta info
 
-  /* allocate buffers */
-  for(i = 0; i < MAX_QDEPTH; i++) {
-    int error = posix_memalign(&handle->buffer_list[i], 64,
-                               num_blocks * ( handle->erasure_state->bsz + sizeof( u32 ) ) );
-    if(error == -1) {
-      int j;
-      // clean up previously allocated buffers and fail.
-      // we can't recover from this error.
-      for(j = i-1; j >= 0; j--) {
-         free(handle->buffer_list[j]);
-      }
-      PRINTerr("posix_memalign failed for queue %d\n", i);
-      return -1;
-    }
-  }
+   // If called for read or rebuild, we may need to dynamically determine the N, E, O, and bsz values.
+   // This requires spinning up threads, one at a time, and checking their meta info for consistency.
+   // Thus, we initialize num_blocks to 1, if N/E were not initialized, and then increment to something 
+   // more reasonable.
+   if ( !( num_blocks ) ) {
+      num_blocks = 1;
+      init_meta = 1;
+   }
 
-  /* open files and initialize BufferQueues */
-  for(i = 0; i < num_blocks; i++) {
-    int error, file_descriptor;
-    char path[MAXNAME];
-    BufferQueue *bq = &handle->blocks[i];
-    // generate the path
-    // sprintf(bq->path, handle->erasure_state->path_fmt, (i + handle->erasure_state->O) % num_blocks);
-    handle->snprintf(bq->path, MAXNAME, handle->erasure_state->path_fmt, (i + handle->erasure_state->O) % num_blocks, handle->printf_state);
+   /* open files and initialize BufferQueues */
+   int threads_ready = 0; // used to indicate how many threads we have already checked the 'open' state for
+   for(i = 0; i < num_blocks; i++) {
+      int error, file_descriptor;
+      char path[MAXNAME];
+      BufferQueue *bq = &handle->blocks[i];
+      // generate the path
+      // sprintf(bq->path, handle->erasure_state->path_fmt, (i + handle->erasure_state->O) % num_blocks);
+      handle->snprintf(bq->path, MAXNAME, handle->erasure_state->path_fmt, (i + handle->erasure_state->O) % num_blocks, handle->printf_state);
 
-    strcat(bq->path, WRITE_SFX);
+      strcat(bq->path, WRITE_SFX);
 
-    // assign pointers into the memaligned buffers.
-    void *buffers[MAX_QDEPTH];
-    int j;
-    for(j = 0; j < MAX_QDEPTH; j++) {
-      buffers[j] = handle->buffer_list[j] + ( i * ( handle->erasure_state->bsz + sizeof( u32 ) ) );
-    }
     
-    if(bq_init(bq, i, buffers, handle) < 0) {
-      // TODO: handle error.
-      PRINTerr("bq_init failed for block %d\n", i);
-      return -1;
-    }
+      if(bq_init(bq, i, handle) < 0) {
+         // TODO: handle error.
+         PRINTerr("bq_init failed for block %d\n", i);
+         return -1;
+      }
 
-    // start the threads
-    error = pthread_create(&handle->threads[i], NULL, bq_writer, (void *)bq);
-    if(error != 0) {
-      PRINTerr("failed to start thread %d\n", i);
-      return -1;
-      // TODO: clean up!!
-    }
-  }
+      // start the threads
+      error = pthread_create(&handle->threads[i], NULL, bq_writer, (void *)bq);
+      if(error != 0) {
+         PRINTerr("failed to start thread %d\n", i);
+         return -1;
+         // TODO: clean up!!
+      }
 
-  /* create the buff_list in the handle. */
-  for(i = 0; i < MAX_QDEPTH; i++) {
-    int j;
-    for(j = 0; j < num_blocks; j++) {
-      handle->block_buffs[i][j] = handle->buffer_list[i] + ( j * ( handle->erasure_state->bsz + sizeof( u32 ) ) );
-    }
-  }
+      // I've pulled this into a conditional so as to not slow us down unless we really really need the meta info from these threads
+      if ( init_meta ) {
+         PRINTdbg("Checking for error opening block %d\n", i);
 
-  // check for errors on open...
-  for(i = 0; i < num_blocks; i++) {
-    PRINTdbg("Checking for error opening block %d\n", i);
+         // wait for the queue to be ready.
+         // As we are checking specific bits in a field that will only ever be touched 
+         // by the thread itself, it should be safe to do this without acquiring the lock.
+         // Also, as the thread acquires its own queue lock between opening the file and 
+         // setting these flags, we should have a guarantee that they are set accurately.
+         while( !( bq->state_flags & (BQ_OPEN | BQ_ERROR) ) ) //wait for either the OPEN or ERROR flags
+            usleep( 1000 );
 
-    BufferQueue *bq = &handle->blocks[i];
-    pthread_mutex_lock(&bq->qlock);
+         threads_ready++;
 
-    // wait for the queue to be ready.
-    while(!(bq->state_flags & BQ_OPEN) && !(bq->state_flags & BQ_ERROR))
-      pthread_cond_wait(&bq->have_space, &bq->qlock);
+         if(bq->state_flags & BQ_ERROR) {
+            PRINTerr("open failed for block %d\n", i);
+            handle->erasure_state->src_in_err[i] = 1;
+            handle->src_err_list[handle->erasure_state->nerr] = i;
+            handle->erasure_state->nerr++;
+         }
+      }
+   }
 
-    if(bq->state_flags & BQ_ERROR) {
-      PRINTerr("open failed for block %d\n", i);
-      handle->erasure_state->src_in_err[i] = 1;
-      handle->src_err_list[handle->erasure_state->nerr] = i;
-      handle->erasure_state->nerr++;
-    }
-    pthread_mutex_unlock(&bq->qlock);
-  }
 
-  return 0;
+   /* allocate buffers */
+   for(i = 0; i < MAX_QDEPTH; i++) {
+      int j;
+      // note, we always make space for a crc.  For writes, this is only needed if we are including 
+      // intermediate-crcs.  For reads, we will use this extra space to indicate any data 
+      // integrity errors for each buffer..
+      int error = posix_memalign(&handle->buffer_list[i], 64,
+                               num_blocks * ( handle->erasure_state->bsz + sizeof( u32 ) ) );
+      if(error == -1) {
+         // clean up previously allocated buffers and fail.
+         // we can't recover from this error.
+         for(j = i-1; j >= 0; j--) {
+            free(handle->buffer_list[j]);
+         }
+         PRINTerr("posix_memalign failed for queue %d\n", i);
+         return -1;
+      }
+
+      PRINTdbg( "creating buffer list for block %d\n", i )
+
+      //void *buffers[MAX_QDEPTH];
+      for(j = 0; j < num_blocks; j++) {
+         handle->block_buffs[i][j] = handle->buffer_list[i] + ( j * ( handle->erasure_state->bsz + sizeof( u32 ) ) );
+         // assign pointers into the memaligned buffers.
+         handle->blocks[j].buffers[i] = handle->block_buffs[i][j];
+      }
+
+   }
+
+   // check for errors on open...
+   // We finish checking thread states way down here in order to give 
+   // the threads some time to spin up.
+   for(i = threads_ready; i < num_blocks; i++) {
+
+      BufferQueue *bq = &handle->blocks[i];
+
+      PRINTdbg("Checking for error opening block %d\n", i);
+
+      // wait for the queue to be ready.
+      // As we are checking specific bits in a field that will only ever be touched 
+      // by the thread itself, it should be safe to do this without acquiring the lock.
+      // Also, as the thread acquires its own queue lock between opening the file and 
+      // setting these flags, we should have a guarantee that they are set accurately.
+      while( !( bq->state_flags & (BQ_OPEN | BQ_ERROR) ) ) //wait for either the OPEN or ERROR flags
+         usleep( 1000 );
+
+      threads_ready++;
+
+      if(bq->state_flags & BQ_ERROR) {
+         PRINTerr("open failed for block %d\n", i);
+         handle->erasure_state->src_in_err[i] = 1;
+         handle->src_err_list[handle->erasure_state->nerr] = i;
+         handle->erasure_state->nerr++;
+      }
+
+   }
+
+   return 0;
 }
 
 int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
