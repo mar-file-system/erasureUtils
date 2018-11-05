@@ -321,6 +321,16 @@ int bq_init(BufferQueue *bq, int block_number, ne_handle handle) {
     pthread_cond_destroy(&bq->have_work);
     return -1;
   }
+  if(pthread_cond_init(&bq->resume, NULL)) {
+    PRINTerr("failed to initialize cv for resume\n");
+    pthread_mutex_destroy(&bq->qlock);
+    pthread_cond_destroy(&bq->have_work);
+    pthread_cond_destroy(&bq->have_space);
+    return -1;
+  }
+
+  if( handle->mode == NE_RDONLY )
+    bq->con_flags |= BQ_HALT; // initialize all read threads in a halted state
 
   return 0;
 }
@@ -625,12 +635,6 @@ void* bq_reader(void* arg) {
    TimingData*  timing  = handle->timing_data_ptr;
    int          error   = 0;
 
-#ifdef INT_CRC
-   const int write_size = bq->buffer_size + sizeof(u32);
-#else
-   const int write_size = bq->buffer_size;
-#endif
-
    if (timing->flags & TF_THREAD)
       fast_timer_start(&timing->stats[bq->block_number].thread);
   
@@ -684,7 +688,8 @@ void* bq_reader(void* arg) {
       }
 
       char* endptr;
-      // simple macro to save some lines for parsing all meta values
+      // simple macro to save some repeated lines of code
+      // this is used to parse all meta values, check for errors, and assign them to their appropriate locations
 #define PARSE_VALUE( VAL, STR, GT_VAL, PARSE_FUNC, TYPE ) \
       if ( ret > GT_VAL ) { \
          TYPE tmp_val = (TYPE) PARSE_FUNC ( STR, &(endptr), 10 ); \
@@ -723,15 +728,23 @@ void* bq_reader(void* arg) {
                             &timing->stats[bq->block_number].open);
    }
 
-   PRINTdbg("bq_reader: opened file %d\n", bq->block_number);
+   PRINTdbg("opened file %d\n", bq->block_number);
 
 // ---------------------- INITIALIZE MAIN PROCESS LOOP ----------------------
 
-   char         aborted = 0; // set to 1 on abort or pthread lock error
+   char   aborted = 0;         // set to 1 on pthread_lock error
+   char   resetable_error = 0; // set on read error, reset on successful re-seek
+
+   // use 'write' to time how long we spend waiting to push buffers to our queue
+   // I've moved this outside the critical section, partially to spend less time
+   // holding the queue lock, and partially because time spent waiting for our 
+   // queue lock to be released is indicative of ne_read() copying data around
+   if (timing->flags & TF_RW)
+      fast_timer_start(&timing->stats[bq->block_number].write);
 
    // attempt to lock the queue before beginning the main loop
    if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
-      PRINTerr("bq_reader: failed to lock queue lock: %s\n", strerror(error));
+      PRINTerr("failed to lock queue lock: %s\n", strerror(error));
       // note the error
       bq->state_flags |= BQ_ERROR;
       aborted = 1;
@@ -739,8 +752,9 @@ void* bq_reader(void* arg) {
    // only set BQ_OPEN or BQ_ERROR after aquiring the queue lock
    // this is intended to avoid any oddities from instruction re-ordering
    if(FD_ERR(bq->file)) {
-      PRINTerr( "bq_reader: failed to open data file for block %d: \"%s\"\n", bq->block_number, bq->path );
+      PRINTerr( "failed to open data file for block %d: \"%s\"\n", bq->block_number, bq->path );
       bq->state_flags |= BQ_ERROR;
+      resetable_error = 1; // while not actually resetable, we need to set this to avoid any read attempts on the bad FD
    }
    else {
       // note the file as having been successfully opened
@@ -754,12 +768,75 @@ void* bq_reader(void* arg) {
 
       // the thread should always be holding its queue lock at this point
 
+      // if the HALT condition is set, wait until we are unpaused
+      while( bq->con_flags & BQ_HALT ) {
+         // indicate to the master proc that we have halted
+         bq->state_flags |= BQ_HALTED;
+         pthread_cond_wait(&bq->resume, &bq->qlock);
+         // make sure we immediately indicate that we are no longer halted
+         bq->state_flags &= ~(BQ_HALTED);
+
+         // after being halted, trigger a reseek of the file in case our offset has changed
+         if( FD_ERR(bq->file)  ||  ( bq->offset != HNDLOP(lseek, bq->file, bq->offset, SEEK_SET) ) )
+            resetable_error = 1; // if the FD is bad or we failed to seek, do not attempt any more reads
+      }
+
+      // wait on the have_work condition
+      while(bq->qdepth == MAX_QDEPTH && !((bq->con_flags & BQ_FINISHED) || (bq->con_flags & BQ_ABORT))) {
+         PRINTdbg("bq_reader[%d]: waiting for signal from ne_read\n", bq->block_number);
+         pthread_cond_wait(&bq->have_space, &bq->qlock);
+      }
+
+      // check for flags that might tell us to quit
+      if(bq->con_flags & BQ_ABORT) {
+         PRINTerr("aborting buffer queue\n");
+         // make sure no one thinks we finished properly
+         bq->state_flags |= BQ_ERROR;
+         pthread_mutex_unlock(&bq->qlock);
+         // note that we should unlink the destination
+         aborted = 1;
+         // let the post-loop code cleanup after us
+         break;
+      }
+
+      if((bq->qdepth == 0) && (bq->con_flags & BQ_FINISHED)) {       // then we are done.
+         PRINTdbg("BQ_reader %d finished\n", bq->block_number);
+         pthread_mutex_unlock(&bq->qlock);
+         break;
+      }
+      pthread_mutex_unlock(&bq->qlock);
+
+      // stop the 'read' timer once we have work to do
+      if (timing->flags & TF_RW) {
+          fast_timer_stop(&timing->stats[bq->block_number].write);
+          log_histo_add_interval(&timing->stats[bq->block_number].write_h,
+                                 &timing->stats[bq->block_number].write);
+      }
+
 
 // ---------------------- READ FROM DATA FILE ----------------------
 
+      // only read if we are at a good offset within the file
+      if ( !(resetable_error) ) {
 
+      }
 
-// ---------------------- STORE DATA TO BUFFER QUEUE ----------------------
+// ---------------------- ADD ENTRY TO BUFFER QUEUE ----------------------
+
+      // use 'write' to time how long it takes us to receive work
+      if (timing->flags & TF_RW)
+         fast_timer_start(&timing->stats[bq->block_number].write);
+
+      // get the queue lock so that we can adjust the head position
+      if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
+         PRINTerr("failed to lock queue lock: %s\n", strerror(error));
+         // note the error
+         bq->state_flags |= BQ_ERROR;
+         // set the aborted flag, for consistency
+         aborted = 2;
+         // let the post-loop code cleanup after us
+         break;
+      }
 
 
    }
@@ -770,6 +847,8 @@ void* bq_reader(void* arg) {
    pthread_cleanup_pop(1);
    return NULL;
 }
+
+
 
 
 /**
@@ -784,10 +863,10 @@ static int initialize_queues(ne_handle handle) {
 
    // If called for read or rebuild, we may need to dynamically determine the N, E, O, and bsz values.
    // This requires spinning up threads, one at a time, and checking their meta info for consistency.
-   // Thus, we initialize num_blocks to 1, if N/E were not initialized, and then increment to something 
-   // more reasonable.
+   // Thus, we initialize num_blocks to MIN_MD_CONSENSUS, if N/E were not initialized, and then increment 
+   // to something more reasonable.
    if ( !( num_blocks ) ) {
-      num_blocks = 1;
+      num_blocks = MIN_MD_CONSENSUS;
       init_meta = 1;
    }
 
@@ -803,12 +882,14 @@ static int initialize_queues(ne_handle handle) {
 
       strcat(bq->path, WRITE_SFX);
 
+      PRINTdbg( "starting up thread for block %d\n", i );
     
       if(bq_init(bq, i, handle) < 0) {
          // TODO: handle error.
          PRINTerr("bq_init failed for block %d\n", i);
          return -1;
       }
+      // note that read threads will be initialized in a halted state
 
       // start the threads
       error = pthread_create(&handle->threads[i], NULL, bq_writer, (void *)bq);
@@ -838,12 +919,16 @@ static int initialize_queues(ne_handle handle) {
             handle->src_err_list[handle->erasure_state->nerr] = i;
             handle->erasure_state->nerr++;
          }
+
       }
    }
 
 
    /* allocate buffers */
    for(i = 0; i < MAX_QDEPTH; i++) {
+
+      PRINTdbg( "creating buffer list for queue position %d\n", i );
+
       int j;
       // note, we always make space for a crc.  For writes, this is only needed if we are including 
       // intermediate-crcs.  For reads, we will use this extra space to indicate any data 
@@ -859,8 +944,6 @@ static int initialize_queues(ne_handle handle) {
          PRINTerr("posix_memalign failed for queue %d\n", i);
          return -1;
       }
-
-      PRINTdbg( "creating buffer list for block %d\n", i )
 
       //void *buffers[MAX_QDEPTH];
       for(j = 0; j < num_blocks; j++) {
@@ -901,6 +984,7 @@ static int initialize_queues(ne_handle handle) {
 
    return 0;
 }
+
 
 int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
   int ret = 0;
@@ -1095,6 +1179,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
    handle->erasure_state->E = E;
    handle->erasure_state->bsz = bsz;
    handle->erasure_state->O = erasure_offset;
+   handle->buff_offset = 0;
 
    if ( counter < 2 ) {
       handle->mode = NE_STAT;
