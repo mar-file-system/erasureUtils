@@ -283,8 +283,8 @@ int incomplete_write( ne_handle handle ) {
 void bq_destroy(BufferQueue *bq) {
   // XXX: Should technically check these for errors (ie. still locked)
   pthread_mutex_destroy(&bq->qlock);
-  pthread_cond_destroy(&bq->have_work);
-  pthread_cond_destroy(&bq->have_space);
+  pthread_cond_destroy(&bq->thread_resume);
+  pthread_cond_destroy(&bq->master_resume);
 }
 
 int bq_init(BufferQueue *bq, int block_number, ne_handle handle) {
@@ -305,32 +305,39 @@ int bq_init(BufferQueue *bq, int block_number, ne_handle handle) {
 
   FD_INIT(bq->file, handle);
 
+  if( handle->mode == NE_RDONLY ) {
+    // initialize all read threads in a halted state
+    bq->con_flags |= BQ_HALT;
+    // allocate space for the manifest info
+    bq->buffers[0] = malloc( sizeof( struct read_meta_buffer_struct ) );
+    if ( bq->buffers[0] == NULL ) {
+      return -1;
+    }
+  }
+
   if(pthread_mutex_init(&bq->qlock, NULL)) {
     PRINTerr("failed to initialize mutex for qlock\n");
     return -1;
   }
-  if(pthread_cond_init(&bq->have_work, NULL)) {
-    PRINTerr("failed to initialize cv for have_work\n");
+  if(pthread_cond_init(&bq->thread_resume, NULL)) {
+    PRINTerr("failed to initialize cv for thread_resume\n");
     // should also destroy the mutex
     pthread_mutex_destroy(&bq->qlock);
     return -1;
   }
-  if(pthread_cond_init(&bq->have_space, NULL)) {
-    PRINTerr("failed to initialize cv for have_space\n");
+  if(pthread_cond_init(&bq->master_resume, NULL)) {
+    PRINTerr("failed to initialize cv for master_resume\n");
     pthread_mutex_destroy(&bq->qlock);
-    pthread_cond_destroy(&bq->have_work);
+    pthread_cond_destroy(&bq->thread_resume);
     return -1;
   }
   if(pthread_cond_init(&bq->resume, NULL)) {
     PRINTerr("failed to initialize cv for resume\n");
     pthread_mutex_destroy(&bq->qlock);
-    pthread_cond_destroy(&bq->have_work);
-    pthread_cond_destroy(&bq->have_space);
+    pthread_cond_destroy(&bq->thread_resume);
+    pthread_cond_destroy(&bq->master_resume);
     return -1;
   }
-
-  if( handle->mode == NE_RDONLY )
-    bq->con_flags |= BQ_HALT; // initialize all read threads in a halted state
 
   return 0;
 }
@@ -339,7 +346,7 @@ void bq_signal(BufferQueue* bq, BQ_Control_Flags sig) {
   pthread_mutex_lock(&bq->qlock);
   PRINTdbg("signalling 0x%x to block %d\n", (uint32_t)sig, bq->block_number);
   bq->con_flags |= sig;
-  pthread_cond_signal(&bq->have_work);
+  pthread_cond_signal(&bq->thread_resume);
   pthread_mutex_unlock(&bq->qlock);  
 }
 
@@ -421,7 +428,8 @@ void *bq_writer(void *arg) {
     // this will allow initialize_queues() to complete and ne_open to reset umask
     bq->state_flags |= BQ_OPEN;
   }
-  // We want the lock as soon as we hit the main loop, so don't bother releasing it
+  pthread_cond_signal(&bq->master_resume);
+  // As no work could have been queued yet, we'll give up the lock as soon as we hit the main loop
   
   while( !(aborted) ) { //condition check used only to skip the main loop if we failed to get the lock above
 
@@ -430,15 +438,29 @@ void *bq_writer(void *arg) {
 
     // the thread should always be holding its queue lock at this point
 
-    // wait on the have_work condition
-    while(bq->qdepth == 0 && !((bq->con_flags & BQ_FINISHED) || (bq->con_flags & BQ_ABORT))) {
-      PRINTdbg("bq_writer[%d]: waiting for signal from ne_write\n", bq->block_number);
-      pthread_cond_wait(&bq->have_work, &bq->qlock);
-    }
+    // check for any states that require us to wait on the master proc, but allow a FINISHED or ABORT signal to break us out
+    while ( ( bq->qdepth == 0  ||  (bq->con_flags & BQ_HALT) )  &&  !((bq->con_flags & BQ_FINISHED) || (bq->con_flags & BQ_ABORT)) ) {
+      // note the halted state if we were asked to pause
+      if ( bq->con_flags & BQ_HALT ) {
+         bq->state_flags |= BQ_HALTED;
+         // the master proc could have been waiting for us to halt, so we must signal
+         pthread_cond_signal(&bq->master_resume);
+      }
+
+      // wait on the thread_resume condition
+      PRINTdbg("bq_writer[%d]: waiting for signal from ne_read\n", bq->block_number);
+      pthread_cond_wait(&bq->thread_resume, &bq->qlock);
+
+      // if we were halted, make sure we immediately indicate that we aren't any more 
+      // and reseek our input file, just in case.
+      if ( bq->state_flags & BQ_HALTED ) {
+         bq->state_flags &= ~(BQ_HALTED);
+      }
+    } 
 
     // check for flags that might tell us to quit
     if(bq->con_flags & BQ_ABORT) {
-      PRINTerr("aborting buffer queue\n");
+      PRINTerr("thread %d is aborting\n", bq->block_number);
       // make sure no one thinks we finished properly
       bq->state_flags |= BQ_ERROR;
       pthread_mutex_unlock(&bq->qlock);
@@ -530,7 +552,7 @@ void *bq_writer(void *arg) {
     PRINTdbg( "completed a work buffer, set queue depth to %d and queue head to %d\n", bq->qdepth, bq->head );
 
     if ( bq->qdepth == MAX_QDEPTH - 1 )
-       pthread_cond_signal(&bq->have_space);
+       pthread_cond_signal(&bq->master_resume);
   }
 
 // ---------------------- END OF MAIN PROCESS LOOP ----------------------
@@ -761,6 +783,12 @@ void* bq_reader(void* arg) {
       // this will allow initialize_queues() to complete and ne_open to reset umask
       bq->state_flags |= BQ_OPEN;
    }
+   // As we should have initialized in a halted state, we'll signal and give up the lock as soon as we hit the main loop
+
+   // local value for the files crcsum
+   u64 local_crcsum = 0;
+   // flag to indicate if we can trust our local crcsum for the file
+   char good_crc = 1;
 
    while ( !(aborted) ) { // condition check used just to skip the main loop if we failed to get the queue lock
 
@@ -768,28 +796,37 @@ void* bq_reader(void* arg) {
 
       // the thread should always be holding its queue lock at this point
 
-      // if the HALT condition is set, wait until we are unpaused
-      while( bq->con_flags & BQ_HALT ) {
-         // indicate to the master proc that we have halted
-         bq->state_flags |= BQ_HALTED;
-         pthread_cond_wait(&bq->resume, &bq->qlock);
-         // make sure we immediately indicate that we are no longer halted
-         bq->state_flags &= ~(BQ_HALTED);
+      // check for any states that require us to wait on the master proc, but allow a FINISHED or ABORT signal to break us out
+      while ( ( bq->qdepth == MAX_QDEPTH  ||  (bq->con_flags & BQ_HALT) )  &&  !((bq->con_flags & BQ_FINISHED) || (bq->con_flags & BQ_ABORT)) ) {
+         // note the halted state if we were asked to pause
+         if ( bq->con_flags & BQ_HALT ) {
+            bq->state_flags |= BQ_HALTED;
+            // the master proc could have been waiting for us to halt, so we must signal
+            pthread_cond_signal(&bq->master_resume);
+            good_crc = 0; // a reseek is comming, so assume we can't use our crcsum
+         }
 
-         // after being halted, trigger a reseek of the file in case our offset has changed
-         if( FD_ERR(bq->file)  ||  ( bq->offset != HNDLOP(lseek, bq->file, bq->offset, SEEK_SET) ) )
-            resetable_error = 1; // if the FD is bad or we failed to seek, do not attempt any more reads
-      }
-
-      // wait on the have_work condition
-      while(bq->qdepth == MAX_QDEPTH && !((bq->con_flags & BQ_FINISHED) || (bq->con_flags & BQ_ABORT))) {
+         // wait on the thread_resume condition
          PRINTdbg("bq_reader[%d]: waiting for signal from ne_read\n", bq->block_number);
-         pthread_cond_wait(&bq->have_space, &bq->qlock);
+         pthread_cond_wait(&bq->thread_resume, &bq->qlock);
+
+         // if we were halted, make sure we immediately indicate that we aren't any more 
+         // and reseek our input file, just in case.
+         if ( bq->state_flags & BQ_HALTED ) {
+            bq->state_flags &= ~(BQ_HALTED);
+            if( FD_ERR(bq->file)  ||  ( bq->offset != HNDLOP(lseek, bq->file, bq->offset, SEEK_SET) ) ) {
+               resetable_error = 1; // if the FD is bad or we failed to seek, do not attempt any reads until we reseek
+            }
+            else if ( bq->offset == 0 ) {
+               good_crc = 1; // if we're starting from offset zero again, our crcsum is valid
+               local_crcsum = 0;
+            }
+         }
       }
 
       // check for flags that might tell us to quit
       if(bq->con_flags & BQ_ABORT) {
-         PRINTerr("aborting buffer queue\n");
+         PRINTerr("thread %d is aborting\n", bq->block_number);
          // make sure no one thinks we finished properly
          bq->state_flags |= BQ_ERROR;
          pthread_mutex_unlock(&bq->qlock);
@@ -799,14 +836,15 @@ void* bq_reader(void* arg) {
          break;
       }
 
-      if((bq->qdepth == 0) && (bq->con_flags & BQ_FINISHED)) {       // then we are done.
+      // if the finished flag is set, we are done, regardless of how full the queue is
+      if(bq->con_flags & BQ_FINISHED) {
          PRINTdbg("BQ_reader %d finished\n", bq->block_number);
          pthread_mutex_unlock(&bq->qlock);
          break;
       }
       pthread_mutex_unlock(&bq->qlock);
 
-      // stop the 'read' timer once we have work to do
+      // stop the 'write' timer once we have work to do
       if (timing->flags & TF_RW) {
           fast_timer_stop(&timing->stats[bq->block_number].write);
           log_histo_add_interval(&timing->stats[bq->block_number].write_h,
@@ -849,6 +887,110 @@ void* bq_reader(void* arg) {
 }
 
 
+void terminate_threads( BQ_Control_Flags flag, ne_handle handle, int thread_cnt, int thread_offset ) {
+   int i;
+   /* wait for the threads */
+   for(i = thread_offset; i < thread_offset + thread_cnt; i++) {
+      bq_signal( &handle->blocks[i], flag );
+      pthread_join( handle->threads[i], NULL );
+      bq_destroy( &handle->blocks[i] );
+      PRINTdbg( "thread %d has terminated\n", i );
+   }
+}
+
+
+/**
+ * This helper function is intended to identify the most common sensible values amongst all meta_buffers 
+ * for a given number of read threads and return them in a provided read_meta_buffer struct.
+ * If two numbers have the same number of instances, preference will be given to the first number ( the 
+ * one with a lower block number ).
+ * @param BufferQueue blocks[ MAXPARTS ] : Array of buffer queues for all threads
+ * @param int num_threads : Number of threads with meta_info ready
+ * @param read_meta_buffer ret_buf : Buffer to be populated with return values
+ * @return int : Lesser of the counts of matching N/E values
+ */
+int check_matches( BufferQueue blocks[ MAXPARTS ], int num_threads, read_meta_buffer ret_buf ) {
+   int N_match[MAXPARTS]     = { 0 };
+   int E_match[MAXPARTS]     = { 0 };
+   int O_match[MAXPARTS]     = { 0 };
+   int bsz_match[MAXPARTS]   = { 0 };
+   int nsz_match[MAXPARTS]   = { 0 };
+   int totsz_match[MAXPARTS] = { 0 };
+
+   int i;
+   for ( i = 0; i < num_threads; i++ ) {
+      int j;
+      read_meta_buffer meta_buf = (read_meta_buffer)(blocks[i].buffers[0]);
+// this macro is intended to produce counts of matching values at the index of their first appearance
+#define COUNT_MATCH_AT_INDEX( VAL, MATCH_LIST, MAX_VAL, MIN_VAL ) \
+if ( meta_buf->VAL >= MIN_VAL  &&  meta_buf->VAL <= MAX_VAL ) { \
+   for ( j = 0; j < i; j++ ) { \
+      if ( ((read_meta_buffer)(blocks[j].buffers[0]))->VAL == meta_buf->VAL ) { \
+         break; \
+      } \
+   } \
+   MATCH_LIST[j]++; \
+}
+      COUNT_MATCH_AT_INDEX( N, N_match, MAXN, 1 )
+      COUNT_MATCH_AT_INDEX( E, E_match, MAXE, 0 )
+      COUNT_MATCH_AT_INDEX( O, O_match, MAXPARTS - 1, 0 )
+      COUNT_MATCH_AT_INDEX( bsz, bsz_match, MAXBLKSZ, 0 )
+      COUNT_MATCH_AT_INDEX( nsz, nsz_match, meta_buf->nsz, 0 ) //no maximum
+      COUNT_MATCH_AT_INDEX( totsz, totsz_match, meta_buf->totsz, 0 ) //no maximum
+   }
+
+   int N_index = 0;
+   int E_index = 0;
+   int O_index = 0;
+   int bsz_index = 0;
+   int nsz_index = 0;
+   int totsz_index = 0;
+   for ( i = 1; i < num_threads; i++ ) {
+      if ( N_match[i] > N_match[N_index] )
+         N_index = i;
+      if ( E_match[i] > E_match[E_index] )
+         E_index = i;
+      if ( O_match[i] > O_match[O_index] )
+         O_index = i;
+      if ( bsz_match[i] > bsz_match[bsz_index] )
+         bsz_index = i;
+      if ( nsz_match[i] > nsz_match[nsz_index] )
+         nsz_index = i;
+      if ( totsz_match[i] > totsz_match[totsz_index] )
+         totsz_index = i;
+   }
+
+   // assign appropriate values to our output struct
+   // Note: we have to do a sanity check on the match count, to make sure 
+   // we don't return an out-of-bounds value.
+   if ( N_match[N_index] )
+      ret_buf->N = ((read_meta_buffer)(blocks[N_index].buffers[0]))->N;
+   else
+      ret_buf->N = 0;
+   if ( E_match[E_index] )
+      ret_buf->E = ((read_meta_buffer)(blocks[E_index].buffers[0]))->E;
+   else
+      ret_buf->E = -1;
+   if ( O_match[O_index] )
+      ret_buf->O = ((read_meta_buffer)(blocks[O_index].buffers[0]))->O;
+   else
+      ret_buf->O = -1;
+   if ( bsz_match[bsz_index] )
+      ret_buf->bsz = ((read_meta_buffer)(blocks[bsz_index].buffers[0]))->bsz;
+   else
+      ret_buf->bsz = 0;
+   if ( nsz_match[nsz_index] )
+      ret_buf->nsz = ((read_meta_buffer)(blocks[nsz_index].buffers[0]))->nsz;
+   else
+      ret_buf->nsz = 0;
+   if ( totsz_match[totsz_index] )
+      ret_buf->totsz = ((read_meta_buffer)(blocks[totsz_index].buffers[0]))->totsz;
+   else
+      ret_buf->totsz = 0;
+
+   return ( N_match[N_index] > E_match[E_index] ) ? E_match[E_index] : N_match[N_index];
+}
+
 
 
 /**
@@ -859,15 +1001,19 @@ void* bq_reader(void* arg) {
 static int initialize_queues(ne_handle handle) {
    int i;
    int num_blocks = handle->erasure_state->N + handle->erasure_state->E;
-   char init_meta = 0; //set to 1 if we need to initialize N, E, O, etc. based on meta info
+   int consensus = MIN_MD_CONSENSUS;
+
+   int cleanup_threads = 0; // error condition indicating how many threads should be terminated
+
+   struct read_meta_buffer_struct read_meta_state; //needed to determine metadata consensus for reads
 
    // If called for read or rebuild, we may need to dynamically determine the N, E, O, and bsz values.
    // This requires spinning up threads, one at a time, and checking their meta info for consistency.
-   // Thus, we initialize num_blocks to MIN_MD_CONSENSUS, if N/E were not initialized, and then increment 
-   // to something more reasonable.
+   // Thus, we initialize num_blocks to a 'consensus' value, if N/E were not initialized, and then reset 
+   // to something more reasonable once we have a good idea of N/E.
    if ( !( num_blocks ) ) {
-      num_blocks = MIN_MD_CONSENSUS;
-      init_meta = 1;
+      // should only happen for read
+      num_blocks = consensus;
    }
 
    /* open files and initialize BufferQueues */
@@ -885,8 +1031,8 @@ static int initialize_queues(ne_handle handle) {
       PRINTdbg( "starting up thread for block %d\n", i );
     
       if(bq_init(bq, i, handle) < 0) {
-         // TODO: handle error.
          PRINTerr("bq_init failed for block %d\n", i);
+         terminate_threads( BQ_ABORT, handle, i, 0 );
          return -1;
       }
       // note that read threads will be initialized in a halted state
@@ -895,12 +1041,12 @@ static int initialize_queues(ne_handle handle) {
       error = pthread_create(&handle->threads[i], NULL, bq_writer, (void *)bq);
       if(error != 0) {
          PRINTerr("failed to start thread %d\n", i);
+         terminate_threads( BQ_ABORT, handle, i, 0 );
          return -1;
-         // TODO: clean up!!
       }
 
       // I've pulled this into a conditional so as to not slow us down unless we really really need the meta info from these threads
-      if ( init_meta ) {
+      if ( handle->erasure_state->N == 0 ) {
          PRINTdbg("Checking for error opening block %d\n", i);
 
          // wait for the queue to be ready.
@@ -909,7 +1055,7 @@ static int initialize_queues(ne_handle handle) {
          // Also, as the thread acquires its own queue lock between opening the file and 
          // setting these flags, we should have a guarantee that they are set accurately.
          while( !( bq->state_flags & (BQ_OPEN | BQ_ERROR) ) ) //wait for either the OPEN or ERROR flags
-            usleep( 1000 );
+            usleep( 10 );
 
          threads_ready++;
 
@@ -920,6 +1066,103 @@ static int initialize_queues(ne_handle handle) {
             handle->erasure_state->nerr++;
          }
 
+         // if we have all the threads needed for determining N/E
+         if ( (i+1) >= consensus ) {
+
+            PRINTdbg( "attempting to determine N/E values after starting %d threads\n", i );
+
+            // find the most common values from amongst all meta information
+            int matches = check_matches( handle->blocks, i, &(read_meta_state) );
+
+            // special case, if we have still failed to produce sensible N/E values
+            if ( matches < 1 ) {
+               // if we are still within our bounds, just keep extending the stripe, trying to find *something*
+               if ( num_blocks < MAXPARTS )
+                  num_blocks++;
+               continue;
+            }
+
+            // we have N/E values, so use them to determine a new consensus
+            consensus = ( read_meta_state.E ) ? ( read_meta_state.E + 1 ) : ( read_meta_state.N );
+            PRINTdbg( "set consensus to %d after retrieving new N/E values\n", consensus );
+            // if we have sufficient matches for consensus, assign them to our handle
+            if ( matches >= consensus ) {
+               PRINTdbg( "setting N/E to %d/%d after reaching consensus of %d\n", read_meta_state.N, read_meta_state.E, matches );
+               handle->erasure_state->N = read_meta_state.N;
+               handle->erasure_state->E = read_meta_state.E;
+            }
+            num_blocks = read_meta_state.N + read_meta_state.E;
+         }
+      }
+   }
+   // if we've failed to identify a value for N/E, terminate all threads
+   if ( handle->erasure_state->N == 0 ) {
+      num_blocks = 0;
+   }
+   // we may have opened up too many threads (or any at all, if we hit an error)
+   // make sure to close those here
+   if ( i > num_blocks ) {
+      terminate_threads( BQ_ABORT, handle, i - num_blocks, num_blocks );
+      // again, if we failed to determine N/E, there is no point continuing
+      if ( handle->erasure_state->N == 0 )
+         return -1;
+   }
+
+
+   // check for errors on open...
+   // We finish checking thread status down here in order to give them a bit more time to spin up.
+   for(i = threads_ready; i < num_blocks; i++) {
+
+      BufferQueue *bq = &handle->blocks[i];
+
+      PRINTdbg("Checking for error opening block %d\n", i);
+
+      // TODO: probably actually better to go back to locking on this
+
+      // wait for the queue to be ready.
+      // As we are checking specific bits in a field that will only ever be touched 
+      // by the thread itself, it should be safe to do this without acquiring the lock.
+      // Also, as the thread acquires its own queue lock between opening the file and 
+      // setting these flags, we should have a guarantee that they are set accurately.
+      while( !( bq->state_flags & (BQ_OPEN | BQ_ERROR) ) ) //wait for either the OPEN or ERROR flags
+         usleep( 10 );
+
+      threads_ready++;
+
+      if(bq->state_flags & BQ_ERROR) {
+         PRINTerr("open failed for block %d\n", i);
+         handle->erasure_state->src_in_err[i] = 1;
+         handle->src_err_list[handle->erasure_state->nerr] = i;
+         handle->erasure_state->nerr++;
+      }
+
+   }
+
+
+   if ( handle->mode == NE_RDONLY ) {
+      // find the most common values from amongst all meta information, now that all threads have started
+      // we have to do this here, in case we don't have a bsz value
+      int matches = check_matches( handle->blocks, i, &(read_meta_state) );
+      // sanity check: if N/E values have changed at this point, the meta info is in a very odd state
+      if ( handle->erasure_state->N != read_meta_state.N  ||  handle->erasure_state->E != read_meta_state.E ) {
+         terminate_threads( BQ_ABORT, handle, num_blocks, 0 );
+         return -1;
+      }
+      handle->erasure_state->O = read_meta_state.O;
+      if ( !(handle->erasure_state->bsz) )
+         handle->erasure_state->bsz = read_meta_state.bsz;
+      handle->erasure_state->nsz = read_meta_state.nsz;
+      handle->erasure_state->totsz = read_meta_state.totsz;
+      // Note: ncompsz and crcsum are set by the thread itself
+      for ( i = 0; i < num_blocks; i++ ) {
+         // take this opportunity to mark all mismatched meta values as incorrect
+         read_meta_buffer read_buf = (read_meta_buffer)handle->blocks[i].buffers[0];
+         if ( read_buf->N != handle->erasure_state->N  ||  read_buf->E != handle->erasure_state->E  ||  read_buf->O != handle->erasure_state->O  ||  
+              read_buf->bsz != handle->erasure_state->bsz  ||  read_buf->nsz != handle->erasure_state->nsz  ||  
+              read_buf->totsz != handle->erasure_state->totsz )
+            handle->erasure_state->manifest_status[i] = 1;
+         // free our read_meta_buff structs
+         free( read_buf ); 
       }
    }
 
@@ -954,32 +1197,9 @@ static int initialize_queues(ne_handle handle) {
 
    }
 
-   // check for errors on open...
-   // We finish checking thread states way down here in order to give 
-   // the threads some time to spin up.
-   for(i = threads_ready; i < num_blocks; i++) {
-
-      BufferQueue *bq = &handle->blocks[i];
-
-      PRINTdbg("Checking for error opening block %d\n", i);
-
-      // wait for the queue to be ready.
-      // As we are checking specific bits in a field that will only ever be touched 
-      // by the thread itself, it should be safe to do this without acquiring the lock.
-      // Also, as the thread acquires its own queue lock between opening the file and 
-      // setting these flags, we should have a guarantee that they are set accurately.
-      while( !( bq->state_flags & (BQ_OPEN | BQ_ERROR) ) ) //wait for either the OPEN or ERROR flags
-         usleep( 1000 );
-
-      threads_ready++;
-
-      if(bq->state_flags & BQ_ERROR) {
-         PRINTerr("open failed for block %d\n", i);
-         handle->erasure_state->src_in_err[i] = 1;
-         handle->src_err_list[handle->erasure_state->nerr] = i;
-         handle->erasure_state->nerr++;
-      }
-
+   // finally, we have to give the non-erasure read threads the go-ahead to begin
+   for ( i = 0; i < handle->erasure_state->N; i++ ) {
+      //TODO
    }
 
    return 0;
@@ -996,7 +1216,7 @@ int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
   }
 
   while(bq->qdepth == MAX_QDEPTH)
-    pthread_cond_wait(&bq->have_space, &bq->qlock);
+    pthread_cond_wait(&bq->master_resume, &bq->qlock);
 
   // NOTE: _Might_ be able to get away with not locking here, since
   // access is controled by the qdepth var, which will not allow a
@@ -1020,7 +1240,7 @@ int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
       ret = 1;
     }
     PRINTdbg("queued complete buffer for block %d\n", bq->block_number);
-    pthread_cond_signal(&bq->have_work);
+    pthread_cond_signal(&bq->thread_resume);
   }
   pthread_mutex_unlock(&bq->qlock);
 
@@ -2376,7 +2596,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
           return -1;
         }
         while(bq->qdepth == MAX_QDEPTH) {
-          pthread_cond_wait(&bq->have_space, &bq->qlock);
+          pthread_cond_wait(&bq->master_resume, &bq->qlock);
         }
         if(i == N) {
           buffer_index = bq->tail;
@@ -2402,7 +2622,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
         BufferQueue *bq = &handle->blocks[i];
         bq->qdepth++;
         bq->tail = (bq->tail + 1) % MAX_QDEPTH;
-        pthread_cond_signal(&bq->have_work);
+        pthread_cond_signal(&bq->thread_resume);
         pthread_mutex_unlock(&bq->qlock);
         handle->erasure_state->ncompsz[i] += bsz;
       }

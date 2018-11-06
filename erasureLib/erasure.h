@@ -301,8 +301,8 @@ typedef struct buffer_queue {
   pthread_mutex_t    qlock;
   void*              buffers[MAX_QDEPTH];    /* array of buffers for passing data on the queue */
   //char               buf_error[MAX_QDEPTH];  /* indicates  errors associated with specific data buffers */
-  pthread_cond_t     have_work;          /* cv signals there is a full slot */
-  pthread_cond_t     have_space;         /* cv signals there is an empty slot */
+  pthread_cond_t     thread_resume;          /* cv signals there is a full slot */
+  pthread_cond_t     master_resume;         /* cv signals there is an empty slot */
   pthread_cond_t     resume;             /* cv signals the thread to resume */
   int                qdepth;             /* number of elements in the queue */
   int                head;               /* next full position */  
