@@ -859,6 +859,7 @@ void* bq_reader(void* arg) {
 
          // if we were halted, we have some housekeeping to take care of
          if ( bq->state_flags & BQ_HALTED ) {
+            PRINTdbg( "thread %d is resuming\n" );
             // let the master proc know that we are no longer halted
             bq->state_flags &= ~(BQ_HALTED);
             // reseek our input file, if possible
@@ -883,8 +884,7 @@ void* bq_reader(void* arg) {
          // make sure no one thinks we finished properly
          bq->state_flags |= BQ_ERROR;
          pthread_mutex_unlock(&bq->qlock);
-         // note that we should unlink the destination
-         aborted = 1;
+         aborted = 1; //probably unnecessary
          // let the post-loop code cleanup after us
          break;
       }
@@ -951,15 +951,25 @@ void* bq_reader(void* arg) {
       if( error == 0 ) { //paradoxically, meaning there was an error...
          // zero out the crc position to indicate a bad buffer to ne_read()
          *(u32*)(bq->buffers[bq->tail] + bq->buffer_size) = 0;
+         // any error means we can't trust our local crcsum any more
+         good_crc = 0;
       }
       else {
          bq->offset += error;
       }
 
       // check if we are at the end of our file
-      if ( ( bq->offset / ( bq->buffer_size + sizeof(u32) ) ) > num_stripes ) {
+      if ( !(resetable_error)  &&  ( ( bq->offset / ( bq->buffer_size + sizeof(u32) ) ) > num_stripes ) ) {
          PRINTdbg( "thread %d has reached the end of its data file ( offset = %zd )\n", bq->block_number, bq->offset );
          resetable_error = 1; // this should allow us to refuse any further buffers while avoiding a reported error
+
+         // if we're at the end of the file, and both our local crcsum and the global are 'trustworthy', verify them
+         if ( good_crc  &&  !(handle->erasure_state->manifest_status[bq->block_number])  &&  
+               ( local_crcsum != handle->erasure_state->csum[bq->block_number] ) ) {
+            bq->state_flags |= BQ_ERROR;  // if the global doesn't match, something very odd is going on with this block
+            PRINTerr( "thread %d detected global crc mismatch ( data = %llu, meta = %llu )\n", 
+                        local_crcsum, handle->erasure_state->csum[bq->block_number] );
+         }
       }
 
 
@@ -1036,11 +1046,39 @@ void* bq_reader(void* arg) {
 void terminate_threads( BQ_Control_Flags flag, ne_handle handle, int thread_cnt, int thread_offset ) {
    int i;
    /* wait for the threads */
-   for(i = thread_offset; i < thread_offset + thread_cnt; i++) {
+   for(i = thread_offset; i < (thread_offset + thread_cnt); i++) {
       bq_signal( &handle->blocks[i], flag );
       pthread_join( handle->threads[i], NULL );
       bq_destroy( &handle->blocks[i] );
       PRINTdbg( "thread %d has terminated\n", i );
+   }
+}
+
+
+void resume_threads( off_t offset, ne_handle handle, int thread_cnt, int thread_offset ) {
+   int i;
+   /* wait for the threads */
+   for(i = thread_offset; i < (thread_offset + thread_cnt); i++) {
+      BufferQueue* bq = &handle->blocks[i];
+      pthread_mutex_lock( &bq->qlock );
+      while( !(bq->state_flags & BQ_HALTED) ) {
+         PRINTdbg( "master proc waiting on thread %d to signal\n", i );
+         pthread_cond_wait( &bq->master_resume, &bq->qlock ); 
+      }
+
+      // now that the thread is suspended, clear out the buffer queue
+      bq->qdepth = 0;
+      bq->head = bq->tail;
+      // as these buffers are consistently overwritten, we really just need to pretend we read them all
+
+      // set the thread to a new offset
+      bq->offset = offset;
+
+      // clear the HALT signal
+      PRINTdbg("clearing 0x%x signal for block %d\n", (uint32_t)BQ_HALT, bq->block_number);
+      bq->con_flags &= ~(BQ_HALT);
+      pthread_cond_signal( &bq->thread_resume );
+      pthread_mutex_unlock( &bq->qlock );
    }
 }
 
@@ -1347,8 +1385,8 @@ static int initialize_queues(ne_handle handle) {
    }
 
    // finally, we have to give the non-erasure read threads the go-ahead to begin
-   for ( i = 0; i < handle->erasure_state->N; i++ ) {
-      //TODO
+   if( handle->mode == NE_RDONLY ) {
+      resume_threads( 0, handle, handle->erasure_state->N, 0 );
    }
 
    return 0;
