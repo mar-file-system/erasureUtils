@@ -231,6 +231,45 @@ static ssize_t write_all(GenericFD* fd, const void* buffer, size_t nbytes) {
 }
 
 
+/**
+ * read(2) may return less than the requested read-size, without there being any errors.
+ * Call read() repeatedly until the buffer has been completely filled, or an error (or EOF) has occurred.
+ *
+ * @param GenericFD fd: the file/socket to read from
+ * @param void* buffer: buffer to be filled
+ * @param size_t nbytes: size of the buffer
+ *
+ * @return ssize_t: the amount read.  negative for errors.
+ */
+
+ssize_t read_all(GenericFD* fd, void* buffer, size_t nbytes) {
+  ssize_t     result = 0;
+  size_t      remain = nbytes;
+  char*       buf    = buffer;  /* assure ourselves pointer arithmetic is by onezies  */
+
+  while (remain) {
+    errno = 0;
+
+    ssize_t count = pHNDLOP(read, fd, buf+result, remain);
+
+    if (count < 0)
+      return count;
+
+    else if (count == 0)
+      return result;            /* EOF */
+
+    //    // COMMENTED OUT: see write_all()
+    //    else if (errno)
+    //      return -1;
+
+    remain -= count;
+    result += count;
+  }
+
+  return result;
+}
+
+
 
 // check for an incomplete write of an object
 int incomplete_write( ne_handle handle ) {
@@ -789,6 +828,11 @@ void* bq_reader(void* arg) {
    u64 local_crcsum = 0;
    // flag to indicate if we can trust our local crcsum for the file
    char good_crc = 1;
+   // used to indicate read return values
+   size_t error = 0;
+   // used to calculate the end of the file.  However, we are not yet sure that values needed for determining this are set
+   // in the handle.  Therefore, initialize this to zero, then reset once we have been 'resumed' by the master proc below.
+   int num_stripes = 0;
 
    while ( !(aborted) ) { // condition check used just to skip the main loop if we failed to get the queue lock
 
@@ -796,7 +840,10 @@ void* bq_reader(void* arg) {
 
       // the thread should always be holding its queue lock at this point
 
-      // check for any states that require us to wait on the master proc, but allow a FINISHED or ABORT signal to break us out
+      // check for any states that require us to wait on the master proc, but allow a FINISHED or ABORT signal to break us out.
+      // Note, it is tempting to wait on 'resetable_error' here; however, we depend upon this thread to set error states for 
+      // all buffers and to advance the queue.  Otherwise, ne_read() would be forced to assume that this thread is just really 
+      // darn slow.
       while ( ( bq->qdepth == MAX_QDEPTH  ||  (bq->con_flags & BQ_HALT) )  &&  !((bq->con_flags & BQ_FINISHED) || (bq->con_flags & BQ_ABORT)) ) {
          // note the halted state if we were asked to pause
          if ( bq->con_flags & BQ_HALT ) {
@@ -810,17 +857,23 @@ void* bq_reader(void* arg) {
          PRINTdbg("bq_reader[%d]: waiting for signal from ne_read\n", bq->block_number);
          pthread_cond_wait(&bq->thread_resume, &bq->qlock);
 
-         // if we were halted, make sure we immediately indicate that we aren't any more 
-         // and reseek our input file, just in case.
+         // if we were halted, we have some housekeeping to take care of
          if ( bq->state_flags & BQ_HALTED ) {
+            // let the master proc know that we are no longer halted
             bq->state_flags &= ~(BQ_HALTED);
+            // reseek our input file, if possible
             if( FD_ERR(bq->file)  ||  ( bq->offset != HNDLOP(lseek, bq->file, bq->offset, SEEK_SET) ) ) {
+               PRINTerr( "thread %d is entering an unreadable state (seek error or bad FD)\n", bq->block_number );
+               bq->state_flags |= BQ_ERROR;
                resetable_error = 1; // if the FD is bad or we failed to seek, do not attempt any reads until we reseek
             }
             else if ( bq->offset == 0 ) {
                good_crc = 1; // if we're starting from offset zero again, our crcsum is valid
                local_crcsum = 0;
             }
+            // as the handle structs should now be initialized, calculate how large our file is expected to be
+            num_stripes = (int)( ( handle->erasure_state->totsz - 1 ) / ( bq->buffer_size * (size_t)handle->erasure_state->N ) );
+            // technically, this will be number of stripes minus 1, due to int truncation
          }
       }
 
@@ -854,10 +907,61 @@ void* bq_reader(void* arg) {
 
 // ---------------------- READ FROM DATA FILE ----------------------
 
+      error = 0;
+
       // only read if we are at a good offset within the file
       if ( !(resetable_error) ) {
 
+         u32 crc_val = 0;
+
+         if (timing->flags & TF_RW)
+            fast_timer_start(&timing->stats[bq->block_number].read);
+
+         error     = read_all(&bq->file, bq->buffers[bq->tail], bq->buffer_size + sizeof(u32));
+
+         if (timing->flags & TF_RW) {
+            fast_timer_stop(&timing->stats[bq->block_number].read);
+            log_histo_add_interval(&timing->stats[bq->block_number].read_h,
+                                   &timing->stats[bq->block_number].read);
+         }
+
+         if ( error != bq->buffer_size + sizeof(u32) ) {
+            PRINTerr( "read error of block %d at offset %zd\n", bq->block_number, bq->offset );
+            bq->state_flags |= BQ_ERROR;
+            resetable_error = 1;
+            error = 0;
+         }
+         else {
+            crc_val   = crc32_ieee(TEST_SEED, bq->buffers[bq->tail], bq->buffer_size);
+            if ( memcmp( bq->buffers[bq->tail] + bq->buffer_size, &crc_val, sizeof(u32) ) ) {
+               PRINTerr( "crc mismatch detected by block %d at offset %zd\n", bq->block_number, bq->offset );
+               bq->state_flags |= BQ_ERROR;
+               // this is why we need this 'error' value to persist outside the loop, to catch transient data errors
+               error = 0;
+            }
+            else {
+               // leave the crc value sitting in the buffer.  This will be a signal to ne_read() that the buffer is
+               // usable.
+               local_crcsum += crc_val;
+               PRINTdbg("read done for block %d\n", bq->block_number);
+            }
+         }
       }
+
+      if( error == 0 ) { //paradoxically, meaning there was an error...
+         // zero out the crc position to indicate a bad buffer to ne_read()
+         *(u32*)(bq->buffers[bq->tail] + bq->buffer_size) = 0;
+      }
+      else {
+         bq->offset += error;
+      }
+
+      // check if we are at the end of our file
+      if ( ( bq->offset / ( bq->buffer_size + sizeof(u32) ) ) > num_stripes ) {
+         PRINTdbg( "thread %d has reached the end of its data file ( offset = %zd )\n", bq->block_number, bq->offset );
+         resetable_error = 1; // this should allow us to refuse any further buffers while avoiding a reported error
+      }
+
 
 // ---------------------- ADD ENTRY TO BUFFER QUEUE ----------------------
 
@@ -876,11 +980,53 @@ void* bq_reader(void* arg) {
          break;
       }
 
+      // even if there was an error, just zero the crc and move on.
+      // the master proc is responsible for checking the error flag
+      // and killing us if needed.
+
+      bq->tail = (bq->tail + 1) % MAX_QDEPTH;
+      bq->qdepth++;
+      PRINTdbg( "completed a work buffer, set queue depth to %d and queue tail to %d\n", bq->qdepth, bq->tail );
+
+      // only signal if it is likely that the master has been waiting for a new buffer
+      if ( bq->qdepth == 1 )
+         pthread_cond_signal(&bq->master_resume);
 
    }
 
 // ---------------------- END OF MAIN PROCESS LOOP ----------------------
 
+   // should have already relinquished the queue lock before breaking out
+
+   // stop the 'write' timer, which will still be running after any loop breakout
+   if (timing->flags & TF_RW) {
+      fast_timer_stop(&timing->stats[bq->block_number].write);
+      log_histo_add_interval(&timing->stats[bq->block_number].write_h,
+                           &timing->stats[bq->block_number].write);
+   }
+
+   // for whatever reason, this thread's work is done.  close the file
+   if (timing->flags & TF_CLOSE)
+      fast_timer_start(&timing->stats[bq->block_number].close);
+
+   int close_rc = HNDLOP(close, bq->file);
+
+   if (timing->flags & TF_CLOSE)
+   {
+      fast_timer_stop(&timing->stats[bq->block_number].close);
+      log_histo_add_interval(&timing->stats[bq->block_number].close_h,
+                            &timing->stats[bq->block_number].close);
+   }
+   // at least note any close error
+   if ( close_rc ) {
+      PRINTerr("error closing block %d\n", bq->block_number);
+      bq->state_flags |= BQ_ERROR;      // ensure the error was noted
+   }
+
+
+   // all done!
+   if (timing->flags & TF_THREAD)
+      fast_timer_stop(&timing->stats[bq->block_number].thread);
 
    pthread_cleanup_pop(1);
    return NULL;
@@ -1026,7 +1172,8 @@ static int initialize_queues(ne_handle handle) {
       // sprintf(bq->path, handle->erasure_state->path_fmt, (i + handle->erasure_state->O) % num_blocks);
       handle->snprintf(bq->path, MAXNAME, handle->erasure_state->path_fmt, (i + handle->erasure_state->O) % num_blocks, handle->printf_state);
 
-      strcat(bq->path, WRITE_SFX);
+      if ( handle->mode == NE_WRONLY )
+         strcat(bq->path, WRITE_SFX);
 
       PRINTdbg( "starting up thread for block %d\n", i );
     
@@ -1163,6 +1310,8 @@ static int initialize_queues(ne_handle handle) {
             handle->erasure_state->manifest_status[i] = 1;
          // free our read_meta_buff structs
          free( read_buf ); 
+         // update each thread's buffer size, just in case
+         handle->blocks[i].buffer_size = handle->erasure_state->bsz;
       }
    }
 
@@ -1645,45 +1794,6 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
 
 
 
-
-
-/**
- * read(2) may return less than the requested read-size, without there being any errors.
- * Call read() repeatedly until the buffer has been completely filled, or an error (or EOF) has occurred.
- *
- * @param GenericFD fd: the file/socket to read from
- * @param void* buffer: buffer to be filled
- * @param size_t nbytes: size of the buffer
- *
- * @return ssize_t: the amount read.  negative for errors.
- */
-
-ssize_t read_all(GenericFD* fd, void* buffer, size_t nbytes) {
-  ssize_t     result = 0;
-  size_t      remain = nbytes;
-  char*       buf    = buffer;  /* assure ourselves pointer arithmetic is by onezies  */
-
-  while (remain) {
-    errno = 0;
-
-    ssize_t count = pHNDLOP(read, fd, buf+result, remain);
-
-    if (count < 0)
-      return count;
-
-    else if (count == 0)
-      return result;            /* EOF */
-
-    //    // COMMENTED OUT: see write_all()
-    //    else if (errno)
-    //      return -1;
-
-    remain -= count;
-    result += count;
-  }
-
-  return result;
-}
 
 /**
  * Reads nbytes of data at offset from the erasure striping referenced by the given handle
