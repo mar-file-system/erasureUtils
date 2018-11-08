@@ -374,6 +374,7 @@ typedef struct handle {
    void *block_buffs[MAX_QDEPTH][MAXPARTS];
    pthread_t threads[MAXPARTS];
    BufferQueue blocks[MAXPARTS];
+   unsigned int ethreads_running;
 
    /* Per-part Info */
    //u64 csum[ MAXPARTS ];
@@ -384,11 +385,14 @@ typedef struct handle {
    /* Erasure Manipulation Structures */
    unsigned char e_ready;
    unsigned char src_err_list[ MAXPARTS ];
+   unsigned char prev_in_err[ MAXPARTS ];
+   unsigned int  prev_err_cnt;
    unsigned char *encode_matrix;
    unsigned char *decode_matrix;
    unsigned char *invert_matrix;
    unsigned char *g_tbls;
    unsigned char *recov[ MAXPARTS ];
+   unsigned int decode_index[ MAXPARTS ];
 
    /* Used for rebuilds to restore the original ownership to the rebuilt file. */
    uid_t owner;

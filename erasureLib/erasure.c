@@ -422,7 +422,7 @@ void *bq_writer(void *arg) {
      fast_timer_start(&timing->stats[bq->block_number].thread);
   
   // debugging, assure we see thread entry/exit, even via cancellation
-  PRINTdbg("entering thread for block %d, in %s\n", bq->block_number, bq->path);
+  PRINTdbg("entering write thread for block %d, in %s\n", bq->block_number, bq->path);
   pthread_cleanup_push(bq_finish, bq);
 
 // ---------------------- OPEN DATA FILE ----------------------
@@ -487,7 +487,7 @@ void *bq_writer(void *arg) {
       }
 
       // wait on the thread_resume condition
-      PRINTdbg("bq_writer[%d]: waiting for signal from ne_read\n", bq->block_number);
+      PRINTdbg("bq_writer[%d]: waiting for signal from ne_write\n", bq->block_number);
       pthread_cond_wait(&bq->thread_resume, &bq->qlock);
 
       // if we were halted, make sure we immediately indicate that we aren't any more 
@@ -700,7 +700,7 @@ void* bq_reader(void* arg) {
       fast_timer_start(&timing->stats[bq->block_number].thread);
   
    // debugging, assure we see thread entry/exit, even via cancellation
-   PRINTdbg("entering thread for block %d, in %s\n", bq->block_number, bq->path);
+   PRINTdbg("entering read thread for block %d, in %s\n", bq->block_number, bq->path);
    pthread_cleanup_push(bq_finish, bq);
 
 // ---------------------- READ META INFO ----------------------
@@ -717,7 +717,7 @@ void* bq_reader(void* arg) {
 
    // pull the meta info for this thread's block
    char xattrval[XATTRLEN];
-   if ( ne_get_xattr1( handle->impl, handle->auth, bq->path, xattrval, XATTRLEN ) ) {
+   if ( ne_get_xattr1( handle->impl, handle->auth, bq->path, xattrval, XATTRLEN ) < 0 ) {
       PRINTerr( "bq_reader: failed to retrieve meta info for file \"%s\"\n", bq->path );
       handle->erasure_state->manifest_status[ bq->block_number ] = 1;
       // Note: we don't set BQ_ERROR here, as it would short-circuit the initialize_queues() function
@@ -795,6 +795,7 @@ void* bq_reader(void* arg) {
 
    char   aborted = 0;         // set to 1 on pthread_lock error
    char   resetable_error = 0; // set on read error, reset on successful re-seek
+   char   permanent_error = 0; // set on failure to open file or global crc mismatch, never cleared
 
    // use 'write' to time how long we spend waiting to push buffers to our queue
    // I've moved this outside the critical section, partially to spend less time
@@ -815,6 +816,7 @@ void* bq_reader(void* arg) {
    if(FD_ERR(bq->file)) {
       PRINTerr( "failed to open data file for block %d: \"%s\"\n", bq->block_number, bq->path );
       bq->state_flags |= BQ_ERROR;
+      permanent_error = 1;
       resetable_error = 1; // while not actually resetable, we need to set this to avoid any read attempts on the bad FD
    }
    else {
@@ -863,14 +865,17 @@ void* bq_reader(void* arg) {
             // let the master proc know that we are no longer halted
             bq->state_flags &= ~(BQ_HALTED);
             // reseek our input file, if possible
-            if( FD_ERR(bq->file)  ||  ( bq->offset != HNDLOP(lseek, bq->file, bq->offset, SEEK_SET) ) ) {
-               PRINTerr( "thread %d is entering an unreadable state (seek error or bad FD)\n", bq->block_number );
-               bq->state_flags |= BQ_ERROR;
-               resetable_error = 1; // if the FD is bad or we failed to seek, do not attempt any reads until we reseek
-            }
-            else if ( bq->offset == 0 ) {
-               good_crc = 1; // if we're starting from offset zero again, our crcsum is valid
-               local_crcsum = 0;
+            if ( !(permanent_error) ) {
+               resetable_error = 0; // reseeking, so clear our temporary error state
+               if ( bq->offset != HNDLOP(lseek, bq->file, bq->offset, SEEK_SET) ) {
+                  PRINTerr( "thread %d is entering an unreadable state (seek error)\n", bq->block_number );
+                  bq->state_flags |= BQ_ERROR;
+                  resetable_error = 1; // do not attempt any reads until we successfully reseek
+               }
+               else if ( bq->offset == 0 ) {
+                  good_crc = 1; // if we're starting from offset zero again, our crcsum is valid
+                  local_crcsum = 0;
+               }
             }
             // as the handle structs should now be initialized, calculate how large our file is expected to be
             num_stripes = (int)( ( handle->erasure_state->totsz - 1 ) / ( bq->buffer_size * (size_t)handle->erasure_state->N ) );
@@ -926,7 +931,7 @@ void* bq_reader(void* arg) {
          }
 
          if ( error != bq->buffer_size + sizeof(u32) ) {
-            PRINTerr( "read error of block %d at offset %zd\n", bq->block_number, bq->offset );
+            PRINTerr( "read error for block %d at offset %zd\n", bq->block_number, bq->offset );
             bq->state_flags |= BQ_ERROR;
             resetable_error = 1;
             error = 0;
@@ -936,14 +941,18 @@ void* bq_reader(void* arg) {
             if ( memcmp( bq->buffers[bq->tail] + bq->buffer_size, &crc_val, sizeof(u32) ) ) {
                PRINTerr( "crc mismatch detected by block %d at offset %zd\n", bq->block_number, bq->offset );
                bq->state_flags |= BQ_ERROR;
-               // this is why we need this 'error' value to persist outside the loop, to catch transient data errors
+               // this is why we need this 'error' value to persist outside the loop, to catch transient data errors.
+               // No need to set the 'resetable_error' flag, as one bad block won't necessarily effect others.
+               // Note that I've also elected not to invalidate our local crcsum here, as it doesn't really matter once 
+               // we've already noted the error.
+               bq->offset += error; // still increment offset
                error = 0;
             }
             else {
                // leave the crc value sitting in the buffer.  This will be a signal to ne_read() that the buffer is
                // usable.
                local_crcsum += crc_val;
-               PRINTdbg("read done for block %d\n", bq->block_number);
+               PRINTdbg("read done for block %d at offset %zd\n", bq->block_number, bq->offset);
             }
          }
       }
@@ -966,9 +975,12 @@ void* bq_reader(void* arg) {
          // if we're at the end of the file, and both our local crcsum and the global are 'trustworthy', verify them
          if ( good_crc  &&  !(handle->erasure_state->manifest_status[bq->block_number])  &&  
                ( local_crcsum != handle->erasure_state->csum[bq->block_number] ) ) {
-            bq->state_flags |= BQ_ERROR;  // if the global doesn't match, something very odd is going on with this block
+            bq->state_flags |= BQ_ERROR;
+            // if the global doesn't match, something very odd is going on with this block.  Best to avoid reading it 
+            // from now on.
+            permanent_error = 1; // note: resetable flag already set above
             PRINTerr( "thread %d detected global crc mismatch ( data = %llu, meta = %llu )\n", 
-                        local_crcsum, handle->erasure_state->csum[bq->block_number] );
+                        bq->block_number, local_crcsum, handle->erasure_state->csum[bq->block_number] );
          }
       }
 
@@ -979,7 +991,7 @@ void* bq_reader(void* arg) {
       if (timing->flags & TF_RW)
          fast_timer_start(&timing->stats[bq->block_number].write);
 
-      // get the queue lock so that we can adjust the head position
+      // get the queue lock so that we can adjust the tail position
       if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
          PRINTerr("failed to lock queue lock: %s\n", strerror(error));
          // note the error
@@ -1223,7 +1235,10 @@ static int initialize_queues(ne_handle handle) {
       // note that read threads will be initialized in a halted state
 
       // start the threads
-      error = pthread_create(&handle->threads[i], NULL, bq_writer, (void *)bq);
+      if ( handle->mode == NE_WRONLY )
+         error = pthread_create(&handle->threads[i], NULL, bq_writer, (void *)bq);
+      else
+         error = pthread_create(&handle->threads[i], NULL, bq_reader, (void *)bq);
       if(error != 0) {
          PRINTerr("failed to start thread %d\n", i);
          terminate_threads( BQ_ABORT, handle, i, 0 );
@@ -1587,6 +1602,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
    handle->erasure_state->bsz = bsz;
    handle->erasure_state->O = erasure_offset;
    handle->buff_offset = 0;
+   handle->prev_err_cnt = 0;
 
    if ( counter < 2 ) {
       handle->mode = NE_STAT;
@@ -1624,7 +1640,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
    strncpy( nfile, path, strlen(path) + 1 );
    handle->erasure_state->path_fmt = nfile;
 
-   if ( mode == NE_REBUILD  ||  mode == NE_RDONLY ) {
+   if ( mode == NE_REBUILD ) { // ||  mode == NE_RDONLY ) {
       ret = xattr_check(handle, path); // identify total data size of stripe
       if ((ret == 0) && (handle->mode == NE_STAT)) {
          PRINTdbg( "ne_open: resetting mode to %d\n", mode);
@@ -1652,7 +1668,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
       }
 
    }
-   else if ( mode != NE_WRONLY ) { //reject improper mode arguments
+   else if ( mode != NE_WRONLY  &&  mode != NE_RDONLY ) { //reject improper mode arguments
       PRINTerr( "improper mode argument received - %d\n", mode );
       errno = EINVAL;
       free( handle->erasure_state );
@@ -1666,7 +1682,7 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
    erasure_offset = handle->erasure_state->O;
    PRINTdbg( "ne_open: using stripe values (N=%d,E=%d,bsz=%d,offset=%d)\n", N,E,bsz,erasure_offset);
 
-   if(handle->mode == NE_WRONLY) { // first cut: mutlti-threading only for writes.
+   if(handle->mode == NE_WRONLY  ||  handle->mode == NE_RDONLY) { // first cut: mutlti-threading only for writes.
      // umask is process-wide, so we have to manipulate it outside of the threads
      mode_t mask = umask(0000);
      if(initialize_queues(handle) < 0) {
@@ -1677,13 +1693,15 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
        return NULL;
      }
      umask(mask);
-     if( UNSAFE(handle) ) {
+     if( handle->mode == NE_WRONLY  &&  UNSAFE(handle) ) {
+       PRINTerr( "errors have rendered the handle unsafe to continue\n" );
        int i;
        for(i = 0; i < handle->erasure_state->N + handle->erasure_state->E; i++) {
          bq_abort(&handle->blocks[i]);
          // just detach and let the OS clean up. We don't care about the return any more.
          pthread_detach(handle->threads[i]);
        }
+       return NULL; //don't hand out a dead handle!
      }
    }
 
@@ -1832,6 +1850,321 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
 
 
 
+/**
+ * Reads nbytes of data at offset from the erasure striping referenced by the given handle
+ * @param ne_handle handle : Handle referencing the desired erasure striping
+ * @param void* buffer : Memory location in which to store the retrieved data
+ * @param int nbytes : Integer number of bytes to be read
+ * @param off_t offset : Offset within the data at which to begin the read
+ * @return int : The number of bytes read or -1 on a failure
+ */
+ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
+   if ( !(handle) ) {
+      PRINTerr( "ne_read received a NULL handle!\n" );
+      return -1;
+   }
+
+   int N = handle->erasure_state->N;
+   int E = handle->erasure_state->E;
+   size_t bsz = handle->erasure_state->bsz;
+   size_t stripesz = bsz * N;
+
+   if (nbytes > UINT_MAX) {
+     PRINTerr( "ne_read: not yet validated for write-sizes above %lu\n", UINT_MAX);
+     errno = EFBIG;             /* sort of */
+     return -1;
+   }
+
+   if ( handle->mode != NE_RDONLY ) {
+      PRINTerr( "ne_read: handle is in improper mode for reading!\n" );
+      errno = EPERM;
+      return -1;
+   }
+
+   if ( (offset + nbytes) > handle->erasure_state->totsz ) {
+      PRINTdbg("ne_read: read would extend beyond EOF, resizing read request...\n");
+      nbytes = handle->erasure_state->totsz - offset;
+      if ( nbytes <= 0 ) {
+         PRINTerr( "ne_read: offset is beyond filesize\n" );
+         return 0;             /* EOF */
+      }
+   }
+
+
+   int cur_stripe = (int)( offset / stripesz ); // I think int truncation actually works out in our favor here
+
+   // if the offset is behind us or so far in front that there is no chance of the work having already been done...
+   if ( (handle->buff_offset > ( cur_stripe * stripesz ))  ||  (( handle->buff_offset + ( MAX_QDEPTH * stripesz ) ) < ( cur_stripe * stripesz )) ) {
+      PRINTdbg( "new offset of %zd will require threads to reseek\n", offset );
+      // we need to halt all threads and trigger a reseek
+      int i;
+      for( i = 0; i < (N + E); i++ ) {
+         bq_signal( &handle->blocks[i], BQ_HALT );
+      }
+      resume_threads( (off_t)cur_stripe * ( bsz + sizeof(u32) ), handle, N, 0 );
+   }
+   // we may still be at least a few stripes in front of the given offset
+   int munch_stripes = (int)(( offset - handle->buff_offset ) / stripesz);
+   // if we're at all behind...
+   if (munch_stripes) {
+      PRINTdbg( "attempting to 'munch' %d buffers off of all queues (%d) to reach offset of %zd\n", munch_stripes, N + handle->ethreads_running, offset );
+      // just chuck buffers off of each queue until we hit the right stripe
+      int i;
+      for( i = 0; i < (N + handle->ethreads_running); i++ ) {
+         int thread_munched = 0;
+
+         // since the entire loop is a critical section, just lock around it
+         if ( pthread_mutex_lock( &handle->blocks[i].qlock ) ) {
+            PRINTerr( "failed to acquire queue lock for thread %d\n", i );
+            return -1;
+         }
+         while ( thread_munched < munch_stripes ) {
+            
+            while ( handle->blocks[i].qdepth == 0 ) {
+               PRINTdbg( "waiting on thread %d to produce a buffer\n", i );
+               // releasing the lock here will let the thread get some work done
+               pthread_cond_wait( &handle->blocks[i].master_resume, &handle->blocks[i].qlock );
+            }
+
+            // remove as many buffers as we can without going beyond the appropriate stripe
+            int orig_depth = handle->blocks[i].qdepth;
+            handle->blocks[i].qdepth = ( (orig_depth - ( munch_stripes - thread_munched )) < 0 ) ? 0 : (orig_depth - ( munch_stripes - thread_munched ));
+            handle->blocks[i].head = ( handle->blocks[i].head + ( orig_depth - handle->blocks[i].qdepth ) ) % MAX_QDEPTH;
+            thread_munched += ( orig_depth - handle->blocks[i].qdepth );
+
+            // make sure to signal the thread if we just made room for it to resume work
+            if ( orig_depth == MAX_QDEPTH )
+               pthread_cond_signal( &handle->blocks[i].thread_resume );
+         }
+         pthread_mutex_unlock( &handle->blocks[i].qlock );
+      }
+      PRINTdbg( "finished pre-read buffer 'munching'\n" );
+   }
+
+   // we are now on the proper stripe for all queues, so update our offset to reflect that
+   handle->buff_offset = cur_stripe * stripesz;
+   offset = offset - handle->buff_offset;
+
+   // time to start actually filling this read request
+   size_t bytes_read = 0;
+   while( nbytes ) { // while data still remains to be read, loop over each stripe
+      unsigned char stripe_in_err[MAXPARTS] = { 0 };
+      unsigned char stripe_err_list[MAXPARTS] = { 0 };
+      int nstripe_errors = 0;
+      int nsrcerr = 0;
+      int ethreads_checked = 0;
+      size_t to_read_in_stripe = ( nbytes % stripesz ) - offset;
+      char read_full_stripe = ( (offset + to_read_in_stripe) >= stripesz ) ? 1 : 0;
+      int cur_block = 0;
+      int skip_blocks = (int)( offset / bsz );
+      offset = offset % bsz; //adjust offset to be that within a signle block
+
+      // fist, loop through all data buffers in the stripe, looking for errors.
+      // Technically, it would theoretically be more efficient to limit this to 
+      // only the blocks we expect to need.  However, if we hit any error in those 
+      // blocks, we'll suddenly need the whole stripe.  I am hoping the reduced 
+      // complexity of just checking them all will be worth what will probably 
+      // only be the slightest of performance hits.  Besides, in the expected 
+      // use case of reading a file start to finish, we'll eventually need this 
+      // entire stripe regardless.
+      // Then, starup erasure threads as necessary to deal with errors.
+      while ( nstripe_errors > ethreads_checked  ||  cur_block < N ) {
+         // check if we can even handle however many errors we've hit so far
+         if ( nstripe_errors > E ) {
+            PRINTdbg( "stripe %d has too many data errors (%d) to be recovered\n", cur_stripe, nstripe_errors );
+            errno=ENODATA;
+            return -1;
+         }
+         int threads_to_start = (nstripe_errors - handle->ethreads_running); // previous check should insure we don't start more than E
+         if ( threads_to_start > 0 ) { // ignore possible negative value
+            PRINTdbg( "starting up %d erasure threads at offset (%zd) to cope with data errors\n", threads_to_start, (off_t)cur_stripe * bsz );
+            resume_threads( (off_t)cur_stripe * ( bsz + sizeof(u32) ), handle, threads_to_start, N + handle->ethreads_running );
+            handle->ethreads_running += threads_to_start;
+         }
+         ethreads_checked = nstripe_errors; //we will be checking as many erasure blocks as there are errors
+
+         // we now need to check each needed block for errors.
+         // Note that neglecting to reassign cur_block in this loop allows us to avoid 
+         // rechecking threads when the outer while-loop repeats.
+         for ( ; cur_block < (N+ethreads_checked); cur_block++ ) {
+            if ( pthread_mutex_lock( &handle->blocks[cur_block].qlock ) ) {
+               PRINTerr( "failed to acquire queue lock for erasure thread %d\n", cur_block );
+               return -1;
+            }
+            // if necessary, wait for the buffer to be ready
+            while ( handle->blocks[cur_block].qdepth == 0 ) {
+               PRINTdbg( "waiting on thread %d to produce a buffer\n", cur_block );
+               // releasing the lock here will let the thread get some work done
+               pthread_cond_wait( &handle->blocks[cur_block].master_resume, &handle->blocks[cur_block].qlock );
+            }
+            pthread_mutex_unlock( &handle->blocks[cur_block].qlock ); // just wanted the buffer to be ready, don't need to hold this
+
+            // check for errors based on whether the crc position of this buffer was cleaned out
+            if ( !(*(u32*)( handle->blocks[cur_block].buffers[ handle->blocks[cur_block].head ] + bsz )) ) {
+               // a zero value in the crc position means the buffer is bad
+               PRINTdbg( "detected bad buffer for block %d at stripe %d\n", cur_block, cur_stripe );
+               stripe_err_list[nstripe_errors] = cur_block;
+               nstripe_errors++;
+               stripe_in_err[cur_block] = 1;
+               // we just need to note the error, nothing to be done about it until we have all buffers ready
+            }
+         }
+         if ( !(ethreads_checked) )
+            nsrcerr = nstripe_errors; // stash the number of data blocks in error for later erasure use
+         PRINTdbg( "have checked %d blocks in stripe %d for errors\n", cur_block, cur_stripe );
+      }
+
+      // if we'er trying to avoid unnecessary reads...
+      if ( handle->mode == NE_RDONLY ) {
+         // keep the greater of how many erasure threads we've needed in the last couple of stripes...
+         if ( nstripe_errors > handle->prev_err_cnt )
+            handle->prev_err_cnt = nstripe_errors;
+         // ...and halt all others
+         for ( cur_block = (N + nstripe_errors); cur_block < (N + handle->prev_err_cnt); cur_block++ ) {
+            bq_signal( &handle->blocks[cur_block], BQ_HALT );
+            handle->ethreads_running--;
+         }
+         // need to reassign, in case the number of errors is decreasing
+         handle->prev_err_cnt = nstripe_errors;
+      }
+
+      // if necessary, engage erasure code to regenerate the missing buffers
+      if ( nstripe_errors ) {
+
+         // check if our erasure_state has changed, and invalidate our erasure_structs if so
+         for ( cur_block = 0; cur_block < (N + E); cur_block++ ) {
+            if ( handle->prev_in_err[ cur_block ] != stripe_in_err[ cur_block ] ) {
+               handle->e_ready = 0;
+               handle->prev_in_err[ cur_block ] = stripe_in_err[ cur_block ];
+            }
+         }
+
+         if ( handle->timing_data_ptr->flags & TF_ERASURE )
+            fast_timer_start(&handle->timing_data_ptr->erasure);
+
+         if ( !(handle->e_ready) ) {
+
+            // Generate encode matrix encode_matrix
+            // The matrix generated by gf_gen_rs_matrix
+            // is not always invertable.
+            PRINTdbg("initializing erasure structs...\n");
+            gf_gen_rs_matrix(handle->encode_matrix, N+E, N);
+
+            // Generate g_tbls from encode matrix encode_matrix
+            ec_init_tables(N, E, &(handle->encode_matrix[N * N]), handle->g_tbls);
+
+            int ret_code = gf_gen_decode_matrix( handle->encode_matrix, handle->decode_matrix,
+                  handle->invert_matrix, handle->decode_index, stripe_err_list, stripe_in_err,
+                  nstripe_errors, nsrcerr, N, N+E);
+
+            if (ret_code != 0) {
+               PRINTerr("failure to generate decode matrix, errors may exceed erasure limits\n");
+               errno=ENODATA;
+
+               if ( handle->timing_data_ptr->flags & TF_ERASURE ) {
+                  fast_timer_stop(&handle->timing_data_ptr->erasure);
+                  log_histo_add_interval(&handle->timing_data_ptr->erasure_h,
+                                         &handle->timing_data_ptr->erasure);
+               }
+               return -1;
+            }
+
+
+            PRINTdbg( "init erasure tables nsrcerr = %d e_ready = %d...\n", nsrcerr, handle->e_ready );
+            ec_init_tables(N, nstripe_errors, handle->decode_matrix, handle->g_tbls);
+
+            handle->e_ready = 1; //indicate that rebuild structures are initialized
+         }
+
+         // as this struct will change depending on the head position of our queues, we must generate here
+         unsigned char *recov[ MAXPARTS ];
+         for (cur_block = 0; cur_block < N; cur_block++) {
+            BufferQueue* bq = &handle->blocks[handle->decode_index[cur_block]];
+            recov[cur_block] = bq->buffers[ bq->head ];
+         }
+
+         unsigned char* temp_buffs[ nstripe_errors ];
+         for ( cur_block = 0; cur_block < nstripe_errors; cur_block++ ) {
+            // assign storage locations for the repaired buffers to be on top of the faulty buffers
+            BufferQueue* bq = &handle->blocks[stripe_err_list[ cur_block ]];
+            temp_buffs[ cur_block ] = bq->buffers[ bq->head ];
+            // as we are regenerating over the bad buffer, mark it as usable for future iterations
+            *(u32*)( temp_buffs[ cur_block ] + bsz ) = 1;
+         }
+
+         PRINTdbg( "performing regeneration from erasure...\n" );
+
+         ec_encode_data(bsz, N, nstripe_errors, handle->g_tbls, recov, &temp_buffs[0]);
+
+         // make sure to mark the regenerated buffers a good
+         //for ( cur_block = 0; cur_block < nstripe_errors; cur_block++ ) {
+         //   BufferQueue* bq = &handle->blocks[stripe_err_list[ cur_block ]];
+         //   ( *(u32*)( bq->buffers[ bq->head ] + bsz ) ) = 1;
+         //}
+
+         if ( handle->timing_data_ptr->flags & TF_ERASURE ) {
+            fast_timer_stop(&handle->timing_data_ptr->erasure);
+            log_histo_add_interval(&handle->timing_data_ptr->erasure_h,
+                                   &handle->timing_data_ptr->erasure);
+         }
+
+
+      }
+
+      // finally, copy all requested data into the buffer and clear unneeded queue entries
+      for( cur_block = 0; cur_block < ( ( handle->mode == NE_RDONLY ) ? N : N+E ); cur_block++ ) {
+         BufferQueue* bq = &handle->blocks[cur_block];
+
+         // does this buffer contain requested data?
+         if ( cur_block >= skip_blocks  &&  cur_block < N ) {
+            // if so, copy it to our output buffer
+            size_t to_copy = ( (bsz - offset) > nbytes ) ? nbytes : (bsz - offset);
+            // as no one but ne_read should be adjusting the head position, and we have already verified that this buffer is ready, 
+            // we can safely copy from it without holding the queue lock
+            memcpy( buffer + bytes_read, bq->buffers[bq->head] + offset, to_copy );
+            PRINTdbg( "copied %zd bytes from thread %d's buffer at position %d to the output buff\n", to_copy, cur_block, bq->head );
+            nbytes -= to_copy;
+            bytes_read += to_copy;
+            offset = 0; // as we have copied from the first applicable value, this offset is no longer relevant
+         }
+
+         if ( read_full_stripe ) {
+            PRINTdbg( "clearing a buffer from thread %d's queue as our read offset is beyond it\n", cur_block );
+            if ( pthread_mutex_lock( &handle->blocks[cur_block].qlock ) ) {
+               PRINTerr( "failed to acquire queue lock for thread %d\n", cur_block );
+               return -1;
+            }
+            // wait for a buffer to be produced, if necessary
+            while ( handle->blocks[cur_block].qdepth == 0 ) {
+               PRINTdbg( "waiting on thread %d to produce a buffer\n", cur_block );
+               // releasing the lock here will let the thread get some work done
+               pthread_cond_wait( &handle->blocks[cur_block].master_resume, &handle->blocks[cur_block].qlock );
+            }
+
+            // just throw away this buffer
+            handle->blocks[cur_block].qdepth--;
+            handle->blocks[cur_block].head = ( handle->blocks[cur_block].head + 1 ) % MAX_QDEPTH;
+
+            // make sure to signal the thread if we just made room for it to resume work
+            if ( handle->blocks[cur_block].qdepth == MAX_QDEPTH - 1 )
+               pthread_cond_signal( &handle->blocks[cur_block].thread_resume );
+            pthread_mutex_unlock( &handle->blocks[cur_block].qlock );
+         }
+         else if ( !(nbytes) ) { // early breakout if we are done
+            break;
+         }
+      }
+
+      offset = 0;
+      cur_stripe++;
+      if ( read_full_stripe )
+         handle->buff_offset += stripesz;
+   }
+
+   return bytes_read;
+}
+
+
 
 /**
  * Reads nbytes of data at offset from the erasure striping referenced by the given handle
@@ -1841,7 +2174,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
  * @param off_t offset : Offset within the data at which to begin the read
  * @return int : The number of bytes read or -1 on a failure
  */
-ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) 
+ssize_t ne_read_old( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) 
 {
    int mtot = (handle->erasure_state->N)+(handle->erasure_state->E);
    int minNerr = handle->erasure_state->N+1;  // greater than N
@@ -3510,6 +3843,8 @@ int ne_close( ne_handle handle )
    int            tmp;
    unsigned char *zero_buff;
    //extract_repo_name(handle->erasure_state->path_fmt, handle->repo, handle->pod_id);
+   
+   PRINTdbg( "entering ne_close()\n" );
 
    if ( handle == NULL ) {
       PRINTerr( "ne_close: received a NULL handle\n" );
@@ -3551,7 +3886,7 @@ int ne_close( ne_handle handle )
    while (counter < N+E) {
 
       char no_rename = 0;
-      if (handle->mode == NE_WRONLY ) {
+      if (handle->mode == NE_WRONLY  ||  handle->mode == NE_RDONLY) {
          bq_close(&handle->blocks[counter]);
       }
       else if (! FD_ERR(handle->FDArray[counter])) {
@@ -3658,7 +3993,7 @@ int ne_close( ne_handle handle )
       counter++;
    }
 
-   if(handle->mode == NE_WRONLY) {
+   if(handle->mode == NE_WRONLY  ||  handle->mode == NE_RDONLY) {
      int i;
      /* wait for the threads */
      for(i = 0; i < handle->erasure_state->N + handle->erasure_state->E; i++) {
