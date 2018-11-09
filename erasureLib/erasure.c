@@ -1942,6 +1942,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
    }
 
    // we are now on the proper stripe for all queues, so update our offset to reflect that
+   off_t orig_handle_offset = handle->buff_offset;
    handle->buff_offset = cur_stripe * stripesz;
    offset = offset - handle->buff_offset;
 
@@ -1954,7 +1955,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
       int nsrcerr = 0;
       int ethreads_checked = 0;
       size_t to_read_in_stripe = ( nbytes % stripesz ) - offset;
-      char read_full_stripe = ( (offset + to_read_in_stripe) >= stripesz ) ? 1 : 0;
+      char read_full_stripe = ( (offset + to_read_in_stripe) > stripesz ) ? 1 : 0;
       int cur_block = 0;
       int skip_blocks = (int)( offset / bsz );
       offset = offset % bsz; //adjust offset to be that within a signle block
@@ -2014,8 +2015,8 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
          PRINTdbg( "have checked %d blocks in stripe %d for errors\n", cur_block, cur_stripe );
       }
 
-      // if we'er trying to avoid unnecessary reads...
-      if ( handle->mode == NE_RDONLY ) {
+      // if we'er trying to avoid unnecessary reads AND are not re-hitting the same stripe as a previous call...
+      if ( handle->mode == NE_RDONLY  &&  handle->buff_offset != orig_handle_offset ) {
          // keep the greater of how many erasure threads we've needed in the last couple of stripes...
          if ( nstripe_errors > handle->prev_err_cnt )
             handle->prev_err_cnt = nstripe_errors;
