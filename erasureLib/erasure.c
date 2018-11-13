@@ -1851,14 +1851,17 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
 
 
 /**
- * Reads nbytes of data at offset from the erasure striping referenced by the given handle
- * @param ne_handle handle : Handle referencing the desired erasure striping
+ * Threaded read of nbytes of data at offset from the erasure striping referenced by the given handle
+ * @param ne_handle handle : Open handle referencing the desired erasure striping
  * @param void* buffer : Memory location in which to store the retrieved data
  * @param int nbytes : Integer number of bytes to be read
  * @param off_t offset : Offset within the data at which to begin the read
  * @return int : The number of bytes read or -1 on a failure
  */
 ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
+
+   PRINTdbg( "called to retrieve %zu bytes at offset %zd\n", nbytes, offset );
+
    if ( !(handle) ) {
       PRINTerr( "ne_read received a NULL handle!\n" );
       return -1;
@@ -1903,48 +1906,52 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
       }
       resume_threads( (off_t)cur_stripe * ( bsz + sizeof(u32) ), handle, N, 0 );
    }
-   // we may still be at least a few stripes in front of the given offset
-   int munch_stripes = (int)(( offset - handle->buff_offset ) / stripesz);
-   // if we're at all behind...
-   if (munch_stripes) {
-      PRINTdbg( "attempting to 'munch' %d buffers off of all queues (%d) to reach offset of %zd\n", munch_stripes, N + handle->ethreads_running, offset );
-      // just chuck buffers off of each queue until we hit the right stripe
-      int i;
-      for( i = 0; i < (N + handle->ethreads_running); i++ ) {
-         int thread_munched = 0;
+   else {
+      // we may still be at least a few stripes in front of the given offset
+      int munch_stripes = (int)(( offset - handle->buff_offset ) / stripesz);
+      // if we're at all behind...
+      if (munch_stripes) {
+         PRINTdbg( "attempting to 'munch' %d buffers off of all queues (%d) to reach offset of %zd\n", munch_stripes, N + handle->ethreads_running, offset );
+         // just chuck buffers off of each queue until we hit the right stripe
+         int i;
+         for( i = 0; i < (N + handle->ethreads_running); i++ ) {
+            int thread_munched = 0;
 
-         // since the entire loop is a critical section, just lock around it
-         if ( pthread_mutex_lock( &handle->blocks[i].qlock ) ) {
-            PRINTerr( "failed to acquire queue lock for thread %d\n", i );
-            return -1;
-         }
-         while ( thread_munched < munch_stripes ) {
-            
-            while ( handle->blocks[i].qdepth == 0 ) {
-               PRINTdbg( "waiting on thread %d to produce a buffer\n", i );
-               // releasing the lock here will let the thread get some work done
-               pthread_cond_wait( &handle->blocks[i].master_resume, &handle->blocks[i].qlock );
+            // since the entire loop is a critical section, just lock around it
+            if ( pthread_mutex_lock( &handle->blocks[i].qlock ) ) {
+               PRINTerr( "failed to acquire queue lock for thread %d\n", i );
+               return -1;
             }
+            while ( thread_munched < munch_stripes ) {
+               
+               while ( handle->blocks[i].qdepth == 0 ) {
+                  PRINTdbg( "waiting on thread %d to produce a buffer\n", i );
+                  // releasing the lock here will let the thread get some work done
+                  pthread_cond_wait( &handle->blocks[i].master_resume, &handle->blocks[i].qlock );
+               }
 
-            // remove as many buffers as we can without going beyond the appropriate stripe
-            int orig_depth = handle->blocks[i].qdepth;
-            handle->blocks[i].qdepth = ( (orig_depth - ( munch_stripes - thread_munched )) < 0 ) ? 0 : (orig_depth - ( munch_stripes - thread_munched ));
-            handle->blocks[i].head = ( handle->blocks[i].head + ( orig_depth - handle->blocks[i].qdepth ) ) % MAX_QDEPTH;
-            thread_munched += ( orig_depth - handle->blocks[i].qdepth );
+               // remove as many buffers as we can without going beyond the appropriate stripe
+               int orig_depth = handle->blocks[i].qdepth;
+               handle->blocks[i].qdepth = ( (orig_depth - ( munch_stripes - thread_munched )) < 0 ) ? 0 : (orig_depth - ( munch_stripes - thread_munched ));
+               handle->blocks[i].head = ( handle->blocks[i].head + ( orig_depth - handle->blocks[i].qdepth ) ) % MAX_QDEPTH;
+               thread_munched += ( orig_depth - handle->blocks[i].qdepth );
 
-            // make sure to signal the thread if we just made room for it to resume work
-            if ( orig_depth == MAX_QDEPTH )
-               pthread_cond_signal( &handle->blocks[i].thread_resume );
+               // make sure to signal the thread if we just made room for it to resume work
+               if ( orig_depth == MAX_QDEPTH )
+                  pthread_cond_signal( &handle->blocks[i].thread_resume );
+            }
+            pthread_mutex_unlock( &handle->blocks[i].qlock );
          }
-         pthread_mutex_unlock( &handle->blocks[i].qlock );
+         PRINTdbg( "finished pre-read buffer 'munching'\n" );
       }
-      PRINTdbg( "finished pre-read buffer 'munching'\n" );
    }
 
    // we are now on the proper stripe for all queues, so update our offset to reflect that
    off_t orig_handle_offset = handle->buff_offset;
    handle->buff_offset = cur_stripe * stripesz;
    offset = offset - handle->buff_offset;
+
+   PRINTdbg( "after reaching the appropriate stripe, read is at offset %zd\n", offset );
 
    // time to start actually filling this read request
    size_t bytes_read = 0;
@@ -1955,10 +1962,12 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
       int nsrcerr = 0;
       int ethreads_checked = 0;
       size_t to_read_in_stripe = ( nbytes % stripesz ) - offset;
-      char read_full_stripe = ( (offset + to_read_in_stripe) > stripesz ) ? 1 : 0;
+      char read_full_stripe = ( (offset + nbytes) > stripesz ) ? 1 : 0;
       int cur_block = 0;
       int skip_blocks = (int)( offset / bsz );
-      offset = offset % bsz; //adjust offset to be that within a signle block
+      offset = offset % bsz; //adjust offset to be that within a single block
+
+      PRINTdbg( "preparing to read from stripe %d beginning at offset %zd in block %d\n", cur_stripe, offset, skip_blocks );
 
       // fist, loop through all data buffers in the stripe, looking for errors.
       // Technically, it would theoretically be more efficient to limit this to 
