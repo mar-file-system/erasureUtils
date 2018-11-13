@@ -878,7 +878,8 @@ void* bq_reader(void* arg) {
                }
             }
             // as the handle structs should now be initialized, calculate how large our file is expected to be
-            num_stripes = (int)( ( handle->erasure_state->totsz - 1 ) / ( bq->buffer_size * (size_t)handle->erasure_state->N ) );
+            if ( handle->erasure_state->N )
+               num_stripes = (int)( ( handle->erasure_state->totsz - 1 ) / ( bq->buffer_size * (size_t)handle->erasure_state->N ) );
             // technically, this will be number of stripes minus 1, due to int truncation
          }
       }
@@ -1213,7 +1214,6 @@ static int initialize_queues(ne_handle handle) {
    }
 
    /* open files and initialize BufferQueues */
-   int threads_ready = 0; // used to indicate how many threads we have already checked the 'open' state for
    for(i = 0; i < num_blocks; i++) {
       int error, file_descriptor;
       char path[MAXNAME];
@@ -1257,22 +1257,13 @@ static int initialize_queues(ne_handle handle) {
          while( !( bq->state_flags & (BQ_OPEN | BQ_ERROR) ) ) //wait for either the OPEN or ERROR flags
             usleep( 10 );
 
-         threads_ready++;
-
-         if(bq->state_flags & BQ_ERROR) {
-            PRINTerr("open failed for block %d\n", i);
-            handle->erasure_state->src_in_err[i] = 1;
-            handle->src_err_list[handle->erasure_state->nerr] = i;
-            handle->erasure_state->nerr++;
-         }
-
          // if we have all the threads needed for determining N/E
          if ( (i+1) >= consensus ) {
 
-            PRINTdbg( "attempting to determine N/E values after starting %d threads\n", i );
+            PRINTdbg( "attempting to determine N/E values after starting %d threads\n", i+1 );
 
             // find the most common values from amongst all meta information
-            int matches = check_matches( handle->blocks, i, &(read_meta_state) );
+            int matches = check_matches( handle->blocks, i+1, &(read_meta_state) );
 
             // special case, if we have still failed to produce sensible N/E values
             if ( matches < 1 ) {
@@ -1284,12 +1275,18 @@ static int initialize_queues(ne_handle handle) {
 
             // we have N/E values, so use them to determine a new consensus
             consensus = ( read_meta_state.E ) ? ( read_meta_state.E + 1 ) : ( read_meta_state.N );
-            PRINTdbg( "set consensus to %d after retrieving new N/E values\n", consensus );
+            PRINTdbg( "set consensus to %d after retrieving new N/E values (have %d matches)\n", consensus, matches );
             // if we have sufficient matches for consensus, assign them to our handle
             if ( matches >= consensus ) {
                PRINTdbg( "setting N/E to %d/%d after reaching consensus of %d\n", read_meta_state.N, read_meta_state.E, matches );
                handle->erasure_state->N = read_meta_state.N;
                handle->erasure_state->E = read_meta_state.E;
+               if ( handle->erasure_state->O != read_meta_state.O ) {
+                  // this is horribly wasteful, but it is far easier to just restart this whole process to fix this mistake
+                  terminate_threads( BQ_ABORT, handle, i+1, 0 );
+                  i = -1; //as we will still hit the for-loop-incementer, set to -1
+               }
+               handle->erasure_state->O = read_meta_state.O;
             }
             num_blocks = read_meta_state.N + read_meta_state.E;
          }
@@ -1311,7 +1308,7 @@ static int initialize_queues(ne_handle handle) {
 
    // check for errors on open...
    // We finish checking thread status down here in order to give them a bit more time to spin up.
-   for(i = threads_ready; i < num_blocks; i++) {
+   for(i = 0; i < num_blocks; i++) {
 
       BufferQueue *bq = &handle->blocks[i];
 
@@ -1326,8 +1323,6 @@ static int initialize_queues(ne_handle handle) {
       // setting these flags, we should have a guarantee that they are set accurately.
       while( !( bq->state_flags & (BQ_OPEN | BQ_ERROR) ) ) //wait for either the OPEN or ERROR flags
          usleep( 10 );
-
-      threads_ready++;
 
       if(bq->state_flags & BQ_ERROR) {
          PRINTerr("open failed for block %d\n", i);
@@ -1603,13 +1598,11 @@ ne_handle ne_open1_vl( SnprintfFunc fn, void* state,
    handle->erasure_state->O = erasure_offset;
    handle->buff_offset = 0;
    handle->prev_err_cnt = 0;
+   handle->mode = mode;
 
-   if ( counter < 2 ) {
+   if ( counter < 2  &&  handle->mode == NE_REBUILD ) {
       handle->mode = NE_STAT;
       PRINTdbg( "ne_open: temporarily setting mode to NE_STAT\n");
-   }
-   else {
-      handle->mode = mode;
    }
 
    handle->snprintf = fn;
@@ -1885,12 +1878,10 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
    }
 
    if ( (offset + nbytes) > handle->erasure_state->totsz ) {
-      PRINTdbg("ne_read: read would extend beyond EOF, resizing read request...\n");
+      if ( offset > handle->erasure_state->totsz )
+         return 0; //EOF
       nbytes = handle->erasure_state->totsz - offset;
-      if ( nbytes <= 0 ) {
-         PRINTerr( "ne_read: offset is beyond filesize\n" );
-         return 0;             /* EOF */
-      }
+      PRINTdbg("ne_read: read would extend beyond EOF, resizing read request to %zu\n", nbytes);
    }
 
 
@@ -1904,7 +1895,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
       for( i = 0; i < (N + E); i++ ) {
          bq_signal( &handle->blocks[i], BQ_HALT );
       }
-      resume_threads( (off_t)cur_stripe * ( bsz + sizeof(u32) ), handle, N, 0 );
+      resume_threads( (off_t)cur_stripe * ( bsz + sizeof(u32) ), handle, N + handle->ethreads_running, 0 );
    }
    else {
       // we may still be at least a few stripes in front of the given offset
@@ -2122,7 +2113,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
       }
 
       // finally, copy all requested data into the buffer and clear unneeded queue entries
-      for( cur_block = 0; cur_block < ( ( handle->mode == NE_RDONLY ) ? N : N+E ); cur_block++ ) {
+      for( cur_block = 0; cur_block <  N + handle->ethreads_running; cur_block++ ) {
          BufferQueue* bq = &handle->blocks[cur_block];
 
          // does this buffer contain requested data?
@@ -2131,8 +2122,8 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
             size_t to_copy = ( (bsz - offset) > nbytes ) ? nbytes : (bsz - offset);
             // as no one but ne_read should be adjusting the head position, and we have already verified that this buffer is ready, 
             // we can safely copy from it without holding the queue lock
+            PRINTdbg( "copying %zd bytes from thread %d's buffer at position %d to the output buff\n", to_copy, cur_block, bq->head );
             memcpy( buffer + bytes_read, bq->buffers[bq->head] + offset, to_copy );
-            PRINTdbg( "copied %zd bytes from thread %d's buffer at position %d to the output buff\n", to_copy, cur_block, bq->head );
             nbytes -= to_copy;
             bytes_read += to_copy;
             offset = 0; // as we have copied from the first applicable value, this offset is no longer relevant

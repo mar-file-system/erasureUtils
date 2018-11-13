@@ -98,7 +98,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
    (N+E) failed stats for every ne_status(), ne_read(), etc. (In the case
    of UDAL_SOCKETS, each of those failed "stats" results in an attempt to
    connect to a non-existent server, which must then time out.  */
-#define MIN_MD_CONSENSUS  6
+#define MIN_MD_CONSENSUS  2
 
 #define MAXN 15
 #define MAXE 5

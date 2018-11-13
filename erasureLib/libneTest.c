@@ -242,10 +242,9 @@ select_snprintf(const char* path) {
 int main( int argc, const char* argv[] ) 
 {
    void* buff;
-   unsigned long long       nread;
-   unsigned long long       toread;
-   unsigned long long       totdone = 0;
-   const unsigned long long M       = (1024 * 1024);
+   long long          nread;
+   unsigned long long toread;
+   unsigned long long totdone = 0;
 
    int start;
    char wr = -1;
@@ -253,7 +252,6 @@ int main( int argc, const char* argv[] )
    int N;
    int E;
    int tmp;
-   unsigned long long totbytes;
    TimingFlagsValue   timing_flags = 0;
    int                parse_err = 0;
    const char*        size_arg = NULL;
@@ -366,15 +364,12 @@ int main( int argc, const char* argv[] )
       return -1;
    }
 
-   if (size_arg)                // optional <input_size> for write
+   unsigned long long buff_size = ( BLKSZ + 1 ) * MAXN; //choose a buffer size that can potentially read beyond a stripe boundary
+   size_t totbytes = buff_size;
+
+   if ( size_arg != NULL ) {                // optional <input_size> for write
       totbytes = strtoll(size_arg, NULL, 10);
-   else
-      // totbytes = N * 64 * 1024; // default
-#     ifdef INT_CRC
-      totbytes = M - sizeof(u32); // default
-#     else
-      totbytes = M;             // default
-#     endif
+   }
  
    srand(time(NULL));
    ne_handle handle;
@@ -430,14 +425,28 @@ int main( int argc, const char* argv[] )
       }
 
       if (rand_size)
-         toread = rand() % (totbytes+1);
+         toread = rand() % (buff_size+1);
       else
-         toread = (totbytes < M) ? totbytes : M;
+         toread = buff_size;
 
-      while ( totbytes != 0 ) {
+      if ( toread > totbytes )
+         toread = totbytes;
 
+      while ( toread > 0 ) {
          // read from input file
          nread = read( filefd, buff, toread );
+         if ( nread < 0 ) {
+            PRINTlog("libneTest: unexpected # of bytes (%ld) read from input file (expected %ld)\n", nread, toread );
+            perror("libneTest");
+            return -1;
+         }
+
+         if ( nread == 0 ) {
+            // reading less than expected likely indicates a premature end to the file
+            if ( size_arg )
+               PRINTlog("libneTest: terminated input reads early (offset %ld) due to zero size read\n" );
+            break;
+         }
 
          // write to erasure stripes
          PRINTdbg("libneTest: preparing to write %llu to erasure files...\n", nread );
@@ -449,19 +458,16 @@ int main( int argc, const char* argv[] )
          }
          PRINTdbg("libneTest: write successful\n" );
 
-         // without a command-line <input_size> argument, copy from the
-         // input-file until we reach EOF
-         if (size_arg)
-            totbytes -= nread;
-         else if (toread != 0  &&  nread == 0)
-            totbytes = 0;
-
          totdone += nread;
 
          if (rand_size)
-            toread = rand() % (totbytes+1);
+            toread = (rand() % buff_size) + 1;
          else
-            toread = (totbytes < M) ? totbytes : M;
+            toread = buff_size;
+         // if we know the file size, limit our reads to only get what we need
+         if ( size_arg  &&  ( (totbytes - totdone) < toread ) ) {
+            toread = (totbytes - totdone);
+         }
       }
 
       //      // if stat-flags were set, show collected stats
@@ -483,14 +489,14 @@ int main( int argc, const char* argv[] )
 
       const char*        local_file = argv[2];
 
-      // if <size_arg> wasn't provided, read the whole thing
-      uint64_t           tbd_bytes;         // total data to be moved
-      uint64_t           totbytes_per_iter; // buf-size
-
-      PRINTout("libneTest: reading %llu bytes from erasure striping "
+      if ( size_arg )
+         PRINTout("libneTest: reading %llu bytes from erasure striping "
                "(N=%d,E=%d,offset=%d) to file %s\n", totbytes, N, E, start, local_file );
-      buff = malloc( sizeof(char) * totbytes );
-      PRINTout("libneTest: allocated buffer of size %llu\n", sizeof(char) * totbytes );
+      else
+         PRINTout("libneTest: reading until EOF from erasure striping "
+               "(N=%d,E=%d,offset=%d) to file %s\n", N, E, start, local_file );
+      buff = malloc( sizeof(char) * buff_size );
+      PRINTdbg("libneTest: allocated buffer of size %llu\n", buff_size );
 
       filefd = open( local_file, O_WRONLY | O_CREAT, 0644 );
       if ( filefd == -1 ) {
@@ -498,21 +504,8 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
-#if 0
-      tbd_bytes = totbytes;
-      if ((N == 0) || (size_arg ==0)) {
-
-         // detect the size of the file, and then read the whole thing.
-         //
-         // NOTE: In the case of UDAL_SOCKETS case (with RDMA), NE_NOINFO
-         //       will attempt to stat MAXPARTS parts.  The snprintf
-         //       function will happily generate IP addrs off the deep-end.
-         //       Each of these will be stated through the RDMA UDAL, which
-         //       will result in an rsocket() call that has to time-out.
-         //       This works, but it's slow.
-         
+      if ( N == 0 )
          handle = NE_OPEN( (char *)argv[3], (NE_RDONLY | NE_NOINFO) );
-      }
       else
          handle = NE_OPEN( (char *)argv[3], NE_RDONLY, start, N, E );
 
@@ -521,10 +514,7 @@ int main( int argc, const char* argv[] )
          return -1;
       }
 
-      if (! size_arg)
-         tbd_bytes = handle->totsz;
-
-#else
+#if 0
       tbd_bytes = totbytes;
       if ((N == 0) || (size_arg ==0)) {
 
@@ -568,60 +558,52 @@ int main( int argc, const char* argv[] )
 
 #endif
 
-      // fill multiple buffers, if needed
-      totbytes_per_iter = totbytes;
-      while (totdone < tbd_bytes) {
+      if (rand_size)  
+         toread = rand() % (buff_size+1);
+      else
+         toread = buff_size;
 
-         totbytes = totbytes_per_iter;
-         if ((totdone + totbytes) > tbd_bytes)
-            totbytes = tbd_bytes - totdone;
-         PRINTdbg("libneTest: performing buffer-loop to read %llu bytes, at %llu/%llu\n",
-                  totbytes, totdone, tbd_bytes );
+      if ( toread > totbytes )
+         toread = totbytes;
 
-         // go through each buffers-worth of data as a series of reads of
-         // decreasing size, in order to exercise "corner cases".
-         // ("readall" just uses max buffers always)
-         if (totbytes && rand_size)
-            toread = (rand() % totbytes) + 1;
-         else
-            toread = (totbytes < M) ? totbytes : M;
-
-         while ( totbytes > 0 ) {
-
-            PRINTdbg("libneTest: preparing to read %llu from erasure files with offset %llu\n", toread, totdone );
-            if ( toread > totbytes ) {
-               PRINTlog("libneTest: toread (%llu) > totbytes (%llu)\n", toread, totbytes);
-               exit(EXIT_FAILURE);
-            }
-
-            tmp = ne_read( handle, buff, toread, totdone );
-            if ( tmp != toread ) {
-               // couldn't this happen without there being an error (?)
-               PRINTlog("libneTest: ne_read got %d but expected %llu\n", tmp, toread );
-               return -1;
-            }
-
-            PRINTdbg("libneTest: ...done.  Writing %llu to output file.\n", toread );
-            ssize_t wrote = write( filefd, buff, toread );
-            if (wrote < 0) {
-               PRINTlog("libneTest: write() to %s failed.  errno %d = '%s'\n",
-                        local_file, errno, strerror(errno) );
-               return -1;
-            }
-            else if (wrote != toread) {
-               PRINTlog("libneTest: wrote %lld bytes to %s, instead of %lld\n",
-                        wrote, local_file, toread );
-               return -1;
-            }
-
-            totbytes -= toread;
-            totdone  += toread;
-
-            if ( totbytes && rand_size)
-               toread = ( rand() % totbytes ) + 1;
-            else if ( totbytes )
-               toread = (totbytes < M) ? totbytes : M;
+      while ( toread > 0 ) {
+         PRINTdbg( "Reading %llu bytes from erasure stripe at offset %llu...\n", toread, totdone );
+         // read from input file
+         nread = ne_read( handle, buff, toread, totdone );
+         if ( nread < 0 ) {
+            PRINTlog("libneTest: unexpected # of bytes (%ld) read from input file (expected %ld)\n", nread, toread );
+            perror("libneTest");
+            return -1;
          }
+
+         if ( nread == 0 ) {
+            // reading less than expected likely indicates a premature end to the file
+            if ( size_arg )
+               PRINTlog("libneTest: terminated input reads early (offset %ld) due to zero size read\n" );
+            break;
+         } 
+
+
+         PRINTdbg("libneTest: ...done.  Writing %llu to output file.\n", nread );
+         ssize_t wrote = write( filefd, buff, nread );
+         if (wrote < 0) {
+            PRINTlog("libneTest: write() to %s failed.  errno %d = '%s'\n",
+                     local_file, errno, strerror(errno) );
+            return -1;
+         }
+
+         totdone  += nread;
+
+         if (rand_size)
+            toread = (rand() % buff_size) + 1;
+         else
+            toread = buff_size;
+         // if we know the file size, limit our reads to only get what we need
+         if ( size_arg != NULL  &&  ( (totbytes - totdone) < toread ) ) {
+            PRINTdbg( "resized read to %zd\n", toread );
+            toread = (totbytes - totdone);
+         }
+
       }
 
       free(buff); 
