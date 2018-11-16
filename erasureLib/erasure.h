@@ -170,7 +170,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
 #endif
 
-#define UNSAFE(HANDLE) ((HANDLE)->erasure_state->nerr > (HANDLE)->erasure_state->E - MIN_PROTECTION)
+#define UNSAFE(HANDLE, NERR) (NERR > ((HANDLE)->erasure_state->E - MIN_PROTECTION))
 
 typedef uint32_t u32;
 typedef uint64_t u64;
@@ -273,25 +273,26 @@ struct GenericFD;   // fwd-decl  (udal.h)
 typedef enum {
   NE_RDONLY = 0,
   NE_WRONLY,
+  NE_RDALL,
   NE_REBUILD,
-  NE_STAT,
   NE_NOINFO = 4,
   NE_SETBSZ = 8
 } ne_mode;
+
+#define NE_STAT 3
 
 #define MAX_QDEPTH 5
 #define MAX_RD_QDEPTH 3
 
 typedef enum {
-  BQ_FINISHED = 0x01 << 0,
-  BQ_ABORT    = 0x01 << 1,
-  BQ_HALT     = 0x01 << 2
+  BQ_FINISHED = 0x01 << 0, // signals to threads that all work has been issued and/or completed
+  BQ_ABORT    = 0x01 << 1, // signals to threads that an unrecoverable errror requires early termination
+  BQ_HALT     = 0x01 << 2  // signals to threads that work should be paused
 } BQ_Control_Flags;
 
 typedef enum {
-  BQ_OPEN     = 0x01 << 0,
-  BQ_ERROR    = 0x01 << 1,
-  BQ_HALTED   = 0x01 << 2
+  BQ_OPEN     = 0x01 << 0, // indicates that the thread has successfully opened its data file
+  BQ_HALTED   = 0x01 << 1  // indicates that this thread is 'paused'
 } BQ_State_Flags;
 
 struct handle; // forward decl.
@@ -314,7 +315,7 @@ typedef struct buffer_queue {
   char               path[2048];         /* path to the file */
   int                block_number;       /* block num of the file for this queue */
   struct handle*     handle;             /* pointer back up to the ne_handle */
-  size_t             offset;             /* for write - amount of partial block 
+  off_t              offset;             /* for write - amount of partial block 
                                              that has been stored in the buffer[tail]
                                             for read - current offset within the 
                                              block file */
@@ -472,10 +473,11 @@ int       ne_link_block1  ( const uDAL* impl, SktAuth auth,
 
 // these interfaces provide a default SnprintfFunc, which supports the
 // expectations of the default MarFS NFS-based multi-component implementation
-ne_handle  ne_open  ( char *path, ne_mode mode, ... );
-int        ne_delete( char* path, int width );
-e_status   ne_status( char* path);
-off_t      ne_size  ( const char* path, int quorum, int max_stripe_width );
+ne_handle  ne_open   ( char *path, ne_mode mode, ... );
+int        ne_rebuild( char* path, ne_mode mode, ... );
+int        ne_delete ( char* path, int width );
+e_status   ne_status ( char* path);
+off_t      ne_size   ( const char* path, int quorum, int max_stripe_width );
 
 
 
@@ -484,7 +486,6 @@ off_t      ne_size  ( const char* path, int quorum, int max_stripe_width );
 ssize_t   ne_read ( ne_handle handle, void       *buffer, size_t nbytes, off_t offset );
 ssize_t   ne_write( ne_handle handle, const void *buffer, size_t nbytes );
 int       ne_close( ne_handle handle );
-int       ne_rebuild( ne_handle handle );
 int       ne_noxattr_rebuild( ne_handle handle );
 int       ne_flush( ne_handle handle );
 
