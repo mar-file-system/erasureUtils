@@ -142,27 +142,32 @@ void usage(const char* prog_name, const char* op) {
 
 #define USAGE(CMD, ARGS)                                       \
    PRINTlog("  %2s %-10s %s\n",                                \
-           (!strcmp(op, CMD) ? "->" : ""), (CMD), (ARGS))
+           (!strncmp(op, CMD, 10) ? "->" : ""), (CMD), (ARGS))
 
-   USAGE("write",      "input_file  erasure_path N E start_file  [timing_flags] [input_size]");
-   USAGE("put",        "input_file  erasure_path N E start_file  [timing_flags] [input_size]");
-   USAGE("read",       "output_file erasure_path N E start_file  [timing_flags] [read_size]");
-   USAGE("get",        "output_file erasure_path N E start_file  [timing_flags] [read_size]");
-   USAGE("rebuild",    "erasure_path             N E start_file  [timing_flags]");
-   USAGE("status",     "erasure_path");
-   USAGE("delete",     "erasure_path stripe_width");
-   USAGE("sizeof",     "erasure_path quorum stripe_width");
-
-   USAGE("crc_status", "");
+   USAGE("read",       "erasure_path N E start_file [-t timing_flags] [-r] [-s input_size] [-o output_file]");
+   USAGE("write",      "erasure_path N E start_file [-t timing_flags] [-r] [-s input_size] [-i input_file]");
+   USAGE("verify",     "erasure_path N E start_file [-t timing_flags] [-r] [-s input_size] [-o output_file]");
+   USAGE("rebuild",    "erasure_path N E start_file [-t timing_flags]");
+   USAGE("delete",     "erasure_path stripe_width   [-t timing_flags] [-f]");
+   USAGE("stat",       "erasure_path                [-t timing_flags]");
+   USAGE("crc-status", "");
    USAGE("help",       "");
 
    PRINTlog("\n");
    PRINTlog("\n");
    PRINTlog("  NOTES:\n");
-   PRINTlog("     write/read        use random transfer-size  (<= 1MB)\n");
-   PRINTlog("     put/get           like write/read but use fixed (1MB) transfer-size\n");
+   PRINTlog("     read/write/verify   Use a fixed transfer size (slightly larger than a libne stripe),\n" \
+"                            but can use a random transfer-size (<= fixed size) if '-r' is specified.\n");
    PRINTlog("\n");
-   PRINTlog("     <timing_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
+   PRINTlog("     output_file         If not specified for read, the retrieved data will simply be \n"
+"                            discarded.\n");
+   PRINTlog("\n");
+   PRINTlog("     input_file          If not specified for write, a stream of zeros will be stored to \n"
+"                            the erasure stripe up to the given input_size.  Specifiying \n"
+"                            neither '-s' nor '-i' for a write operation will result in \n"
+"                            an error condition.\n");
+   PRINTlog("\n");
+   PRINTlog("     <timing_flags>      can be decimal, or can be hex-value starting with \"0x\"\n");
    PRINTlog("\n");
    PRINTlog("        OPEN    =  0x0001\n");
    PRINTlog("        RW      =  0x0002     /* each individual read/write, in given stream */\n");
@@ -192,22 +197,13 @@ void usage(const char* prog_name, const char* op) {
 
 
 
-int
-parse_flags(TimingFlagsValue* flags, const char* str) {
+int parse_flags(TimingFlagsValue* flags, const char* str) {
    if (! str)
       *flags = 0;
-
-   else if (!strncmp("0x", str, 2)) {
-      errno = 0;
-      *flags = (TimingFlagsValue)strtol(str+2, NULL, 16);
-      if (errno) {
-         PRINTlog("couldn't parse flags from '%s'\n", str);
-         return -1;
-      }
-   }
    else {
       errno = 0;
-      *flags = (TimingFlagsValue)strtol(str, NULL, 10);
+      // strtol() already detects the '0x' prefix for us
+      *flags = (TimingFlagsValue)strtol(str, NULL, 0);
       if (errno) {
          PRINTlog("couldn't parse flags from '%s'\n", str);
          return -1;
@@ -239,149 +235,200 @@ select_snprintf(const char* path) {
 
 
 
-int main( int argc, const char* argv[] ) 
+int main( int argc, const char** argv ) 
 {
    void* buff;
-   long long          nread;
-   unsigned long long toread;
    unsigned long long totdone = 0;
 
-   int start;
-   char wr = -1;
+   char wr = -1;  // defines the operation being performed ( 0 = read, 1 = write, 2 = rebuild, 3 = verify, 4 = stat, 5 = delete )
    int filefd;
-   int N;
-   int E;
-   int tmp;
+   int N = -1;
+   int E = -1;
+   int O = -1;
+   char* erasure_path = NULL;
    TimingFlagsValue   timing_flags = 0;
    int                parse_err = 0;
-   const char*        size_arg = NULL;
-   int                rand_size = 1;
-
-   LOG_INIT();
-
-   if ( argc < 2 ) {
-      usage(argv[0], "help");
-      return -1;
-   }
-
-
-   if ((    strcmp( argv[1], "write"    ) == 0 )
-       || ( strcmp( argv[1], "put" ) == 0 )) {
-      if ( argc < 7 ) {
-         usage( argv[0], argv[1] ); 
-         return -1;
-      }
-      if ( argc >= 8 )          // optional <timing_flags>
-         parse_err = parse_flags(&timing_flags, argv[7]);
-
-      if ( argc >= 9)
-         size_arg = argv[8];
-
-      wr = 1;
-      if (strcmp( argv[1], "put" ) == 0 )
-         rand_size = 0;
-   }
-   else if ((    strcmp( argv[1], "read" ) == 0 )
-            || ( strcmp( argv[1], "get" ) == 0 )) {
-      if ( argc < 7 ) {
-         usage( argv[0], argv[1] ); 
-         return -1;
-      }
-      if ( argc >= 8 )          // optional <timing_flags>
-         parse_err = parse_flags(&timing_flags, argv[7]);
-
-      if ( argc >= 9)
-         size_arg = argv[8];
-
-      wr = 0;
-      if (strcmp( argv[1], "get" ) == 0 )
-         rand_size = 0;
-   }
-   else if ( strcmp( argv[1], "rebuild" ) == 0 ) {
-      if ( argc < 6 ) {
-         usage( argv[0], argv[1] ); 
-         return -1;
-      }
-      if ( argc == 7 )          // optional <timing_flags>
-         parse_err = parse_flags(&timing_flags, argv[6]);
-
-      wr = 2;
-   }
-
-   else if ( strcmp( argv[1], "status" ) == 0 ) {
-      if ( argc != 3 ) { 
-         usage( argv[0], argv[1] ); 
-         return -1;
-      }
-      wr = 3;
-   }
-
-   else if ( strcmp( argv[1], "delete" ) == 0 ) {
-      if ( argc != 4 ) {
-         usage( argv[0], argv[1] ); 
-         return -1;
-      }
-      N = atoi(argv[3]);
-      wr = 4;
-   }
-
-   else if ( strcmp( argv[1], "crc-status" ) == 0 ) {
-      PRINTout("MAX-N: %d   MAX-E: %d\n", MAXN, MAXE);
-      return crc_status();
-   }
-
-   else if ( strcmp( argv[1], "sizeof" ) == 0 ) {
-      if ( argc != 5 ) {
-         usage( argv[0], argv[1] );
-         return -1;
-      }
-      wr = 5;
-   }
-
-   else {
-      usage( argv[0], "help" );
-      return -1;
-   }
-   
-   PRINTdbg("libneTest: command = '%s'\n", argv[1]);
-
-
-
-   // --- command-specific extra args
-   if ( wr < 2 ) {              // read or write
-      N = atoi(argv[4]);
-      E = atoi(argv[5]);
-      start = atoi(argv[6]);
-   }
-   else if ( wr < 3 ) {         // i.e. rebuild
-      N = atoi(argv[3]);
-      E = atoi(argv[4]);
-      start = atoi(argv[5]);
-   }
-
-   if (parse_err) {
-      usage(argv[0], argv[1]);
-      return -1;
-   }
+   char               size_arg = 0;
+   char               rand_size = 0;
+   char               force_delete = 0;
+   char* output_file = NULL;
+   char* input_file  = NULL;
 
    unsigned long long buff_size = ( BLKSZ + 1 ) * MAXN; //choose a buffer size that can potentially read beyond a stripe boundary
    size_t totbytes = buff_size;
 
-   if ( size_arg != NULL ) {                // optional <input_size> for write
-      totbytes = strtoll(size_arg, NULL, 10);
-   }
- 
-   srand(time(NULL));
-   ne_handle handle;
+   LOG_INIT();
 
-   SktAuth  auth;
-   if (DEFAULT_AUTH_INIT(auth)) {
-      PRINTerr("failed to initialize default socket-authentication credentials\n");
+   char pr_usage = 0;
+   int c;
+   // parse all position-independent arguments
+   while ( (c = getopt( argc, (char* const*)argv, "t:i:o:s:rfh" )) != -1 ) {
+      switch (c) {
+         char* endptr;
+         case 't':
+            if ( parse_flags(&timing_flags, optarg) ) {
+               PRINTlog( "failed to parse timing flags value: \"%s\"\n", optarg );
+               pr_usage = 1;
+            }
+            break;
+         case 'i':
+            input_file = optarg;
+            break;
+         case 'o':
+            output_file = optarg;
+            break;
+         case 's':
+            size_arg = 1;
+            totbytes = strtoll(optarg, &endptr, 10);
+            // afterwards, check for a parse error
+            if ( *endptr != '\0' ) {
+               PRINTlog( "%s: failed to parse argument for '-s' option: \"%s\"\n", argv[0], optarg );
+               usage( argv[0], "help" );
+               return -1;
+            }
+            break;
+         case 'r':
+            rand_size = 1;
+            break;
+         case 'f':
+            force_delete = 1;
+            break;
+         case 'h':
+            usage( argv[0], "help" );
+            return 0;
+         case '?':
+            pr_usage = 1;
+            break;
+         default:
+            PRINTlog( "failed to parse command line options\n" );
+            return -1;
+      }
+   }
+
+   char* operation = NULL;
+   // parse all position/command-dependent arguments
+   for ( c = optind; c < argc; c++ ) {
+      if ( wr < 0 ) { // if no operation specified, the first arg should define it
+         if ( strcmp( argv[c], "read"    ) == 0 )
+            wr = 0;
+         else if ( strcmp( argv[c], "write"    ) == 0 )
+            wr = 1;
+         else if ( strcmp( argv[c], "verify"    ) == 0 )
+            wr = 2;
+         else if ( strcmp( argv[c], "rebuild"    ) == 0 )
+            wr = 3;
+         else if ( strcmp( argv[c], "delete"    ) == 0 )
+            wr = 4;
+         else if ( strcmp( argv[c], "stat"    ) == 0 )
+            wr = 5;
+         else if ( strcmp( argv[c], "crc-status" ) == 0 ) {
+            PRINTout( "MAXN: %d     MAXE: %d\n", MAXN, MAXE );
+            crc_status();
+            return 0;
+         }
+         else if ( strcmp( argv[c], "help" ) == 0 ) {
+            usage( argv[0], argv[c] );
+            return 0;
+         }
+         else {
+            PRINTlog( "%s: unrecognized operation argument provided: \"%s\"\n", argv[0], argv[c] );
+            usage( argv[0], "help" );
+            return -1;
+         }
+         operation = (char *)argv[c];
+      }
+      else if ( erasure_path == NULL ) { // all operations require this as the next argument
+         erasure_path = (char *)argv[c];
+      }
+      else if ( (wr < 4)  &&  (O == -1) ) { // loop through here until N/E/O are populated, if this operation needs them
+         char val = '\0';
+         char* endptr = &val;
+         if ( N == -1 ) {
+            val = 'N';
+            N = strtol( argv[c], &endptr, 10 );
+         }
+         else if ( E == -1 ) {
+            val = 'E';
+            E = strtol( argv[c], &endptr, 10 );
+         }
+         else {
+            val = 'O';
+            O = strtol( argv[c], &endptr, 10 );
+         }
+         // afterwards, check for a parse error
+         if ( *endptr != '\0' ) {
+            PRINTlog( "%s: failed to parse value for %c: \"%s\"\n", argv[0], val, argv[c] );
+            usage( argv[0], operation );
+            return -1;
+         }
+      }
+      else if ( (wr == 4)  &&  (N == -1) ) { // for delete, store the stripe width to 'N'
+         char* endptr;
+         N = strtol( argv[c], &endptr, 10 );
+         if ( *endptr != '\0' ) {
+            PRINTlog( "%s: failed to parse value for stripe-width: \"%s\"\n", argv[0], argv[c] );
+            usage( argv[0], operation );
+            return -1;
+         }
+      }
+      else {
+         PRINTlog( "%s: encountered unrecognized argument: \"%s\"\n", argv[0], argv[c] );
+         usage( argv[0], operation );
+         return -1;
+      }
+   }
+
+   // verify that we received all required args
+   if ( operation == NULL ) {
+      PRINTlog( "%s: no operation specified\n", argv[0] );
+      usage( argv[0], "help" );
+      return -1;
+   }
+   if ( erasure_path == NULL  ||  ( (wr != 5) && (N == -1) )  ||  ( (wr < 4) && (O == -1) ) ) {
+      PRINTlog( "%s: missing required arguments for operation: \"%s\"\n", argv[0], operation );
+      usage( argv[0], operation );
       return -1;
    }
 
+   // warn if improper args were specified for a given op
+   if ( ( input_file != NULL )  &&  ( wr != 1 ) ) {
+      PRINTlog( "%s: the '-i' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
+      usage( argv[0], operation );
+      return -1;
+   }
 
+   if ( (rand_size)  &&  ( wr > 2 ) ) {
+      PRINTlog( "%s: the '-r' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
+      usage( argv[0], operation );
+      return -1;
+   }
 
+   if ( (size_arg)  &&  ( wr > 2 ) ) {
+      PRINTlog( "%s: the '-s' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
+      usage( argv[0], operation );
+      return -1;
+   }
+
+   if ( ( output_file != NULL )  &&  ( wr != 0  &&  wr != 2 ) ) {
+      PRINTlog( "%s: the '-o' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
+      usage( argv[0], operation );
+      return -1;
+   }
+
+   if ( (wr == 1)  &&  (input_file == NULL)  &&  !(size_arg) ) {
+      PRINTlog( "%s: missing required arguments for operation: \"%s\"\n", argv[0], operation );
+      PRINTlog( "%s: write operations require one or both of the '-s' and '-i' options\n", argv[0] );
+      usage( argv[0], operation );
+      return -1;
+   }
+
+   // if we've made it all the way here without hitting a hard error, make sure to still print usage from a previous 'soft' error
+   if ( pr_usage ) {
+      usage( argv[0], operation );
+      return -1;
+   }
+   
+   PRINTdbg("libneTest: command = '%s'\n", operation);
 
 #  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, \
                                                  timing_flags, NULL,    \
@@ -395,263 +442,86 @@ int main( int argc, const char* argv[] )
                                                  timing_flags, NULL,    \
                                                  (PATH))
 
+# define NE_STAT_CALL(PATH, E_STRUCT)      ne_stat1(select_snprintf(PATH), NULL, select_impl(PATH), auth, \
+                                                 timing_flags, NULL,    \
+                                                 (PATH), (E_STRUCT) )
+
 #  define NE_SIZE(PATH, QUOR, WIDTH)  ne_size1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, \
                                                  timing_flags, NULL,    \
                                                  (PATH), (QUOR), (WIDTH))
+   ne_handle handle;
 
-
-
-   // -----------------------------------------------------------------
-   // write / put
-   // -----------------------------------------------------------------
-
-   if ( wr == 1 ) {
-
-      buff = malloc( sizeof(char) * totbytes );
-
-      PRINTout("libneTest: writing content of file %s to erasure striping (N=%d,E=%d,offset=%d)\n",
-               argv[2], N, E, start );
-
-      filefd = open( argv[2], O_RDONLY );
-      if ( filefd == -1 ) {
-         PRINTlog("libneTest: failed to open file %s\n", argv[2] );
-         return -1;
-      }
-
-      handle = NE_OPEN( (char *)argv[3], NE_WRONLY, start, N, E );
-      if ( handle == NULL ) {
-         PRINTlog("libneTest: ne_open failed.  errno %d = '%s'\n", errno, strerror(errno) );
-         return -1;
-      }
-
-      if (rand_size)
-         toread = rand() % (buff_size+1);
-      else
-         toread = buff_size;
-
-      if ( toread > totbytes )
-         toread = totbytes;
-
-      while ( toread > 0 ) {
-         // read from input file
-         nread = read( filefd, buff, toread );
-         if ( nread < 0 ) {
-            PRINTlog("libneTest: unexpected # of bytes (%ld) read from input file (expected %ld)\n", nread, toread );
-            perror("libneTest");
-            return -1;
-         }
-
-         if ( nread == 0 ) {
-            // reading less than expected likely indicates a premature end to the file
-            if ( size_arg )
-               PRINTlog("libneTest: terminated input reads early (offset %ld) due to zero size read\n" );
-            break;
-         }
-
-         // write to erasure stripes
-         PRINTdbg("libneTest: preparing to write %llu to erasure files...\n", nread );
-         ssize_t nwritten = ne_write( handle, buff, nread );
-         if ( nwritten != nread ) {
-            PRINTlog("libneTest: unexpected # of bytes (%ld) written by ne_write (expected %ld)\n", nwritten, nread );
-            perror("libneTest");
-            return -1;
-         }
-         PRINTdbg("libneTest: write successful\n" );
-
-         totdone += nread;
-
-         if (rand_size)
-            toread = (rand() % buff_size) + 1;
-         else
-            toread = buff_size;
-         // if we know the file size, limit our reads to only get what we need
-         if ( size_arg  &&  ( (totbytes - totdone) < toread ) ) {
-            toread = (totbytes - totdone);
-         }
-      }
-
-      //      // if stat-flags were set, show collected stats
-      //      show_handle_stats(handle);
-
-      close(filefd);
-      free(buff);
-
-      PRINTout("libneTest: all writes completed\n");
-      PRINTout("libneTest: total written = %llu\n", totdone );
+   SktAuth  auth;
+   if (DEFAULT_AUTH_INIT(auth)) {
+      PRINTerr("%s: failed to initialize default socket-authentication credentials\n", argv[0] );
+      return -1;
    }
-
-
-   // -----------------------------------------------------------------
-   // read / get
-   // -----------------------------------------------------------------
-
-   else if ( wr == 0 ) {
-
-      const char*        local_file = argv[2];
-
-      if ( size_arg )
-         PRINTout("libneTest: reading %llu bytes from erasure striping "
-               "(N=%d,E=%d,offset=%d) to file %s\n", totbytes, N, E, start, local_file );
-      else
-         PRINTout("libneTest: reading until EOF from erasure striping "
-               "(N=%d,E=%d,offset=%d) to file %s\n", N, E, start, local_file );
-      buff = malloc( sizeof(char) * buff_size );
-      PRINTdbg("libneTest: allocated buffer of size %llu\n", buff_size );
-
-      filefd = open( local_file, O_WRONLY | O_CREAT, 0644 );
-      if ( filefd == -1 ) {
-         PRINTlog("libneTest: failed to open file %s\n", local_file );
-         return -1;
-      }
-
-      if ( N == 0 )
-         handle = NE_OPEN( (char *)argv[3], (NE_RDONLY | NE_NOINFO) );
-      else
-         handle = NE_OPEN( (char *)argv[3], NE_RDONLY, start, N, E );
-
-      if ( handle == NULL ) {
-         PRINTlog("libneTest: ne_open failed.  errno %d = '%s'\n", errno, strerror(errno) );
-         return -1;
-      }
-
-#if 0
-      tbd_bytes = totbytes;
-      if ((N == 0) || (size_arg ==0)) {
-
-         // If the size for the read wasn't provided, use ne_stat() to find the
-         // actual size of the file, and then read the whole thing.
-
-         TimingFlagsValue temp_timing_flags = timing_flags; /* don't use timing_flags during NE_STAT() */
-         timing_flags = 0;
-
-         PRINTout("libneTest: stat'ing to get total size.  path = '%s'\n", (char *)argv[3] );
-
-         e_status stat = NE_STATUS( (char *)argv[3] );
-         if ( stat == NULL ) {
-            PRINTlog("libneTest: ne_status failed!\n" );
-            return -1;
-         }
-         PRINTout("after ne_status() -- N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
-                 stat->N, stat->E, stat->bsz, stat->O, (unsigned long long)stat->totsz );
-
-         timing_flags = temp_timing_flags; /* restore timing_flags for NE_READ() */
-
-         if (! N)
-            N = stat->N;
-
-         if (! E)
-            E = stat->E;
-
-         if (! start)
-            start = stat->O;
-
-         if (! size_arg)
-            tbd_bytes = stat->totsz;
-      }
-
-      handle = NE_OPEN( (char *)argv[3], NE_RDONLY, start, N, E );
-      if ( handle == NULL ) {
-         PRINTlog("libneTest: ne_open failed.  errno %d = '%s'\n", errno, strerror(errno) );
-         return -1;
-      }
-      PRINTout("did open()\n");
-
-#endif
-
-      if (rand_size)  
-         toread = rand() % (buff_size+1);
-      else
-         toread = buff_size;
-
-      if ( toread > totbytes )
-         toread = totbytes;
-
-      while ( toread > 0 ) {
-         PRINTdbg( "Reading %llu bytes from erasure stripe at offset %llu...\n", toread, totdone );
-         // read from input file
-         nread = ne_read( handle, buff, toread, totdone );
-         if ( nread < 0 ) {
-            PRINTlog("libneTest: unexpected # of bytes (%ld) read from input file (expected %ld)\n", nread, toread );
-            perror("libneTest");
-            return -1;
-         }
-
-         if ( nread == 0 ) {
-            // reading less than expected likely indicates a premature end to the file
-            if ( size_arg )
-               PRINTlog("libneTest: terminated input reads early (offset %ld) due to zero size read\n" );
-            break;
-         } 
-
-
-         PRINTdbg("libneTest: ...done.  Writing %llu to output file.\n", nread );
-         ssize_t wrote = write( filefd, buff, nread );
-         if (wrote < 0) {
-            PRINTlog("libneTest: write() to %s failed.  errno %d = '%s'\n",
-                     local_file, errno, strerror(errno) );
-            return -1;
-         }
-
-         totdone  += nread;
-
-         if (rand_size)
-            toread = (rand() % buff_size) + 1;
-         else
-            toread = buff_size;
-         // if we know the file size, limit our reads to only get what we need
-         if ( size_arg != NULL  &&  ( (totbytes - totdone) < toread ) ) {
-            PRINTdbg( "resized read to %zd\n", toread );
-            toread = (totbytes - totdone);
-         }
-
-      }
-
-      free(buff); 
-      close(filefd);
-
-      //      // if stat-flags were set, show collected stats
-      //      show_handle_stats(handle);
-
-      PRINTout("libneTest: all reads completed\n");
-      PRINTout("libneTest: total read = %llu\n", totdone );
-   }
-
+   int tmp;
 
    // -----------------------------------------------------------------
    // rebuild
    // -----------------------------------------------------------------
 
-   else if ( wr == 2 ) {
-      PRINTout("libneTest: rebuilding erasure striping (N=%d,E=%d,offset=%d)\n", N, E, start );
+   if ( wr == 3 ) {
+      PRINTout("libneTest: rebuilding erasure striping (N=%d,E=%d,offset=%d)\n", N, E, O );
 
-      if ( N == 0 ) {
-         handle = NE_OPEN( (char *)argv[2], NE_REBUILD | NE_NOINFO );
-         if(handle == NULL) {
-           perror("ne_open()");
-         }
-      }
-      else {
-         handle = NE_OPEN( (char *)argv[2], NE_REBUILD, start, N, E );
-      }
-
-      tmp = ne_rebuild( handle );
-      if ( tmp < 0 ) {
-        PRINTout("rebuild result %d, errno=%d (%s)\n", tmp, errno, strerror(errno));
-        PRINTlog("libneTest: rebuild failed!\n" );
+      if ( (tmp = ne_rebuild( erasure_path, NE_REBUILD, O, N, E )) ) {
+         PRINTout("rebuild result %d, errno=%d (%s)\n", tmp, errno, strerror(errno));
+         PRINTlog("libneTest: rebuild failed!\n" );
          return -1;
       }
       PRINTout("libneTest: rebuild complete\n" );
+
+      PRINTout("rebuild rc: %d\n",tmp);
+
+      return tmp;
+   }
+
+
+
+   // -----------------------------------------------------------------
+   // delete
+   // -----------------------------------------------------------------
+
+   if ( wr == 4 ) {
+      char response;
+      char iter = 0;
+      while ( !(force_delete)  &&  response != 'y'  &&  response != 'Y' ) {
+         response = '\n';
+         PRINTout("libneTest: deleting striping corresponding to path \"%s\" with width %d...\n"
+                  "Are you sure you wish to continue? (y/n): ", (char*)argv[2], N );
+         fflush( stdout );
+         while( response == '\n' )
+            response = getchar();
+         if ( response == 'n'  ||  response == 'N' )
+            return -1;
+         PRINTout( "libneTest: input unrecognized\n" );
+         iter++; // see if this has happened a lot
+         if ( iter > 4 ) {
+            PRINTout( "libneTest: terminating due to excessive unrecognized user input\n" );
+            return -1;
+         }
+      }
+      if ( NE_DELETE( erasure_path, N ) ) {
+         PRINTlog("libneTest: deletion attempt indicates a failure for path \"%s\"\n", (char*)argv[2] );
+         return -1;
+      }
+      PRINTout("libneTest: deletion successful\n" );
+      return 0;
    }
 
 
    // -----------------------------------------------------------------
-   // status
+   // stat
    // -----------------------------------------------------------------
 
-   else if ( wr == 3 ) {
+   if ( wr == 5 ) {
       PRINTout("libneTest: retrieving status of erasure striping with path \"%s\"\n", (char *)argv[2] );
-      e_status stat = NE_STATUS( (char *)argv[2] );
-      if ( stat == NULL ) {
+      struct ne_stat_struct stat_struct;
+      e_status stat = &stat_struct;
+      memset( stat, 0, sizeof( struct ne_stat_struct ) );
+
+      if ( NE_STAT_CALL( erasure_path, stat ) ) {
          PRINTlog("libneTest: ne_status failed!\n" );
          return -1;
       }
@@ -685,8 +555,6 @@ int main( int argc, const char* argv[] )
             tmp += ( 1 << ((filefd + stat->O) % (stat->N+stat->E)) );
          }
       }
-      free(stat);
-
       printf("%d\n",tmp);
 
       return tmp;
@@ -694,39 +562,130 @@ int main( int argc, const char* argv[] )
 
 
    // -----------------------------------------------------------------
-   // size
+   // read / write / verify
    // -----------------------------------------------------------------
 
-   else if (wr == 5) {
-      PRINTout( "Size of \"%s\" -- %zd\n",
-                argv[2],
-                NE_SIZE( argv[2], atoi(argv[3]), atoi(argv[4]) ) );
-      return 0;
+   srand(time(NULL));
+
+   // allocate space for a data buffer and zero out so that we could zero write using it
+   buff = memset( malloc( sizeof(char) * buff_size ), 0, buff_size );
+   if ( buff == NULL ) {
+      PRINTlog( "libneTest: failed to allocate space for a data buffer\n" );
+      return -1;
    }
 
+   int std_fd = 0; // no way this FD gets reused, so safe to initialize to this
+   if ( output_file != NULL )
+      std_fd = open( output_file, O_WRONLY | O_CREAT | O_EXCL, 0600 );
+   else if ( input_file != NULL )
+      std_fd = open( input_file, O_RDONLY );
 
-   // -----------------------------------------------------------------
-   // delete
-   // -----------------------------------------------------------------
+   // verify a proper open of our standard file
+   if ( std_fd < 0 ) {
+      if ( output_file != NULL )
+         PRINTlog( "libneTest: failed to open output file \"%s\": %s\n", output_file, strerror(errno) );
+      else
+         PRINTlog( "libneTest: failed to open input file \"%s\": %s\n", input_file, strerror(errno) );
+      free( buff );
+      return -1;
+   }
 
-   else if ( wr == 4 ) {
-      PRINTout("libneTest: deleting striping corresponding to path \"%s\" with width %d...\n", (char*)argv[2], N );
-      if ( NE_DELETE( (char*) argv[2], N ) ) {
-         PRINTlog("libneTest: deletion attempt indicates a failure for path \"%s\"\n", (char*)argv[2] );
+   if ( wr == 0 ) // read
+      handle = ne_open( erasure_path, NE_RDONLY, O, N, E );
+   else if ( wr == 1 ) // write
+      handle = ne_open( erasure_path, NE_WRONLY, O, N, E );
+   else if ( wr == 2 ) // verify
+      handle = ne_open( erasure_path, NE_RDALL, O, N, E );
+
+   // check for a successful open of the handle
+   if ( handle == NULL ) {
+      PRINTlog( "libneTest: failed to open the requested erasure path for a %s operation\n", operation );
+      return -1;
+   }
+
+   unsigned long long toread;
+
+   if (rand_size)
+      toread = rand() % (buff_size+1);
+   else
+      toread = buff_size;
+   if ( toread > totbytes )
+      toread = totbytes;
+
+   off_t bytes_moved = 0;
+   while ( toread > 0 ) {
+
+      // READ DATA
+      ssize_t nread = toread; // assume success if no read takes place
+      if ( (wr == 1)  &&  (std_fd) ) { // if input_file was defined, writes get data from it 
+         PRINTdbg("libneTest: reading %llu bytes from \"%s\"\n", toread, input_file );
+         nread = read( std_fd, buff, toread );
+      }
+      else if ( wr != 1 ) { // read/verify get data from the erasure stripe
+         PRINTdbg("libneTest: reading %llu bytes from erasure stripe\n", toread );
+         nread = ne_read( handle, buff, toread, bytes_moved );
+      }
+
+      // check for a read error
+      if ( (nread < 0)  ||  ( (size_arg) && (nread < toread) ) ) {
+         PRINTlog( "libneTest: expected to read %llu bytes from source but instead received: %zd\n", toread, nread );
+         free( buff );
+         ne_close( handle );
+         if ( std_fd )
+            close( std_fd );
          return -1;
       }
-      PRINTout("libneTest: deletion successful\n" );
-      return 0;
+
+      // WRITE DATA
+      if ( wr == 1 ) { // for write, just output to the stripe
+         PRINTdbg( "libneTest: writing %zd bytes to erasure stripe\n", nread );
+         nread = ne_write( handle, buff, nread );
+      }
+      else if ( std_fd ) { // for read/verify, only write out if given the -o flag
+         PRINTdbg( "libneTest: writing %zd bytes to \"%s\"\n", nread, output_file );
+         nread = write( std_fd, buff, nread );
+      }
+ 
+      // check for a write error
+      if ( (nread < 0)  ||  ( (size_arg) && (nread < toread) ) ) {
+         PRINTlog( "libneTest: expected to write %llu bytes but instead wrote: %zd\n", toread, nread );
+         free( buff );
+         ne_close( handle );
+         if ( std_fd )
+            close( std_fd );
+         return -1;
+      }
+
+      // increment our counters
+      bytes_moved += nread;
+
+      // determine how much to read next time
+      if (rand_size)
+         toread = rand() % (buff_size+1);
+      else
+         toread = buff_size;
+      if ( (size_arg)  &&  (toread > (totbytes - bytes_moved)) )
+         toread = totbytes - bytes_moved;
+      // if size wasn't specified, only read until we can't any more
+      if ( !(size_arg)  &&  (nread < toread) )
+         toread = 0;
+
    }
 
+   PRINTout( "libneTest: all data movement completed (%llu bytes)\n", bytes_moved );
 
+   if ( std_fd  &&  close( std_fd ) ) {
+      if ( wr == 1 )
+         PRINTlog( "libneTest: encountered an error when trying to close input file\n" );
+      else
+         PRINTlog( "libneTest: encountered an error when trying to close output file\n" );
+   }
+      
 
+   // close the handle and indicate it's close condition
    tmp = ne_close( handle );
    PRINTout("close rc: %d\n",tmp);
-   fflush(stdout);
-   fflush(stderr);
 
    return tmp;
-
 }
 

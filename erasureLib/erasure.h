@@ -291,8 +291,9 @@ typedef enum {
 } BQ_Control_Flags;
 
 typedef enum {
-  BQ_OPEN     = 0x01 << 0, // indicates that the thread has successfully opened its data file
-  BQ_HALTED   = 0x01 << 1  // indicates that this thread is 'paused'
+  BQ_OPEN     = 0x01 << 0, // indicates that this thread has successfully opened its data file
+  BQ_HALTED   = 0x01 << 1, // indicates that this thread is 'paused'
+  BQ_SKIP     = 0x01 << 2  // indicates that this thread is skipping all work assigned to it
 } BQ_State_Flags;
 
 struct handle; // forward decl.

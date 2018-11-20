@@ -174,7 +174,7 @@ while [[ $cnt -lt $ITER ]]; do
    echo >> $LIBTLOG
    echo "Generating $n+$e striping starting at file $start""..." >> $LOGFILE
 #   tcnt=$( date +%s%N )
-   { ret=$( time -p ./libneTest write $DATAFILE $EPAT $n $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.write
+   { ret=$( time -p ./libneTest write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.write
 
 #   tcnt="`date +%s%N` - $tcnt"
 #   if [[ $BC -eq 0 ]]; then
@@ -183,9 +183,9 @@ while [[ $cnt -lt $ITER ]]; do
 
    if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
       echo -e "\033[0;31mFAIL - write operation returned an unexpected status"
-      echo -e "CMD = ./libneTest write $DATAFILE $EPAT $n $e $start $FSZ\033[0m"
+      echo -e "CMD = ./libneTest write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE\033[0m"
       echo "   FAILURE: wite operation returned a non-sero status" >> $LOGFILE
-      echo "CMD = ./libneTest write $DATAFILE $EPAT $n $e $start $FSZ" >> $LOGFILE
+      echo "CMD = ./libneTest write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE" >> $LOGFILE
       exit -1
    fi
 #   echo "...done.  Elapsed time = $tcnt""."
@@ -379,14 +379,14 @@ while [[ $cnt -lt $ITER ]]; do
          echo -n "Verifying corruption pattern (expecting pattern $stat)..."
          echo "Verifying corruption pattern (expecting pattern $stat)..." >> $LOGFILE
 
-         { ret=$( time -p ./libneTest status $EPAT 2>&1 | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
+         { ret=$( time -p ./libneTest verify $EPAT $n $e $start 2>&1 | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
 
          if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
             echo
             echo -e "\033[0;31mFAIL - status check returned an unexpected error pattern"
-            echo -e "CMD = ./libneTest status $EPAT\033[0m"
+            echo -e "CMD = ./libneTest verify $EPAT $n $e $start\033[0m"
             echo "FAIL - status check returned an unexpected error pattern" >> $LOGFILE
-            echo "CMD = ./libneTest status $EPAT" >> $LOGFILE
+            echo "CMD = ./libneTest verify $EPAT $n $e $start" >> $LOGFILE
             exit -1
          fi
          echo "corruption pattern matches"
@@ -397,6 +397,8 @@ while [[ $cnt -lt $ITER ]]; do
 
          noinfo=$RANDOM
          let "noinfo %= 2"
+         # temporarily avoiding no_info runs
+         noinfo=0
          if [[ $noinfo -eq 1 ]]; then
             echo -n "ignoring stripe state for this read..."
             echo "   Using N=0 to perform read while ignoring stripe state..." >> $LOGFILE
@@ -407,22 +409,22 @@ while [[ $cnt -lt $ITER ]]; do
          
          RFAIL=0
 
-         { ret=$( time -p ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.read
+         { ret=$( time -p ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.read
          
          if [[ ! $ret =~ $re  ||  $ret -gt $tstat  ||  ( $ICRC -eq 1  &&  $ret -ne $tstat ) ]]; then
             echo
-            echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but recieved $ret"
-            echo -e "CMD = ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ\033[0m"
-            echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but recieved $ret" >> $LOGFILE
-            echo "CMD = ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ" >> $LOGFILE
+            echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but received $ret"
+            echo -e "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE\033[0m"
+            echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but received $ret" >> $LOGFILE
+            echo "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE" >> $LOGFILE
             exit -1
          elif [[ $ret -lt $tstat ]]; then
             echo
-            echo -e "\033[0;33mWARNING - read operation returned an inappropriate status, expected $tstat but recieved $ret"
+            echo -e "\033[0;33mWARNING - read operation returned an inappropriate status, expected $tstat but received $ret"
             echo -e "This may simply be the result of silent corruption present in the zero fill (undetectable on read)"
-            echo -e "CMD = ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ\033[0m"
-            echo "   WARNING: read operation returned an inappropriate status, expected $tstat but recieved $ret" >> $LOGFILE
-            echo "CMD = ./libneTest read $OUTFILE $EPAT $tN $e $start $FSZ" >> $LOGFILE
+            echo -e "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE\033[0m"
+            echo "   WARNING: read operation returned an inappropriate status, expected $tstat but received $ret" >> $LOGFILE
+            echo "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE" >> $LOGFILE
             RFAIL=1
          fi
          echo "read completed"
@@ -436,10 +438,10 @@ while [[ $cnt -lt $ITER ]]; do
             echo
             echo -e "\033[0;31mFAIL - output does not match expected data"
             echo -e "        compared $DATAFILE and $OUTFILE"
-            echo -e "CMD = ./libneTest read $OUTFILE $EPAT $n $e $start $FSZ\033[0m"
+            echo -e "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE\033[0m"
             echo "   FAILURE: output of ne_read does not match the expected data" >> $LOGFILE
             echo "            compared $DATAFILE and $OUTFILE" >> $LOGFILE
-            echo "CMD = ./libneTest read $OUTFILE $EPAT $n $e $start $FSZ" >> $LOGFILE
+            echo "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE" >> $LOGFILE
             exit -1
          fi
          echo "Comparison passed"
@@ -456,6 +458,8 @@ while [[ $cnt -lt $ITER ]]; do
 
          noinfo=$RANDOM
          let "noinfo %= 2"
+         # tmp disable
+         noinfo=0
          if [[ $noinfo -eq 1 ]]; then
             echo -n "ignoring stripe state for this read..."
             echo "   Using N=0 to perform read while ignoring stripe state..." >> $LOGFILE
@@ -464,22 +468,22 @@ while [[ $cnt -lt $ITER ]]; do
             tN=$n
          fi
          
-         { ret=$( time -p ./libneTest read /dev/null $EPAT $tN $e $start $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.no_read
+         { ret=$( time -p ./libneTest read $EPAT $tN $e $start -s $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.no_read
          
          if [[ ! $ret =~ $re  ||  $ret -gt $tstat  ||  ( $RFAIL -eq 0  &&  $ret -ne $tstat ) ]]; then
             echo
-            echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but recieved $ret"
-            echo -e "CMD = ./libneTest read /dev/null $EPAT $tN $e $start $FSZ\033[0m"
-            echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but recieved $ret" >> $LOGFILE
-            echo "CMD = ./libneTest read /dev/null $EPAT $tN $e $start $FSZ" >> $LOGFILE
+            echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but received $ret"
+            echo -e "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ\033[0m"
+            echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but received $ret" >> $LOGFILE
+            echo "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ" >> $LOGFILE
             exit -1
          elif [[ $ret -lt $tstat  &&  $RFAIL -eq 1 ]]; then
             echo
-            echo -e "\033[0;33mWARNING - read operation returned an inappropriate status, expected $tstat but recieved $ret"
+            echo -e "\033[0;33mWARNING - read operation returned an inappropriate status, expected $tstat but received $ret"
             echo -e "This may simply be the result of silent corruption present in the zero fill (undetectable on read)"
-            echo -e "CMD = ./libneTest read /dev/null $EPAT $tN $e $start $FSZ\033[0m"
-            echo "   WARNING: read operation returned an inappropriate status, expected $tstat but recieved $ret" >> $LOGFILE
-            echo "CMD = ./libneTest read /dev/null $EPAT $tN $e $start $FSZ" >> $LOGFILE
+            echo -e "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ\033[0m"
+            echo "   WARNING: read operation returned an inappropriate status, expected $tstat but received $ret" >> $LOGFILE
+            echo "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ" >> $LOGFILE
          fi
          echo "read completed"
          echo
@@ -491,6 +495,8 @@ while [[ $cnt -lt $ITER ]]; do
 
             noinfo=$RANDOM
             let "noinfo %= 2"
+            # tmp disable no_info
+            noinfo=0
             if [[ $noinfo -eq 1 ]]; then
                echo -n "ignoring stripe state for this rebuild..."
                echo "   Using N=0 to perform rebuild while ignoring stripe state..." >> $LOGFILE
@@ -502,11 +508,12 @@ while [[ $cnt -lt $ITER ]]; do
             { ret=$( time -p ./libneTest rebuild $EPAT $tN $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.recovery
 
 
-            if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
+            #if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
+            if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
                echo
-               echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of $stat but recieved $ret"
+               echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of 0 but received $ret"
                echo -e "CMD = ./libneTest rebuild $EPAT $tN $e $start\033[0m"
-               echo "   FAILURE: an error occured within ne_rebuild, expected return of $stat but recieved $ret" >> $LOGFILE
+               echo "   FAILURE: an error occured within ne_rebuild, expected return of 0 but received $ret" >> $LOGFILE
                echo "CMD = "./libneTest rebuild $EPAT $tN $e $start >> $LOGFILE
                exit $ret
             fi
@@ -534,25 +541,25 @@ while [[ $cnt -lt $ITER ]]; do
                   echo "Comparison passed. Removing backup file." >> $LOGFILE
                   rm "$line".backup
                   if [[ -e "$line".corrupted ]]; then
-                     cmp "$line".corrupted "$line".rebuild_bkp.*
-                     if [[ $? -ne 0 ]]; then
-                        echo
-                        echo -e "\033[0;31mFAIL - rebuild backup does not match expected data"
-                        echo -e "        compared $line"".corrupted and $line"".rebuild_bkp.*"
-                        echo -e "CMD = ./libneTest rebuild $EPAT $n $e $start\033[0m"
-                        echo "   FAILURE: output of ne_rebuild backup file does not match the expected data" >> $LOGFILE
-                        echo "            compared $line"".corrupted and $line"".rebuild_bkp.*" >> $LOGFILE
-                        echo "CMD = ./libneTest rebuild $EPAT $n $e $start" >> $LOGFILE
-                        exit -1
-                     fi
+#                     cmp "$line".corrupted "$line".rebuild_bkp.*
+#                     if [[ $? -ne 0 ]]; then
+#                        echo
+#                        echo -e "\033[0;31mFAIL - rebuild backup does not match expected data"
+#                        echo -e "        compared $line"".corrupted and $line"".rebuild_bkp.*"
+#                        echo -e "CMD = ./libneTest rebuild $EPAT $n $e $start\033[0m"
+#                        echo "   FAILURE: output of ne_rebuild backup file does not match the expected data" >> $LOGFILE
+#                        echo "            compared $line"".corrupted and $line"".rebuild_bkp.*" >> $LOGFILE
+#                        echo "CMD = ./libneTest rebuild $EPAT $n $e $start" >> $LOGFILE
+#                        exit -1
+#                     fi
 
-                     echo -n "Removing backup corrupted file..."
+                     echo -n "removing backup corrupted file..."
                      echo "Removing backup corrupted file." >> $LOGFILE
                      rm "$line".corrupted
 
-                     echo -n "Removing backup pre-rebuild file..."
-                     echo "Removing backup pre-rebuild file." >> $LOGFILE
-                     rm "$line".rebuild_bkp.*
+#                     echo -n "Removing backup pre-rebuild file..."
+#                     echo "Removing backup pre-rebuild file." >> $LOGFILE
+#                     rm "$line".rebuild_bkp.*
                   fi
                   echo "done"
                fi
@@ -567,14 +574,14 @@ while [[ $cnt -lt $ITER ]]; do
          echo -n "Checking the striping for corruption..."
          echo "Checking the striping for corruption..." >> $LOGFILE
 
-         { ret=$( time -p ./libneTest status $EPAT 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
+         { ret=$( time -p ./libneTest verify $EPAT $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
 
          if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
             echo
             echo -e "\033[0;31mFAIL - status check indicates corruption present in erasure striping ( code : $ret )"
-            echo -e "CMD = ./libneTest status $EPAT\033[0m"
+            echo -e "CMD = ./libneTest verify $EPAT $n $e $start\033[0m"
             echo "FAIL - status check indicates corruption present in erasure striping ( code : $ret )" >> $LOGFILE
-            echo "CMD = ./libneTest status $EPAT" >> $LOGFILE
+            echo "CMD = ./libneTest verify $EPAT $n $e $start" >> $LOGFILE
             exit $ret
          fi
          echo "done"
@@ -605,7 +612,7 @@ while [[ $cnt -lt $ITER ]]; do
    done
 
    echo -n "Cleaning up file array..."
-   ./libneTest delete $EPAT $(( n + e )) > /dev/null
+   ./libneTest delete $EPAT $(( n + e )) -f > /dev/null
    if [[ $? -ne 0 ]]; then
       echo
       echo -e "\033[0;31mDeletion failure...continuing.\033[0m"
