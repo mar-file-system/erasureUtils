@@ -369,7 +369,6 @@ typedef struct handle {
    unsigned char *buffs[ MAXPARTS ];
    unsigned long buff_rem;
    off_t buff_offset;
-   GenericFD FDArray[ MAXPARTS ];
 
    /* Threading fields */
    void *buffer_list[MAX_QDEPTH];
@@ -488,7 +487,6 @@ ssize_t   ne_read ( ne_handle handle, void       *buffer, size_t nbytes, off_t o
 ssize_t   ne_write( ne_handle handle, const void *buffer, size_t nbytes );
 int       ne_close( ne_handle handle );
 int       ne_noxattr_rebuild( ne_handle handle );
-int       ne_flush( ne_handle handle );
 
 
 

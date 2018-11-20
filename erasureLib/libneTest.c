@@ -438,10 +438,6 @@ int main( int argc, const char** argv )
                                                  timing_flags, NULL,    \
                                                  (PATH), (WIDTH))
 
-#  define NE_STATUS(PATH)             ne_status1(select_snprintf(PATH), NULL, select_impl(PATH), auth, \
-                                                 timing_flags, NULL,    \
-                                                 (PATH))
-
 # define NE_STAT_CALL(PATH, E_STRUCT)      ne_stat1(select_snprintf(PATH), NULL, select_impl(PATH), auth, \
                                                  timing_flags, NULL,    \
                                                  (PATH), (E_STRUCT) )
@@ -522,7 +518,7 @@ int main( int argc, const char** argv )
       memset( stat, 0, sizeof( struct ne_stat_struct ) );
 
       if ( NE_STAT_CALL( erasure_path, stat ) ) {
-         PRINTlog("libneTest: ne_status failed!\n" );
+         PRINTlog("libneTest: ne_stat failed!\n" );
          return -1;
       }
 
