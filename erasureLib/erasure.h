@@ -271,12 +271,12 @@ struct FileSysImpl; // fwd-decl  (udal.h)
 struct GenericFD;   // fwd-decl  (udal.h)
 
 typedef enum {
-  NE_RDONLY = 0,
-  NE_WRONLY,
+  NE_RDONLY = 1,
   NE_RDALL,
+  NE_WRONLY,
   NE_REBUILD,
-  NE_NOINFO = 4,
-  NE_SETBSZ = 8
+  NE_NOINFO = 8,
+  NE_SETBSZ = 16
 } ne_mode;
 
 #define NE_STAT 3
