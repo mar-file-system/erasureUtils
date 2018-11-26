@@ -144,12 +144,12 @@ void usage(const char* prog_name, const char* op) {
    PRINTlog("  %2s %-10s %s\n",                                \
            (!strncmp(op, CMD, 10) ? "->" : ""), (CMD), (ARGS))
 
-   USAGE("read",       "erasure_path N E start_file [-t timing_flags] [-r] [-s input_size] [-o output_file]");
-   USAGE("write",      "erasure_path N E start_file [-t timing_flags] [-r] [-s input_size] [-i input_file]");
-   USAGE("verify",     "erasure_path N E start_file [-t timing_flags] [-r] [-s input_size] [-o output_file]");
-   USAGE("rebuild",    "erasure_path N E start_file [-t timing_flags]");
-   USAGE("delete",     "erasure_path stripe_width   [-t timing_flags] [-f]");
-   USAGE("stat",       "erasure_path                [-t timing_flags]");
+   USAGE("read",       "erasure_path ( -n |  N E start_file ) [-t timing_flags] [-r] [-s input_size] [-o output_file]");
+   USAGE("verify",     "erasure_path ( -n |  N E start_file ) [-t timing_flags] [-r] [-s input_size] [-o output_file]");
+   USAGE("write",      "erasure_path         N E start_file   [-t timing_flags] [-r] [-s input_size] [-i input_file]");
+   USAGE("rebuild",    "erasure_path ( -n |  N E start_file ) [-t timing_flags]");
+   USAGE("delete",     "erasure_path stripe_width             [-t timing_flags] [-f]");
+   USAGE("stat",       "erasure_path                          [-t timing_flags]");
    USAGE("crc-status", "");
    USAGE("help",       "");
 
@@ -250,6 +250,7 @@ int main( int argc, const char** argv )
    int                parse_err = 0;
    char               size_arg = 0;
    char               rand_size = 0;
+   char               no_info = 0;
    char               force_delete = 0;
    char* output_file = NULL;
    char* input_file  = NULL;
@@ -262,7 +263,7 @@ int main( int argc, const char** argv )
    char pr_usage = 0;
    int c;
    // parse all position-independent arguments
-   while ( (c = getopt( argc, (char* const*)argv, "t:i:o:s:rfh" )) != -1 ) {
+   while ( (c = getopt( argc, (char* const*)argv, "t:i:o:s:rnfh" )) != -1 ) {
       switch (c) {
          char* endptr;
          case 't':
@@ -289,6 +290,9 @@ int main( int argc, const char** argv )
             break;
          case 'r':
             rand_size = 1;
+            break;
+         case 'n':
+            no_info = 1;
             break;
          case 'f':
             force_delete = 1;
@@ -340,7 +344,7 @@ int main( int argc, const char** argv )
       else if ( erasure_path == NULL ) { // all operations require this as the next argument
          erasure_path = (char *)argv[c];
       }
-      else if ( (wr < 4)  &&  (O == -1) ) { // loop through here until N/E/O are populated, if this operation needs them
+      else if ( (wr < 4)  &&  !(no_info)  &&  (O == -1) ) { // loop through here until N/E/O are populated, if this operation needs them
          char val = '\0';
          char* endptr = &val;
          if ( N == -1 ) {
@@ -384,37 +388,40 @@ int main( int argc, const char** argv )
       usage( argv[0], "help" );
       return -1;
    }
-   if ( erasure_path == NULL  ||  ( (wr != 5) && (N == -1) )  ||  ( (wr < 4) && (O == -1) ) ) {
+   if ( erasure_path == NULL  ||  ( (wr == 4) && (N == -1) )  ||  ( (wr < 4)  &&  !(no_info)  && (O == -1) ) ) {
       PRINTlog( "%s: missing required arguments for operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
    }
 
-   // warn if improper args were specified for a given op
+   // warn if improper options were specified for a given operation
    if ( ( input_file != NULL )  &&  ( wr != 1 ) ) {
       PRINTlog( "%s: the '-i' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
    }
-
    if ( (rand_size)  &&  ( wr > 2 ) ) {
       PRINTlog( "%s: the '-r' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
    }
-
    if ( (size_arg)  &&  ( wr > 2 ) ) {
       PRINTlog( "%s: the '-s' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
    }
-
+   if ( (no_info)  &&  ( wr != 0  &&  wr != 2  &&  wr != 3 ) ) {
+      PRINTlog( "%s: the '-n' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
+      usage( argv[0], operation );
+      return -1;
+   }
    if ( ( output_file != NULL )  &&  ( wr != 0  &&  wr != 2 ) ) {
       PRINTlog( "%s: the '-o' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
    }
 
+   // check specifically that a write operation has at least an input file and/or a write size
    if ( (wr == 1)  &&  (input_file == NULL)  &&  !(size_arg) ) {
       PRINTlog( "%s: missing required arguments for operation: \"%s\"\n", argv[0], operation );
       PRINTlog( "%s: write operations require one or both of the '-s' and '-i' options\n", argv[0] );
@@ -461,7 +468,12 @@ int main( int argc, const char** argv )
    if ( wr == 3 ) {
       PRINTout("libneTest: rebuilding erasure striping (N=%d,E=%d,offset=%d)\n", N, E, O );
 
-      if ( (tmp = ne_rebuild( erasure_path, NE_REBUILD, O, N, E )) ) {
+      if ( (no_info) )
+         tmp = ne_rebuild( erasure_path, NE_REBUILD | NE_NOINFO );
+      else
+         tmp = ne_rebuild( erasure_path, NE_REBUILD, O, N, E );
+
+      if ( (tmp) ) {
          PRINTout("rebuild result %d, errno=%d (%s)\n", tmp, errno, strerror(errno));
          PRINTlog("libneTest: rebuild failed!\n" );
          return -1;
@@ -586,12 +598,21 @@ int main( int argc, const char** argv )
       return -1;
    }
 
-   if ( wr == 0 ) // read
-      handle = ne_open( erasure_path, NE_RDONLY, O, N, E );
-   else if ( wr == 1 ) // write
+   if ( wr == 0 ) { // read
+      if ( (no_info) )
+         handle = ne_open( erasure_path, NE_RDONLY | NE_NOINFO );
+      else
+         handle = ne_open( erasure_path, NE_RDONLY, O, N, E );
+   }
+   else if ( wr == 1 ) { // write
       handle = ne_open( erasure_path, NE_WRONLY, O, N, E );
-   else if ( wr == 2 ) // verify
-      handle = ne_open( erasure_path, NE_RDALL, O, N, E );
+   }
+   else if ( wr == 2 ) { // verify
+      if ( (no_info) )
+         handle = ne_open( erasure_path, NE_RDALL | NE_NOINFO );
+      else
+         handle = ne_open( erasure_path, NE_RDALL, O, N, E );
+   }
 
    // check for a successful open of the handle
    if ( handle == NULL ) {
@@ -677,6 +698,8 @@ int main( int argc, const char** argv )
          PRINTlog( "libneTest: encountered an error when trying to close output file\n" );
    }
       
+   // free our work buffer
+   free( buff );
 
    // close the handle and indicate it's close condition
    tmp = ne_close( handle );

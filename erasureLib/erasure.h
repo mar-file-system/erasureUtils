@@ -275,11 +275,10 @@ typedef enum {
   NE_RDALL,
   NE_WRONLY,
   NE_REBUILD,
+  NE_STAT,
   NE_NOINFO = 8,
   NE_SETBSZ = 16
 } ne_mode;
-
-#define NE_STAT 3
 
 #define MAX_QDEPTH 5
 #define MAX_RD_QDEPTH 3
@@ -341,7 +340,6 @@ typedef struct ne_stat_struct {
    int E;
    int O;
    unsigned int bsz;
-   char* path_fmt;
 
    // striping size
    unsigned long nsz;
@@ -362,6 +360,7 @@ typedef struct ne_stat_struct {
 typedef struct handle {
    /* Erasure Info */
    e_status erasure_state;
+   char* path_fmt;
 
    /* Read/Write Info and Structures */
    ne_mode mode;
@@ -446,16 +445,10 @@ int       ne_delete1( SnprintfFunc func, void* state,
                       TimingFlagsValue flags, TimingData* timing_data,
                       char *path, int width );
 
-e_status   ne_status1( SnprintfFunc func, void* state,
-                      uDALType itype, SktAuth auth,
-                      TimingFlagsValue flags, TimingData* timing_data,
-                      char *path );
-
-off_t     ne_size1  ( SnprintfFunc func, void* state,
-                      uDALType itype, SktAuth auth,
-                      TimingFlagsValue flags, TimingData* timing_data,
-                      const char* path, int quorum, int max_stripe_width );
-
+int ne_stat1( SnprintfFunc fn, void* state,
+                    uDALType itype, SktAuth auth,
+                    TimingFlagsValue timing_flags, TimingData* timing_data,
+                    char *path, e_status e_state_struct );
 
 // per-block
 int       ne_set_xattr1   ( const uDAL* impl, SktAuth auth,
@@ -476,7 +469,7 @@ int       ne_link_block1  ( const uDAL* impl, SktAuth auth,
 ne_handle  ne_open   ( char *path, ne_mode mode, ... );
 int        ne_rebuild( char* path, ne_mode mode, ... );
 int        ne_delete ( char* path, int width );
-e_status   ne_status ( char* path);
+int        ne_stat   ( char* path, e_status erasure_status_struct );
 off_t      ne_size   ( const char* path, int quorum, int max_stripe_width );
 
 

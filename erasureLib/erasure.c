@@ -296,7 +296,7 @@ int bq_init(BufferQueue *bq, int block_number, ne_handle handle) {
 
   FD_INIT(bq->file, handle);
 
-  if( handle->mode == NE_RDONLY || handle->mode == NE_RDALL ) {
+  if( handle->mode == NE_RDONLY || handle->mode == NE_RDALL || handle->mode == NE_STAT ) {
     // initialize all read threads in a halted state
     bq->con_flags |= BQ_HALT;
     // allocate space for the manifest info
@@ -634,9 +634,9 @@ void *bq_writer(void *arg) {
      fast_timer_start(&timing->stats[bq->block_number].rename);
 
   char block_file_path[MAXNAME];
-  //  sprintf( block_file_path, handle->erasure_state->path_fmt,
+  //  sprintf( block_file_path, handle->path_fmt,
   //           (bq->block_number+handle->erasure_state->O)%(handle->erasure_state->N+handle->erasure_state->E) );
-  handle->snprintf( block_file_path, MAXNAME, handle->erasure_state->path_fmt,
+  handle->snprintf( block_file_path, MAXNAME, handle->path_fmt,
                     (bq->block_number+handle->erasure_state->O)%(handle->erasure_state->N+handle->erasure_state->E), handle->printf_state );
 
   PRINTdbg("bq_writer: renaming old:  %s\n", bq->path );
@@ -1226,8 +1226,8 @@ static int initialize_queues(ne_handle handle) {
       char path[MAXNAME];
       BufferQueue *bq = &handle->blocks[i];
       // generate the path
-      // sprintf(bq->path, handle->erasure_state->path_fmt, (i + handle->erasure_state->O) % num_blocks);
-      handle->snprintf(bq->path, MAXNAME, handle->erasure_state->path_fmt, (i + handle->erasure_state->O) % num_blocks, handle->printf_state);
+      // sprintf(bq->path, handle->path_fmt, (i + handle->erasure_state->O) % num_blocks);
+      handle->snprintf(bq->path, MAXNAME, handle->path_fmt, (i + handle->erasure_state->O) % num_blocks, handle->printf_state);
 
       if ( handle->mode == NE_REBUILD ) {
          strcat(bq->path, REBUILD_SFX);
@@ -1506,6 +1506,28 @@ ne_handle create_handle( SnprintfFunc fn, void* state,
                            uDALType itype, SktAuth auth,
                            TimingFlagsValue timing_flags, TimingData* timing_data,
                            char *path, ne_mode mode, e_status erasure_state ) {
+   // this makes a convenient place to handle a NE_NOINFO case.
+   // Just make sure not to infinite loop by calling ne_stat1() after it calls us!
+   if ( mode != NE_STAT  &&  !(erasure_state->N) ) {
+      PRINTdbg( "using ne_stat1() to determine N/E/O values for handle\n" );
+      // need to stash our bsz value, in case NE_SETBSZ was specified
+      u32 bsz = erasure_state->bsz; 
+      // if we don't have any N/E/O values, let ne_stat() do the work of determining those
+      if ( ne_stat1( fn, state, itype, auth, timing_flags, timing_data, path, erasure_state ) )
+         return NULL;
+      // we now need to stash the values we care about, and clear the rest of this struct; 
+      // otherwise, our meta-info/data errors may not take offset into account.
+      int N = erasure_state->N;
+      int E = erasure_state->E;
+      int O = erasure_state->O;
+      memset( erasure_state, 0, sizeof( struct ne_stat_struct ) );
+      erasure_state->N = N;
+      erasure_state->E = E;
+      erasure_state->O = O;
+      erasure_state->bsz = bsz;
+   }
+
+
    ne_handle handle = malloc( sizeof( struct handle ) );
    if ( handle == NULL )
       return handle;
@@ -1545,7 +1567,7 @@ ne_handle create_handle( SnprintfFunc fn, void* state,
 
    char* nfile = malloc( strlen(path) + 1 );
    strncpy( nfile, path, strlen(path) + 1 );
-   handle->erasure_state->path_fmt = nfile;
+   handle->path_fmt = nfile;
 
    return handle;
 }
@@ -1561,6 +1583,10 @@ ne_handle create_handle( SnprintfFunc fn, void* state,
  * @return ne_mode : Mode argument with parsing flags stripped, or 0 on error
  */
 ne_mode parse_va_open_args( va_list ap, ne_mode mode, e_status erasure_state ) {
+   // first, ensure there is no garbage data in our e_status struct
+   memset( erasure_state, 0, sizeof( struct ne_stat_struct ) );
+
+   // now, use the mode flags to determine how to parse the variadic args
    int counter = 3;
    if ( mode & NE_SETBSZ ) {
       counter++;
@@ -1707,11 +1733,10 @@ ne_handle ne_open1( SnprintfFunc fn, void* state,
       errno = ENOMEM;
       return NULL;
    }
-   // zeroing out this struct is mandatory, who knows what malloc gave us
-   memset( erasure_state_tmp, 0, sizeof( struct ne_stat_struct ) );
 
    va_list vl;
    va_start(vl, mode);
+   // this function will parse args and zero out our e_status struct
    mode = parse_va_open_args( vl, mode, erasure_state_tmp );
    va_end(vl);
 
@@ -1746,11 +1771,10 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
       errno = ENOMEM;
       return NULL;
    }
-   // zeroing out this struct is mandatory, who knows what malloc gave us
-   memset( erasure_state_tmp, 0, sizeof( struct ne_stat_struct ) );
 
    va_list vl;
    va_start(vl, mode);
+   // this function will parse args and zero out our e_status struct
    mode = parse_va_open_args( vl, mode, erasure_state_tmp );
    va_end(vl);
 
@@ -3014,7 +3038,7 @@ int ne_close( ne_handle handle )
    int            E;
    unsigned int   bsz;
    int            ret = 0;
-   //extract_repo_name(handle->erasure_state->path_fmt, handle->repo, handle->pod_id);
+   //extract_repo_name(handle->path_fmt, handle->repo, handle->pod_id);
    
    PRINTdbg( "entering ne_close()\n" );
 
@@ -3096,8 +3120,8 @@ int ne_close( ne_handle handle )
       }
    }
 
-   if ( handle->erasure_state->path_fmt != NULL )
-      free(handle->erasure_state->path_fmt);
+   if ( handle->path_fmt != NULL )
+      free(handle->path_fmt);
 
    free(handle->encode_matrix);
    free(handle->decode_matrix);
@@ -3244,10 +3268,9 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
       errno = ENOMEM;
       return -1;
    }
-   // zeroing out this struct is mandatory, who knows what malloc gave us
-   memset( erasure_state_read, 0, sizeof( struct ne_stat_struct ) );
 
    // open the stripe for RDALL to verify all data/erasure blocks and to regenerate as we read
+   // this function will parse args and zero out our e_status struct
    ne_mode read_mode = parse_va_open_args( ap, NE_RDALL | ( mode & ( NE_NOINFO | NE_SETBSZ ) ), erasure_state_read );
 
    if ( !(read_mode) ) { //reject improper mode arguments
@@ -3297,7 +3320,8 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
       ne_close( read_handle );
       return -1;
    }
-   // zeroing out this struct is mandatory, who knows what malloc gave us
+   // zeroing out this struct is mandatory, as we won't be calling parse_va_open_args() with it
+   // who knows what malloc gave us
    memset( erasure_state_write, 0, sizeof( struct ne_stat_struct ) );
 
    // populate the write handle with values set in the read handle
@@ -3637,7 +3661,7 @@ int ne_stat1( SnprintfFunc fn, void* state,
                     TimingFlagsValue timing_flags, TimingData* timing_data,
                     char *path, e_status e_state_struct ) {
    memset( e_state_struct, 0, sizeof( struct ne_stat_struct ) );
-   ne_handle handle = create_handle( fn, state, itype, auth, timing_flags, timing_data, path, NE_RDALL, e_state_struct );
+   ne_handle handle = create_handle( fn, state, itype, auth, timing_flags, timing_data, path, NE_STAT, e_state_struct );
    if ( handle == NULL )
       return -1;
 
@@ -3657,7 +3681,7 @@ int ne_stat1( SnprintfFunc fn, void* state,
    /* open files and initialize BufferQueues */
    for(i = 0; i < num_blocks; i++) {
       BufferQueue *bq = &handle->blocks[i];
-      handle->snprintf(bq->path, MAXNAME, handle->erasure_state->path_fmt, (i + handle->erasure_state->O) % num_blocks, handle->printf_state);
+      handle->snprintf(bq->path, MAXNAME, handle->path_fmt, (i + handle->erasure_state->O) % num_blocks, handle->printf_state);
 
       PRINTdbg( "starting up thread for block %d\n", i );
     
@@ -3766,6 +3790,7 @@ int ne_stat1( SnprintfFunc fn, void* state,
    }
 
    terminate_threads( BQ_FINISHED, handle, threads_running, 0 );
+   free( handle->path_fmt );
    free( handle );
    if ( error )
       return -1;
@@ -4002,7 +4027,7 @@ static int set_block_xattr(ne_handle handle, int block) {
             block, xattrval );
 
   char block_file_path[2048];
-  handle->snprintf(block_file_path, MAXNAME, handle->erasure_state->path_fmt,
+  handle->snprintf(block_file_path, MAXNAME, handle->path_fmt,
                    (block+handle->erasure_state->O)%(handle->erasure_state->N + handle->erasure_state->E),
                    handle->printf_state);
 

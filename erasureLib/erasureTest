@@ -397,34 +397,33 @@ while [[ $cnt -lt $ITER ]]; do
 
          noinfo=$RANDOM
          let "noinfo %= 2"
-         # temporarily avoiding no_info runs
-         noinfo=0
-         if [[ $noinfo -eq 1 ]]; then
-            echo -n "ignoring stripe state for this read..."
-            echo "   Using N=0 to perform read while ignoring stripe state..." >> $LOGFILE
-            tN=0
-         else
-            tN=$n
-         fi
          
          RFAIL=0
 
-         { ret=$( time -p ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.read
+         CMD="./libneTest read $EPAT $n $e $start -s $FSZ -o $OUTFILE"
+
+         if [[ $noinfo -eq 1 ]]; then
+            echo -n "ignoring stripe state for this read..."
+            echo "   Using '-n' option to perform read while ignoring stripe state..." >> $LOGFILE
+            CMD="./libneTest read $EPAT -n -s $FSZ -o $OUTFILE"
+         fi
+
+         { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.read
          
          if [[ ! $ret =~ $re  ||  $ret -gt $tstat  ||  ( $ICRC -eq 1  &&  $ret -ne $tstat ) ]]; then
             echo
             echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but received $ret"
-            echo -e "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE\033[0m"
+            echo -e "CMD = $CMD\033[0m"
             echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but received $ret" >> $LOGFILE
-            echo "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE" >> $LOGFILE
+            echo "CMD = $CMD" >> $LOGFILE
             exit -1
          elif [[ $ret -lt $tstat ]]; then
             echo
             echo -e "\033[0;33mWARNING - read operation returned an inappropriate status, expected $tstat but received $ret"
             echo -e "This may simply be the result of silent corruption present in the zero fill (undetectable on read)"
-            echo -e "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE\033[0m"
+            echo -e "CMD = $CMD\033[0m"
             echo "   WARNING: read operation returned an inappropriate status, expected $tstat but received $ret" >> $LOGFILE
-            echo "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE" >> $LOGFILE
+            echo "CMD = $CMD" >> $LOGFILE
             RFAIL=1
          fi
          echo "read completed"
@@ -458,32 +457,31 @@ while [[ $cnt -lt $ITER ]]; do
 
          noinfo=$RANDOM
          let "noinfo %= 2"
-         # tmp disable
-         noinfo=0
+         
+         CMD="./libneTest read $EPAT $n $e $start -s $FSZ"
+
          if [[ $noinfo -eq 1 ]]; then
             echo -n "ignoring stripe state for this read..."
-            echo "   Using N=0 to perform read while ignoring stripe state..." >> $LOGFILE
-            tN=0
-         else
-            tN=$n
+            echo "   Using '-n' option to perform read while ignoring stripe state..." >> $LOGFILE
+            CMD="./libneTest read $EPAT -n -s $FSZ"
          fi
-         
-         { ret=$( time -p ./libneTest read $EPAT $tN $e $start -s $FSZ 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.no_read
+
+         { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.no_read
          
          if [[ ! $ret =~ $re  ||  $ret -gt $tstat  ||  ( $RFAIL -eq 0  &&  $ret -ne $tstat ) ]]; then
             echo
             echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but received $ret"
-            echo -e "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ\033[0m"
+            echo -e "CMD = $CMD\033[0m"
             echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but received $ret" >> $LOGFILE
-            echo "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ" >> $LOGFILE
+            echo "CMD = $CMD" >> $LOGFILE
             exit -1
          elif [[ $ret -lt $tstat  &&  $RFAIL -eq 1 ]]; then
             echo
             echo -e "\033[0;33mWARNING - read operation returned an inappropriate status, expected $tstat but received $ret"
             echo -e "This may simply be the result of silent corruption present in the zero fill (undetectable on read)"
-            echo -e "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ\033[0m"
+            echo -e "CMD = $CMD\033[0m"
             echo "   WARNING: read operation returned an inappropriate status, expected $tstat but received $ret" >> $LOGFILE
-            echo "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ" >> $LOGFILE
+            echo "CMD = $CMD" >> $LOGFILE
          fi
          echo "read completed"
          echo
@@ -495,26 +493,25 @@ while [[ $cnt -lt $ITER ]]; do
 
             noinfo=$RANDOM
             let "noinfo %= 2"
-            # tmp disable no_info
-            noinfo=0
+
+            CMD="./libneTest rebuild $EPAT $n $e $start"
+            
             if [[ $noinfo -eq 1 ]]; then
                echo -n "ignoring stripe state for this rebuild..."
-               echo "   Using N=0 to perform rebuild while ignoring stripe state..." >> $LOGFILE
-               tN=0
-            else
-               tN=$n
+               echo "   Using '-n' option to perform rebuild while ignoring stripe state..." >> $LOGFILE
+               CMD="./libneTest rebuild $EPAT -n"
             fi
-            
-            { ret=$( time -p ./libneTest rebuild $EPAT $tN $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.recovery
+
+            { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.recovery
 
 
             #if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
             if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
                echo
                echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of 0 but received $ret"
-               echo -e "CMD = ./libneTest rebuild $EPAT $tN $e $start\033[0m"
+               echo -e "CMD = $CMD\033[0m"
                echo "   FAILURE: an error occured within ne_rebuild, expected return of 0 but received $ret" >> $LOGFILE
-               echo "CMD = "./libneTest rebuild $EPAT $tN $e $start >> $LOGFILE
+               echo "CMD = $CMD" >> $LOGFILE
                exit $ret
             fi
             echo "rebuild completed"
@@ -530,10 +527,10 @@ while [[ $cnt -lt $ITER ]]; do
                      echo
                      echo -e "\033[0;31mFAIL - rebuild output does not match expected data"
                      echo -e "        compared $line and $line"".backup"
-                     echo -e "CMD = ./libneTest rebuild $EPAT $n $e $start\033[0m"
+                     echo -e "CMD = $CMD\033[0m"
                      echo "   FAILURE: output of ne_rebuild does not match the expected data" >> $LOGFILE
                      echo "            compared $line and $line"".backup" >> $LOGFILE
-                     echo "CMD = ./libneTest rebuild $EPAT $n $e $start" >> $LOGFILE
+                     echo "CMD = $CMD" >> $LOGFILE
                      exit -1
                   fi
                   echo "Comparison passed"
@@ -546,10 +543,10 @@ while [[ $cnt -lt $ITER ]]; do
 #                        echo
 #                        echo -e "\033[0;31mFAIL - rebuild backup does not match expected data"
 #                        echo -e "        compared $line"".corrupted and $line"".rebuild_bkp.*"
-#                        echo -e "CMD = ./libneTest rebuild $EPAT $n $e $start\033[0m"
+#                        echo -e "CMD = $CMD\033[0m"
 #                        echo "   FAILURE: output of ne_rebuild backup file does not match the expected data" >> $LOGFILE
 #                        echo "            compared $line"".corrupted and $line"".rebuild_bkp.*" >> $LOGFILE
-#                        echo "CMD = ./libneTest rebuild $EPAT $n $e $start" >> $LOGFILE
+#                        echo "CMD = $CMD" >> $LOGFILE
 #                        exit -1
 #                     fi
 
