@@ -220,7 +220,7 @@ while [[ $cnt -lt $ITER ]]; do
       oldpos=0
       errcnt=0
       errpos=-1
-      readerr=1 # read should now detect all errors
+      readerr=0 # read may not detect all errors
       silent_count=0
 
       echo "$nerr error(s) are to be inserted..."
@@ -242,7 +242,7 @@ while [[ $cnt -lt $ITER ]]; do
 
             efile=$( echo "$EPAT" | sed 's/%d/'"$errpos"'/' )
 
-            echo "   creating backup of $efile""..."
+            echo "      creating backup of $efile""..."
             cp $efile "$efile".backup
 
             truepos=$(( errpos - start ))
@@ -250,20 +250,20 @@ while [[ $cnt -lt $ITER ]]; do
                truepos=$(( truepos + n + e ))
             fi
                
-            if [[ $truepos -lt $n ]]; then
-               readerr=1
-            fi
+            #if [[ $truepos -lt $n ]]; then
+            #   readerr=1
+            #fi
 
             ctype=$(( RANDOM % (3-ICRC) ))
             if [[ $ctype -eq 0 ]]; then
-               echo "   corrupting file $efile ( corruption-type : removal )"
-               echo "   corrupting file $efile ( corruption-type : removal )" >> $LOGFILE
+               echo "      corrupting file $efile ( corruption-type : removal )"
+               echo "      corrupting file $efile ( corruption-type : removal )" >> $LOGFILE
                rm $efile
             elif [[ $ctype -eq 1 ]]; then
                err_list[$silent_count]=$errpos
                silent_count=$(( silent_count + 1 ))
-               echo "   corrupting file $efile ( corruption-type : truncate )"
-               echo "   corrupting file $efile ( corruption-type : truncate )" >> $LOGFILE
+               echo "      corrupting file $efile ( corruption-type : truncate )"
+               echo "      corrupting file $efile ( corruption-type : truncate )" >> $LOGFILE
                fsize=$( stat $stfmt $efile )
                corr=$(( `od -N 4 -t uL -An /dev/urandom | awk '{print $1}'` % fsize ))
                echo "      truncating from $fsize to $corr bytes"
@@ -272,17 +272,17 @@ while [[ $cnt -lt $ITER ]]; do
                #rm $efile
                #mv $efile.tmp $efile
                truncate -s $corr $efile
-               echo "   creating backup of corrupted file..."
+               echo "      creating backup of corrupted file"
                cp $efile "$efile".corrupted
             else
                err_list[$silent_count]=$errpos
                silent_count=$(( silent_count + 1 ))
-               echo "   corrupting file $efile ( corruption-type : silent )"
-               echo "   corrupting file $efile ( corruption-type : silent )" >> $LOGFILE
+               echo "      corrupting file $efile ( corruption-type : silent )"
+               echo "      corrupting file $efile ( corruption-type : silent )" >> $LOGFILE
                fsize=$( stat $stfmt $efile )
                corr=$(( `od -N 4 -t uL -An /dev/urandom | awk '{print $1}'` % fsize ))
                offset=$(( `od -N 4 -t uL -An /dev/urandom | awk '{print $1}'` % ( fsize - corr ) ))
-               echo -n "      inserting $corr random bytes at offset $offset"
+               echo "      inserting $corr random bytes at offset $offset"
                echo "      inserting $corr random bytes at offset $offset" >> $LOGFILE
 
                corrmegab=$(( ($corr / 1048576) + 1 ))
@@ -304,20 +304,18 @@ while [[ $cnt -lt $ITER ]]; do
                         corrbs="1c"
                         toffset=$(( offset + corr_done ))
                      fi
-                     echo -n "."
                      dd if="$efile".esource of=$efile bs=$corrbs count=$tocorr seek=$toffset conv=notrunc > /dev/null 2>&1
                      corr_done=$(( corr_done + 1048576 ))
                   done
                   diff $efile $efile".tmp" > /dev/null 2>&1
                   diff=$?
                   if [[ $diff -eq 0 ]]; then
-                     echo "      corrption insertion did not alter file, retrying..."
+                     echo "      corrption insertion did not alter file, retrying"
                   fi
                done
-               echo "done"
                rm $efile".tmp"
                rm "$efile".esource
-               echo "   creating backup of corrupted file..."
+               echo "      creating backup of corrupted file"
                cp $efile "$efile".corrupted
             fi
 
@@ -335,8 +333,8 @@ while [[ $cnt -lt $ITER ]]; do
             else
                npat="$npat"".1"
             fi
-            echo "   error creation successful"
-            echo "   error creation successful" >> $LOGFILE
+            echo "      error creation successful"
+            echo "      error creation successful" >> $LOGFILE
             oldpos=$(( oldpos + 1 ))
             
             errcnt=$(( errcnt + 1 ))
@@ -356,6 +354,7 @@ while [[ $cnt -lt $ITER ]]; do
 
          echo "error insertion complete, pattern is : $npat"
          echo "Errors inserted, pattern is  $npat" >> $LOGFILE
+         echo "There are $silent_count potentially silent errors in the stripe"
          echo
 
          tstat=$stat
@@ -367,6 +366,7 @@ while [[ $cnt -lt $ITER ]]; do
                truepos=$(( truepos + n + e ))
             fi
 
+            echo "Checking if error at $errpos (truepos=$truepos) is missable (lt $n)"
             if [[ ! $truepos -lt $n ]]; then
                tstat=$(( tstat - (2**errpos) ))
             fi
@@ -392,8 +392,8 @@ while [[ $cnt -lt $ITER ]]; do
          echo "corruption pattern matches"
          echo
 
-         echo -n "Performing a read of all data from striping (expected return value = $tstat)..."
-         echo "Performing read of all data from striping (expected return value = $tstat)..." >> $LOGFILE
+         echo -n "Performing a read of all data from striping (expected return value = $stat)..."
+         echo "Performing read of all data from striping (expected return value = $stat)..." >> $LOGFILE
 
          noinfo=$RANDOM
          let "noinfo %= 2"
@@ -410,19 +410,21 @@ while [[ $cnt -lt $ITER ]]; do
 
          { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.read
          
-         if [[ ! $ret =~ $re  ||  $ret -gt $tstat  ||  ( $ICRC -eq 1  &&  $ret -ne $tstat ) ]]; then
+         if [[ ! $ret =~ $re  ||  $ret -gt $stat  ||  $ret -lt $tstat ]]; then
             echo
-            echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but received $ret"
+            echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $stat but received $ret"
+            echo -e "Minimum acceptible status value is $tstat"
             echo -e "CMD = $CMD\033[0m"
-            echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but received $ret" >> $LOGFILE
+            echo "   FAILURE: read operation returned an inappropriate status, expected $stat but received $ret" >> $LOGFILE
             echo "CMD = $CMD" >> $LOGFILE
             exit -1
-         elif [[ $ret -lt $tstat ]]; then
+         elif [[ $ret -lt $stat ]]; then
             echo
-            echo -e "\033[0;33mWARNING - read operation returned an inappropriate status, expected $tstat but received $ret"
-            echo -e "This may simply be the result of silent corruption present in the zero fill (undetectable on read)"
+            echo -e "\033[0;33mWARNING - read operation failed to detect all erasure errors, expected $stat but received $ret"
+            echo -e "This may simply be the result of the read request not requiring the faulty erasure data or perhaps "
+            echo -e "silent corruption present in the zero fill (undetectable on read)"
             echo -e "CMD = $CMD\033[0m"
-            echo "   WARNING: read operation returned an inappropriate status, expected $tstat but received $ret" >> $LOGFILE
+            echo "   WARNING: read operation failed to detect all erasure errors, expected $stat but received $ret" >> $LOGFILE
             echo "CMD = $CMD" >> $LOGFILE
             RFAIL=1
          fi
@@ -452,8 +454,8 @@ while [[ $cnt -lt $ITER ]]; do
          echo "done"
          echo
 
-         echo -n "Performing \"no-output\" read of all data from striping (expected return value = $tstat)..."
-         echo "Performing \"no-output\" read of all data from striping (expected return value = $tstat)..." >> $LOGFILE
+         echo -n "Performing \"no-output\" read of all data from striping (expected return value = $stat)..."
+         echo "Performing \"no-output\" read of all data from striping (expected return value = $stat)..." >> $LOGFILE
 
          noinfo=$RANDOM
          let "noinfo %= 2"
@@ -468,20 +470,23 @@ while [[ $cnt -lt $ITER ]]; do
 
          { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.no_read
          
-         if [[ ! $ret =~ $re  ||  $ret -gt $tstat  ||  ( $RFAIL -eq 0  &&  $ret -ne $tstat ) ]]; then
+         if [[ ! $ret =~ $re  ||  $ret -gt $stat  ||  $ret -lt $tstat  ||  ( $RFAIL -eq 0  &&  $ret -ne $stat ) ]]; then
             echo
-            echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $tstat but received $ret"
+            echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $stat but received $ret"
+            echo -e "Minimum acceptible status value is $tstat"
             echo -e "CMD = $CMD\033[0m"
-            echo "   FAILURE: read operation returned an inappropriate status, expected $tstat but received $ret" >> $LOGFILE
+            echo "   FAILURE: read operation returned an inappropriate status, expected $stat but received $ret" >> $LOGFILE
             echo "CMD = $CMD" >> $LOGFILE
             exit -1
-         elif [[ $ret -lt $tstat  &&  $RFAIL -eq 1 ]]; then
+         elif [[ $ret -lt $stat ]]; then
             echo
-            echo -e "\033[0;33mWARNING - read operation returned an inappropriate status, expected $tstat but received $ret"
-            echo -e "This may simply be the result of silent corruption present in the zero fill (undetectable on read)"
+            echo -e "\033[0;33mWARNING - read operation failed to detect all erasure errors, expected $stat but received $ret"
+            echo -e "This may simply be the result of the read request not requiring the faulty erasure data or perhaps "
+            echo -e "silent corruption present in the zero fill (undetectable on read)"
             echo -e "CMD = $CMD\033[0m"
-            echo "   WARNING: read operation returned an inappropriate status, expected $tstat but received $ret" >> $LOGFILE
+            echo "   WARNING: read operation failed to detect all erasure errors, expected $stat but received $ret" >> $LOGFILE
             echo "CMD = $CMD" >> $LOGFILE
+            RFAIL=1
          fi
          echo "read completed"
          echo
