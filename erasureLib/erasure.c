@@ -1010,7 +1010,11 @@ void* bq_reader(void* arg) {
    if (timing->flags & TF_CLOSE)
       fast_timer_start(&timing->stats[bq->block_number].close);
 
-   int close_rc = HNDLOP(close, bq->file);
+   int close_rc = 1;
+
+   // don't bother attempting to close a file we failed to open
+   if ( ! FD_ERR( bq->file ) )
+      close_rc = HNDLOP(close, bq->file);
 
    if (timing->flags & TF_CLOSE)
    {
@@ -1277,6 +1281,7 @@ static int initialize_queues(ne_handle handle) {
          PRINTerr( "detected mismatch between provided N/E (%d/%d) and the most common meta values for this stripe (%d/%d)\n", 
                      handle->erasure_state->N, handle->erasure_state->E, read_meta_state.N, read_meta_state.E );
          terminate_threads( BQ_ABORT, handle, num_blocks, 0 );
+         errno = ENODATA;
          return -1;
       }
       handle->erasure_state->O = read_meta_state.O;
@@ -1318,6 +1323,7 @@ static int initialize_queues(ne_handle handle) {
             free(handle->buffer_list[j]);
          }
          PRINTerr("posix_memalign failed for queue %d\n", i);
+         errno = ENOMEM;
          return -1;
       }
 
@@ -1613,7 +1619,6 @@ int initialize_handle( ne_handle handle )
    mode_t mask = umask(0000);
    if(initialize_queues(handle) < 0) {
      // all destruction/cleanup should be handled in initialize_queues()
-     errno = ENOMEM;
      return -1;
    }
    umask(mask);
