@@ -348,8 +348,6 @@ typedef struct ne_stat_struct {
    // striping health
    char manifest_status[ MAXPARTS ];
    char data_status[ MAXPARTS ];
-   char src_in_err[ MAXPARTS ];
-   int nerr;
 
    // per-part info
    u64 csum[ MAXPARTS ];
@@ -364,8 +362,6 @@ typedef struct handle {
 
    /* Read/Write Info and Structures */
    ne_mode mode;
-   void *buffer;
-   unsigned char *buffs[ MAXPARTS ];
    unsigned long buff_rem;
    off_t buff_offset;
 
@@ -376,25 +372,18 @@ typedef struct handle {
    BufferQueue blocks[MAXPARTS];
    unsigned int ethreads_running;
 
-   /* Per-part Info */
-   //u64 csum[ MAXPARTS ];
-   //unsigned long nsz[ MAXPARTS ];
-   //unsigned long ncompsz[ MAXPARTS ];
-   //off_t written[ MAXPARTS ];
-
    /* Erasure Manipulation Structures */
    unsigned char e_ready;
-   unsigned char src_err_list[ MAXPARTS ];
    unsigned char prev_in_err[ MAXPARTS ];
    unsigned int  prev_err_cnt;
    unsigned char *encode_matrix;
    unsigned char *decode_matrix;
    unsigned char *invert_matrix;
    unsigned char *g_tbls;
-   unsigned char *recov[ MAXPARTS ];
    unsigned int decode_index[ MAXPARTS ];
 
    /* Used for rebuilds to restore the original ownership to the rebuilt file. */
+   // TODO: the new rebuild scheme does not do this!
    uid_t owner;
    gid_t group;
 

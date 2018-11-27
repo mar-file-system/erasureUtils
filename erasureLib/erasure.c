@@ -3033,7 +3033,7 @@ int ne_close( ne_handle handle )
       PRINTdbg( "ne_close: detected unsafe error levels following write operation\n" );
       ret = -1;
    }
-   else if ( handle->erasure_state->nerr > handle->erasure_state->E ) { /* for non-writes */
+   else if ( nerr > handle->erasure_state->E ) { /* for non-writes */
       PRINTdbg( "ne_close: detected excessive errors following a read operation\n" );
       ret = -1;
    }
