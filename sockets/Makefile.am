@@ -79,6 +79,7 @@ endif
 
 # at build-time, we want the versions in the source-tree
 AM_CPPFLAGS += -I${top_srcdir}/erasureLib
+AM_CPPFLAGS += -I${top_srcdir}/config
 AM_CPPFLAGS += -I${top_srcdir}/fast_timer
 
 
@@ -139,7 +140,7 @@ endif
 
 
 
-include_HEADERS = skt_config.h skt_common.h
+include_HEADERS = skt_common.h
 
 lib_LIBRARIES = librdma_sockets.a
 librdma_sockets_a_SOURCES = skt_common.c skt_common.h

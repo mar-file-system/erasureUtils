@@ -80,7 +80,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "ne_logging.h"
 
 // generated to #define SOCKETS, etc, based on configuration options.
-#include "skt_config.h"
 #include "udal.h"
 
 

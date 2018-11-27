@@ -67,7 +67,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#include "skt_config.h"
+#include "udal_config.h"
 #if S3_AUTH
 #  include <aws4c.h>
 #endif

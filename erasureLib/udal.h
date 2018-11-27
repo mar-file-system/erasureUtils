@@ -75,7 +75,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 typedef struct uDALImpl uDAL;
 
 // generated to #define SOCKETS, etc, based on configuration options.
-#include "skt_config.h"
+#include "udal_config.h"
 
 #if (SOCKETS != SKT_none)
 #  include "skt_common.h"

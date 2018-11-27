@@ -20,7 +20,7 @@ foo*
 old/
 *.tgz
 *.[ch].*
-!skt_config.h.in
+!udal_config.h.in
 *.log
 commit.txt
 example_*
