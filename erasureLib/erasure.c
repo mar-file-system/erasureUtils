@@ -137,6 +137,7 @@ static int set_block_xattr(ne_handle handle, int block);
 // #include "erasure_internals.h"
 
 /* The following are defined here, so as to hide them from users of the library */
+// erasure functions
 #ifdef HAVE_LIBISAL
 extern uint32_t      crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
 extern void          ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
@@ -145,11 +146,6 @@ extern uint32_t      crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len)
 extern void          ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 #endif
 
-int ne_set_xattr   ( const char *path, const char *xattrval, size_t len );
-int ne_get_xattr   ( const char *path, char *xattrval, size_t len );
-int ne_delete_block( const char *path );
-int ne_link_block  ( const char *link_path, const char *target );
-int xattr_check    ( ne_handle handle, char *path );
 static int gf_gen_decode_matrix(unsigned char *encode_matrix,
                                 unsigned char *decode_matrix,
                                 unsigned char *invert_matrix,
@@ -157,7 +153,110 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
                                 unsigned char *src_err_list,
                                 unsigned char *src_in_err,
                                 int nerrs, int nsrcerrs, int k, int m);
-//void dump(unsigned char *buf, int len);
+
+// per-block
+int ne_set_xattr   ( const char *path, const char *xattrval, size_t len );
+int ne_get_xattr   ( const char *path, char *xattrval, size_t len );
+int ne_delete_block( const char *path );
+int ne_link_block  ( const char *link_path, const char *target );
+int       ne_set_xattr1   ( const uDAL* impl, SktAuth auth,
+                            const char *path, const char *xattrval, size_t len );
+
+int       ne_get_xattr1   ( const uDAL* impl, SktAuth auth,
+                            const char *path, char *xattrval, size_t len );
+
+int       ne_delete_block1( const uDAL* impl, SktAuth auth,
+                            const char *path );
+
+int       ne_link_block1  ( const uDAL* impl, SktAuth auth,
+                            const char *link_path, const char *target );
+
+// internal structures
+typedef struct buffer_queue {
+  pthread_mutex_t    qlock;
+  void*              buffers[MAX_QDEPTH];    /* array of buffers for passing data on the queue */
+  //char               buf_error[MAX_QDEPTH];  /* indicates  errors associated with specific data buffers */
+  pthread_cond_t     thread_resume;          /* cv signals there is a full slot */
+  pthread_cond_t     master_resume;         /* cv signals there is an empty slot */
+  pthread_cond_t     resume;             /* cv signals the thread to resume */
+  int                qdepth;             /* number of elements in the queue */
+  int                head;               /* next full position */  
+  int                tail;               /* next empty position */
+  BQ_Control_Flags   con_flags;          /* meant for sending thread commands */
+  BQ_State_Flags     state_flags;        /* meant for signaling thread status */
+  size_t             buffer_size;        /* size of an individual data buffer */
+  struct GenericFD   file;               /* file descriptor */
+  char               path[2048];         /* path to the file */
+  int                block_number;       /* block num of the file for this queue */
+  ne_handle          handle;             /* pointer back up to the ne_handle */
+  off_t              offset;             /* for write - amount of partial block 
+                                             that has been stored in the buffer[tail]
+                                            for read - current offset within the 
+                                             block file */
+} BufferQueue;
+
+
+// This struct is intended to allow read threads to pass
+// meta-file/xattr info back to the ne_open() function
+typedef struct read_meta_buffer_struct {
+   int N;
+   int E;
+   int O;
+   unsigned int bsz;
+   unsigned long nsz;
+   u64 totsz;
+}* read_meta_buffer;
+
+
+
+typedef struct handle {
+   /* Erasure Info */
+   e_status erasure_state;
+   char* path_fmt;
+
+   /* Read/Write Info and Structures */
+   ne_mode mode;
+   unsigned long buff_rem;
+   off_t buff_offset;
+
+   /* Threading fields */
+   void *buffer_list[MAX_QDEPTH];
+   void *block_buffs[MAX_QDEPTH][MAXPARTS];
+   pthread_t threads[MAXPARTS];
+   BufferQueue blocks[MAXPARTS];
+   unsigned int ethreads_running;
+
+   /* Erasure Manipulation Structures */
+   unsigned char e_ready;
+   unsigned char prev_in_err[ MAXPARTS ];
+   unsigned int  prev_err_cnt;
+   unsigned char *encode_matrix;
+   unsigned char *decode_matrix;
+   unsigned char *invert_matrix;
+   unsigned char *g_tbls;
+   unsigned int  decode_index[ MAXPARTS ];
+
+   /* Used for rebuilds to restore the original ownership to the rebuilt file. */
+   // TODO: the new rebuild scheme does not do this!
+   uid_t owner;
+   gid_t group;
+
+   /* path-printing technique provided by caller */
+   SnprintfFunc   snprintf;
+   void*          printf_state;        // caller-data to be provided to <snprintf>
+
+   /* pass-through to RDMA/sockets impl */
+   SktAuth        auth;
+
+   /* run-time dispatch of sockets versus file implementation */
+   const uDAL*    impl;
+
+   /* optional timing/benchmarking */
+   TimingData     timing_data;
+   TimingData*    timing_data_ptr;  /* caller of ne_open() can provide their own TimingData
+                                       (e.g. so data can survive ne_close()) */
+} *ne_handle;
+
 
 
 
