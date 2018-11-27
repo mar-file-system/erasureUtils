@@ -342,17 +342,22 @@ typedef struct ne_stat_struct {
 ne_handle ne_open1  ( SnprintfFunc func, void* state,
                       uDALType itype, SktAuth auth,
                       TimingFlagsValue flags, TimingData* timing_data,
-                      char *path, ne_mode mode, ... );
+                      char* path, ne_mode mode, ... );
 
-int       ne_delete1( SnprintfFunc func, void* state,
+int ne_rebuild1     ( SnprintfFunc fn, void* state,
                       uDALType itype, SktAuth auth,
                       TimingFlagsValue flags, TimingData* timing_data,
-                      char *path, int width );
+                      char* path, ne_mode mode, ... );
 
-int ne_stat1( SnprintfFunc fn, void* state,
-                    uDALType itype, SktAuth auth,
-                    TimingFlagsValue timing_flags, TimingData* timing_data,
-                    char *path, e_status e_state_struct );
+int ne_delete1      ( SnprintfFunc func, void* state,
+                      uDALType itype, SktAuth auth,
+                      TimingFlagsValue flags, TimingData* timing_data,
+                      char* path, int width );
+
+int ne_stat1        ( SnprintfFunc fn, void* state,
+                      uDALType itype, SktAuth auth,
+                      TimingFlagsValue flags, TimingData* timing_data,
+                      char* path, e_status e_state_struct );
 
 
 // these interfaces provide a default SnprintfFunc, which supports the
@@ -361,9 +366,6 @@ ne_handle  ne_open   ( char *path, ne_mode mode, ... );
 int        ne_rebuild( char* path, ne_mode mode, ... );
 int        ne_delete ( char* path, int width );
 int        ne_stat   ( char* path, e_status erasure_status_struct );
-off_t      ne_size   ( const char* path, int quorum, int max_stripe_width );
-
-
 
 
 /* Erasure utility-functions taking a <handle> argument */

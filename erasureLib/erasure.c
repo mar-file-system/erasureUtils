@@ -1380,7 +1380,9 @@ static int initialize_queues(ne_handle handle) {
          PRINTerr( "detected mismatch between provided N/E (%d/%d) and the most common meta values for this stripe (%d/%d)\n", 
                      handle->erasure_state->N, handle->erasure_state->E, read_meta_state.N, read_meta_state.E );
          terminate_threads( BQ_ABORT, handle, num_blocks, 0 );
-         errno = ENODATA;
+         errno = EBADFD; // hopefully gives a bit more insight than just ENODATA
+         if ( matches == 0 ) // no valid meta info, assume the file doesn't exist
+            errno = ENOENT;
          return -1;
       }
       handle->erasure_state->O = read_meta_state.O;
@@ -1859,7 +1861,8 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
 // ---------------------- CHECK BOUNDARY AND INVALID CALL CONDITIONS ----------------------
 
    if ( !(handle) ) {
-      PRINTerr( "ne_read received a NULL handle!\n" );
+      PRINTerr( "ne_read: received a NULL handle!\n" );
+      errno = EINVAL;
       return -1;
    }
 
@@ -2076,6 +2079,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
                   log_histo_add_interval(&handle->timing_data_ptr->erasure_h,
                                          &handle->timing_data_ptr->erasure);
                }
+               errno = ENODATA;
                return -1;
             }
 
@@ -2205,9 +2209,15 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
      return -1;
    }
 
+   if ( !(handle) ) {
+     PRINTerr( "ne_write: received a NULL handle!\n" );
+     errno = EINVAL;
+     return -1;
+   }
+
    if ( handle->mode != NE_WRONLY  &&  handle->mode != NE_REBUILD ) {
      PRINTerr( "ne_write: handle is in improper mode for writing! %d\n", handle->mode );
-     errno = EPERM;
+     errno = EINVAL;
      return -1;
    }
 
@@ -3135,10 +3145,12 @@ int ne_close( ne_handle handle )
 
    if( (UNSAFE(handle,nerr) && handle->mode == NE_WRONLY) ) {
       PRINTdbg( "ne_close: detected unsafe error levels following write operation\n" );
+      errno = EIO;
       ret = -1;
    }
    else if ( nerr > handle->erasure_state->E ) { /* for non-writes */
       PRINTdbg( "ne_close: detected excessive errors following a read operation\n" );
+      errno = ENODATA;
       ret = -1;
    }
    if ( ret == 0 ) {
