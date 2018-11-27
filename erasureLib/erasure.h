@@ -380,7 +380,7 @@ typedef struct handle {
    unsigned char *decode_matrix;
    unsigned char *invert_matrix;
    unsigned char *g_tbls;
-   unsigned int decode_index[ MAXPARTS ];
+   unsigned int  decode_index[ MAXPARTS ];
 
    /* Used for rebuilds to restore the original ownership to the rebuilt file. */
    // TODO: the new rebuild scheme does not do this!

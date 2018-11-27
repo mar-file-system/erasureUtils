@@ -2113,8 +2113,6 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
 
    mtot=N+E;
 
-   int nerr = 0; //used for reporting excessive errors at the end of the function
-
 
    /* loop until the file input or stream input ends */
    totsize = 0;
@@ -2224,11 +2222,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
                                 &timing->erasure);
       }
 
-      nerr = 0;
       for(i = N; i < handle->erasure_state->N + handle->erasure_state->E; i++) {
-         // TODO: fix this broken count
-        if ( handle->erasure_state->manifest_status[i] || handle->erasure_state->data_status[i] )
-           nerr++; //use this opportunity to count how many errors we have
         BufferQueue *bq = &handle->blocks[i];
         bq->qdepth++;
         bq->tail = (bq->tail + 1) % MAX_QDEPTH;
@@ -2240,6 +2234,12 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
       handle->buff_rem = 0; 
    }
    handle->erasure_state->totsz += totsize; //as it is impossible to write at an offset, the sum of writes will be the total size
+
+   int nerr = 0; //used for reporting excessive errors at the end of the function
+   for ( counter = 0; counter < N + E; counter++) {
+      if ( handle->erasure_state->manifest_status[counter] || handle->erasure_state->data_status[counter] )
+           nerr++;
+   }
 
    // If the errors exceed the minimum protection threshold number of
    // errrors then fail the write.

@@ -199,7 +199,8 @@ while [[ $cnt -lt $ITER ]]; do
    while [[ $incnt -lt $INITER ]]; do
 
       if [[ $incnt -ne 0 ]]; then
-         echo "Continuing with the same $n+$e striping..."
+         echo
+         echo "Continuing with the same $n+$e start position $start stripe..."
          echo >> $LOGFILE
          echo "Continuring to use $n+$e striping with start $start..." >> $LOGFILE
          echo
