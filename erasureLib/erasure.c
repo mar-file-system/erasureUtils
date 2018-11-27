@@ -1205,20 +1205,8 @@ if ( meta_buf->VAL >= MIN_VAL  &&  meta_buf->VAL <= MAX_VAL ) { \
 static int initialize_queues(ne_handle handle) {
    int i;
    int num_blocks = handle->erasure_state->N + handle->erasure_state->E;
-   int consensus = MIN_MD_CONSENSUS;
-
-   int cleanup_threads = 0; // error condition indicating how many threads should be terminated
 
    struct read_meta_buffer_struct read_meta_state; //needed to determine metadata consensus for reads
-
-   // If called for read or rebuild, we may need to dynamically determine the N, E, O, and bsz values.
-   // This requires spinning up threads, one at a time, and checking their meta info for consistency.
-   // Thus, we initialize num_blocks to a 'consensus' value, if N/E were not initialized, and then reset 
-   // to something more reasonable once we have a good idea of N/E.
-   if ( !( num_blocks ) ) {
-      // should only happen for read
-      num_blocks = consensus;
-   }
 
    /* open files and initialize BufferQueues */
    for(i = 0; i < num_blocks; i++) {
@@ -1258,71 +1246,7 @@ static int initialize_queues(ne_handle handle) {
          terminate_threads( BQ_ABORT, handle, i, 0 );
          return -1;
       }
-
-      // I've pulled this into a conditional so as to not slow us down unless we really really need the meta info from these threads
-      if ( handle->erasure_state->N == 0 ) {
-         PRINTdbg("Checking for error opening block %d\n", i);
-
-         if ( pthread_mutex_lock( &bq->qlock ) ) {
-            PRINTerr( "failed to aquire queue lock for thread %d\n", i );
-            terminate_threads( BQ_ABORT, handle, i+1, 0 );
-            return -1;
-         }
-
-         // wait for the queue to be ready.
-         while( !( bq->state_flags & BQ_OPEN ) ) // wait for the thread to open its file
-            pthread_cond_wait( &bq->master_resume, &bq->qlock );
-         pthread_mutex_unlock( &bq->qlock ); // just waiting for open to complete, don't need to hold this longer
-
-         // if we have all the threads needed for determining N/E
-         if ( (i+1) >= consensus ) {
-
-            PRINTdbg( "attempting to determine N/E values after starting %d threads\n", i+1 );
-
-            // find the most common values from amongst all meta information
-            int matches = check_matches( handle->blocks, i+1, &(read_meta_state) );
-
-            // special case, if we have still failed to produce sensible N/E values
-            if ( matches < 1 ) {
-               // if we are still within our bounds, just keep extending the stripe, trying to find *something*
-               if ( num_blocks < MAXPARTS )
-                  num_blocks++;
-               continue;
-            }
-
-            // we have N/E values, so use them to determine a new consensus
-            consensus = ( read_meta_state.E ) ? ( read_meta_state.E + 1 ) : ( read_meta_state.N );
-            PRINTdbg( "set consensus to %d after retrieving new N/E values (have %d matches)\n", consensus, matches );
-            // if we have sufficient matches for consensus, assign them to our handle
-            if ( matches >= consensus ) {
-               PRINTdbg( "setting N/E to %d/%d after reaching consensus of %d\n", read_meta_state.N, read_meta_state.E, matches );
-               handle->erasure_state->N = read_meta_state.N;
-               handle->erasure_state->E = read_meta_state.E;
-               if ( handle->erasure_state->O != read_meta_state.O ) {
-                  // this is horribly wasteful, but it is far easier to just restart this whole process to fix this mistake
-                  terminate_threads( BQ_ABORT, handle, i+1, 0 );
-                  i = -1; //as we will still hit the for-loop-incementer, set to -1
-                  //TODO: this may still leave false manifest errors lingering in our handle
-               }
-               handle->erasure_state->O = read_meta_state.O;
-            }
-            num_blocks = read_meta_state.N + read_meta_state.E;
-         }
-      }
    }
-   // if we've failed to identify a value for N/E, terminate all threads
-   if ( handle->erasure_state->N == 0 ) {
-      num_blocks = 0;
-   }
-   // we may have opened up too many threads (or any at all, if we hit an error)
-   // make sure to close those here
-   if ( i > num_blocks ) {
-      terminate_threads( BQ_ABORT, handle, i - num_blocks, num_blocks );
-      // again, if we failed to determine N/E, there is no point continuing
-      if ( handle->erasure_state->N == 0 )
-         return -1;
-   }
-
 
    // We finish checking thread status down here in order to give them a bit more time to spin up.
    for(i = 0; i < num_blocks; i++) {
@@ -1344,10 +1268,9 @@ static int initialize_queues(ne_handle handle) {
 
    }
 
-
+   // For reads, find the most common values from amongst all meta information, now that all threads have started.
+   // We have to do this here, in case we don't have a bsz value
    if ( handle->mode == NE_RDONLY  ||  handle->mode == NE_RDALL ) {
-      // find the most common values from amongst all meta information, now that all threads have started
-      // we have to do this here, in case we don't have a bsz value
       int matches = check_matches( handle->blocks, i, &(read_meta_state) );
       // sanity check: if N/E values have changed at this point, the meta info is in a very odd state
       if ( handle->erasure_state->N != read_meta_state.N  ||  handle->erasure_state->E != read_meta_state.E ) {
@@ -1357,7 +1280,7 @@ static int initialize_queues(ne_handle handle) {
          return -1;
       }
       handle->erasure_state->O = read_meta_state.O;
-      if ( !(handle->erasure_state->bsz) )
+      if ( !(handle->erasure_state->bsz) ) // only set bsz if not already specified via NE_SETBSZ mode
          handle->erasure_state->bsz = read_meta_state.bsz;
       handle->erasure_state->nsz = read_meta_state.nsz;
       handle->erasure_state->totsz = read_meta_state.totsz;
@@ -1412,6 +1335,7 @@ static int initialize_queues(ne_handle handle) {
       resume_threads( 0, handle, handle->erasure_state->N, 0 );
    }
    else if ( handle->mode == NE_RDALL ) {
+      // for NE_RDALL, we immediately start both data and erasure threads
       resume_threads( 0, handle, handle->erasure_state->N + handle->erasure_state->E, 0 );
       handle->ethreads_running  = handle->erasure_state->E;
    }
@@ -1520,10 +1444,13 @@ ne_handle create_handle( SnprintfFunc fn, void* state,
       int N = erasure_state->N;
       int E = erasure_state->E;
       int O = erasure_state->O;
+      // completely clear the e_status struct to ensure no extra state is carried over
       memset( erasure_state, 0, sizeof( struct ne_stat_struct ) );
+      // then reassign the values we wish to preserve
       erasure_state->N = N;
       erasure_state->E = E;
       erasure_state->O = O;
+      // if bsz was not set, this value will be overwritten in initialize_queues()
       erasure_state->bsz = bsz;
    }
 

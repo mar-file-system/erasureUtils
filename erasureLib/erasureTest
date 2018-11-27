@@ -352,10 +352,10 @@ while [[ $cnt -lt $ITER ]]; do
             oldpos=$(( oldpos + 1 ))
          done
 
-         echo "error insertion complete, pattern is : $npat"
+         echo "Error insertion complete, pattern is : $npat"
          echo "Errors inserted, pattern is  $npat" >> $LOGFILE
          echo "There are $silent_count potentially silent errors in the stripe"
-         echo
+         echo "There are $silent_count potentially silent errors in the stripe" >> $LOGFILE
 
          tstat=$stat
          tmp=0
@@ -366,7 +366,6 @@ while [[ $cnt -lt $ITER ]]; do
                truepos=$(( truepos + n + e ))
             fi
 
-            echo "Checking if error at $errpos (truepos=$truepos) is missable (lt $n)"
             if [[ ! $truepos -lt $n ]]; then
                tstat=$(( tstat - (2**errpos) ))
             fi
@@ -374,6 +373,9 @@ while [[ $cnt -lt $ITER ]]; do
             tmp=$(( tmp + 1 ))
          done
 
+         echo "The minimum acceptible error detection for reads is $tstat"
+         echo "The minimum acceptible error detection for reads is $tstat" >> $LOGFILE
+         echo
          echo >> $LIBTLOG
 
          echo -n "Verifying corruption pattern (expecting pattern $stat)..."
@@ -397,8 +399,6 @@ while [[ $cnt -lt $ITER ]]; do
 
          noinfo=$RANDOM
          let "noinfo %= 2"
-         
-         RFAIL=0
 
          CMD="./libneTest read $EPAT $n $e $start -s $FSZ -o $OUTFILE"
 
@@ -411,6 +411,7 @@ while [[ $cnt -lt $ITER ]]; do
          { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.read
          
          if [[ ! $ret =~ $re  ||  $ret -gt $stat  ||  $ret -lt $tstat ]]; then
+            # may still be possible to get false failure on silent zero-fill corruption
             echo
             echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $stat but received $ret"
             echo -e "Minimum acceptible status value is $tstat"
@@ -420,13 +421,11 @@ while [[ $cnt -lt $ITER ]]; do
             exit -1
          elif [[ $ret -lt $stat ]]; then
             echo
-            echo -e "\033[0;33mWARNING - read operation failed to detect all erasure errors, expected $stat but received $ret"
-            echo -e "This may simply be the result of the read request not requiring the faulty erasure data or perhaps "
-            echo -e "silent corruption present in the zero fill (undetectable on read)"
-            echo -e "CMD = $CMD\033[0m"
-            echo "   WARNING: read operation failed to detect all erasure errors, expected $stat but received $ret" >> $LOGFILE
+            echo -e "\033[0;33mNOTE - Read operation failed to detect all erasure errors (expected $stat but received $ret)."
+            echo -e "       This is not unusual, as the faulty erasure sections may not have been needed for data recovery."
+            echo -e "       CMD = $CMD\033[0m"
+            echo "   NOTE: read operation failed to detect all erasure errors, expected $stat but received $ret" >> $LOGFILE
             echo "CMD = $CMD" >> $LOGFILE
-            RFAIL=1
          fi
          echo "read completed"
          echo
@@ -470,7 +469,7 @@ while [[ $cnt -lt $ITER ]]; do
 
          { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.no_read
          
-         if [[ ! $ret =~ $re  ||  $ret -gt $stat  ||  $ret -lt $tstat  ||  ( $RFAIL -eq 0  &&  $ret -ne $stat ) ]]; then
+         if [[ ! $ret =~ $re  ||  $ret -gt $stat  ||  $ret -lt $tstat ]]; then
             echo
             echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $stat but received $ret"
             echo -e "Minimum acceptible status value is $tstat"
@@ -480,13 +479,11 @@ while [[ $cnt -lt $ITER ]]; do
             exit -1
          elif [[ $ret -lt $stat ]]; then
             echo
-            echo -e "\033[0;33mWARNING - read operation failed to detect all erasure errors, expected $stat but received $ret"
-            echo -e "This may simply be the result of the read request not requiring the faulty erasure data or perhaps "
-            echo -e "silent corruption present in the zero fill (undetectable on read)"
-            echo -e "CMD = $CMD\033[0m"
-            echo "   WARNING: read operation failed to detect all erasure errors, expected $stat but received $ret" >> $LOGFILE
+            echo -e "\033[0;33mNOTE - Read operation failed to detect all erasure errors (expected $stat but received $ret)."
+            echo -e "       This is not unusual, as the faulty erasure sections may not have been needed for data recovery."
+            echo -e "       CMD = $CMD\033[0m"
+            echo "   NOTE: read operation failed to detect all erasure errors, expected $stat but received $ret" >> $LOGFILE
             echo "CMD = $CMD" >> $LOGFILE
-            RFAIL=1
          fi
          echo "read completed"
          echo
@@ -598,6 +595,7 @@ while [[ $cnt -lt $ITER ]]; do
          fi
          echo -e "       and error pattern   $npat"
          echo -e "       ( Test $(( (cnt*INITER) + incnt + 1 )) )\033[0m"
+         echo
 
          echo "PASS - $n+$e with start position $start" >> $LOGFILE 
          echo "       and error pattern   $npat" >> $LOGFILE
