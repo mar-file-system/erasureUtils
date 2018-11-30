@@ -144,10 +144,10 @@ void usage(const char* prog_name, const char* op) {
    PRINTlog("  %2s %-10s %s\n",                                \
            (!strncmp(op, CMD, 10) ? "->" : ""), (CMD), (ARGS))
 
-   USAGE("read",       "erasure_path ( -n |  N E start_file ) [-t timing_flags] [-r] [-s input_size] [-o output_file]");
-   USAGE("verify",     "erasure_path ( -n |  N E start_file ) [-t timing_flags] [-r] [-s input_size] [-o output_file]");
-   USAGE("write",      "erasure_path         N E start_file   [-t timing_flags] [-r] [-s input_size] [-i input_file]");
-   USAGE("rebuild",    "erasure_path ( -n |  N E start_file ) [-t timing_flags]");
+   USAGE("read",       "erasure_path ( -n |  N E start_file ) [-t timing_flags] [-e] [-r] [-s input_size] [-o output_file]");
+   USAGE("verify",     "erasure_path ( -n |  N E start_file ) [-t timing_flags] [-e] [-r] [-s input_size] [-o output_file]");
+   USAGE("write",      "erasure_path         N E start_file   [-t timing_flags] [-e] [-r] [-s input_size] [-i input_file]");
+   USAGE("rebuild",    "erasure_path ( -n |  N E start_file ) [-t timing_flags] [-e]");
    USAGE("delete",     "erasure_path stripe_width             [-t timing_flags] [-f]");
    USAGE("stat",       "erasure_path                          [-t timing_flags]");
    USAGE("crc-status", "");
@@ -233,6 +233,31 @@ select_snprintf(const char* path) {
 }
 
 
+void print_erasure_state( e_state state ) {
+   PRINTout( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
+             state->N, state->E, state->bsz, state->O, (unsigned long long)state->totsz );
+   PRINTout( "Metadata Errors:      " );
+   int tmp;
+   for( tmp = 0; tmp < ( state->N + state->E ); tmp++ ){
+      PRINTout( "%d ", state->meta_status[tmp] );
+   }
+   PRINTout( "\n" );
+
+   PRINTout( "Data/Erasure Errors:  " );
+   int nerr = 0;
+   for( tmp = 0; tmp < ( state->N + state->E ); tmp++ ){
+      if( state->data_status[tmp] )
+         nerr++;
+      PRINTout( "%d ", state->data_status[tmp] );
+   }
+   PRINTout( "\n" );
+
+   if( nerr > state->E )
+      PRINTlog( "WARNING: the data may be unrecoverable!\n" );
+   else if ( nerr > 0 )
+      PRINTlog( "WARNING: errors were found, be sure to rebuild this object before data loss occurs!\n" );
+}
+
 
 
 int main( int argc, const char** argv ) 
@@ -252,6 +277,7 @@ int main( int argc, const char** argv )
    char               rand_size = 0;
    char               no_info = 0;
    char               force_delete = 0;
+   char               show_state = 0;
    char* output_file = NULL;
    char* input_file  = NULL;
 
@@ -263,7 +289,7 @@ int main( int argc, const char** argv )
    char pr_usage = 0;
    int c;
    // parse all position-independent arguments
-   while ( (c = getopt( argc, (char* const*)argv, "t:i:o:s:rnfh" )) != -1 ) {
+   while ( (c = getopt( argc, (char* const*)argv, "t:i:o:s:rnefh" )) != -1 ) {
       switch (c) {
          char* endptr;
          case 't':
@@ -293,6 +319,9 @@ int main( int argc, const char** argv )
             break;
          case 'n':
             no_info = 1;
+            break;
+         case 'e':
+            show_state = 1;
             break;
          case 'f':
             force_delete = 1;
@@ -415,6 +444,11 @@ int main( int argc, const char** argv )
       usage( argv[0], operation );
       return -1;
    }
+   if ( (show_state)  &&  ( wr > 3 ) ) {
+      PRINTlog( "%s: the '-e' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
+      usage( argv[0], operation );
+      return -1;
+   }
    if ( ( output_file != NULL )  &&  ( wr != 0  &&  wr != 2 ) ) {
       PRINTlog( "%s: the '-o' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
@@ -467,18 +501,37 @@ int main( int argc, const char** argv )
 
    if ( wr == 3 ) {
       PRINTout("libneTest: rebuilding erasure striping (N=%d,E=%d,offset=%d)\n", N, E, O );
+      struct ne_state_struct state_struct;
+      e_state state = &state_struct;
 
-      if ( (no_info) )
-         tmp = ne_rebuild( erasure_path, NE_REBUILD | NE_NOINFO );
-      else
-         tmp = ne_rebuild( erasure_path, NE_REBUILD, O, N, E );
+      // how we call ne_rebuild() depends greatly on the arguments provided
+      if ( show_state ) {
+         if ( (no_info) )
+            tmp = ne_rebuild( erasure_path, NE_REBUILD | NE_ESTATE | NE_NOINFO, state );
+         else
+            tmp = ne_rebuild( erasure_path, NE_REBUILD | NE_ESTATE, state, O, N, E );
+      }
+      else {
+         if ( (no_info) )
+            tmp = ne_rebuild( erasure_path, NE_REBUILD | NE_NOINFO );
+         else
+            tmp = ne_rebuild( erasure_path, NE_REBUILD, O, N, E );
+      }
+
+      if ( (show_state) ) {
+         PRINTout( "Stripe state pre-rebuild:\n" ); 
+         print_erasure_state( state );
+      }
 
       if ( (tmp) ) {
-         PRINTout("rebuild result %d, errno=%d (%s)\n", tmp, errno, strerror(errno));
-         PRINTlog("libneTest: rebuild failed!\n" );
-         return -1;
+         PRINTout("Rebuild failed to correct all errors: errno=%d (%s)\n", tmp, errno, strerror(errno));
+         if ( tmp < 0 )
+            PRINTout("libneTest: rebuild failed!\n" );
+         else
+            PRINTout("libneTest: rebuild indicates only partial success\n" );
       }
-      PRINTout("libneTest: rebuild complete\n" );
+      else
+         PRINTout("libneTest: rebuild complete\n" );
 
       PRINTout("rebuild rc: %d\n",tmp);
 
@@ -525,38 +578,16 @@ int main( int argc, const char** argv )
 
    if ( wr == 5 ) {
       PRINTout("libneTest: retrieving status of erasure striping with path \"%s\"\n", (char *)argv[2] );
-      struct ne_state_struct stat_struct;
-      e_state stat = &stat_struct;
-      memset( stat, 0, sizeof( struct ne_state_struct ) );
+      struct ne_state_struct state_struct;
+      e_state state = &state_struct;
 
       int ret;
-      if ( ( ret = NE_STAT_CALL( erasure_path, stat ) ) < 0 ) {
+      if ( ( ret = NE_STAT_CALL( erasure_path, state ) ) < 0 ) {
          PRINTlog("libneTest: ne_stat failed!\n" );
          return -1;
       }
 
-      PRINTout( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
-                stat->N, stat->E, stat->bsz, stat->O, (unsigned long long)stat->totsz );
-      PRINTout( "Extended Attribute Errors : ");
-      for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
-         PRINTout( "%d ", stat->manifest_status[tmp] );
-      }
-      PRINTout( "\n" );
-
-      PRINTout( "Data/Erasure Errors :       " );
-      int nerr = 0;
-      for( tmp = 0; tmp < ( stat->N+stat->E ); tmp++ ){
-         if( stat->data_status[tmp] )
-            nerr++;
-         PRINTout( "%d ", stat->data_status[tmp] );
-      }
-      PRINTout( "\n" );
-
-      if( nerr > stat->E )
-         PRINTlog( "WARNING: the data appears to be unrecoverable!\n" );
-      else if ( nerr > 0 )
-         PRINTlog( "WARNING: errors were found, be sure to rebuild this object before data loss occurs!\n" );
-
+      print_erasure_state( state );
       // display the ne_stat return value
       printf("%d\n",ret);
 
@@ -593,20 +624,30 @@ int main( int argc, const char** argv )
       return -1;
    }
 
+   
+   struct ne_state_struct state_struct;
+   e_state state = &state_struct;
+
+   ne_mode base_mode = NE_RDALL; //verify
    if ( wr == 0 ) { // read
-      if ( (no_info) )
-         handle = ne_open( erasure_path, NE_RDONLY | NE_NOINFO );
-      else
-         handle = ne_open( erasure_path, NE_RDONLY, O, N, E );
+      base_mode = NE_RDONLY;
    }
    else if ( wr == 1 ) { // write
-      handle = ne_open( erasure_path, NE_WRONLY, O, N, E );
+      base_mode = NE_WRONLY;
    }
-   else if ( wr == 2 ) { // verify
+
+   // how we issue this open depends greatly on our arguments
+   if ( (show_state) ) {
       if ( (no_info) )
-         handle = ne_open( erasure_path, NE_RDALL | NE_NOINFO );
+         handle = ne_open( erasure_path, base_mode | NE_ESTATE | NE_NOINFO, state );
       else
-         handle = ne_open( erasure_path, NE_RDALL, O, N, E );
+         handle = ne_open( erasure_path, base_mode | NE_ESTATE, state, O, N, E );
+   }
+   else {
+      if ( (no_info) )
+         handle = ne_open( erasure_path, base_mode | NE_NOINFO );
+      else
+         handle = ne_open( erasure_path, base_mode, O, N, E );
    }
 
    // check for a successful open of the handle
@@ -698,6 +739,10 @@ int main( int argc, const char** argv )
 
    // close the handle and indicate it's close condition
    tmp = ne_close( handle );
+
+   if( (show_state) )
+      print_erasure_state( state );
+
    PRINTout("close rc: %d\n",tmp);
 
    return tmp;

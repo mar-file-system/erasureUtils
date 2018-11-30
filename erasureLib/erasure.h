@@ -311,7 +311,7 @@ typedef struct ne_state_struct {
    u64 totsz;
 
    // striping health
-   char manifest_status[ MAXPARTS ];
+   char meta_status[ MAXPARTS ];
    char data_status[ MAXPARTS ];
 
    // per-part info

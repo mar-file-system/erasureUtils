@@ -464,7 +464,7 @@ void *bq_writer(void *arg) {
   int          error;
   char         aborted = 0; // set to 1 on abort and 2 on pthread lock error
 
-  char* meta_status = &(handle->erasure_state->manifest_status[bq->block_number]);
+  char* meta_status = &(handle->erasure_state->meta_status[bq->block_number]);
   char* data_status = &(handle->erasure_state->data_status[bq->block_number]);
 
 #ifdef INT_CRC
@@ -794,7 +794,7 @@ void* bq_reader(void* arg) {
    meta_buf->bsz = 0;
    meta_buf->nsz = 0;
    meta_buf->totsz = 0;
-   char* meta_status = &(handle->erasure_state->manifest_status[bq->block_number]);
+   char* meta_status = &(handle->erasure_state->meta_status[bq->block_number]);
    char* data_status = &(handle->erasure_state->data_status[bq->block_number]);
 
    // pull the meta info for this thread's block
@@ -1052,7 +1052,7 @@ void* bq_reader(void* arg) {
          resetable_error = 1; // this should allow us to refuse any further buffers while avoiding a reported error
 
          // if we're at the end of the file, and both our local crcsum and the global are 'trustworthy', verify them
-         if ( good_crc  &&  !(handle->erasure_state->manifest_status[bq->block_number])  &&  
+         if ( good_crc  &&  !(handle->erasure_state->meta_status[bq->block_number])  &&  
                ( local_crcsum != handle->erasure_state->csum[bq->block_number] ) ) {
             *data_status = 1;
             // if the global doesn't match, something very odd is going on with this block.  Best to avoid reading it 
@@ -1398,7 +1398,7 @@ static int initialize_queues(ne_handle handle) {
          if ( read_buf->N != handle->erasure_state->N  ||  read_buf->E != handle->erasure_state->E  ||  read_buf->O != handle->erasure_state->O  ||  
               read_buf->bsz != handle->erasure_state->bsz  ||  read_buf->nsz != handle->erasure_state->nsz  ||  
               read_buf->totsz != handle->erasure_state->totsz )
-            handle->erasure_state->manifest_status[i] = 1;
+            handle->erasure_state->meta_status[i] = 1;
          // free our read_meta_buff structs
          free( read_buf ); 
          // update each thread's buffer size, just in case
@@ -1743,7 +1743,7 @@ int initialize_handle( ne_handle handle )
    int i;
    // quick loop to count up errors
    for ( i = 0; i < (handle->erasure_state->N + handle->erasure_state->E); i++ ) {
-     if ( handle->erasure_state->data_status[i]  ||  handle->erasure_state->manifest_status[i] )
+     if ( handle->erasure_state->data_status[i]  ||  handle->erasure_state->meta_status[i] )
        nerr++;
    }
    if( (handle->mode == NE_WRONLY || handle->mode == NE_REBUILD)  &&  UNSAFE(handle,nerr) ) {
@@ -2363,7 +2363,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
 
    int nerr = 0; //used for reporting excessive errors at the end of the function
    for ( counter = 0; counter < N + E; counter++) {
-      if ( handle->erasure_state->manifest_status[counter] || handle->erasure_state->data_status[counter] )
+      if ( handle->erasure_state->meta_status[counter] || handle->erasure_state->data_status[counter] )
            nerr++;
    }
 
@@ -3140,7 +3140,7 @@ int ne_close( ne_handle handle )
    for(i = 0; i < N+E; i++) {
       pthread_join(handle->threads[i], NULL);
       bq_destroy(&handle->blocks[i]);
-      if ( handle->erasure_state->manifest_status[i] || handle->erasure_state->data_status[i] )
+      if ( handle->erasure_state->meta_status[i] || handle->erasure_state->data_status[i] )
          nerr++; //use this opportunity to count how many errors we have
    }
 
@@ -3169,7 +3169,7 @@ int ne_close( ne_handle handle )
       PRINTdbg( "ne_close: encoding error pattern in return value...\n" );
       /* Encode any file errors into the return status */
       for( counter = 0; counter < N+E; counter++ ) {
-         if ( handle->erasure_state->data_status[counter] | handle->erasure_state->manifest_status[counter] ) {
+         if ( handle->erasure_state->data_status[counter] | handle->erasure_state->meta_status[counter] ) {
             ret += ( 1 << ((counter + handle->erasure_state->O) % (N+E)) );
          }
       }
@@ -3430,7 +3430,7 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
       int i;
       for ( i = 0; i < (N + E); i++ ) {
          BufferQueue* bq = &write_handle->blocks[i];
-         if ( erasure_state_read->manifest_status[i] || erasure_state_read->data_status[i] ) {
+         if ( erasure_state_read->meta_status[i] || erasure_state_read->data_status[i] ) {
             // if the read handle has this block listed as being in error, we need to actually write out a new copy
             PRINTdbg( "block %d is needed for output, and will be resumed\n", i );
             bq_resume( 0, bq );
@@ -3482,7 +3482,7 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
       // loop through all blocks in the read handle, checking for new errors
       all_rebuilt = 1;
       for ( i = 0; i < (N + E); i++ ) {
-         if ( ( erasure_state_read->manifest_status[i] || erasure_state_read->data_status[i] )  &&  !(being_rebuilt[i]) ) {
+         if ( ( erasure_state_read->meta_status[i] || erasure_state_read->data_status[i] )  &&  !(being_rebuilt[i]) ) {
             all_rebuilt = 0; // any error which we have not yet rebuilt will require a re-run
             PRINTdbg( "new error in block %d will require a re-read\n", i );
          }
@@ -3837,7 +3837,7 @@ int ne_stat1( SnprintfFunc fn, void* state,
       if ( read_buf->N != handle->erasure_state->N  ||  read_buf->E != handle->erasure_state->E  ||  read_buf->O != handle->erasure_state->O  ||  
            read_buf->bsz != handle->erasure_state->bsz  ||  read_buf->nsz != handle->erasure_state->nsz  ||  
            read_buf->totsz != handle->erasure_state->totsz )
-         handle->erasure_state->manifest_status[i] = 1;
+         handle->erasure_state->meta_status[i] = 1;
       // free our read_meta_buff structs
       free( read_buf ); 
    }
