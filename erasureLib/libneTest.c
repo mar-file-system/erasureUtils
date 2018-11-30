@@ -152,44 +152,57 @@ void usage(const char* prog_name, const char* op) {
    USAGE("stat",       "erasure_path                          [-t timing_flags]");
    USAGE("crc-status", "");
    USAGE("help",       "");
-
    PRINTlog("\n");
+
+   if ( strncmp(op, "help", 10) ) // if help was not explicitly specified, avoid printing the entire usage block
+      return;
+
+   PRINTlog("  Options:\n");
+   PRINTlog("      -n                 For read/verfiy/write operations, specifies the use of the NE_NOINFO flag.\n");
+   PRINTlog("                         This will result in libne automatically determining values for N/E/start_file based on existing \n");
+   PRINTlog("                         stripe metadata.\n");
+   PRINTlog("\n");
+   PRINTlog("      -t timing_flags    Specifies flags to be passed to the libne internal timer functions.  See 'NOTES' below.\n");
+   PRINTlog("\n");
+   PRINTlog("      -e                 For read/verify/write/rebuild, specifies the use of the NE_ESTATE flag.\n");
+   PRINTlog("                         This will allow an e_state struct to be retrieved following the operation.  Some of the contents \n");
+   PRINTlog("                         of the structure will be printed out to the console (N/E/O/bsz/totsz/meta_status/data_status).\n");
+   PRINTlog("\n");
+   PRINTlog("      -r                 Randomizes the read/write sizes used for data movement during the specified operation.\n");
+   PRINTlog("\n");
+   PRINTlog("      -s input_size      Specifies the quantity of data to be read from the data source, whether that source be an \n");
+   PRINTlog("                         erasure stripe (for read/verify) or an input-file/zero-buffer (for write).\n");
+   PRINTlog("\n");
+   PRINTlog("      -o ontput_file     Specifies a standard POSIX file to which data retrieved from an erasure stripe should be stored.\n");
+   PRINTlog("\n");
+   PRINTlog("      -i input_file      Specifies a standard POSIX file from which data should be copied to the output erasure stripe.\n");
+   PRINTlog("\n");
+   PRINTlog("      -f                 Used to perform a deletion without prompting for confirmation first.\n");
    PRINTlog("\n");
    PRINTlog("  NOTES:\n");
-   PRINTlog("     read/write/verify   Use a fixed transfer size (slightly larger than a libne stripe),\n" \
-"                            but can use a random transfer-size (<= fixed size) if '-r' is specified.\n");
+   PRINTlog("     If an input file is not specified for write, a stream of zeros will be stored to the \n" \
+"      erasure stripe up to the given input_size.\n" );
    PRINTlog("\n");
-   PRINTlog("     output_file         If not specified for read, the retrieved data will simply be \n"
-"                            discarded.\n");
+   PRINTlog("     <stripe_width> refers to the total number of data/erasure parts in the target stripe (N+E).\n");
    PRINTlog("\n");
-   PRINTlog("     input_file          If not specified for write, a stream of zeros will be stored to \n"
-"                            the erasure stripe up to the given input_size.  Specifiying \n"
-"                            neither '-s' nor '-i' for a write operation will result in \n"
-"                            an error condition.\n");
-   PRINTlog("\n");
-   PRINTlog("     <timing_flags>      can be decimal, or can be hex-value starting with \"0x\"\n");
-   PRINTlog("\n");
-   PRINTlog("        OPEN    =  0x0001\n");
-   PRINTlog("        RW      =  0x0002     /* each individual read/write, in given stream */\n");
-   PRINTlog("        CLOSE   =  0x0004     /* cost of close */\n");
-   PRINTlog("        RENAME  =  0x0008\n");
-   PRINTlog("        STAT    =  0x0010\n");
-   PRINTlog("        XATTR   =  0x0020\n");
-   PRINTlog("        ERASURE =  0x0040\n");
-   PRINTlog("        CRC     =  0x0080\n");
-   PRINTlog("        THREAD  =  0x0100     /* from beginning to end  */\n");
-   PRINTlog("        HANDLE  =  0x0200     /* from start/stop, all threads, in 1 handle */\n");
-   PRINTlog("        SIMPLE  =  0x0400     /* diagnostic output uses terse numeric formats */\n");
+   PRINTlog("     <timing_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
+   PRINTlog("                   OPEN    =  0x0001\n");
+   PRINTlog("                   RW      =  0x0002     /* each individual read/write, in given stream */\n");
+   PRINTlog("                   CLOSE   =  0x0004     /* cost of close */\n");
+   PRINTlog("                   RENAME  =  0x0008\n");
+   PRINTlog("                   STAT    =  0x0010\n");
+   PRINTlog("                   XATTR   =  0x0020\n");
+   PRINTlog("                   ERASURE =  0x0040\n");
+   PRINTlog("                   CRC     =  0x0080\n");
+   PRINTlog("                   THREAD  =  0x0100     /* from beginning to end  */\n");
+   PRINTlog("                   HANDLE  =  0x0200     /* from start/stop, all threads, in 1 handle */\n");
+   PRINTlog("                   SIMPLE  =  0x0400     /* diagnostic output uses terse numeric formats */\n");
    PRINTlog("\n");
    PRINTlog("     <erasure_path> is one of the following\n");
-   PRINTlog("\n");
    PRINTlog("       [RDMA] xx.xx.xx.%%d:pppp/local/blah/block%%d/.../fname\n");
-   PRINTlog("\n");
-   PRINTlog("               ('/local/blah' is some local path on all accessed storage nodes\n");
-   PRINTlog("\n");
+   PRINTlog("               ('/local/blah' is some local path on all accessed storage nodes)\n");
    PRINTlog("       [MC]   /NFS/blah/block%%d/.../fname\n");
-   PRINTlog("\n");
-   PRINTlog("               ('/NFS/blah/'  is some NFS path on the client nodes\n");
+   PRINTlog("               ('/NFS/blah/'  is some NFS path on the client nodes)\n");
    PRINTlog("\n");
 
 #undef USAGE
@@ -281,7 +294,8 @@ int main( int argc, const char** argv )
    char* output_file = NULL;
    char* input_file  = NULL;
 
-   unsigned long long buff_size = ( BLKSZ + 1 ) * MAXN; //choose a buffer size that can potentially read beyond a stripe boundary
+   unsigned long long buff_size = ( BLKSZ + 1 ) * MAXN; //choose a buffer size that can potentially read/write beyond a stripe boundary
+                                                        //this is meant to hit more edge cases, not performance considerations
    size_t totbytes = buff_size;
 
    LOG_INIT();
@@ -483,9 +497,6 @@ int main( int argc, const char** argv )
                                                  timing_flags, NULL,    \
                                                  (PATH), (E_STRUCT) )
 
-#  define NE_SIZE(PATH, QUOR, WIDTH)  ne_size1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, \
-                                                 timing_flags, NULL,    \
-                                                 (PATH), (QUOR), (WIDTH))
    ne_handle handle;
 
    SktAuth  auth;
@@ -589,7 +600,7 @@ int main( int argc, const char** argv )
 
       print_erasure_state( state );
       // display the ne_stat return value
-      printf("%d\n",ret);
+      PRINTout("stat rc: %d\n", ret);
 
       return ret;
    }
@@ -639,15 +650,15 @@ int main( int argc, const char** argv )
    // how we issue this open depends greatly on our arguments
    if ( (show_state) ) {
       if ( (no_info) )
-         handle = ne_open( erasure_path, base_mode | NE_ESTATE | NE_NOINFO, state );
+         handle = NE_OPEN( erasure_path, base_mode | NE_ESTATE | NE_NOINFO, state );
       else
-         handle = ne_open( erasure_path, base_mode | NE_ESTATE, state, O, N, E );
+         handle = NE_OPEN( erasure_path, base_mode | NE_ESTATE, state, O, N, E );
    }
    else {
       if ( (no_info) )
-         handle = ne_open( erasure_path, base_mode | NE_NOINFO );
+         handle = NE_OPEN( erasure_path, base_mode | NE_NOINFO );
       else
-         handle = ne_open( erasure_path, base_mode, O, N, E );
+         handle = NE_OPEN( erasure_path, base_mode, O, N, E );
    }
 
    // check for a successful open of the handle
@@ -690,13 +701,26 @@ int main( int argc, const char** argv )
       }
 
       // WRITE DATA
+      size_t written;
       if ( wr == 1 ) { // for write, just output to the stripe
          PRINTdbg( "libneTest: writing %zd bytes to erasure stripe\n", nread );
-         nread = ne_write( handle, buff, nread );
+         if( ( written = ne_write( handle, buff, nread ) ) != nread ) {
+            PRINTlog( "libneTest: expected to write %llu bytes to erasure stripe, but ne_write returned: %zd\n", written );
+            ne_close( handle );
+            if ( std_fd )
+               close( std_fd );
+            return -1;
+         }
       }
       else if ( std_fd ) { // for read/verify, only write out if given the -o flag
          PRINTdbg( "libneTest: writing %zd bytes to \"%s\"\n", nread, output_file );
-         nread = write( std_fd, buff, nread );
+         if ( ( written = write( std_fd, buff, nread ) ) != nread ) {
+            PRINTlog( "libneTest: expected to write %llu bytes to output file, but write returned: %zd\n", written );
+            ne_close( handle );
+            if ( std_fd )
+               close( std_fd );
+            return -1;
+         }
       }
  
       // check for a write error
@@ -712,16 +736,20 @@ int main( int argc, const char** argv )
       // increment our counters
       bytes_moved += nread;
 
-      // determine how much to read next time
-      if (rand_size)
-         toread = rand() % (buff_size+1);
-      else
-         toread = buff_size;
-      if ( (size_arg)  &&  (toread > (totbytes - bytes_moved)) )
-         toread = totbytes - bytes_moved;
       // if size wasn't specified, only read until we can't any more
-      if ( !(size_arg)  &&  (nread < toread) )
+      if ( !(size_arg)  &&  (nread < toread) ) {
          toread = 0;
+      }
+      else {
+         // determine how much to read next time
+         if (rand_size)
+            toread = rand() % (buff_size+1);
+         else
+            toread = buff_size;
+         // if we are going beyond the specified size, limit our reads
+         if ( (size_arg)  &&  (toread > (totbytes - bytes_moved)) )
+            toread = totbytes - bytes_moved;
+      }
 
    }
 

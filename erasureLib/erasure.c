@@ -672,15 +672,18 @@ void *bq_writer(void *arg) {
                            &timing->stats[bq->block_number].read);
   }
 
-  // for whatever reason, this thread's work is done.  close the file
-  if (timing->flags & TF_CLOSE)
-     fast_timer_start(&timing->stats[bq->block_number].close);
-  int close_rc = HNDLOP(close, bq->file);
-  if (timing->flags & TF_CLOSE)
-  {
-     fast_timer_stop(&timing->stats[bq->block_number].close);
-     log_histo_add_interval(&timing->stats[bq->block_number].close_h,
-                            &timing->stats[bq->block_number].close);
+  // for whatever reason, this thread's work is done
+  // close the file, so long as we didn't fail to open it in the first place
+  int close_rc = 1;
+  if ( !(FD_ERR(bq->file)) ) {
+     if (timing->flags & TF_CLOSE)
+        fast_timer_start(&timing->stats[bq->block_number].close);
+     close_rc = HNDLOP(close, bq->file);
+     if (timing->flags & TF_CLOSE) {
+        fast_timer_stop(&timing->stats[bq->block_number].close);
+        log_histo_add_interval(&timing->stats[bq->block_number].close_h,
+                               &timing->stats[bq->block_number].close);
+     }
   }
 
   // check for special case, where rebuild does not need this block
@@ -702,6 +705,7 @@ void *bq_writer(void *arg) {
     }
 
     *data_status = 1;   // ensure the error was noted
+    *meta_status = 1;   // skipping any attempt to set the meta info
 
     // check if the write has been aborted
     if ( aborted == 1 )
@@ -3170,7 +3174,10 @@ int ne_close( ne_handle handle )
       /* Encode any file errors into the return status */
       for( counter = 0; counter < N+E; counter++ ) {
          if ( handle->erasure_state->data_status[counter] | handle->erasure_state->meta_status[counter] ) {
-            ret += ( 1 << ((counter + handle->erasure_state->O) % (N+E)) );
+            if ( handle->mode != NE_STAT )
+               ret += ( 1 << ((counter + handle->erasure_state->O) % (N+E)) );
+            else  // for NE_STAT, data/meta status structs are always arranged as if erasure_state->O is zero
+               ret += ( 1 << counter );
          }
       }
    }
