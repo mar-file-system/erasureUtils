@@ -211,7 +211,8 @@ typedef struct read_meta_buffer_struct {
 
 typedef struct handle {
    /* Erasure Info */
-   e_status erasure_state;
+   e_state erasure_state;
+   char  alloc_state;    // indicates whether we allocated the e_state struct or not
    char* path_fmt;
 
    /* Read/Write Info and Structures */
@@ -1536,23 +1537,23 @@ int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, 
 ne_handle create_handle( SnprintfFunc fn, void* state,
                            uDALType itype, SktAuth auth,
                            TimingFlagsValue timing_flags, TimingData* timing_data,
-                           char *path, ne_mode mode, e_status erasure_state ) {
+                           char *path, ne_mode mode, e_state erasure_state ) {
    // this makes a convenient place to handle a NE_NOINFO case.
    // Just make sure not to infinite loop by calling ne_stat1() after it calls us!
-   if ( mode != NE_STAT  &&  !(erasure_state->N) ) {
+   if ( ( mode & ~(NE_ESTATE) ) != NE_STAT  &&  !(erasure_state->N) ) {
       PRINTdbg( "using ne_stat1() to determine N/E/O values for handle\n" );
       // need to stash our bsz value, in case NE_SETBSZ was specified
       u32 bsz = erasure_state->bsz; 
       // if we don't have any N/E/O values, let ne_stat() do the work of determining those
-      if ( ne_stat1( fn, state, itype, auth, timing_flags, timing_data, path, erasure_state ) )
+      if ( ne_stat1( fn, state, itype, auth, timing_flags, timing_data, path, erasure_state ) < 0 )
          return NULL;
       // we now need to stash the values we care about, and clear the rest of this struct; 
       // otherwise, our meta-info/data errors may not take offset into account.
       int N = erasure_state->N;
       int E = erasure_state->E;
       int O = erasure_state->O;
-      // completely clear the e_status struct to ensure no extra state is carried over
-      memset( erasure_state, 0, sizeof( struct ne_stat_struct ) );
+      // completely clear the e_state struct to ensure no extra state is carried over
+      memset( erasure_state, 0, sizeof( struct ne_state_struct ) );
       // then reassign the values we wish to preserve
       erasure_state->N = N;
       erasure_state->E = E;
@@ -1560,7 +1561,6 @@ ne_handle create_handle( SnprintfFunc fn, void* state,
       // if bsz was not set, this value will be overwritten in initialize_queues()
       erasure_state->bsz = bsz;
    }
-
 
    ne_handle handle = malloc( sizeof( struct handle ) );
    if ( handle == NULL )
@@ -1571,8 +1571,11 @@ ne_handle create_handle( SnprintfFunc fn, void* state,
    handle->erasure_state = erasure_state;
    handle->buff_offset = 0;
    handle->prev_err_cnt = 0;
-   handle->mode = mode;
-
+   handle->alloc_state = 1;
+   // make sure to note the NE_ESTATE flag, if set
+   if ( mode & NE_ESTATE )
+      handle->alloc_state = 0;
+   handle->mode = ( mode & ~(NE_ESTATE) ); // don't bother recoring ESTATE in the mode
 
    handle->snprintf = fn;
    handle->printf_state    = fn;
@@ -1612,47 +1615,60 @@ ne_handle create_handle( SnprintfFunc fn, void* state,
  * into the provided erasure_state struct and to strip parsing flags from the 
  * provided ne_mode value.
  * @param va_list ap : Variadic argument list for parsing
- * @param ne_mode mode : Mode value to assist in parsing
- * @param e_status erasure_state : e_status struct pointer to have N/E/O/bsz populated
- * @return ne_mode : Mode argument with parsing flags stripped, or 0 on error
+ * @param ne_mode* mode : Mode value to assist in parsing
+ * @return e_state : e_state struct pointer with N/E/O/bsz values populated
  */
-ne_mode parse_va_open_args( va_list ap, ne_mode mode, e_status erasure_state ) {
-   // first, ensure there is no garbage data in our e_status struct
-   memset( erasure_state, 0, sizeof( struct ne_stat_struct ) );
+e_state parse_va_open_args( va_list ap, ne_mode* mode ) {
 
-   // now, use the mode flags to determine how to parse the variadic args
-   int counter = 3;
-   if ( mode & NE_SETBSZ ) {
-      counter++;
-      mode -= NE_SETBSZ;
-      PRINTdbg( "ne_open: NE_SETBSZ flag detected\n");
+   e_state erasure_state = NULL;
+   // if the NE_ESTATE flag was supplied, use the provided ne_state_struct
+   if ( *mode & NE_ESTATE ) {
+      erasure_state = va_arg( ap, e_state );
+      // leave the NE_ESTATE flag intact, as we will need to remeber whether we allocated this ourselves later
    }
-   else {
-      erasure_state->bsz = BLKSZ;
+   else { // otherwise, allocate our own struct
+      erasure_state = malloc( sizeof( struct ne_state_struct ) );
    }
-   if ( mode & NE_NOINFO ) {
-      counter -= 3;
-      mode -= NE_NOINFO;
-      PRINTdbg( "ne_open: NE_NOINFO flag detected\n");
+   // check both for malloc failure and a NULL argument
+   if ( erasure_state == NULL ) {
+      va_end( ap ); // just stop parsing
+      errno = ENOMEM;
+      return NULL;
    }
 
-   // Parse variadic arguments
-   if ( counter == 1 ) {
-      erasure_state->bsz = va_arg( ap, int );
-   }
-   else if ( counter > 1 ){
+   // whether we allocated it or not, ensure there is no garbage data in our e_state struct
+   memset( erasure_state, 0, sizeof( struct ne_state_struct ) );
+
+   char noinfo = 0; // note if NE_NOINFO was provided
+
+   // if the NE_NOINFO flag wasn't supplied, we expect O/N/E args
+   if ( !(*mode & NE_NOINFO) ) {
       erasure_state->O = va_arg( ap, int );
       erasure_state->N = va_arg( ap, int );
       erasure_state->E = va_arg( ap, int );
-      if ( counter == 4 ){
-         erasure_state->bsz = va_arg( ap, int );
-      }
+   }
+   else { // clear the NE_NOINFO flag
+      *mode &= ~(NE_NOINFO);
+      noinfo = 1;
+   }
+   // if the NE_SETBSZ was supplied, we expect a bsz arg
+   if ( *mode & NE_SETBSZ ) {
+      erasure_state->bsz = va_arg( ap, int );
+      *mode &= ~(NE_SETBSZ); // clear the NE_SETBSZ flag
+   }
+   else { // otherwise, use the default value from our header file
+      erasure_state->bsz = BLKSZ;
    }
 
-   if ( mode == NE_WRONLY  &&  counter < 2 ) {
+   // end parsing of the variadic list
+   va_end( ap );
+
+   if ( ( (*mode & ~(NE_ESTATE)) == NE_WRONLY )  &&  (noinfo) ) {
       PRINTerr( "ne_open: recieved an invalid \"NE_NOINFO\" flag for \"NE_WRONLY\" operation\n");
+      if (*mode & NE_ESTATE)
+         free( erasure_state );
       errno = EINVAL;
-      return 0;
+      return NULL;
    }
 
 #ifdef INT_CRC
@@ -1660,7 +1676,7 @@ ne_mode parse_va_open_args( va_list ap, ne_mode mode, e_status erasure_state ) {
    erasure_state->bsz -= sizeof( u32 );
 #endif
 
-   if ( counter > 1 ) {
+   if ( !(noinfo) ) {
       if ( erasure_state->N < 1  ||  erasure_state->N > MAXN ) {
          PRINTerr( "ne_open: improper N arguement received - %d\n", erasure_state->N);
          errno = EINVAL;
@@ -1683,8 +1699,8 @@ ne_mode parse_va_open_args( va_list ap, ne_mode mode, e_status erasure_state ) {
       return 0;
    }
 
-   // return the mode argument, with NE_NOINFO and NE_SETBSZ flags stipped out
-   return mode;
+   // return the new ne_state_struct
+   return erasure_state;
 }
 
 
@@ -1760,36 +1776,34 @@ ne_handle ne_open1( SnprintfFunc fn, void* state,
                     uDALType itype, SktAuth auth,
                     TimingFlagsValue timing_flags, TimingData* timing_data,
                     char *path, ne_mode mode, ... ) {
-
-   e_status erasure_state_tmp = malloc( sizeof( struct ne_stat_struct ) );
-   if ( erasure_state_tmp == NULL ) {
-      errno = ENOMEM;
-      return NULL;
-   }
-
    va_list vl;
    va_start(vl, mode);
-   // this function will parse args and zero out our e_status struct
-   mode = parse_va_open_args( vl, mode, erasure_state_tmp );
-   va_end(vl);
-
-   if ( mode != NE_WRONLY  &&  mode != NE_RDONLY  &&  mode != NE_RDALL ) { //reject improper mode arguments
-      PRINTerr( "improper mode argument received - %d\n", mode );
-      free( erasure_state_tmp );
-      errno = EINVAL;
-      return NULL;
-   }
+   // this function will parse args and zero out our e_state struct
+   e_state erasure_state_tmp = parse_va_open_args( vl, &mode );
+   if ( erasure_state_tmp == NULL )
+      return NULL; // check for failure condition, parse_va_open_args will set errno
 
    // this will handle allocating a handle and setting values
    ne_handle handle = create_handle( fn, state, itype, auth, timing_flags, timing_data, path, mode, erasure_state_tmp );
    if ( handle == NULL ) {
-      free( erasure_state_tmp );
+      if ( !(mode & NE_ESTATE) )
+         free( erasure_state_tmp );
       return handle;
+   }
+
+   // Note: handle->mode == ( mode & ~(NE_ESTATE) )
+   if ( handle->mode != NE_WRONLY  &&  handle->mode != NE_RDONLY  &&  handle->mode != NE_RDALL ) { //reject improper mode arguments
+      PRINTerr( "improper mode argument received - %d\n", handle->mode );
+      if ( !(mode & NE_ESTATE) )
+         free( erasure_state_tmp );
+      errno = EINVAL;
+      return NULL;
    }
 
    if( initialize_handle(handle) ) {
       free( handle );
-      free( erasure_state_tmp );
+      if ( !(mode & NE_ESTATE) )
+         free( erasure_state_tmp );
       return NULL;
    }
    return handle;
@@ -1799,24 +1813,12 @@ ne_handle ne_open1( SnprintfFunc fn, void* state,
 // provide defaults for SprintfFunc, printf_state, and SktAuth
 // so naive callers can continue to work (in some cases).
 ne_handle ne_open( char *path, ne_mode mode, ... ) {
-   e_status erasure_state_tmp = malloc( sizeof( struct ne_stat_struct ) );
-   if ( erasure_state_tmp == NULL ) {
-      errno = ENOMEM;
-      return NULL;
-   }
-
    va_list vl;
    va_start(vl, mode);
-   // this function will parse args and zero out our e_status struct
-   mode = parse_va_open_args( vl, mode, erasure_state_tmp );
-   va_end(vl);
-
-   if ( mode != NE_WRONLY  &&  mode != NE_RDONLY  &&  mode != NE_RDALL ) { //reject improper mode arguments
-      PRINTerr( "improper mode argument received - %d\n", mode );
-      free( erasure_state_tmp );
-      errno = EINVAL;
-      return NULL;
-   }
+   // this function will parse args and zero out our e_state struct
+   e_state erasure_state_tmp = parse_va_open_args( vl, &mode );
+   if ( erasure_state_tmp == NULL )
+      return NULL; // check for failure condition, parse_va_open_args will set errno
 
    // this is safe for builds with/without sockets enabled
    // and with/without socket-authentication enabled
@@ -1831,16 +1833,26 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
    // this will handle allocating a handle and setting values
    ne_handle handle = create_handle( ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, NULL, path, mode, erasure_state_tmp );
    if ( handle == NULL ) {
-      free( erasure_state_tmp );
-      return handle;
+      if ( !(mode & NE_ESTATE) )
+         free( erasure_state_tmp );
+      return NULL;
+   }
+
+   // Note: handle->mode == ( mode & ~(NE_ESTATE) )
+   if ( handle->mode != NE_WRONLY  &&  handle->mode != NE_RDONLY  &&  handle->mode != NE_RDALL ) { //reject improper mode arguments
+      PRINTerr( "improper mode argument received - %d\n", handle->mode );
+      if ( !(mode & NE_ESTATE) )
+         free( erasure_state_tmp );
+      errno = EINVAL;
+      return NULL;
    }
 
    if( initialize_handle(handle) ) {
       free( handle );
-      free( erasure_state_tmp );
+      if ( !(mode & NE_ESTATE) )
+         free( erasure_state_tmp );
       return NULL;
    }
-
    return handle;
 }
 
@@ -3075,9 +3087,6 @@ int print_timing_data(TimingData* timing, const char* hdr, int avg, int use_sysl
 int ne_close( ne_handle handle ) 
 {
    int            counter;
-   int            N;
-   int            E;
-   unsigned int   bsz;
    int            ret = 0;
    //extract_repo_name(handle->path_fmt, handle->repo, handle->pod_id);
    
@@ -3089,9 +3098,9 @@ int ne_close( ne_handle handle )
       return -1;
    }
 
-   N = handle->erasure_state->N;
-   E = handle->erasure_state->E;
-   bsz = handle->erasure_state->bsz;
+   int N = handle->erasure_state->N;
+   int E = handle->erasure_state->E;
+   u32 bsz = handle->erasure_state->bsz;
 
    TimingData* timing = handle->timing_data_ptr; /* shorthand */
 
@@ -3111,6 +3120,7 @@ int ne_close( ne_handle handle )
          ret = -1;
       }
 
+      // make sure to decrement totsz, so the zero-fill is not included in the total data size
       handle->erasure_state->totsz -= tmp;
       free( zero_buff );
    }
@@ -3127,7 +3137,7 @@ int ne_close( ne_handle handle )
    int nerr = 0;
    int i;
    /* wait for the threads */
-   for(i = 0; i < handle->erasure_state->N + handle->erasure_state->E; i++) {
+   for(i = 0; i < N+E; i++) {
       pthread_join(handle->threads[i], NULL);
       bq_destroy(&handle->blocks[i]);
       if ( handle->erasure_state->manifest_status[i] || handle->erasure_state->data_status[i] )
@@ -3138,9 +3148,11 @@ int ne_close( ne_handle handle )
    // should be safe to reset umask
    umask(mask);
 
-   /* free the buffers */
-   for(i = 0; i < MAX_QDEPTH; i++) {
-      free(handle->buffer_list[i]);
+   if ( handle->mode != NE_STAT ) { // ne_stat() won't have allocated buffs
+      /* free the buffers */
+      for(i = 0; i < MAX_QDEPTH; i++) {
+         free(handle->buffer_list[i]);
+      }
    }
 
    if( (UNSAFE(handle,nerr) && handle->mode == NE_WRONLY) ) {
@@ -3148,7 +3160,7 @@ int ne_close( ne_handle handle )
       errno = EIO;
       ret = -1;
    }
-   else if ( nerr > handle->erasure_state->E ) { /* for non-writes */
+   else if ( ( handle->mode != NE_STAT )  &&  ( nerr > handle->erasure_state->E ) ) { /* for non-writes */
       PRINTdbg( "ne_close: detected excessive errors following a read operation\n" );
       errno = ENODATA;
       ret = -1;
@@ -3183,7 +3195,9 @@ int ne_close( ne_handle handle )
       show_handle_stats(handle);
    }
 
-   free( handle->erasure_state );
+   // only free erasure_state if we didn't receive NE_ESTATE at open time
+   if ( handle->alloc_state )
+      free( handle->erasure_state );
    free(handle);
    return ret;
 }
@@ -3306,35 +3320,31 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
 
    PRINTdbg( "opening handle for read\n" );
 
-   e_status erasure_state_read = malloc( sizeof( struct ne_stat_struct ) );
-   if ( erasure_state_read == NULL ) {
-      errno = ENOMEM;
-      return -1;
-   }
-
    // open the stripe for RDALL to verify all data/erasure blocks and to regenerate as we read
-   // this function will parse args and zero out our e_status struct
-   ne_mode read_mode = parse_va_open_args( ap, NE_RDALL | ( mode & ( NE_NOINFO | NE_SETBSZ ) ), erasure_state_read );
-
-   if ( !(read_mode) ) { //reject improper mode arguments
-      PRINTerr( "improper mode argument received - %d\n", mode );
-      free( erasure_state_read );
-      errno = EINVAL;
-      return -1;
-   }
+   // this function will parse args and zero out our e_state struct
+   ne_mode read_mode = NE_RDALL | ( mode & ( NE_NOINFO | NE_SETBSZ | NE_ESTATE ) );
+   e_state erasure_state_read = parse_va_open_args( ap, &read_mode );
+   if ( erasure_state_read == NULL )
+      return -1; // check for failure condition, parse_va_open_args will set errno
 
    // this will handle allocating a handle and setting values
    ne_handle read_handle = create_handle( fn, state, itype, auth, timing_flags, timing_data, path, read_mode, erasure_state_read );
    if ( read_handle == NULL ) {
-      free( erasure_state_read );
+      if ( !(read_mode & NE_ESTATE) )
+         free( erasure_state_read );
       return -1;
    }
 
+   // we know our mode arg is good, no need to check
+
+   // prep the handle for reading
    if( initialize_handle(read_handle) ) {
       free( read_handle );
-      free( erasure_state_read );
+      if ( !(read_mode & NE_ESTATE) )
+         free( erasure_state_read );
       return -1;
    }
+
 
    // as we didn't parse our own arguments, we now need to pull their values out of the read handle structs.
    // Even if opened with NE_NOINFO, these should be populated by the time ne_open() returns.
@@ -3342,7 +3352,7 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
    int E = erasure_state_read->E;
    int O = erasure_state_read->O;
    u32 bsz = erasure_state_read->bsz;
-   u64 totsz = erasure_state_read->totsz;
+   u64 totsz = erasure_state_read->totsz; // this will be used for determining when to stop, rather than for populating our write structs
    // allocate a buffer for moving data between the two handles
    size_t buff_size = bsz * N;
    void* data_buff = malloc( sizeof(char) * buff_size ); // reading a whole stripe at a time is probably most efficient
@@ -3357,7 +3367,7 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
 
    PRINTdbg( "opening handle for write\n" );
 
-   e_status erasure_state_write = malloc( sizeof( struct ne_stat_struct ) );
+   e_state erasure_state_write = malloc( sizeof( struct ne_state_struct ) );
    if ( erasure_state_write == NULL ) {
       errno = ENOMEM;
       ne_close( read_handle );
@@ -3365,7 +3375,7 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
    }
    // zeroing out this struct is mandatory, as we won't be calling parse_va_open_args() with it
    // who knows what malloc gave us
-   memset( erasure_state_write, 0, sizeof( struct ne_stat_struct ) );
+   memset( erasure_state_write, 0, sizeof( struct ne_state_struct ) );
 
    // populate the write handle with values set in the read handle
    erasure_state_write->N = N;
@@ -3400,7 +3410,7 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
    // Now, we need to loop over all data, until the entire file has been successfully read and re-written as necessary
    while ( !(all_rebuilt) ) {
 
-      PRINTdbg( "performing iteration %d of the rebuild process\n", iterations );
+      PRINTdbg( "performing iteration %d of the rebuild process\n", iterations + 1 );
       // We should only have to read the original a maximum of two times.  Once to detect all data errors, and 
       // a second time to output all regenerated blocks.  Any more than that is suspicious and should be reported.
       if ( iterations > 1 )
@@ -3508,7 +3518,6 @@ int ne_rebuild1( SnprintfFunc fn, void* state,
    va_list vl;
    va_start(vl, mode);
    ret = ne_rebuild1_vl(fn, state, itype, auth, timing_flags, timing_data, path, mode, vl); 
-   va_end(vl);
    return ret; 
 }
 
@@ -3529,7 +3538,6 @@ int ne_rebuild( char *path, ne_mode mode, ... ) {
    va_list   vl;
    va_start(vl, mode);
    ret = ne_rebuild1_vl(ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, NULL, path, mode, vl);
-   va_end(vl);
 
    return ret;
 }
@@ -3702,9 +3710,9 @@ static int gf_gen_decode_matrix(unsigned char *encode_matrix,
 int ne_stat1( SnprintfFunc fn, void* state,
                     uDALType itype, SktAuth auth,
                     TimingFlagsValue timing_flags, TimingData* timing_data,
-                    char *path, e_status e_state_struct ) {
-   memset( e_state_struct, 0, sizeof( struct ne_stat_struct ) );
-   ne_handle handle = create_handle( fn, state, itype, auth, timing_flags, timing_data, path, NE_STAT, e_state_struct );
+                    char *path, e_state e_state_struct ) {
+   memset( e_state_struct, 0, sizeof( struct ne_state_struct ) );
+   ne_handle handle = create_handle( fn, state, itype, auth, timing_flags, timing_data, path, NE_STAT | NE_ESTATE, e_state_struct );
    if ( handle == NULL )
       return -1;
 
@@ -3789,7 +3797,9 @@ int ne_stat1( SnprintfFunc fn, void* state,
       }
    }
 
-   int threads_running = i;
+   // in some rare cases (N=1 and E=0 for example), we may have started too many threads
+   // terminate those now
+   terminate_threads( BQ_FINISHED, handle, i - (num_blocks), num_blocks );
 
    // check for errors on open...
    // We finish checking thread status down here in order to give them a bit more time to spin up.
@@ -3832,25 +3842,23 @@ int ne_stat1( SnprintfFunc fn, void* state,
       free( read_buf ); 
    }
 
-   terminate_threads( BQ_FINISHED, handle, threads_running, 0 );
-   free( handle->path_fmt );
-   free( handle );
+   matches = ne_close( handle ); // let ne_close cleanup, and set error pattern for ret code
    if ( error )
       return -1;
-   return 0;
+   return matches;
 
 }
 
 
 
-int ne_stat( char* path, e_status erasure_status_struct ) {
+int ne_stat( char* path, e_state erasure_state_struct ) {
    SktAuth  auth;
    if (DEFAULT_AUTH_INIT(auth)) {
       PRINTerr("failed to initialize default socket-authentication credentials\n");
       return -1;
    }
 
-   return ne_stat1( ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, NULL, path, erasure_status_struct );
+   return ne_stat1( ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, NULL, path, erasure_state_struct );
 }
 
 

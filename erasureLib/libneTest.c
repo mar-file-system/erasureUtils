@@ -525,11 +525,12 @@ int main( int argc, const char** argv )
 
    if ( wr == 5 ) {
       PRINTout("libneTest: retrieving status of erasure striping with path \"%s\"\n", (char *)argv[2] );
-      struct ne_stat_struct stat_struct;
-      e_status stat = &stat_struct;
-      memset( stat, 0, sizeof( struct ne_stat_struct ) );
+      struct ne_state_struct stat_struct;
+      e_state stat = &stat_struct;
+      memset( stat, 0, sizeof( struct ne_state_struct ) );
 
-      if ( NE_STAT_CALL( erasure_path, stat ) ) {
+      int ret;
+      if ( ( ret = NE_STAT_CALL( erasure_path, stat ) ) < 0 ) {
          PRINTlog("libneTest: ne_stat failed!\n" );
          return -1;
       }
@@ -556,16 +557,10 @@ int main( int argc, const char** argv )
       else if ( nerr > 0 )
          PRINTlog( "WARNING: errors were found, be sure to rebuild this object before data loss occurs!\n" );
 
-      /* Encode any file errors into the return status */
-      tmp=0;
-      for( filefd = 0; filefd < stat->N+stat->E; filefd++ ) {
-         if ( stat->data_status[filefd] || stat->manifest_status[filefd] ) {
-            tmp += ( 1 << ((filefd + stat->O) % (stat->N+stat->E)) );
-         }
-      }
-      printf("%d\n",tmp);
+      // display the ne_stat return value
+      printf("%d\n",ret);
 
-      return tmp;
+      return ret;
    }
 
 

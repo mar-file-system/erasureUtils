@@ -270,13 +270,15 @@ struct FileSysImpl; // fwd-decl  (udal.h)
 struct GenericFD;   // fwd-decl  (udal.h)
 
 typedef enum {
-  NE_RDONLY = 1,
-  NE_RDALL,
-  NE_WRONLY,
-  NE_REBUILD,
-  NE_STAT,
-  NE_NOINFO = 8,
-  NE_SETBSZ = 16
+  NE_RDONLY  = 1,         //1  -- read data, only read erasure when necessary for reconstruction
+  NE_RDALL,               //2  -- read data and all erasure, regardless of data state
+  NE_WRONLY,              //3  -- write data and erasure to new stripe
+  NE_WRALL = NE_WRONLY,   //   -- same as above, defined just to avoid confusion
+  NE_REBUILD,             //4  -- reconstruct data and/or erasure for an existing stripe  (lib use only)
+  NE_STAT,                //5  -- read meta info for all files, but skip data and erasure (lib use only)
+  NE_ESTATE  = 0x01 << 3, //8  -- indicates a e_state argument, to be populated during the operation
+  NE_NOINFO  = 0x01 << 4, //16 -- indicates the absence of N/E/O arguments
+  NE_SETBSZ  = 0x01 << 5  //32 -- indicates a bsz argument, to be assumed when reading/writing
 } ne_mode;
 
 #define MAX_QDEPTH 5
@@ -297,7 +299,7 @@ typedef enum {
 typedef struct handle* ne_handle; // forward decl.
 
 
-typedef struct ne_stat_struct {
+typedef struct ne_state_struct {
    // erasure structure
    int N;
    int E;
@@ -315,7 +317,7 @@ typedef struct ne_stat_struct {
    // per-part info
    u64 csum[ MAXPARTS ];
    unsigned long ncompsz[ MAXPARTS ];
-} *e_status;
+} *e_state;
 
 
 
@@ -357,7 +359,7 @@ int ne_delete1      ( SnprintfFunc func, void* state,
 int ne_stat1        ( SnprintfFunc fn, void* state,
                       uDALType itype, SktAuth auth,
                       TimingFlagsValue flags, TimingData* timing_data,
-                      char* path, e_status e_state_struct );
+                      char* path, e_state e_state_struct );
 
 
 // these interfaces provide a default SnprintfFunc, which supports the
@@ -365,7 +367,7 @@ int ne_stat1        ( SnprintfFunc fn, void* state,
 ne_handle  ne_open   ( char *path, ne_mode mode, ... );
 int        ne_rebuild( char* path, ne_mode mode, ... );
 int        ne_delete ( char* path, int width );
-int        ne_stat   ( char* path, e_status erasure_status_struct );
+int        ne_stat   ( char* path, e_state erasure_state_struct );
 
 
 /* Erasure utility-functions taking a <handle> argument */
