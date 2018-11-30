@@ -167,6 +167,7 @@ void usage(const char* prog_name, const char* op) {
    PRINTlog("      -e                 For read/verify/write/rebuild, specifies the use of the NE_ESTATE flag.\n");
    PRINTlog("                         This will allow an e_state struct to be retrieved following the operation.  Some of the contents \n");
    PRINTlog("                         of the structure will be printed out to the console (N/E/O/bsz/totsz/meta_status/data_status).\n");
+   PRINTlog("                         See 'NOTES' for an explanation of some subtle differences between this output and that of 'stat'.\n");
    PRINTlog("\n");
    PRINTlog("      -r                 Randomizes the read/write sizes used for data movement during the specified operation.\n");
    PRINTlog("\n");
@@ -182,6 +183,13 @@ void usage(const char* prog_name, const char* op) {
    PRINTlog("  NOTES:\n");
    PRINTlog("     If an input file is not specified for write, a stream of zeros will be stored to the \n" \
 "      erasure stripe up to the given input_size.\n" );
+   PRINTlog("\n");
+   PRINTlog("     The erasure state output produced by a 'stat' operation may differ slightly from that of \n");
+   PRINTlog("      '-e'.  The erasure structs returned by '-e' operations are adjusted by 'start_file' \n");
+   PRINTlog("      offset values, and thus indicate data/erasure status relative to the stripe format.\n");
+   PRINTlog("      The struct returned by ne_stat() has no such adjustment, and is thus relative to the \n");
+   PRINTlog("      actual file locations.\n");
+   PRINTlog("      Return codes for all operations are relative to actual file locations (no erasure offset).\n");
    PRINTlog("\n");
    PRINTlog("     <stripe_width> refers to the total number of data/erasure parts in the target stripe (N+E).\n");
    PRINTlog("\n");
