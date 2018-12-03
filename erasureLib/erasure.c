@@ -209,7 +209,7 @@ typedef struct read_meta_buffer_struct {
 
 
 
-typedef struct handle {
+struct handle {
    /* Erasure Info */
    e_state erasure_state;
    char  alloc_state;    // indicates whether we allocated the e_state struct or not
@@ -256,7 +256,7 @@ typedef struct handle {
    TimingData     timing_data;
    TimingData*    timing_data_ptr;  /* caller of ne_open() can provide their own TimingData
                                        (e.g. so data can survive ne_close()) */
-} *ne_handle;
+};
 
 
 

@@ -186,7 +186,7 @@ typedef enum {
 
 // FileDescriptors in ne_handle will be either SocketHandle* or int.
 // Different uDAL implementations will choose how to extract their own FD.
-typedef struct uDALImpl {
+struct uDALImpl {
    //   FDExtractor   fd_extractor;  // extract fd to be passed to uDAL functions
    uDALType          itype;     /* allows reverse of get_impl() */
 
@@ -213,7 +213,7 @@ typedef struct uDALImpl {
    udal_auth_init    auth_init;
    udal_auth_install auth_install;
    
-} uDAL;
+};
 
 
 extern const uDAL*  udal_posix;

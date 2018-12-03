@@ -296,6 +296,7 @@ typedef enum {
   BQ_SKIP     = 0x01 << 2  // indicates that this thread is skipping all work assigned to it
 } BQ_State_Flags;
 
+
 typedef struct handle* ne_handle; // forward decl.
 
 
