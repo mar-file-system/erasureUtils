@@ -1573,18 +1573,18 @@ ne_handle create_handle( SnprintfFunc fn, void* state,
 
    /* initialize any non-zero handle members */
    handle->erasure_state = erasure_state;
-   handle->buff_offset = 0;
-   handle->prev_err_cnt = 0;
-   handle->alloc_state = 1;
+   handle->buff_offset   = 0;
+   handle->prev_err_cnt  = 0;
+   handle->alloc_state   = 1;
    // make sure to note the NE_ESTATE flag, if set
    if ( mode & NE_ESTATE )
       handle->alloc_state = 0;
    handle->mode = ( mode & ~(NE_ESTATE) ); // don't bother recoring ESTATE in the mode
 
-   handle->snprintf = fn;
-   handle->printf_state    = fn;
-   handle->auth     = auth;
-   handle->impl     = get_impl(itype);
+   handle->snprintf     = fn;
+   handle->printf_state = state;
+   handle->auth         = auth;
+   handle->impl         = get_impl(itype);
 
    if (! handle->impl) {
       PRINTerr( "create_handle: couldn't find implementation for itype %d\n", itype );
