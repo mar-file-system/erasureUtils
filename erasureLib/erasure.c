@@ -1635,7 +1635,6 @@ e_state parse_va_open_args( va_list ap, ne_mode* mode ) {
    }
    // check both for malloc failure and a NULL argument
    if ( erasure_state == NULL ) {
-      va_end( ap ); // just stop parsing
       errno = ENOMEM;
       return NULL;
    }
@@ -1663,9 +1662,6 @@ e_state parse_va_open_args( va_list ap, ne_mode* mode ) {
    else { // otherwise, use the default value from our header file
       erasure_state->bsz = BLKSZ;
    }
-
-   // end parsing of the variadic list
-   va_end( ap );
 
    if ( ( (*mode & ~(NE_ESTATE)) == NE_WRONLY )  &&  (noinfo) ) {
       PRINTerr( "ne_open: recieved an invalid \"NE_NOINFO\" flag for \"NE_WRONLY\" operation\n");
@@ -1784,6 +1780,7 @@ ne_handle ne_open1( SnprintfFunc fn, void* state,
    va_start(vl, mode);
    // this function will parse args and zero out our e_state struct
    e_state erasure_state_tmp = parse_va_open_args( vl, &mode );
+   va_end(vl);
    if ( erasure_state_tmp == NULL )
       return NULL; // check for failure condition, parse_va_open_args will set errno
 
@@ -1821,6 +1818,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
    va_start(vl, mode);
    // this function will parse args and zero out our e_state struct
    e_state erasure_state_tmp = parse_va_open_args( vl, &mode );
+   va_end(vl);
    if ( erasure_state_tmp == NULL )
       return NULL; // check for failure condition, parse_va_open_args will set errno
 
@@ -3525,6 +3523,7 @@ int ne_rebuild1( SnprintfFunc fn, void* state,
    va_list vl;
    va_start(vl, mode);
    ret = ne_rebuild1_vl(fn, state, itype, auth, timing_flags, timing_data, path, mode, vl); 
+   va_end(vl);
    return ret; 
 }
 
@@ -3545,6 +3544,7 @@ int ne_rebuild( char *path, ne_mode mode, ... ) {
    va_list   vl;
    va_start(vl, mode);
    ret = ne_rebuild1_vl(ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, NULL, path, mode, vl);
+   va_end(vl);
 
    return ret;
 }
