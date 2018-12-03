@@ -1785,7 +1785,9 @@ ne_handle ne_open1( SnprintfFunc fn, void* state,
       return NULL; // check for failure condition, parse_va_open_args will set errno
 
    // this will handle allocating a handle and setting values
-   ne_handle handle = create_handle( fn, state, itype, auth, timing_flags, timing_data, path, mode, erasure_state_tmp );
+   ne_handle handle = create_handle( fn, state, itype, auth,
+                                     timing_flags, timing_data,
+                                     path, mode, erasure_state_tmp );
    if ( handle == NULL ) {
       if ( !(mode & NE_ESTATE) )
          free( erasure_state_tmp );
@@ -1833,7 +1835,9 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
    }
 
    // this will handle allocating a handle and setting values
-   ne_handle handle = create_handle( ne_default_snprintf, NULL, UDAL_POSIX, auth, 0, NULL, path, mode, erasure_state_tmp );
+   ne_handle handle = create_handle( ne_default_snprintf, NULL, UDAL_POSIX, auth,
+                                     0, NULL,
+                                     path, mode, erasure_state_tmp );
    if ( handle == NULL ) {
       if ( !(mode & NE_ESTATE) )
          free( erasure_state_tmp );
@@ -3333,7 +3337,9 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
       return -1; // check for failure condition, parse_va_open_args will set errno
 
    // this will handle allocating a handle and setting values
-   ne_handle read_handle = create_handle( fn, state, itype, auth, timing_flags, timing_data, path, read_mode, erasure_state_read );
+   ne_handle read_handle = create_handle( fn, state, itype, auth,
+                                          timing_flags, timing_data,
+                                          path, read_mode, erasure_state_read );
    if ( read_handle == NULL ) {
       if ( !(read_mode & NE_ESTATE) )
          free( erasure_state_read );
@@ -3389,7 +3395,9 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
    erasure_state_write->bsz = bsz;
 
    // this will handle allocating a handle and setting value (we can pass in NE_REBUILD here to use the proper suffix for writes)
-   ne_handle write_handle = create_handle( fn, state, itype, auth, timing_flags, timing_data, path, NE_REBUILD, erasure_state_write );
+   ne_handle write_handle = create_handle( fn, state, itype, auth,
+                                           timing_flags, timing_data,
+                                           path, NE_REBUILD, erasure_state_write );
    if ( write_handle == NULL ) {
       free( erasure_state_write );
       ne_close( read_handle );
@@ -3719,7 +3727,9 @@ int ne_stat1( SnprintfFunc fn, void* state,
                     TimingFlagsValue timing_flags, TimingData* timing_data,
                     char *path, e_state e_state_struct ) {
    memset( e_state_struct, 0, sizeof( struct ne_state_struct ) );
-   ne_handle handle = create_handle( fn, state, itype, auth, timing_flags, timing_data, path, NE_STAT | NE_ESTATE, e_state_struct );
+   ne_handle handle = create_handle( fn, state, itype, auth,
+                                     timing_flags, timing_data,
+                                     path, NE_STAT | NE_ESTATE, e_state_struct );
    if ( handle == NULL )
       return -1;
 
