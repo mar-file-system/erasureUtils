@@ -2103,15 +2103,20 @@ ssize_t skt_write_all(SocketHandle* handle, const void* buffer, size_t size) {
 //
 // We only support monotonically increasing the mapping size.
 //
+// NEW: The mapping defines where in memory RDMA transfers are going to go.
+// So, if the caller provides a new buffer, we must also change the
+// riomapping.
 
 int riomap_reader(SocketHandle* handle, void* buf, size_t size) {
 
 #if USE_RIOWRITE
 
-  // drop the old mapping, if the new read has a bigger read-buffer
+  // drop the old mapping, if the new read has a bigger read-buffer,
+  // or if caller has provided a new destination
   if (likely (handle->flags & HNDL_RIOMAPPED)) {
 
-    if (likely (size <= handle->rio_size))
+     if (likely ((size <= handle->rio_size)
+                 && (buf == handle->rio_buf)))
       return 0;
 
     THREAD_CANCEL(DISABLE);
