@@ -178,7 +178,6 @@ typedef struct buffer_queue {
   //char               buf_error[MAX_QDEPTH];  /* indicates  errors associated with specific data buffers */
   pthread_cond_t     thread_resume;          /* cv signals there is a full slot */
   pthread_cond_t     master_resume;         /* cv signals there is an empty slot */
-  pthread_cond_t     resume;             /* cv signals the thread to resume */
   int                qdepth;             /* number of elements in the queue */
   int                head;               /* next full position */  
   int                tail;               /* next empty position */
@@ -422,13 +421,6 @@ int bq_init(BufferQueue *bq, int block_number, ne_handle handle) {
     pthread_cond_destroy(&bq->thread_resume);
     return -1;
   }
-  if(pthread_cond_init(&bq->resume, NULL)) {
-    PRINTerr("failed to initialize cv for resume\n");
-    pthread_mutex_destroy(&bq->qlock);
-    pthread_cond_destroy(&bq->thread_resume);
-    pthread_cond_destroy(&bq->master_resume);
-    return -1;
-  }
 
   return 0;
 }
@@ -495,7 +487,7 @@ void *bq_writer(void *arg) {
                             &timing->stats[bq->block_number].open);
   }
 
-  PRINTdbg("opened file %d\n", bq->block_number);
+  PRINTdbg("open issued for file %d\n", bq->block_number);
 
 // ---------------------- INITIALIZE MAIN PROCESS LOOP ----------------------
 
@@ -517,6 +509,7 @@ void *bq_writer(void *arg) {
   bq->state_flags |= BQ_OPEN;
   // this is intended to avoid any oddities from instruction re-ordering
   if(FD_ERR(bq->file)) {
+    PRINTerr("failed to open data file for block %d\n", bq->block_number);
     *data_status = 1;
   }
   pthread_cond_signal(&bq->master_resume);
@@ -1365,7 +1358,7 @@ static int initialize_queues(ne_handle handle) {
 
       if ( pthread_mutex_lock( &bq->qlock ) ) {
          PRINTerr( "failed to aquire queue lock for thread %d\n", i );
-         terminate_threads( BQ_ABORT, handle, i+1, 0 );
+         terminate_threads( BQ_ABORT, handle, num_blocks, 0 );
          return -1;
       }
 
@@ -1748,11 +1741,8 @@ int initialize_handle( ne_handle handle )
    }
    if( (handle->mode == NE_WRONLY || handle->mode == NE_REBUILD)  &&  UNSAFE(handle,nerr) ) {
      PRINTerr( "errors have rendered the handle unsafe to continue\n" );
-     for(i = 0; i < handle->erasure_state->N + handle->erasure_state->E; i++) {
-       bq_abort(&handle->blocks[i]);
-       // just detach and let the OS clean up. We don't care about the return any more.
-       pthread_detach(handle->threads[i]);
-     }
+     terminate_threads( BQ_ABORT, handle, handle->erasure_state->N + handle->erasure_state->E, 0 );
+     errno = EIO;
      return -1; //don't hand out a dead handle!
    }
 
@@ -3816,7 +3806,7 @@ int ne_stat1( SnprintfFunc fn, void* state,
 
    // in some rare cases (N=1 and E=0 for example), we may have started too many threads
    // terminate those now
-   terminate_threads( BQ_FINISHED, handle, i - (num_blocks), num_blocks );
+   terminate_threads( BQ_FINISHED, handle, i - (handle->erasure_state->N + handle->erasure_state->E), handle->erasure_state->N + handle->erasure_state->E );
 
    // check for errors on open...
    // We finish checking thread status down here in order to give them a bit more time to spin up.
