@@ -629,7 +629,7 @@ int main( int argc, const char** argv )
 
    int std_fd = 0; // no way this FD gets reused, so safe to initialize to this
    if ( output_file != NULL )
-      std_fd = open( output_file, O_WRONLY | O_CREAT | O_EXCL, 0600 );
+      std_fd = open( output_file, (O_WRONLY | O_CREAT), 0600 ); //  | O_EXCL
    else if ( input_file != NULL )
       std_fd = open( input_file, O_RDONLY );
 
