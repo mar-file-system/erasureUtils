@@ -1329,6 +1329,17 @@ static int initialize_queues(ne_handle handle) {
       else {
          PRINTdbg( "starting up read thread for block %d\n", i );
       }
+
+      if ( (i == 1)  &&  (strncmp(bq->path, handle->blocks[0].path, MAXNAME) == 0) ) {
+         // sanity check, blocks should not have matching paths
+         // I only bother to check for the first and second blocks, just to avoid simple mistakes (no %d in path).
+         // More complex sprintf functions may still have collisions later on, but that is the responsibility of 
+         // the caller, who gave us those functions.
+         PRINTerr( "detected a name collision between blocks 0 and 1\n" );
+         terminate_threads( BQ_ABORT, handle, i, 0 );
+         errno = EINVAL;
+         return -1;
+      }
     
       if(bq_init(bq, i, handle) < 0) {
          PRINTerr("bq_init failed for block %d\n", i);
@@ -1794,6 +1805,7 @@ ne_handle ne_open1( SnprintfFunc fn, void* state,
    }
 
    if( initialize_handle(handle) ) {
+      free( handle->path_fmt );
       free( handle );
       if ( !(mode & NE_ESTATE) )
          free( erasure_state_tmp );
@@ -1844,6 +1856,7 @@ ne_handle ne_open( char *path, ne_mode mode, ... ) {
    }
 
    if( initialize_handle(handle) ) {
+      free( handle->path_fmt );
       free( handle );
       if ( !(mode & NE_ESTATE) )
          free( erasure_state_tmp );
@@ -3340,6 +3353,7 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
 
    // prep the handle for reading
    if( initialize_handle(read_handle) ) {
+      free( read_handle->path_fmt );
       free( read_handle );
       if ( !(read_mode & NE_ESTATE) )
          free( erasure_state_read );
@@ -3395,6 +3409,7 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
    }
 
    if( initialize_handle(write_handle) ) {
+      free( write_handle->path_fmt );
       free( write_handle );
       free( erasure_state_write );
       ne_close( read_handle );
@@ -3720,8 +3735,10 @@ int ne_stat1( SnprintfFunc fn, void* state,
    ne_handle handle = create_handle( fn, state, itype, auth,
                                      timing_flags, timing_data,
                                      path, NE_STAT | NE_ESTATE, e_state_struct );
-   if ( handle == NULL )
+   if ( handle == NULL ) {
+      errno = EINVAL;
       return -1;
+   }
 
    int i;
    int consensus = MIN_MD_CONSENSUS;
@@ -3740,6 +3757,17 @@ int ne_stat1( SnprintfFunc fn, void* state,
    for(i = 0; i < num_blocks; i++) {
       BufferQueue *bq = &handle->blocks[i];
       handle->snprintf(bq->path, MAXNAME, handle->path_fmt, (i + handle->erasure_state->O) % num_blocks, handle->printf_state);
+
+      if ( (i == 1)  &&  (strncmp(bq->path, handle->blocks[0].path, MAXNAME) == 0) ) {
+         // sanity check, blocks should not have matching paths
+         // I only bother to check for the first and second blocks, just to avoid simple mistakes (no %d in path).
+         // More complex sprintf functions may still have collisions later on, but that is the responsibility of 
+         // the caller, who gave us those functions.
+         PRINTerr( "detected a name collision between blocks 0 and 1\n" );
+         terminate_threads( BQ_ABORT, handle, i, 0 );
+         errno = EINVAL;
+         return -1;
+      }
 
       PRINTdbg( "starting up thread for block %d\n", i );
     
@@ -3783,10 +3811,13 @@ int ne_stat1( SnprintfFunc fn, void* state,
             // special case, if we have still failed to produce sensible N/E values
             if ( matches < 1 ) {
                // if we are still within our bounds, just keep extending the stripe, trying to find *something*
-               if ( num_blocks < MAXPARTS )
+               if ( num_blocks < MAXPARTS ) {
                   num_blocks++;
-               else
+               }
+               else {
                   error = 1; // to trigger cleanup below
+                  errno = ENOENT;
+               }
                continue;
             }
 

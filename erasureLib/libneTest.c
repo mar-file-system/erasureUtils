@@ -583,7 +583,7 @@ int main( int argc, const char** argv )
          }
       }
       if ( NE_DELETE( erasure_path, N ) ) {
-         PRINTlog("libneTest: deletion attempt indicates a failure for path \"%s\"\n", (char*)argv[2] );
+         PRINTlog("libneTest: deletion attempt indicates a failure for path \"%s\": errno=%d (%s)\n", (char*)argv[2], errno, strerror(errno));
          return -1;
       }
       PRINTout("libneTest: deletion successful\n" );
@@ -602,7 +602,7 @@ int main( int argc, const char** argv )
 
       int ret;
       if ( ( ret = NE_STAT_CALL( erasure_path, state ) ) < 0 ) {
-         PRINTlog("libneTest: ne_stat failed!\n" );
+         PRINTlog( "libneTest: ne_stat failed: errno=%d (%s)\n", errno, strerror(errno) );
          return -1;
       }
 
@@ -636,9 +636,9 @@ int main( int argc, const char** argv )
    // verify a proper open of our standard file
    if ( std_fd < 0 ) {
       if ( output_file != NULL )
-         PRINTlog( "libneTest: failed to open output file \"%s\": %s\n", output_file, strerror(errno) );
+         PRINTlog( "libneTest: failed to open output file \"%s\": errno=%d (%s)\n", output_file, errno, strerror(errno) );
       else
-         PRINTlog( "libneTest: failed to open input file \"%s\": %s\n", input_file, strerror(errno) );
+         PRINTlog( "libneTest: failed to open input file \"%s\": errno=%d (%s)\n", input_file, errno, strerror(errno) );
       free( buff );
       return -1;
    }
@@ -671,7 +671,8 @@ int main( int argc, const char** argv )
 
    // check for a successful open of the handle
    if ( handle == NULL ) {
-      PRINTlog( "libneTest: failed to open the requested erasure path for a %s operation\n", operation );
+      PRINTlog( "libneTest: failed to open the requested erasure path for a %s operation: errno=%d (%s)\n", operation, errno, strerror(errno) );
+      free( buff );
       return -1;
    }
 
@@ -700,7 +701,7 @@ int main( int argc, const char** argv )
 
       // check for a read error
       if ( (nread < 0)  ||  ( (size_arg) && (nread < toread) ) ) {
-         PRINTlog( "libneTest: expected to read %llu bytes from source but instead received: %zd\n", toread, nread );
+         PRINTlog( "libneTest: expected to read %llu bytes from source, but instead received %zd: errno=%d (%s)\n", toread, nread, errno, strerror(errno) );
          free( buff );
          ne_close( handle );
          if ( std_fd )
@@ -709,31 +710,19 @@ int main( int argc, const char** argv )
       }
 
       // WRITE DATA
-      size_t written;
+      size_t written = nread; // no write performed -> success
       if ( wr == 1 ) { // for write, just output to the stripe
          PRINTdbg( "libneTest: writing %zd bytes to erasure stripe\n", nread );
-         if( ( written = ne_write( handle, buff, nread ) ) != nread ) {
-            PRINTlog( "libneTest: expected to write %llu bytes to erasure stripe, but ne_write returned: %zd\n", written );
-            ne_close( handle );
-            if ( std_fd )
-               close( std_fd );
-            return -1;
-         }
+         written = ne_write( handle, buff, nread );
       }
       else if ( std_fd ) { // for read/verify, only write out if given the -o flag
          PRINTdbg( "libneTest: writing %zd bytes to \"%s\"\n", nread, output_file );
-         if ( ( written = write( std_fd, buff, nread ) ) != nread ) {
-            PRINTlog( "libneTest: expected to write %llu bytes to output file, but write returned: %zd\n", written );
-            ne_close( handle );
-            if ( std_fd )
-               close( std_fd );
-            return -1;
-         }
+         written = write( std_fd, buff, nread );
       }
  
       // check for a write error
-      if ( (nread < 0)  ||  ( (size_arg) && (nread < toread) ) ) {
-         PRINTlog( "libneTest: expected to write %llu bytes but instead wrote: %zd\n", toread, nread );
+      if ( nread != written ) {
+         PRINTlog( "libneTest: expected to write %llu bytes to destination, but instead wrote %zd: errno=%d (%s)\n", nread, written, errno, strerror(errno) );
          free( buff );
          ne_close( handle );
          if ( std_fd )

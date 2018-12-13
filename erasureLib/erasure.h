@@ -169,7 +169,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
 #endif
 
-#define UNSAFE(HANDLE, NERR) (NERR > ((HANDLE)->erasure_state->E - MIN_PROTECTION))
+#define UNSAFE(HANDLE, NERR) ( (NERR)  &&  (NERR > ((HANDLE)->erasure_state->E - MIN_PROTECTION)) )
 
 typedef uint32_t u32;
 typedef uint64_t u64;
