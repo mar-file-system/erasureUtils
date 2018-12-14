@@ -154,25 +154,45 @@ void usage(const char* prog_name, const char* op) {
    USAGE("help",       "");
    PRINTlog("\n");
 
-   if ( strncmp(op, "help", 10) ) // if help was not explicitly specified, avoid printing the entire usage block
+   if ( strncmp(op, "help", 5) ) // if help was not explicitly specified, avoid printing the entire usage block
       return;
 
+   PRINTlog("  Operations:\n");
+   PRINTlog("      read               Reads the content of the specified erasure stripe, utilizing erasure info only if necessary.\n");
+   PRINTlog("\n");
+   PRINTlog("      verify             Reads the content of the specified erasure stripe, including all erasure info.\n");
+   PRINTlog("\n");
+   PRINTlog("      write              Writes data to a new erasure stripe, overwriting any existing data.\n");
+   PRINTlog("\n");
+   PRINTlog("      rebuild            Reconstructs any damaged data/erasure blocks from valid blocks, if possible.\n");
+   PRINTlog("\n");
+   PRINTlog("      delete             Deletes all data, erasure, meta, and partial blocks of the given erasure stripe.  By default, \n");
+   PRINTlog("                          this operation prompts for confirmation before performing the deletion.\n");
+   PRINTlog("\n");
+   PRINTlog("      stat               Performs a sequential (ignoring stripe offset) read of meta information for the specified stripe \n");
+   PRINTlog("                          in order to determine N/E/O values.  Once these have been established, all remaining meta info \n");
+   PRINTlog("                          is read/verified and all data/erasure blocks are opened.  Stripe info and/or errors discovered \n");
+   PRINTlog("                          during this process are then displayed in a manner similar to that of '-e' option output for \n");
+   PRINTlog("                          for other commands (see NOTES for important output differences).\n");
+   PRINTlog("\n");
+   PRINTlog("      crc-status         Prints MAXN and MAXE values supported by libne, as well as whether intermediate crcs are active.\n");
+   PRINTlog("\n");
+   PRINTlog("      help               Prints this usage information and exits.\n");
+   PRINTlog("\n");
    PRINTlog("  Options:\n");
    PRINTlog("      -n                 For read/verfiy/write operations, specifies the use of the NE_NOINFO flag.\n");
-   PRINTlog("                         This will result in libne automatically determining values for N/E/start_file based on existing \n");
-   PRINTlog("                         stripe metadata.\n");
+   PRINTlog("                          This will result in the automatic setting of N/E/start_file values based on stripe metadata.\n");
    PRINTlog("\n");
    PRINTlog("      -t timing_flags    Specifies flags to be passed to the libne internal timer functions.  See 'NOTES' below.\n");
    PRINTlog("\n");
    PRINTlog("      -e                 For read/verify/write/rebuild, specifies the use of the NE_ESTATE flag.\n");
-   PRINTlog("                         This will allow an e_state struct to be retrieved following the operation.  Some of the contents \n");
-   PRINTlog("                         of the structure will be printed out to the console (N/E/O/bsz/totsz/meta_status/data_status).\n");
-   PRINTlog("                         See 'NOTES' for an explanation of some subtle differences between this output and that of 'stat'.\n");
+   PRINTlog("                          This will allow an e_state struct to be retrieved following the operation.  Some content of \n");
+   PRINTlog("                          the structure will be printed out to the console (N/E/O/bsz/totsz/meta_status/data_status).\n");
+   PRINTlog("                          See 'NOTES' for an explanation of subtle differences between this output and that of 'stat'.\n");
    PRINTlog("\n");
    PRINTlog("      -r                 Randomizes the read/write sizes used for data movement during the specified operation.\n");
    PRINTlog("\n");
-   PRINTlog("      -s input_size      Specifies the quantity of data to be read from the data source, whether that source be an \n");
-   PRINTlog("                         erasure stripe (for read/verify) or an input-file/zero-buffer (for write).\n");
+   PRINTlog("      -s input_size      Specifies the quantity of data to be read from the data source (stripe, file, or zero-buffer).\n");
    PRINTlog("\n");
    PRINTlog("      -o ontput_file     Specifies a standard POSIX file to which data retrieved from an erasure stripe should be stored.\n");
    PRINTlog("\n");
@@ -181,14 +201,13 @@ void usage(const char* prog_name, const char* op) {
    PRINTlog("      -f                 Used to perform a deletion without prompting for confirmation first.\n");
    PRINTlog("\n");
    PRINTlog("  NOTES:\n");
-   PRINTlog("     If an input file is not specified for write, a stream of zeros will be stored to the \n" \
-"      erasure stripe up to the given input_size.\n" );
+   PRINTlog("     If an input file is not specified for write, a stream of zeros will be stored to the erasure stripe up to the given \n");
+   PRINTlog("      input_size.  A failure to specify at least one of '-s' or '-i' for a write operation will result in an error.\n" );
    PRINTlog("\n");
-   PRINTlog("     The erasure state output produced by a 'stat' operation may differ slightly from that of \n");
-   PRINTlog("      '-e'.  The erasure structs returned by '-e' operations are adjusted by 'start_file' \n");
-   PRINTlog("      offset values, and thus indicate data/erasure status relative to the stripe format.\n");
-   PRINTlog("      The struct returned by ne_stat() has no such adjustment, and is thus relative to the \n");
-   PRINTlog("      actual file locations.\n");
+   PRINTlog("     The erasure state output produced by a 'stat' operation may differ slightly from that of '-e'.  The erasure structs \n");
+   PRINTlog("      returned by '-e' operations are adjusted by 'start_file' offset values, and thus indicate data/erasure status \n");
+   PRINTlog("      relative to the stripe format.\n");
+   PRINTlog("      The struct returned by ne_stat() has no such adjustment, and is thus relative to the actual file locations.\n");
    PRINTlog("      Return codes for all operations are relative to actual file locations (no erasure offset).\n");
    PRINTlog("\n");
    PRINTlog("     <stripe_width> refers to the total number of data/erasure parts in the target stripe (N+E).\n");
