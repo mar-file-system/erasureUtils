@@ -801,6 +801,7 @@ void* bq_reader(void* arg) {
       *meta_status = 1;
    }
    else {
+      PRINTdbg( "retrieved meta string for block %d (file %s): \"%s\"\n", bq->block_number, bq->path, xattrval );
       // declared here so that the compiler can hopefully free up this memory outside of the 'else' block
       char xattrN[5];            /* char array to get n parts from xattr */
       char xattrE[5];            /* char array to get erasure parts from xattr */
@@ -1239,9 +1240,9 @@ if ( meta_buf->VAL >= MIN_VAL  &&  meta_buf->VAL <= MAX_VAL ) { \
       COUNT_MATCH_AT_INDEX( N, N_match, MAXN, 1 )
       COUNT_MATCH_AT_INDEX( E, E_match, MAXE, 0 )
       COUNT_MATCH_AT_INDEX( O, O_match, MAXPARTS - 1, 0 )
-      COUNT_MATCH_AT_INDEX( bsz, bsz_match, MAXBLKSZ, 0 )
-      COUNT_MATCH_AT_INDEX( nsz, nsz_match, meta_buf->nsz, 0 ) //no maximum
-      COUNT_MATCH_AT_INDEX( totsz, totsz_match, meta_buf->totsz, 0 ) //no maximum
+      COUNT_MATCH_AT_INDEX( bsz, bsz_match, MAXBLKSZ, 1 )
+      COUNT_MATCH_AT_INDEX( nsz, nsz_match, meta_buf->nsz, 1 ) //no maximum
+      COUNT_MATCH_AT_INDEX( totsz, totsz_match, meta_buf->totsz, 1 ) //no maximum
    }
 
    int N_index = 0;
@@ -1385,16 +1386,15 @@ static int initialize_queues(ne_handle handle) {
    if ( handle->mode == NE_RDONLY  ||  handle->mode == NE_RDALL ) {
       int matches = check_matches( handle->blocks, i, &(read_meta_state) );
       // sanity check: if N/E values have changed at this point, the meta info is in a very odd state
-      if ( handle->erasure_state->N != read_meta_state.N  ||  handle->erasure_state->E != read_meta_state.E ) {
-         PRINTerr( "detected mismatch between provided N/E (%d/%d) and the most common meta values for this stripe (%d/%d)\n", 
-                     handle->erasure_state->N, handle->erasure_state->E, read_meta_state.N, read_meta_state.E );
+      if ( handle->erasure_state->N != read_meta_state.N  ||  handle->erasure_state->E != read_meta_state.E  ||  handle->erasure_state->O != read_meta_state.O ) {
+         PRINTerr( "detected mismatch between provided N/E/O (%d/%d/%d) and the most common meta values for this stripe (%d/%d/%d)\n", 
+                     handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->O, read_meta_state.N, read_meta_state.E, read_meta_state.O );
          terminate_threads( BQ_ABORT, handle, num_blocks, 0 );
          errno = EBADFD; // hopefully gives a bit more insight than just ENODATA
          if ( matches == 0 ) // no valid meta info, assume the file doesn't exist
             errno = ENOENT;
          return -1;
       }
-      handle->erasure_state->O = read_meta_state.O;
       if ( !(handle->erasure_state->bsz) ) // only set bsz if not already specified via NE_SETBSZ mode
          handle->erasure_state->bsz = read_meta_state.bsz;
       handle->erasure_state->nsz = read_meta_state.nsz;
@@ -1405,8 +1405,10 @@ static int initialize_queues(ne_handle handle) {
          read_meta_buffer read_buf = (read_meta_buffer)handle->blocks[i].buffers[0];
          if ( read_buf->N != handle->erasure_state->N  ||  read_buf->E != handle->erasure_state->E  ||  read_buf->O != handle->erasure_state->O  ||  
               read_buf->bsz != handle->erasure_state->bsz  ||  read_buf->nsz != handle->erasure_state->nsz  ||  
-              read_buf->totsz != handle->erasure_state->totsz )
+              read_buf->totsz != handle->erasure_state->totsz ) {
             handle->erasure_state->meta_status[i] = 1;
+            PRINTerr( "detected mismatch between accepted meta values and those read by block %d\n", i );
+         }
          // free our read_meta_buff structs
          free( read_buf ); 
          // update each thread's buffer size, just in case
@@ -3169,11 +3171,13 @@ int ne_close( ne_handle handle )
       errno = EIO;
       ret = -1;
    }
-   else if ( ( handle->mode != NE_STAT )  &&  ( nerr > handle->erasure_state->E ) ) { /* for non-writes */
-      PRINTdbg( "ne_close: detected excessive errors following a read operation\n" );
-      errno = ENODATA;
-      ret = -1;
-   }
+   // NOTE: I think we only really care about returning a -1 for writes.  Otherwise, ne_read() should handle
+   // setting errors in the case of excess errors.  ne_close() should just report what errrors there were
+   //else if ( ( handle->mode != NE_STAT )  &&  ( nerr > handle->erasure_state->E ) ) { /* for non-writes */
+   //   PRINTdbg( "ne_close: detected excessive errors following a read operation\n" );
+   //   errno = ENODATA;
+   //   ret = -1;
+   //}
    if ( ret == 0 ) {
       PRINTdbg( "ne_close: encoding error pattern in return value...\n" );
       /* Encode any file errors into the return status */
@@ -3741,8 +3745,7 @@ int ne_stat1( SnprintfFunc fn, void* state,
    }
 
    int i;
-   int consensus = MIN_MD_CONSENSUS;
-   int num_blocks = consensus;
+   int num_blocks = MIN_MD_CONSENSUS;
    char error = 0; // for indicating an error condition
 
    struct read_meta_buffer_struct read_meta_state; //needed to determine metadata consensus of read threadss
@@ -3801,15 +3804,20 @@ int ne_stat1( SnprintfFunc fn, void* state,
          threads_checked++;
 
          // if we have all the threads needed for determining N/E
-         if ( (i+1) >= consensus ) {
-
-            PRINTdbg( "attempting to determine N/E values after starting %d threads\n", i+1 );
+         if ( (i+1) >= MIN_MD_CONSENSUS ) {
 
             // find the most common values from amongst all meta information
             int matches = check_matches( handle->blocks, i+1, &(read_meta_state) );
 
+            PRINTdbg( "attempting to determine N/E values after starting %d threads resulted in %d matches\n", i+1, matches );
+
             // special case, if we have still failed to produce sensible N/E values
-            if ( matches < 1 ) {
+            if ( matches >= MIN_MD_CONSENSUS  ||  ( matches >= read_meta_state.N  &&  (read_meta_state.N + read_meta_state.E) <= MIN_MD_CONSENSUS ) ) {
+               PRINTdbg( "setting N/E to %d/%d after locating %d matching values\n", read_meta_state.N, read_meta_state.E, matches );
+               handle->erasure_state->N = read_meta_state.N;
+               handle->erasure_state->E = read_meta_state.E;
+            }
+            else {
                // if we are still within our bounds, just keep extending the stripe, trying to find *something*
                if ( num_blocks < MAXPARTS ) {
                   num_blocks++;
@@ -3821,15 +3829,6 @@ int ne_stat1( SnprintfFunc fn, void* state,
                continue;
             }
 
-            // we have N/E values, so use them to determine a new consensus
-            consensus = ( read_meta_state.E ) ? ( read_meta_state.E + 1 ) : ( read_meta_state.N );
-            PRINTdbg( "set consensus to %d after retrieving new N/E values (have %d matches)\n", consensus, matches );
-            // if we have sufficient matches for consensus, assign them to our handle
-            if ( matches >= consensus ) {
-               PRINTdbg( "setting N/E to %d/%d after reaching consensus of %d\n", read_meta_state.N, read_meta_state.E, matches );
-               handle->erasure_state->N = read_meta_state.N;
-               handle->erasure_state->E = read_meta_state.E;
-            }
             num_blocks = read_meta_state.N + read_meta_state.E;
          }
       }
@@ -4082,6 +4081,10 @@ int ne_get_xattr1( const uDAL* impl, SktAuth auth,
       ret = -1;
    }
 #endif
+
+   // make sure that our xattr values are null terminated strings
+   if ( ret >= 0 )
+      *(xattrval + ret) = '\0';
 
    return ret;
 }
