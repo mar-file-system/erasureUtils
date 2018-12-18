@@ -562,11 +562,11 @@ int main( int argc, const char** argv )
       }
 
       if ( (tmp) ) {
-         PRINTout("Rebuild failed to correct all errors: errno=%d (%s)\n", tmp, errno, strerror(errno));
+         PRINTout("Rebuild failed to correct all errors: errno=%d (%s)\n", errno, strerror(errno));
          if ( tmp < 0 )
             PRINTout("libneTest: rebuild failed!\n" );
          else
-            PRINTout("libneTest: rebuild indicates only partial success\n" );
+            PRINTout("libneTest: rebuild indicates only partial success: rc = %d\n", tmp );
       }
       else
          PRINTout("libneTest: rebuild complete\n" );

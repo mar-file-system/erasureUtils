@@ -727,7 +727,7 @@ if [[ $BC -eq 0 ]]; then
 
    if [[ $count -ne 0 ]]; then
       tcnt=$( echo "$tcnt ) / $count" | bc -l )
-      output="$output\nStatus:,Performed = $count,AvgTime = $tcnt Seconds"
+      output="$output\nVerify:,Performed = $count,AvgTime = $tcnt Seconds"
    fi
 
    { res=$( printf "$output\n" | column -s "," -o "   " -t ); } 2>/dev/null

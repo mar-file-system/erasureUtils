@@ -1385,7 +1385,7 @@ static int initialize_queues(ne_handle handle) {
    // We have to do this here, in case we don't have a bsz value
    if ( handle->mode == NE_RDONLY  ||  handle->mode == NE_RDALL ) {
       int matches = check_matches( handle->blocks, i, &(read_meta_state) );
-      // sanity check: if N/E values have changed at this point, the meta info is in a very odd state
+      // sanity check: if N/E values differ at this point, the meta info is in a very odd state
       if ( handle->erasure_state->N != read_meta_state.N  ||  handle->erasure_state->E != read_meta_state.E  ||  handle->erasure_state->O != read_meta_state.O ) {
          PRINTerr( "detected mismatch between provided N/E/O (%d/%d/%d) and the most common meta values for this stripe (%d/%d/%d)\n", 
                      handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->O, read_meta_state.N, read_meta_state.E, read_meta_state.O );
@@ -3811,8 +3811,27 @@ int ne_stat1( SnprintfFunc fn, void* state,
 
             PRINTdbg( "attempting to determine N/E values after starting %d threads resulted in %d matches\n", i+1, matches );
 
-            // special case, if we have still failed to produce sensible N/E values
-            if ( matches >= MIN_MD_CONSENSUS  ||  ( matches >= read_meta_state.N  &&  (read_meta_state.N + read_meta_state.E) <= MIN_MD_CONSENSUS ) ) {
+            // check if our values seem sensible enough to believe.
+            // This check can be thought of as two distinct possiblities--
+            //    Stripe width appears to be greater than MIN_MD_CONSENSUS, it must also be true that:
+            //       - we have at least MIN_MD_CONSENSUS matching values
+            //    Stripe width appears to be less than or equal to MIN_MD_CONSENSUS, it must also be true that:
+            //       - we have checked exactly MIN_MD_CONSENSUS threads, with more, it doesn't make sense to see this value
+            //       - the values are at least potentially valid (N > 0  and  E >= 0)
+            //       - we have at least N matches, providing at least some assurance
+            if ( 
+                  (
+                    (read_meta_state.N + read_meta_state.E) > MIN_MD_CONSENSUS  &&
+                    matches >= MIN_MD_CONSENSUS //we want at least MIN_MD_CONSENSUS matches before using values
+                  )  
+                     ||  
+                  ( 
+                    ((read_meta_state.N + read_meta_state.E) <= MIN_MD_CONSENSUS)  &&  
+                    (i < MIN_MD_CONSENSUS)  &&  //only applies when we have checked exactly MIN_MD_CONSENSUS threads (already know (i+1) >= MIN)
+                    (read_meta_state.N > 0  &&  read_meta_state.E >= 0)  &&  //ensure these values are sensible
+                    (matches >= read_meta_state.N)  //ensure we have at least N matches before believing a low value
+                  ) 
+               ) {
                PRINTdbg( "setting N/E to %d/%d after locating %d matching values\n", read_meta_state.N, read_meta_state.E, matches );
                handle->erasure_state->N = read_meta_state.N;
                handle->erasure_state->E = read_meta_state.E;
@@ -3863,8 +3882,21 @@ int ne_stat1( SnprintfFunc fn, void* state,
    // find the most common values from amongst all meta information, now that all threads have started
    // we have to do this here, in case we don't have a bsz value
    int matches = check_matches( handle->blocks, num_blocks, &(read_meta_state) );
+   if ( read_meta_state.N != handle->erasure_state->N  ||  read_meta_state.E != handle->erasure_state->E ) {
+      PRINTerr( "detected a mismatch between consensus N/E values (%d/%d) and those most common to the stripe (%d/%d).\n",
+                  handle->erasure_state->N, handle->erasure_state->E, read_meta_state.N, read_meta_state.E );
+      error = 1;
+   }
    handle->erasure_state->O = read_meta_state.O;
+   if ( read_meta_state.O < 0  ||  read_meta_state.O >= (read_meta_state.N + read_meta_state.E) ) {
+      PRINTerr( "consensus O value (%d) is invalid or incosistent with N/E values (%d/%d).\n", read_meta_state.O, read_meta_state.N, read_meta_state.E );
+      error = 1;
+   }
    handle->erasure_state->bsz = read_meta_state.bsz;
+   if ( read_meta_state.bsz <= 0 ) {
+      PRINTerr( "consensus bsz value (%lu) is invalid.\n", read_meta_state.bsz );
+      error = 1;
+   }
    handle->erasure_state->nsz = read_meta_state.nsz;
    handle->erasure_state->totsz = read_meta_state.totsz;
    // Note: ncompsz and crcsum are set by the thread itself
