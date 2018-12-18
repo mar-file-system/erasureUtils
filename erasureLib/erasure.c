@@ -1252,9 +1252,18 @@ if ( meta_buf->VAL >= MIN_VAL  &&  meta_buf->VAL <= MAX_VAL ) { \
    int nsz_index = 0;
    int totsz_index = 0;
    for ( i = 1; i < num_threads; i++ ) {
-      if ( N_match[i] > N_match[N_index] )
+      // find the value with the most matches
+      // For N/E: if two values are tied for matches, prefer the larger value (helps to avoid taking values from a single bad meta info)
+      // For other values: if two values are tied for matches, prefer the first
+      if ( N_match[i] > N_match[N_index]  ||  
+            ( N_match[i] == N_match[N_index]  &&  
+              ((read_meta_buffer)(blocks[i].buffers[0]))->N > ((read_meta_buffer)(blocks[N_index].buffers[0]))->N )
+         )
          N_index = i;
-      if ( E_match[i] > E_match[E_index] )
+      if ( E_match[i] > E_match[E_index]  ||  
+            ( E_match[i] == E_match[E_index]  &&  
+              ((read_meta_buffer)(blocks[i].buffers[0]))->E > ((read_meta_buffer)(blocks[E_index].buffers[0]))->E )
+         )
          E_index = i;
       if ( O_match[i] > O_match[O_index] )
          O_index = i;
@@ -3885,16 +3894,19 @@ int ne_stat1( SnprintfFunc fn, void* state,
    if ( read_meta_state.N != handle->erasure_state->N  ||  read_meta_state.E != handle->erasure_state->E ) {
       PRINTerr( "detected a mismatch between consensus N/E values (%d/%d) and those most common to the stripe (%d/%d).\n",
                   handle->erasure_state->N, handle->erasure_state->E, read_meta_state.N, read_meta_state.E );
+      errno = EBADFD;
       error = 1;
    }
    handle->erasure_state->O = read_meta_state.O;
    if ( read_meta_state.O < 0  ||  read_meta_state.O >= (read_meta_state.N + read_meta_state.E) ) {
       PRINTerr( "consensus O value (%d) is invalid or incosistent with N/E values (%d/%d).\n", read_meta_state.O, read_meta_state.N, read_meta_state.E );
+      errno = EBADFD;
       error = 1;
    }
    handle->erasure_state->bsz = read_meta_state.bsz;
    if ( read_meta_state.bsz <= 0 ) {
       PRINTerr( "consensus bsz value (%lu) is invalid.\n", read_meta_state.bsz );
+      errno = EBADFD;
       error = 1;
    }
    handle->erasure_state->nsz = read_meta_state.nsz;

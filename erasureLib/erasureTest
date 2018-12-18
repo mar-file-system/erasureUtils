@@ -297,7 +297,8 @@ while [[ $cnt -lt $ITER ]]; do
             nerr=$e
          fi
          met_err_free=1
-      elif [[ $nerr -eq $(( n + e - 1 )) ]]; then
+      fi
+      if [[ $nerr -eq $(( n + e - 1 )) ]]; then
          # special case, we can't leave only a single valid meta file, as there is no guaratee we will get correct values then
          nerr=$(( nerr - 1 ))
       fi
