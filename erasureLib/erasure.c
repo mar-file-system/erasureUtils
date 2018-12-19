@@ -3990,8 +3990,8 @@ int ne_set_xattr1(const uDAL* impl, SktAuth auth,
    }
    else {
       // int val = HNDLOP( write, fd, xattrval, strlen(xattrval) + 1 );
-      int val = write_all(&fd, xattrval, strlen(xattrval) + 1 );
-      if ( val != strlen(xattrval) + 1 ) {
+      int val = write_all(&fd, xattrval, len );
+      if ( val != len ) {
          PRINTerr( "ne_close: failed to write to file %s\n", meta_file);
          ret = -1;
          HNDLOP(close, fd);
@@ -4016,9 +4016,9 @@ int ne_set_xattr1(const uDAL* impl, SktAuth auth,
    else {
 
 #   if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
-      ret = HNDLOP(fsetxattr, fd, XATTRKEY, xattrval, strlen(xattrval), 0);
+      ret = HNDLOP(fsetxattr, fd, XATTRKEY, xattrval, len, 0);
 #   else
-      ret = HNDLOP(fsetxattr, fd, XATTRKEY, xattrval, strlen(xattrval), 0, 0);
+      ret = HNDLOP(fsetxattr, fd, XATTRKEY, xattrval, len, 0, 0);
 #   endif
    }
 
@@ -4153,11 +4153,11 @@ static int set_block_xattr(ne_handle handle, int block) {
   TimingData* timing = handle->timing_data_ptr;
 
   char xattrval[1024];
-  sprintf(xattrval,"%d %d %d %d %lu %lu %llu %llu",
-          handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->O,
-          handle->erasure_state->bsz, handle->erasure_state->nsz,
-          handle->erasure_state->ncompsz[block], (unsigned long long)handle->erasure_state->csum[block],
-          (unsigned long long)handle->erasure_state->totsz);
+  int xvalen = snprintf(xattrval,1024,"%d %d %d %d %lu %lu %llu %llu\n",
+                        handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->O,
+                        handle->erasure_state->bsz, handle->erasure_state->nsz,
+                        handle->erasure_state->ncompsz[block], (unsigned long long)handle->erasure_state->csum[block],
+                        (unsigned long long)handle->erasure_state->totsz);
 
   PRINTdbg( "ne_close: setting file %d xattr = \"%s\"\n",
             block, xattrval );
@@ -4176,7 +4176,7 @@ static int set_block_xattr(ne_handle handle, int block) {
    if (timing->flags & TF_XATTR)
       fast_timer_start(&timing->stats[block].xattr);
 
-   int rc = ne_set_xattr1(handle->impl, handle->auth, block_file_path, xattrval, strlen(xattrval));
+   int rc = ne_set_xattr1(handle->impl, handle->auth, block_file_path, xattrval, xvalen);
 
    if (timing->flags & TF_XATTR)
       fast_timer_stop(&timing->stats[block].xattr);
