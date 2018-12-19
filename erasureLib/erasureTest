@@ -151,20 +151,27 @@ corrupt_file() {
       echo "      inserting $corr random bytes at offset $offset" >> $LOGFILE
 
       corrmegab=$(( ($corr / 1048576) + 1 ))
-      dd if=/dev/urandom of="$ftocorr".esource bs=1M count=1 > /dev/null 2>&1
 
       cp $ftocorr $ftocorr".tmp"
       diff=0
       while [[ $diff -eq 0 ]]; do
+         # generate the random source inside this loop, so we get a different set of bytes each time
+         dd if=/dev/urandom of="$ftocorr".esource bs=1M count=1 > /dev/null 2>&1
+
+         # first, insert enough corruption to get to a MiB aligned offset
          corr_done=$(( 1048576 - (offset % 1048576) ))
+         # make sure not to insert too much though
          if [[ $corr_done -gt $corr ]]; then corr_done=$corr; fi
-         # insert enough to align our offset to megabyte boundaries
          dd if="$ftocorr".esource of=$ftocorr bs=1c count=$corr_done seek=$offset conv=notrunc > /dev/null 2>&1
+
+         # now insert the remaining corruption
          while [[ $corr_done -lt $corr ]]; do
+            # try to insert in 1MiB chunks at 1MiB aligned offsets
             tocorr=1
             corrbs="1M"
             toffset=$(( (offset + corr_done) / 1048576 ))
             if [[ $(( $corr_done + 1048576 )) -gt $corr ]]; then
+               # if we have less than 1MiB remaining, we'll have to do the insert one byte at a time
                tocorr=$(( corr - corr_done ))
                corrbs="1c"
                toffset=$(( offset + corr_done ))
@@ -183,8 +190,6 @@ corrupt_file() {
       echo "      creating backup of corrupted file"
       cp $ftocorr "$ftocorr".corrupted
    fi
-
-   echo "   file corruption complete"
 
    return $ctype
 
@@ -382,12 +387,6 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Data error insertion complete, pattern is : $npat"
       echo "Data errors inserted, pattern is  $npat" >> $LOGFILE
 
-
-      echo "The minimum acceptible error detection for reads is $tstat"
-      echo "The minimum acceptible error detection for reads is $tstat" >> $LOGFILE
-      echo
-      echo >> $LIBTLOG
-
       # finally, get the total error pattern
       npat=""
       for pos in $(seq 0 $(( n + e - 1 )) ); do
@@ -398,6 +397,15 @@ while [[ $cnt -lt $ITER ]]; do
          fi
       done
 
+      echo
+      echo "The combined error pattern for this stripe is : $npat"
+      echo "The combined error pattern for this stripe is : $npat" >> $LOGFILE
+      echo "The expected return code for complete error detection is $stat"
+      echo "The expected return code for complete error detection is $stat" >> $LOGFILE
+      echo "The minimum acceptible error detection for reads is $tstat"
+      echo "The minimum acceptible error detection for reads is $tstat" >> $LOGFILE
+      echo
+      echo >> $LIBTLOG
 
 
       {
