@@ -257,7 +257,7 @@ while [[ $cnt -lt $ITER ]]; do
    dat_err_free=0
 
    echo
-   echo "Generating $n+$e striping starting at file $start..."
+   echo -e "\e[34mGenerating $n+$e striping starting at file $start...\e[0m"
    echo >> $LOGFILE
    echo >> $LIBTLOG
    echo "Generating $n+$e striping starting at file $start""..." >> $LOGFILE
@@ -281,7 +281,7 @@ while [[ $cnt -lt $ITER ]]; do
 
       if [[ $incnt -ne 0 ]]; then
          echo
-         echo "Continuing with the same $n+$e start position $start stripe..."
+         echo -e "\e[34mContinuing with the same $n+$e start position $start stripe...\e[0m"
          echo >> $LOGFILE
          echo "Continuring to use $n+$e striping with start $start..." >> $LOGFILE
          echo
@@ -445,17 +445,17 @@ while [[ $cnt -lt $ITER ]]; do
          if [[ ! $ret =~ $re  ||  $ret -gt $stat  ||  $ret -lt $tstat ]]; then
             # may still be possible to get false failure on silent zero-fill corruption
             echo
-            echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $stat but received $ret"
+            echo -e "\033[0;33mWARNING - read operation returned an inappropriate status, expected $stat but received $ret"
             echo -e "Minimum acceptible status value is $tstat"
+            echo -e "This may be the result of corruption of the meta crcsum value for an unused/partially used erasure block."
             echo -e "CMD = $CMD\033[0m"
-            echo "   FAILURE: read operation returned an inappropriate status, expected $stat but received $ret" >> $LOGFILE
+            echo "   WARNING: read operation returned an inappropriate status, expected $stat but received $ret" >> $LOGFILE
             echo "CMD = $CMD" >> $LOGFILE
-            exit -1
          elif [[ $ret -lt $stat ]]; then
             echo
-            echo -e "\033[0;33mNOTE - Read operation failed to detect all erasure errors (expected $stat but received $ret)."
-            echo -e "       This is not unusual, as the faulty erasure sections may not have been needed for data recovery."
-            echo -e "       CMD = $CMD\033[0m"
+            echo "NOTE - Read operation failed to detect all erasure errors (expected $stat but received $ret)."
+            echo "       This is not unusual, as the faulty erasure sections may not have been needed for data recovery."
+            echo "       CMD = $CMD"
             echo "   NOTE: read operation failed to detect all erasure errors, expected $stat but received $ret" >> $LOGFILE
             echo "CMD = $CMD" >> $LOGFILE
          fi
@@ -503,17 +503,17 @@ while [[ $cnt -lt $ITER ]]; do
          
          if [[ ! $ret =~ $re  ||  $ret -gt $stat  ||  $ret -lt $tstat ]]; then
             echo
-            echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $stat but received $ret"
+            echo -e "\033[0;33mWARNING - read operation returned an inappropriate status, expected $stat but received $ret"
             echo -e "Minimum acceptible status value is $tstat"
+            echo -e "This may be the result of corruption of the meta crcsum value for an unused/partially used erasure block."
             echo -e "CMD = $CMD\033[0m"
-            echo "   FAILURE: read operation returned an inappropriate status, expected $stat but received $ret" >> $LOGFILE
+            echo "   WARNING: read operation returned an inappropriate status, expected $stat but received $ret" >> $LOGFILE
             echo "CMD = $CMD" >> $LOGFILE
-            exit -1
          elif [[ $ret -lt $stat ]]; then
             echo
-            echo -e "\033[0;33mNOTE - Read operation failed to detect all erasure errors (expected $stat but received $ret)."
-            echo -e "       This is not unusual, as the faulty erasure sections may not have been needed for data recovery."
-            echo -e "       CMD = $CMD\033[0m"
+            echo "NOTE - Read operation failed to detect all erasure errors (expected $stat but received $ret)."
+            echo "       This is not unusual, as the faulty erasure sections may not have been needed for data recovery."
+            echo "       CMD = $CMD"
             echo "   NOTE: read operation failed to detect all erasure errors, expected $stat but received $ret" >> $LOGFILE
             echo "CMD = $CMD" >> $LOGFILE
          fi
