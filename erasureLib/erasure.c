@@ -237,7 +237,6 @@ struct handle {
    unsigned int  decode_index[ MAXPARTS ];
 
    /* Used for rebuilds to restore the original ownership to the rebuilt file. */
-   // TODO: the new rebuild scheme does not do this!
    uid_t owner;
    gid_t group;
 
@@ -722,9 +721,6 @@ void *bq_writer(void *arg) {
 // ---------------------- RENAME OUTPUT FILES TO FINAL LOCATIONS ----------------------
 
   // rename
-  if (timing->flags & TF_RENAME)
-     fast_timer_start(&timing->stats[bq->block_number].rename);
-
   char block_file_path[MAXNAME];
   //  sprintf( block_file_path, handle->path_fmt,
   //           (bq->block_number+handle->erasure_state->O)%(handle->erasure_state->N+handle->erasure_state->E) );
@@ -733,9 +729,21 @@ void *bq_writer(void *arg) {
 
   PRINTdbg("bq_writer: renaming old:  %s\n", bq->path );
   PRINTdbg("                    new:  %s\n", block_file_path );
+
+  if (timing->flags & TF_RENAME)
+     fast_timer_start(&timing->stats[bq->block_number].rename);
+
   if( PATHOP( rename, handle->impl, handle->auth, bq->path, block_file_path ) != 0 ) {
     PRINTerr("bq_writer: rename failed: %s\n", strerror(errno) );
     *data_status = 1;
+  }
+
+  if (timing->flags & TF_RENAME)
+     fast_timer_stop(&timing->stats[bq->block_number].rename);
+
+  if ( handle->mode == NE_REBUILD ) {
+    PRINTdbg( "performing chown of rebuilt file \"%s\"\n", block_file_path );
+    PATHOP(chown, handle->impl, handle->auth, block_file_path, handle->owner, handle->group);
   }
 
 #ifdef META_FILES
@@ -745,14 +753,25 @@ void *bq_writer(void *arg) {
 
   PRINTdbg("bq_writer: renaming meta old:  %s\n", bq->path );
   PRINTdbg("                         new:  %s\n", block_file_path );
+
+  if (timing->flags & TF_RENAME)
+     fast_timer_start(&timing->stats[bq->block_number].rename);
+
   if ( PATHOP( rename, handle->impl, handle->auth, bq->path, block_file_path ) != 0 ) {
      PRINTerr("bq_writer: rename failed: %s\n", strerror(errno) );
      *meta_status = 1;
   }
-#endif
 
   if (timing->flags & TF_RENAME)
      fast_timer_stop(&timing->stats[bq->block_number].rename);
+
+  if ( handle->mode == NE_REBUILD ) {
+    PRINTdbg( "performing chown of rebuilt meta file \"%s\"\n", block_file_path );
+    PATHOP(chown, handle->impl, handle->auth, block_file_path, handle->owner, handle->group);
+  }
+
+#endif
+
   if (timing->flags & TF_THREAD)
      fast_timer_stop(&timing->stats[bq->block_number].thread);
 
@@ -1587,6 +1606,8 @@ ne_handle create_handle( SnprintfFunc fn, void* state,
    handle->erasure_state = erasure_state;
    handle->buff_offset   = 0;
    handle->prev_err_cnt  = 0;
+   handle->owner         = 0;
+   handle->group         = 0;
    handle->alloc_state   = 1;
    // make sure to note the NE_ESTATE flag, if set
    if ( mode & NE_ESTATE )
@@ -3430,6 +3451,34 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
       return -1;
    }
 
+   // determine owner uid and gid by stating the first intact data file
+   int i;
+   for ( i = 0; i < (N + E); i++ ) {
+      BufferQueue* bq = &read_handle->blocks[i];
+      if ( !(erasure_state_read->data_status[i]) ) {
+         struct stat st_info;
+
+         if (read_handle->timing_data_ptr->flags & TF_STAT)
+            fast_timer_start(&read_handle->timing_data_ptr->stats[i].stat);
+
+         int ret = PATHOP(stat, read_handle->impl, read_handle->auth, bq->path, &st_info);
+
+         if (read_handle->timing_data_ptr->flags & TF_STAT)
+            fast_timer_stop(&read_handle->timing_data_ptr->stats[i].stat);
+
+         if ( ret == 0 ) {
+            write_handle->owner = st_info.st_uid;
+            write_handle->group = st_info.st_gid;
+            break;
+         }
+         else {
+            PRINTerr( "failure of stat for file \"%s\"\n", bq->path );
+         }
+      }
+   }
+   if ( i == (N + E) )
+      PRINTerr( "failed to determine proper uid/gid for rebuilt parts\n" );
+
 // ---------------------- BEGIN MAIN REBUILD LOOP ----------------------
 
    // let's create a struct to indicate which blocks we are rebuilding
@@ -3459,7 +3508,6 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
       write_handle->erasure_state->nsz = 0;
       write_handle->erasure_state->totsz = 0;
       write_handle->buff_rem = 0;
-      int i;
       for ( i = 0; i < (N + E); i++ ) {
          BufferQueue* bq = &write_handle->blocks[i];
          if ( erasure_state_read->meta_status[i] || erasure_state_read->data_status[i] ) {
