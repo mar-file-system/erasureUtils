@@ -583,7 +583,7 @@ void *bq_writer(void *arg) {
     }
 
 
-    if( !(*data_status)  &&  !(bq->state_flags & BQ_SKIP) ) {
+    if( !(*data_status) ) {
 
 // ---------------------- WRITE TO THE DATA FILE ----------------------
 
@@ -679,29 +679,24 @@ void *bq_writer(void *arg) {
      }
   }
 
-  // check for special case, where rebuild does not need this block
-  if ( bq->state_flags & BQ_SKIP ) {
-    PRINTdbg( "thread %d was never used and will terminate early\n", bq->block_number );
-    PATHOP(unlink, handle->impl, handle->auth, bq->path); // try to clean up after ourselves.
-    if (timing->flags & TF_THREAD)
-       fast_timer_stop(&timing->stats[bq->block_number].thread);
-    return NULL; // don't bother trying to rename
-  }
-
-  // this should catch any errors from close or within the main loop
-  if ( close_rc || (*data_status) ) {
+  // this should catch any errors from close or within the main loop as well as the case where this thread was 
+  // unused by ne_rebuild()
+  if ( close_rc  ||  (*data_status)  ||  (bq->con_flags & BQ_HALT) ) {
     if ( close_rc ) {
        PRINTerr("error closing block %d\n", bq->block_number);
+       *data_status = 1;   // ensure the error was noted
+       *meta_status = 1;   // skipping any attempt to set the meta info
+    }
+    else if ( (*data_status) ) {
+       PRINTerr("early termination due to error for block %d\n", bq->block_number);
+       *meta_status = 1;   // skipping any attempt to set the meta info
     }
     else {
-       PRINTerr("early termination due to error for block %d\n", bq->block_number);
+       PRINTdbg( "thread %d was never used and will terminate early\n", bq->block_number );
     }
 
-    *data_status = 1;   // ensure the error was noted
-    *meta_status = 1;   // skipping any attempt to set the meta info
-
     // check if the write has been aborted
-    if ( aborted == 1 )
+    if ( aborted == 1  ||  (bq->con_flags & BQ_HALT) )
       PATHOP(unlink, handle->impl, handle->auth, bq->path); // try to clean up after ourselves.
 
     if (timing->flags & TF_THREAD)
@@ -971,8 +966,9 @@ void* bq_reader(void* arg) {
          break;
       }
 
-      // if the finished flag is set, we are done, regardless of how full the queue is
-      if(bq->con_flags & BQ_FINISHED) {
+      // if the finished flag is set, only terminate if we've hit an error, are still halted, or the queue is full.
+      // This is mean to ensure that we have the chance to reach EOF and verify the global crc
+      if( (bq->con_flags & BQ_FINISHED)  &&  ( (bq->con_flags & BQ_HALT)  ||  !(good_crc)  ||  (bq->qdepth == MAX_QDEPTH) ) ) {
          PRINTdbg("BQ_reader %d finished\n", bq->block_number);
          pthread_mutex_unlock(&bq->qlock);
          break;
@@ -1050,7 +1046,7 @@ void* bq_reader(void* arg) {
          resetable_error = 1; // this should allow us to refuse any further buffers while avoiding a reported error
 
          // if we're at the end of the file, and both our local crcsum and the global are 'trustworthy', verify them
-         if ( good_crc  &&  !(handle->erasure_state->meta_status[bq->block_number])  &&  
+         if ( good_crc  &&  !(*meta_status)  &&  
                ( local_crcsum != handle->erasure_state->csum[bq->block_number] ) ) {
             *data_status = 1;
             // if the global doesn't match, something very odd is going on with this block.  Best to avoid reading it 
@@ -1171,26 +1167,20 @@ void bq_resume( off_t offset, BufferQueue* bq ) {
    bq->qdepth = 0;
    // Note: we specifically set queue positions to zero to avoid any oddness with queues potentially
    // being misaligned from one another, which will break erasure.
+   // as these buffers are consistently overwritten, we really just need to pretend we read them all
    bq->head = 0;
    bq->tail = 0;
-   // as these buffers are consistently overwritten, we really just need to pretend we read them all
 
-   // special case, if this thread is supposed to be set to skip work
-   if ( offset < 0 ) {
-      bq->offset = 0;
-      bq->state_flags |= BQ_SKIP; // because we hold the lock, we're fine to do this
-   }
-   else {
-      // set the thread to a new offset
+   // use offset of zero in the special case of offset < 0 (unused rebuild thread)
+   bq->offset = 0;
+
+   if ( offset >= 0 ) {
       bq->offset = offset;
-      // clear any previous instance of the skip flag
-      bq->state_flags &= ~(BQ_SKIP);
+      // clear the HALT signal only if we got a valid offset (rebuild will give -1 offset to avoid this)
+      PRINTdbg("clearing 0x%x signal for block %d\n", (uint32_t)BQ_HALT, bq->block_number);
+      bq->con_flags &= ~(BQ_HALT);
+      pthread_cond_signal( &bq->thread_resume );
    }
-
-   // clear the HALT signal
-   PRINTdbg("clearing 0x%x signal for block %d\n", (uint32_t)BQ_HALT, bq->block_number);
-   bq->con_flags &= ~(BQ_HALT);
-   pthread_cond_signal( &bq->thread_resume );
    pthread_mutex_unlock( &bq->qlock );
 }
 
@@ -1490,6 +1480,9 @@ int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
   // bq->buffers[bq->tail] is a pointer to the beginning of the
   // buffer. bq->buffers[bq->tail] + bq->offset should be a pointer to
   // the inside of the buffer.
+  //
+  // Even if this is an unused rebuild thread, we still need to perform 
+  // this memcpy so that the data is available for erasure generation.
   memcpy(bq->buffers[bq->tail]+bq->offset, buf, size);
 
   if(size+bq->offset < bq->buffer_size) {
@@ -1499,14 +1492,18 @@ int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
   }
   else {
     bq->offset = 0;
-    bq->qdepth++;
     bq->tail = (bq->tail + 1) % MAX_QDEPTH;
     PRINTdbg("queued complete buffer for block %d at queue position %d\n", bq->block_number, bq->tail);
-    pthread_cond_signal(&bq->thread_resume);
+    // special case, BQ_HALT indicates an unused rebuild block.
+    // In which case, we want to skip this work
+    if ( !(bq->con_flags & BQ_HALT) ) {
+      bq->qdepth++;
+      pthread_cond_signal(&bq->thread_resume);
+    }
   }
   pthread_mutex_unlock(&bq->qlock);
 
-  return ret;
+  return 0;
 }
 
 
@@ -2344,6 +2341,7 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
           return -1;
         }
         while(bq->qdepth == MAX_QDEPTH) {
+          PRINTdbg("waiting on erasure thread %d\n", i);
           pthread_cond_wait(&bq->master_resume, &bq->qlock);
         }
         if(i == N) {
@@ -2370,9 +2368,12 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
 
       for(i = N; i < handle->erasure_state->N + handle->erasure_state->E; i++) {
         BufferQueue *bq = &handle->blocks[i];
-        bq->qdepth++;
         bq->tail = (bq->tail + 1) % MAX_QDEPTH;
-        pthread_cond_signal(&bq->thread_resume);
+        // special case, skip work when BQ_HALT is set (unused rebuild thread)
+        if ( !(bq->con_flags & BQ_HALT) ) {
+          bq->qdepth++;
+          pthread_cond_signal(&bq->thread_resume);
+        }
         pthread_mutex_unlock(&bq->qlock);
       }
 

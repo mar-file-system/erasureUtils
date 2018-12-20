@@ -292,8 +292,7 @@ typedef enum {
 
 typedef enum {
   BQ_OPEN     = 0x01 << 0, // indicates that this thread has successfully opened its data file
-  BQ_HALTED   = 0x01 << 1, // indicates that this thread is 'paused'
-  BQ_SKIP     = 0x01 << 2  // indicates that this thread is skipping all work assigned to it
+  BQ_HALTED   = 0x01 << 1  // indicates that this thread is 'paused'
 } BQ_State_Flags;
 
 
