@@ -153,6 +153,7 @@ corrupt_file() {
       corrmegab=$(( ($corr / 1048576) + 1 ))
 
       cp $ftocorr $ftocorr".tmp"
+      iter=0
       diff=0
       while [[ $diff -eq 0 ]]; do
          # generate the random source inside this loop, so we get a different set of bytes each time
@@ -182,8 +183,13 @@ corrupt_file() {
          diff $ftocorr $ftocorr".tmp" > /dev/null 2>&1
          diff=$?
          if [[ $diff -eq 0 ]]; then
+            if [[ $iter -gt 4 ]]; then
+               echo "      too many corruption iterations, giving up now"
+               exit -1
+            fi
             echo "      corrption insertion did not alter file, retrying"
          fi
+         iter=$(( iter + 1 ))
       done
       rm $ftocorr".tmp"
       rm "$ftocorr".esource
@@ -293,6 +299,7 @@ while [[ $cnt -lt $ITER ]]; do
 
       stat=0
       tstat=0
+      dstat=0
 
       # Insert Meta Corruption
       nerr=$RANDOM
@@ -369,8 +376,11 @@ while [[ $cnt -lt $ITER ]]; do
             fi
             corrupt_file "$( echo "$EPAT" | sed 's/%d/'"$errpos"'/' )"
             # only note errors which do not align with meta errors and which are removal type or in data blocks
-            if [[ ${met_err_list[$errpos]} -eq 0  &&  ( $? -eq 0  ||  $truepos -lt $n ) ]]; then
-               tstat=$(( tstat + 2**errpos ))
+            if [[ $? -eq 0  ||  $truepos -lt $n ]]; then
+               dstat=$(( dstat + 2**errpos ))
+               if [[ ${met_err_list[$errpos]} -eq 0 ]]; then
+                  tstat=$(( tstat + 2**errpos ))
+               fi
             fi
          fi
       done
@@ -402,8 +412,10 @@ while [[ $cnt -lt $ITER ]]; do
       echo "The combined error pattern for this stripe is : $npat" >> $LOGFILE
       echo "The expected return code for complete error detection is $stat"
       echo "The expected return code for complete error detection is $stat" >> $LOGFILE
-      echo "The minimum acceptible error detection for reads is $tstat"
-      echo "The minimum acceptible error detection for reads is $tstat" >> $LOGFILE
+      echo "The minimum expected error detection for reads is $tstat"
+      echo "The minimum expected error detection for reads is $tstat" >> $LOGFILE
+      echo "The minimum acceptible error detection for reads is $dstat"
+      echo "The minimum acceptible error detection for reads is $dstat" >> $LOGFILE
       echo
       echo >> $LIBTLOG
 
@@ -442,19 +454,27 @@ while [[ $cnt -lt $ITER ]]; do
 
          { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.read
          
-         if [[ ! $ret =~ $re  ||  $ret -gt $stat  ||  $ret -lt $tstat ]]; then
+         if [[ ! $ret =~ $re  ||  $ret -gt $stat  ||  $ret -lt $dstat ]]; then
             # may still be possible to get false failure on silent zero-fill corruption
             echo
+            echo -e "\033[0;31mFAIL - read operation returned an inappropriate status, expected $stat but received $ret"
+            echo -e "Minimum expected status value is $tstat"".  Minimum acceptible value is $dstat."
+            echo -e "CMD = $CMD\033[0m"
+            echo "   FAILURE: read operation returned an inappropriate status, expected $stat but received $ret" >> $LOGFILE
+            echo "CMD = $CMD" >> $LOGFILE
+            exit -1
+         elif [[ $ret -lt $tstat ]]; then
             echo -e "\033[0;33mWARNING - read operation returned an inappropriate status, expected $stat but received $ret"
-            echo -e "Minimum acceptible status value is $tstat"
+            echo -e "The minimum acceptible status value is $dstat."
             echo -e "This may be the result of corruption of the meta crcsum value for an unused/partially used erasure block."
             echo -e "CMD = $CMD\033[0m"
             echo "   WARNING: read operation returned an inappropriate status, expected $stat but received $ret" >> $LOGFILE
             echo "CMD = $CMD" >> $LOGFILE
          elif [[ $ret -lt $stat ]]; then
             echo
-            echo "NOTE - Read operation failed to detect all erasure errors (expected $stat but received $ret)."
+            echo -e "\e[33mNOTE - \e[0mRead operation failed to detect all erasure errors (expected $stat but received $ret)."
             echo "       This is not unusual, as the faulty erasure sections may not have been needed for data recovery."
+            echo "       The minimum expected status value is $tstat."
             echo "       CMD = $CMD"
             echo "   NOTE: read operation failed to detect all erasure errors, expected $stat but received $ret" >> $LOGFILE
             echo "CMD = $CMD" >> $LOGFILE
@@ -511,7 +531,7 @@ while [[ $cnt -lt $ITER ]]; do
             echo "CMD = $CMD" >> $LOGFILE
          elif [[ $ret -lt $stat ]]; then
             echo
-            echo "NOTE - Read operation failed to detect all erasure errors (expected $stat but received $ret)."
+            echo -e "\e[33mNOTE - \e[0mRead operation failed to detect all erasure errors (expected $stat but received $ret)."
             echo "       This is not unusual, as the faulty erasure sections may not have been needed for data recovery."
             echo "       CMD = $CMD"
             echo "   NOTE: read operation failed to detect all erasure errors, expected $stat but received $ret" >> $LOGFILE

@@ -3893,6 +3893,7 @@ int ne_stat1( SnprintfFunc fn, void* state,
                PRINTdbg( "setting N/E to %d/%d after locating %d matching values\n", read_meta_state.N, read_meta_state.E, matches );
                handle->erasure_state->N = read_meta_state.N;
                handle->erasure_state->E = read_meta_state.E;
+               num_blocks = read_meta_state.N + read_meta_state.E;
             }
             else {
                // if we are still within our bounds, just keep extending the stripe, trying to find *something*
@@ -3900,16 +3901,14 @@ int ne_stat1( SnprintfFunc fn, void* state,
                   num_blocks++;
                }
                else {
+                  // otherwise, ENOENT is probably the most applicable failure condition
                   error = 1; // to trigger cleanup below
                   errno = ENOENT;
                }
-               continue;
             }
-
-            num_blocks = read_meta_state.N + read_meta_state.E;
-         }
-      }
-   }
+         } // END OF : if ( (i+1) >= MIN_MD_CONSENSUS )
+      } // END OF : if ( handle->erasure_state->N == 0 )
+   } // END OF : for(i = 0; i < num_blocks; i++)
 
    // in some rare cases (N=1 and E=0 for example), we may have started too many threads
    // terminate those now
