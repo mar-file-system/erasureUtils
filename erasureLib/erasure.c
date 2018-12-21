@@ -568,7 +568,7 @@ void *bq_writer(void *arg) {
     }
 
     if((bq->qdepth == 0) && (bq->con_flags & BQ_FINISHED)) {       // then we are done.
-      PRINTdbg("BQ finished\n");
+      PRINTdbg("BQ_writer completed all work for block %d\n", bq->block_number);
       pthread_mutex_unlock(&bq->qlock);
       break;
     }

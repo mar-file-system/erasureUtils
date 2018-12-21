@@ -276,25 +276,43 @@ select_snprintf(const char* path) {
 void print_erasure_state( e_state state ) {
    PRINTout( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
              state->N, state->E, state->bsz, state->O, (unsigned long long)state->totsz );
-   PRINTout( "Metadata Errors:      " );
+   // this complicated declaration is simply meant to ensure that we have space for 
+   //  a null terminator and up to 5 chars per potential array element
+   char output_string[ (MAXPARTS * 5) + 1 ];
+   output_string[0] = '\0'; // the initial strncat() call will expect a null terminator
    int tmp;
+   int eerr = 0;
+   // construct a list of meta_status array elements for later printing
    for( tmp = 0; tmp < ( state->N + state->E ); tmp++ ){
-      PRINTout( "%d ", state->meta_status[tmp] );
+      if( state->meta_status[tmp] )
+         eerr++;
+      char append_str[6];
+      snprintf( append_str, 6, "%d", state->meta_status[tmp] );
+      strncat( output_string, append_str, 5 );
+      if ( (tmp+1) < (state->N + state->E) )
+         strncat( output_string, " ", 1 );
    }
-   PRINTout( "\n" );
 
-   PRINTout( "Data/Erasure Errors:  " );
+   PRINTout( "%s %s\n", "Metadata Errors:     ", output_string );
+   output_string[0] = '\0'; // this is effectively the same as clearing the string
+
    int nerr = 0;
+   // construct a list of data_status array elements for later printing
    for( tmp = 0; tmp < ( state->N + state->E ); tmp++ ){
       if( state->data_status[tmp] )
          nerr++;
-      PRINTout( "%d ", state->data_status[tmp] );
+      char append_str[6];
+      snprintf( append_str, 6, "%d", state->data_status[tmp] );
+      strncat( output_string, append_str, 5 );
+      if ( (tmp+1) < (state->N + state->E) )
+         strncat( output_string, " ", 1 );
    }
-   PRINTout( "\n" );
 
-   if( nerr > state->E )
+   PRINTout( "%s %s\n", "Data/Erasure Errors: ", output_string );
+
+   if( nerr > state->E  ||  eerr > state->E )
       PRINTlog( "WARNING: the data may be unrecoverable!\n" );
-   else if ( nerr > 0 )
+   else if ( nerr > 0  ||  eerr > 0 )
       PRINTlog( "WARNING: errors were found, be sure to rebuild this object before data loss occurs!\n" );
 }
 
