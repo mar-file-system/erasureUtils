@@ -658,10 +658,13 @@ int main( int argc, const char** argv )
    srand(time(NULL));
 
    // allocate space for a data buffer and zero out so that we could zero write using it
-   buff = memset( malloc( sizeof(char) * buff_size ), 0, buff_size );
-   if ( buff == NULL ) {
-      PRINTlog( "libneTest: failed to allocate space for a data buffer\n" );
-      return -1;
+   buff = NULL;
+   if ( output_file != NULL  ||  wr == 1 ) { // only allocate this buffer if we are writing to something
+      buff = memset( malloc( sizeof(char) * buff_size ), 0, buff_size );
+      if ( buff == NULL ) {
+         PRINTlog( "libneTest: failed to allocate space for a data buffer\n" );
+         return -1;
+      }
    }
 
    int std_fd = 0; // no way this FD gets reused, so safe to initialize to this
@@ -676,7 +679,8 @@ int main( int argc, const char** argv )
          PRINTlog( "libneTest: failed to open output file \"%s\": errno=%d (%s)\n", output_file, errno, strerror(errno) );
       else
          PRINTlog( "libneTest: failed to open input file \"%s\": errno=%d (%s)\n", input_file, errno, strerror(errno) );
-      free( buff );
+      if ( buff )
+         free( buff );
       return -1;
    }
 
@@ -709,7 +713,8 @@ int main( int argc, const char** argv )
    // check for a successful open of the handle
    if ( handle == NULL ) {
       PRINTlog( "libneTest: failed to open the requested erasure path for a %s operation: errno=%d (%s)\n", operation, errno, strerror(errno) );
-      free( buff );
+      if ( buff )
+         free( buff );
       return -1;
    }
 
@@ -734,12 +739,14 @@ int main( int argc, const char** argv )
       else if ( wr != 1 ) { // read/verify get data from the erasure stripe
          PRINTdbg("libneTest: reading %llu bytes from erasure stripe\n", toread );
          nread = ne_read( handle, buff, toread, bytes_moved );
+         // Note: if buff is NULL here, retrieved data will simply be thrown out
       }
 
       // check for a read error
       if ( (nread < 0)  ||  ( (size_arg) && (nread < toread) ) ) {
          PRINTlog( "libneTest: expected to read %llu bytes from source, but instead received %zd: errno=%d (%s)\n", toread, nread, errno, strerror(errno) );
-         free( buff );
+         if ( buff )
+            free( buff );
          ne_close( handle );
          if ( std_fd )
             close( std_fd );
@@ -760,7 +767,8 @@ int main( int argc, const char** argv )
       // check for a write error
       if ( nread != written ) {
          PRINTlog( "libneTest: expected to write %llu bytes to destination, but instead wrote %zd: errno=%d (%s)\n", nread, written, errno, strerror(errno) );
-         free( buff );
+         if ( buff )
+            free( buff );
          ne_close( handle );
          if ( std_fd )
             close( std_fd );
@@ -796,8 +804,9 @@ int main( int argc, const char** argv )
          PRINTlog( "libneTest: encountered an error when trying to close output file\n" );
    }
       
-   // free our work buffer
-   free( buff );
+   // free our work buffer, if we allocated one
+   if ( buff )
+      free( buff );
 
    // close the handle and indicate it's close condition
    tmp = ne_close( handle );

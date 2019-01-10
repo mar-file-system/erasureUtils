@@ -2179,10 +2179,12 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
          if ( cur_block >= skip_blocks  &&  cur_block < N ) {
             // if so, copy it to our output buffer
             size_t to_copy = ( (bsz - offset) > nbytes ) ? nbytes : (bsz - offset);
-            // as no one but ne_read should be adjusting the head position, and we have already verified that this buffer is ready, 
-            // we can safely copy from it without holding the queue lock
-            PRINTdbg( "copying %zd bytes from thread %d's buffer at position %d to the output buff\n", to_copy, cur_block, bq->head );
-            memcpy( buffer + bytes_read, bq->buffers[bq->head] + offset, to_copy );
+            if ( buffer ) { // only actually copy out the data if we have a valid buffer
+               // as no one but ne_read should be adjusting the head position, and we have already verified that this buffer is ready, 
+               // we can safely copy from it without holding the queue lock
+               PRINTdbg( "copying %zd bytes from thread %d's buffer at position %d to the output buff\n", to_copy, cur_block, bq->head );
+               memcpy( buffer + bytes_read, bq->buffers[bq->head] + offset, to_copy );
+            }
             nbytes -= to_copy;
             bytes_read += to_copy;
             offset = 0; // as we have copied from the first applicable value, this offset is no longer relevant
