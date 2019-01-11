@@ -551,6 +551,10 @@ void *bq_writer(void *arg) {
                PRINTerr( "thread %d is entering an unwritable state (seek error)\n", bq->block_number );
                *data_status = 1;
             }
+            else {
+               PRINTdbg( "thread %d has successfully reseeked its output file and will reset any data errors\n", bq->block_number );
+               *data_status = 0; // a successful reseek to zero and a good file descriptor means we can safely attempt writes again
+            }
          }
       }
     }
@@ -687,7 +691,7 @@ void *bq_writer(void *arg) {
        *meta_status = 1;   // skipping any attempt to set the meta info
     }
     else if ( (*data_status) ) {
-       PRINTerr("early termination due to error for block %d\n", bq->block_number);
+       PRINTerr("early termination due to previous data error for block %d\n", bq->block_number);
        *meta_status = 1;   // skipping any attempt to set the meta info
     }
     else {
@@ -1513,12 +1517,8 @@ int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
     bq->offset = 0;
     bq->tail = (bq->tail + 1) % MAX_QDEPTH;
     PRINTdbg("queued complete buffer for block %d at queue position %d\n", bq->block_number, bq->tail);
-    // special case, BQ_HALT indicates an unused rebuild block.
-    // In which case, we want to skip this work
-    if ( !(bq->con_flags & BQ_HALT) ) {
-      bq->qdepth++;
-      pthread_cond_signal(&bq->thread_resume);
-    }
+    bq->qdepth++;
+    pthread_cond_signal(&bq->thread_resume);
   }
   pthread_mutex_unlock(&bq->qlock);
 
@@ -1927,7 +1927,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
      return -1;
    }
 
-   if ( handle->mode != NE_RDONLY  &&  handle->mode != NE_RDALL ) {
+   if ( handle->mode != NE_RDONLY  &&  handle->mode != NE_RDALL  &&  handle->mode != NE_REBUILD ) {
       PRINTerr( "ne_read: handle is in improper mode for reading!\n" );
       errno = EPERM;
       return -1;
@@ -2007,14 +2007,21 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
       unsigned char stripe_err_list[MAXPARTS] = { 0 };
       int nstripe_errors = 0;
       int nsrcerr = 0;
-      int ethreads_checked = 0;
       size_t to_read_in_stripe = ( nbytes % stripesz ) - offset;
+      // Note: It is ESSENTIAL for rebuilds that this 'read_full_stripe' remains zero if the read request exactly aligns to 
+      //  the end of the stripe.
       char read_full_stripe = ( (offset + nbytes) > stripesz ) ? 1 : 0;
       int cur_block = 0;
       int skip_blocks = (int)( offset / bsz ); // determine how many blocks we need to skip over to hit the first requested data
       offset = offset % bsz; // adjust offset to be that within the first requested block
 
       PRINTdbg( "preparing to read from stripe %d beginning at offset %zd in block %d\n", cur_stripe, offset, skip_blocks );
+
+      // sanity check, to ensure rebuilds are reading at stripe alignments only
+      if ( handle->mode == NE_REBUILD  &&  read_full_stripe ) {
+         PRINTerr( "detected an attempt to read beyond a single stripe during a rebuild operation, which is not permitted\n" );
+         return -1;
+      }
 
 // ---------------------- VERIFY INTEGRITY OF ALL BLOCKS IN STRIPE ----------------------
 
@@ -2027,7 +2034,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
       // only be the slightest of performance hits.  Besides, in the expected 
       // use case of reading a file start to finish, we'll eventually need this 
       // entire stripe regardless.
-      while ( nstripe_errors > ethreads_checked  ||  cur_block < N ) {
+      while ( nstripe_errors > handle->ethreads_running  ||  cur_block < N ) {
          // check if we can even handle however many errors we've hit so far
          if ( nstripe_errors > E ) {
             PRINTdbg( "stripe %d has too many data errors (%d) to be recovered\n", cur_stripe, nstripe_errors );
@@ -2040,12 +2047,11 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
             resume_threads( (off_t)cur_stripe * ( bsz + sizeof(u32) ), handle, threads_to_start, N + handle->ethreads_running );
             handle->ethreads_running += threads_to_start;
          }
-         ethreads_checked = nstripe_errors; //we will be checking as many erasure blocks as there are errors
 
          // we now need to check each needed block for errors.
          // Note that neglecting to reassign cur_block in this loop allows us to avoid 
          // rechecking threads when the outer while-loop repeats.
-         for ( ; cur_block < (N+ethreads_checked); cur_block++ ) {
+         for ( ; cur_block < (N + handle->ethreads_running); cur_block++ ) {
             if ( pthread_mutex_lock( &handle->blocks[cur_block].qlock ) ) {
                PRINTerr( "failed to acquire queue lock for erasure thread %d\n", cur_block );
                return -1;
@@ -2067,9 +2073,11 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
                stripe_in_err[cur_block] = 1;
                // we just need to note the error, nothing to be done about it until we have all buffers ready
             }
+
+            // make sure to note the number of data errors for later erasure use
+            if ( cur_block == (N - 1) )
+               nsrcerr = nstripe_errors;
          }
-         if ( !(ethreads_checked) )
-            nsrcerr = nstripe_errors; // stash the number of data blocks in error for later erasure use
          PRINTdbg( "have checked %d blocks in stripe %d for errors\n", cur_block, cur_stripe );
       }
 
@@ -2092,7 +2100,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
 // ---------------------- REGENERATE FAULTY BLOCKS FROM ERASURE ----------------------
 
       // if necessary, engage erasure code to regenerate the missing buffers
-      if ( nstripe_errors ) {
+      if ( nsrcerr  ||  ( handle->mode == NE_REBUILD  &&  nstripe_errors ) ) {
 
          // check if our erasure_state has changed, and invalidate our erasure_structs if so
          for ( cur_block = 0; cur_block < (N + E); cur_block++ ) {
@@ -2390,14 +2398,11 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
       }
 
       for(i = N; i < handle->erasure_state->N + handle->erasure_state->E; i++) {
-        BufferQueue *bq = &handle->blocks[i];
-        bq->tail = (bq->tail + 1) % MAX_QDEPTH;
-        // special case, skip work when BQ_HALT is set (unused rebuild thread)
-        if ( !(bq->con_flags & BQ_HALT) ) {
-          bq->qdepth++;
-          pthread_cond_signal(&bq->thread_resume);
-        }
-        pthread_mutex_unlock(&bq->qlock);
+         BufferQueue *bq = &handle->blocks[i];
+         bq->tail = (bq->tail + 1) % MAX_QDEPTH;
+         bq->qdepth++;
+         pthread_cond_signal(&bq->thread_resume);
+         pthread_mutex_unlock(&bq->qlock);
       }
 
       //now that we have written out all data, reset buffer
@@ -3150,7 +3155,8 @@ int ne_close( ne_handle handle )
 
 
    /* flush the handle buffer if necessary */
-   if ( ( handle->mode == NE_WRONLY  ||  handle->mode == NE_REBUILD )  &&  handle->buff_rem != 0 ) {
+   if ( handle->mode == NE_WRONLY  &&  handle->buff_rem != 0 ) {
+      // Note: this should be skipped for rebuilds
       int tmp;
       unsigned char* zero_buff;
       PRINTdbg( "ne_close: flushing handle buffer...\n" );
@@ -3199,7 +3205,7 @@ int ne_close( ne_handle handle )
       }
    }
 
-   if( (UNSAFE(handle,nerr) && handle->mode == NE_WRONLY) ) {
+   if( UNSAFE(handle,nerr)  &&  ( handle->mode == NE_WRONLY  ||  handle->mode == NE_REBUILD ) ) {
       PRINTdbg( "ne_close: detected unsafe error levels following write operation\n" );
       errno = EIO;
       ret = -1;
@@ -3405,15 +3411,10 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
    int O = erasure_state_read->O;
    u32 bsz = erasure_state_read->bsz;
    u64 totsz = erasure_state_read->totsz; // this will be used for determining when to stop, rather than for populating our write structs
-   // allocate a buffer for moving data between the two handles
-   size_t buff_size = bsz * N;
-   void* data_buff = malloc( sizeof(char) * buff_size ); // reading a whole stripe at a time is probably most efficient
-   if ( data_buff == NULL ) {
-      PRINTerr( "ne_rebuild: failed to allocate space for a stripe buffer\n" );
-      ne_close( read_handle );
-      errno = ENOMEM;
-      return -1;
-   }
+
+   // now that handle initialization is complete, we can explicitly indicate to the read handle that this is a rebuild operation, 
+   //  requiring the regeneration of all erasure data
+   read_handle->mode = NE_REBUILD;
 
 // ---------------------- OPEN THE SAME STRIPE FOR OUTPUT ----------------------
 
@@ -3435,7 +3436,7 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
    erasure_state_write->O = O;
    erasure_state_write->bsz = bsz;
 
-   // this will handle allocating a handle and setting value (we can pass in NE_REBUILD here to use the proper suffix for writes)
+   // this will handle allocating a handle and setting values (we can pass in NE_REBUILD here to use the proper suffix for writes)
    ne_handle write_handle = create_handle( fn, state, itype, auth,
                                            timing_flags, timing_data,
                                            path, NE_REBUILD, erasure_state_write );
@@ -3478,6 +3479,7 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
          }
       }
    }
+   // check for a failure to get uid/gid, but don't bother to stop the rebuild
    if ( i == (N + E) )
       PRINTerr( "failed to determine proper uid/gid for rebuilt parts\n" );
 
@@ -3493,11 +3495,15 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
    // Now, we need to loop over all data, until the entire file has been successfully read and re-written as necessary
    while ( !(all_rebuilt) ) {
 
+      char err_out = 0; // use this flag to indicate a hard failure condition
+
       PRINTdbg( "performing iteration %d of the rebuild process\n", iterations + 1 );
       // We should only have to read the original a maximum of two times.  Once to detect all data errors, and 
       // a second time to output all regenerated blocks.  Any more than that is suspicious and should be reported.
-      if ( iterations > 1 )
+      if ( iterations > 1 ) {
+         err_out = 1;
          break;
+      }
 
 // ---------------------- DEACTIVATE UNNEEDED OUTPUT THREADS ----------------------
 
@@ -3506,10 +3512,9 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
       // rebuilt.  This will prevent any data from being written to them until needed.  Setting their error state like 
       // this should also allow us to bypass having the blocks considered 'bad' at close time of write_handle.
       signal_threads( BQ_HALT, write_handle, N+E, 0 ); // halt all write threads
-      // explicitly clear fields set by ne_write()
+      // explicitly clear fields set during the writing process
       write_handle->erasure_state->nsz = 0;
       write_handle->erasure_state->totsz = 0;
-      write_handle->buff_rem = 0;
       for ( i = 0; i < (N + E); i++ ) {
          BufferQueue* bq = &write_handle->blocks[i];
          if ( erasure_state_read->meta_status[i] || erasure_state_read->data_status[i] ) {
@@ -3532,26 +3537,49 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
 // ---------------------- REPAIR DAMAGED BLOCKS ----------------------
 
       off_t bytes_repaired = 0; // keep track of how much of the file has successfully been repaired
-      char err_out = 0; // use this flag to indicate a hard failure condition
+      // Note: it is ESSENTIAL, that the ne_read calls performed during rebuilds perfectly align to the stripe width.  Any larger, and 
+      //  buffers may be removed from queues before we can use them for reconstructing damaged files.
+      size_t buff_size = bsz * N;
 
       // this loop will actually perform the data movement
       while ( bytes_repaired < totsz ) {
-         size_t bytes_to_copy = ( ( (buff_size+bytes_repaired) > totsz ) ? ( totsz - bytes_repaired ) : buff_size );
          // read the bytes from the original file
-         PRINTdbg( "reading %zd bytes from original file\n", bytes_to_copy );
-         if ( ne_read( read_handle, data_buff, bytes_to_copy, bytes_repaired ) != bytes_to_copy ) {
-            PRINTerr( "ne_rebuild: failed to read %zd bytes at offset %zd from the original stripe\n", bytes_to_copy, bytes_repaired );
+         PRINTdbg( "reading %zd bytes from original file\n", buff_size );
+         off_t bytes_read = ne_read( read_handle, NULL, buff_size, bytes_repaired );
+         // check for an under-read
+         if ( bytes_read < buff_size ) {
+            if( bytes_read < 0 ) {
+               PRINTerr( "ne_rebuild: failed to read %zd bytes at offset %zd from the original stripe\n", buff_size, bytes_repaired );
+               err_out = 1;
+               break;
+            }
+            // an under-read is expected at the end of the file.  Anywhere else is a problem.
+            if ( (bytes_repaired + bytes_read) < totsz ) {
+               PRINTerr( "ne_rebuild: read at offset %zd returned fewer bytes than expected (%zd instead of %zd)\n", bytes_repaired, bytes_read, (totsz - bytes_repaired) );
+               err_out = 1;
+               break;
+            }
+            PRINTdbg( "received %zd bytes instead of a full stripe (%zd bytes), indicating end of file\n", bytes_read, buff_size );
+         }
+         // sanity check, to ensure we are reading at stripe alignments
+         if ( read_handle->buff_offset != bytes_repaired ) {
+            PRINTerr( "ne_rebuild: expected a read handle offset of %zd following a stripe rebuild, but instead found %zd\n", bytes_repaired, read_handle->buff_offset );
             err_out = 1;
             break;
          }
-         // then write it fresh out to the repaired blocks
-         PRINTdbg( "writing %zd bytes to the rebulding blocks\n", bytes_to_copy );
-         if ( ne_write( write_handle, data_buff, bytes_to_copy ) != bytes_to_copy ) {
-            PRINTerr( "ne_rebuild: failed to write %zd bytes at offset %zd to the repaired blocks\n", bytes_to_copy, bytes_repaired );
-            err_out = 1;
-            break;
+         // then write reconstructed buffers out to the repairing blocks
+         for ( i = 0; i < (N + E); i++ ) {
+            if ( being_rebuilt[i] ) {
+               PRINTdbg( "writing %zd bytes to rebulding block %d\n", bsz, i );
+               BufferQueue* bq_read =  &read_handle->blocks[i];
+               BufferQueue* bq_write = &write_handle->blocks[i];
+               bq_enqueue( bq_write, bq_read->buffers[ bq_read->head ], bsz );
+            }
          }
-         bytes_repaired += bytes_to_copy;
+         // increment write handle values
+         write_handle->erasure_state->nsz += bsz;
+         write_handle->erasure_state->totsz += bytes_read;
+         bytes_repaired += bytes_read;
       }
       iterations++; // note that we have read the original again
 
@@ -3576,7 +3604,6 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
 
    PRINTdbg( "exited rebuild loop after %d iterations\n", iterations );
 
-   free( data_buff );
    ne_close( read_handle );
    if ( !(all_rebuilt) ) { // error conditions should have left this at zero
       PRINTdbg( "aborting all write threads due to rebuild error\n" );
@@ -3587,6 +3614,7 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
    }
 
    // finalize our rebuilt blocks
+   // this close should skip writing out any zero-fill.  We have already handled those blocks above.
    return ne_close(write_handle); // the error pattern returned by ne_close() should now indicate the state of the stripe
 }
 
