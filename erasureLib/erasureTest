@@ -322,12 +322,6 @@ while [[ $cnt -lt $ITER ]]; do
     
          nerr=$RANDOM
          let "nerr %= $(( e + 1 ))"
-         if [[ $nerr -eq 0 ]]; then
-            if [[ $dat_err_free -eq 1 ]]; then
-               nerr=$e
-            fi
-            dat_err_free=1
-         fi
 
          # only accept a stripe without errors if we have not already tried it
          if [[ $nerr -ne 0  ||  $nerr_met -ne 0 ]]; then
