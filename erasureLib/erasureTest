@@ -115,9 +115,19 @@ fi
 # corruption insertion function
 corrupt_file() {
    ftocorr="$1"
+   secondary_backup="$2"
    echo "   Corrupting file \"$ftocorr\"..."
    echo "      creating backup of $ftocorr"
    cp $ftocorr "$ftocorr".backup
+
+   extra_backup="$ftocorr".meta
+   if [[ "$ftocorr" =~ .meta$ ]]; then
+      extra_backup=$( echo "$ftocorr" | sed 's/\.meta$//' )
+   fi
+   if [[ $secondary_backup -eq 1 ]]; then
+      echo "      creating a backup of $extra_backup"
+      cp "$extra_backup" "$extra_backup".backup
+   fi
 
    ctype=$(( RANDOM % (3-ICRC) ))
    if [[ $ctype -eq 0 ]]; then
@@ -259,8 +269,7 @@ while [[ $cnt -lt $ITER ]]; do
    start=$RANDOM
    let "start %= $(( n + e ))"
 
-   met_err_free=0
-   dat_err_free=0
+   err_free=0
 
    echo
    echo -e "\e[34mGenerating $n+$e striping starting at file $start...\e[0m"
@@ -280,7 +289,6 @@ while [[ $cnt -lt $ITER ]]; do
    echo "   stripe generation complete" >> $LOGFILE
    echo
    ls $( echo "$EPAT" | sed 's/%d/\*/' )
-   echo
 
    incnt=0
    while [[ $incnt -lt $INITER ]]; do
@@ -290,7 +298,6 @@ while [[ $cnt -lt $ITER ]]; do
          echo -e "\e[34mContinuing with the same $n+$e start position $start stripe...\e[0m"
          echo >> $LOGFILE
          echo "Continuring to use $n+$e striping with start $start..." >> $LOGFILE
-         echo
       fi
 
       met_err_list=( 0 )
@@ -301,25 +308,50 @@ while [[ $cnt -lt $ITER ]]; do
       tstat=0
       dstat=0
 
-      # Insert Meta Corruption
-      nerr=$RANDOM
-      let "nerr %= $(( e + 1 ))"
-      if [[ $nerr -eq 0 ]]; then
-         if [[ $met_err_free -eq 1 ]]; then
-            nerr=$e
+      # Determine error counts
+      nerr_met=0
+      nerr=0
+
+      while true; do
+         nerr_met=$RANDOM
+         let "nerr_met %= $(( e + 1 ))"
+         if [[ $nerr_met -eq $(( n + e - 1 )) ]]; then
+            # special case, we can't leave only a single valid meta file, as there is no guaratee we will get correct values then
+            nerr_met=$(( nerr_met - 1 ))
          fi
-         met_err_free=1
-      fi
-      if [[ $nerr -eq $(( n + e - 1 )) ]]; then
-         # special case, we can't leave only a single valid meta file, as there is no guaratee we will get correct values then
-         nerr=$(( nerr - 1 ))
-      fi
+    
+         nerr=$RANDOM
+         let "nerr %= $(( e + 1 ))"
+         if [[ $nerr -eq 0 ]]; then
+            if [[ $dat_err_free -eq 1 ]]; then
+               nerr=$e
+            fi
+            dat_err_free=1
+         fi
+
+         # only accept a stripe without errors if we have not already tried it
+         if [[ $nerr -ne 0  ||  $nerr_met -ne 0 ]]; then
+            break
+         elif [[ $err_free -eq 0 ]]; then
+            err_free=1
+            break
+         fi
+         echo "Re-randomizing error counts to avoid pristine stripe"
+      done
+      echo
+
+      # Insert Meta Corruption
       errcnt=0
 
-      echo "$nerr meta error(s) are to be inserted..."
-      echo "Inserting $nerr meta error(s)..." >> $LOGFILE
+      echo "$nerr_met meta error(s) are to be inserted..."
+      echo "Inserting $nerr_met meta error(s)..." >> $LOGFILE
 
-      while [[ $errcnt -lt $nerr ]]; do
+      # these are used to note locations with potential silent global crc errors
+      # we must make sure not to leave so many of these that the stripe becomes unrecoverable
+      silent_met_err_cnt=0
+      silent_met_err_list=( 0 )
+
+      while [[ $errcnt -lt $nerr_met ]]; do
          errpos=$RANDOM
          let "errpos %= $(( n + e ))"
          if [[ ${met_err_list[$errpos]} -eq 0 ]]; then
@@ -328,7 +360,11 @@ while [[ $cnt -lt $ITER ]]; do
             met_err_list[$errpos]=1
             stat=$(( stat + 2**errpos ))
             tstat=$(( tstat + 2**errpos ))
-            corrupt_file "$( echo "$EPAT" | sed 's/%d/'"$errpos"'/' | sed 's/$/.meta/' )"
+            corrupt_file "$( echo "$EPAT" | sed 's/%d/'"$errpos"'/' | sed 's/$/.meta/' )" 1
+            if [[ $? -eq 2 ]]; then
+               (( silent_met_err_cnt++ ))
+               silent_met_err_list[$errpos]=1
+            fi
          fi
       done
 
@@ -344,16 +380,8 @@ while [[ $cnt -lt $ITER ]]; do
       echo "Meta error insertion complete, pattern is : $npat"
       echo "Meta errors inserted, pattern is  $npat" >> $LOGFILE
 
- 
+
       # Insert Data Corruption
-      nerr=$RANDOM
-      let "nerr %= $(( e + 1 ))"
-      if [[ $nerr -eq 0 ]]; then
-         if [[ $dat_err_free -eq 1 ]]; then
-            nerr=$e
-         fi
-         dat_err_free=1
-      fi
       errcnt=0
 
       echo "$nerr data error(s) are to be inserted..."
@@ -362,6 +390,22 @@ while [[ $cnt -lt $ITER ]]; do
       while [[ $errcnt -lt $nerr ]]; do
          errpos=$RANDOM
          let "errpos %= $(( n + e ))"
+         # special checks to avoid the possiblity of a silent global crc error rendering the stripe unrecoverable
+         if [[ ${silent_met_err_list[$errpos]} -eq 0  &&  $(( 1 + errcnt + silent_met_err_cnt )) -gt $e ]]; then
+            echo "ERROR AT POSTION $errpos MAY RESULT IN UNRECOVERABLE STRIPE"
+            for errpos in $(seq 0 $(( n + e - 1 )) ); do
+               if [[ ${silent_met_err_list[$errpos]} -ne 0 ]]; then
+                  break;
+               fi
+            done
+            echo "RELOCATING ERROR TO POSTION $errpos"
+            silent_met_err_list[$errpos]=0
+            (( silent_met_err_cnt-- ))
+         elif [[ ${silent_met_err_list[$errpos]} -ne 0 ]]; then
+            # if we'er corrupting a block with silent meta corruption, we don't need to worry about that location any more
+            silent_met_err_list[$errpos]=0
+            (( silent_met_err_cnt-- ))
+         fi
          if [[ ${dat_err_list[$errpos]} -eq 0 ]]; then
             # only corrupt the file if we are hitting a new postion
             truepos=$(( errpos - start ))
@@ -370,13 +414,19 @@ while [[ $cnt -lt $ITER ]]; do
             fi
             errcnt=$(( errcnt + 1 ))
             dat_err_list[$errpos]=1
+            cor_type=0
             # if there are no previous errors at this postion, note it for rc checking
             if [[ ${met_err_list[$errpos]} -eq 0 ]]; then
                stat=$(( stat + 2**errpos ))
+               corrupt_file "$( echo "$EPAT" | sed 's/%d/'"$errpos"'/' )" 1
+               cor_type=$?
+            else
+               # make sure not to create a backup '.meta' file if we have already corrupted it
+               corrupt_file "$( echo "$EPAT" | sed 's/%d/'"$errpos"'/' )" 0
+               cor_type=$?
             fi
-            corrupt_file "$( echo "$EPAT" | sed 's/%d/'"$errpos"'/' )"
             # only note errors which do not align with meta errors and which are removal type or in data blocks
-            if [[ $? -eq 0  ||  $truepos -lt $n ]]; then
+            if [[ $cor_type -eq 0  ||  $truepos -lt $n ]]; then
                dstat=$(( dstat + 2**errpos ))
                if [[ ${met_err_list[$errpos]} -eq 0 ]]; then
                   tstat=$(( tstat + 2**errpos ))
@@ -540,37 +590,37 @@ while [[ $cnt -lt $ITER ]]; do
          echo "read completed"
          echo
 
-         if [[ $npat == *"1"* ]]; then
-            echo >> $LIBTLOG
-            echo -n "Attempting error recovery..."
-            echo "Attempting error recovery..." >> $LOGFILE
+         echo >> $LIBTLOG
+         echo -n "Attempting error recovery..."
+         echo "Attempting error recovery..." >> $LOGFILE
 
-            noinfo=$RANDOM
-            let "noinfo %= 2"
+         noinfo=$RANDOM
+         let "noinfo %= 2"
 
-            CMD="./libneTest rebuild $EPAT $n $e $start"
-            
-            if [[ $noinfo -eq 1 ]]; then
-               echo -n "ignoring stripe state for this rebuild..."
-               echo "   Using '-n' option to perform rebuild while ignoring stripe state..." >> $LOGFILE
-               CMD="./libneTest rebuild $EPAT -n"
-            fi
+         CMD="./libneTest rebuild $EPAT $n $e $start"
+         
+         if [[ $noinfo -eq 1 ]]; then
+            echo -n "ignoring stripe state for this rebuild..."
+            echo "   Using '-n' option to perform rebuild while ignoring stripe state..." >> $LOGFILE
+            CMD="./libneTest rebuild $EPAT -n"
+         fi
 
-            { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.recovery
+         { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.recovery
 
 
-            #if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
-            if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
-               echo
-               echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of 0 but received $ret"
-               echo -e "CMD = $CMD\033[0m"
-               echo "   FAILURE: an error occured within ne_rebuild, expected return of 0 but received $ret" >> $LOGFILE
-               echo "CMD = $CMD" >> $LOGFILE
-               exit $ret
-            fi
-            echo "rebuild completed"
+         #if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
+         if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
             echo
+            echo -e "\033[0;31mFAIL - ne_rebuild has failed, expected return of 0 but received $ret"
+            echo -e "CMD = $CMD\033[0m"
+            echo "   FAILURE: an error occured within ne_rebuild, expected return of 0 but received $ret" >> $LOGFILE
+            echo "CMD = $CMD" >> $LOGFILE
+            exit $ret
+         fi
+         echo "rebuild completed"
+         echo
 
+         if [[ $npat == *"1"* ]]; then
             ls $( echo "$EPAT*" | sed 's/%d/\*/' ) | while read -r line; do
                if [[ -e "$line".backup ]]; then
                   echo -n "Performing comparison against original file = \"""$line"".backup\"..."
