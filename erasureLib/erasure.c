@@ -3547,7 +3547,7 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
          PRINTdbg( "reading %zd bytes from original file\n", buff_size );
          off_t bytes_read = ne_read( read_handle, NULL, buff_size, bytes_repaired );
          // check for an under-read
-         if ( bytes_read < buff_size ) {
+         if ( bytes_read < (off_t)buff_size ) { // the off_t cast is needed to ensure bytes_read is not autocast to an unsigned value
             if( bytes_read < 0 ) {
                PRINTerr( "ne_rebuild: failed to read %zd bytes at offset %zd from the original stripe\n", buff_size, bytes_repaired );
                err_out = 1;
