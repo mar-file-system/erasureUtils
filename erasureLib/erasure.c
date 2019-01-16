@@ -1177,7 +1177,7 @@ void signal_threads( BQ_Control_Flags flag, ne_handle handle, int thread_cnt, in
 
 // Used to resume a specific thread.
 // Pulled out into a seperate func to allow ne_rebuild1_vl() to call it directly
-void bq_resume( off_t offset, BufferQueue* bq ) {
+void bq_resume( off_t offset, BufferQueue* bq, int queue_position ) {
    // TODO: should probably give these funcs a return value and actually do 
    // some error checking for this lock call
    pthread_mutex_lock( &bq->qlock );
@@ -1188,11 +1188,11 @@ void bq_resume( off_t offset, BufferQueue* bq ) {
 
    // now that the thread is suspended, clear out the buffer queue
    bq->qdepth = 0;
-   // Note: we specifically set queue positions to zero to avoid any oddness with queues potentially
+   // Note: we set queue positions to a specific value in order to avoid any oddness with queues potentially
    // being misaligned from one another, which will break erasure.
    // as these buffers are consistently overwritten, we really just need to pretend we read them all
-   bq->head = 0;
-   bq->tail = 0;
+   bq->head = queue_position;
+   bq->tail = queue_position;
 
    // use offset of zero in the special case of offset < 0 (unused rebuild thread)
    bq->offset = 0;
@@ -1208,12 +1208,12 @@ void bq_resume( off_t offset, BufferQueue* bq ) {
 }
 
 
-void resume_threads( off_t offset, ne_handle handle, int thread_cnt, int thread_offset ) {
+void resume_threads( off_t offset, ne_handle handle, int thread_cnt, int thread_offset, int queue_position ) {
    int i;
    /* wait for the threads */
    for(i = thread_offset; i < (thread_offset + thread_cnt); i++) {
       BufferQueue* bq = &handle->blocks[i];
-      bq_resume( offset, bq );
+      bq_resume( offset, bq, queue_position );
    }
 }
 
@@ -1472,11 +1472,11 @@ static int initialize_queues(ne_handle handle) {
 
    // finally, we have to give all necessary read threads the go-ahead to begin
    if( handle->mode == NE_RDONLY ) {
-      resume_threads( 0, handle, handle->erasure_state->N, 0 );
+      resume_threads( 0, handle, handle->erasure_state->N, 0, 0 );
    }
    else if ( handle->mode == NE_RDALL ) {
       // for NE_RDALL, we immediately start both data and erasure threads
-      resume_threads( 0, handle, handle->erasure_state->N + handle->erasure_state->E, 0 );
+      resume_threads( 0, handle, handle->erasure_state->N + handle->erasure_state->E, 0, 0 );
       handle->ethreads_running  = handle->erasure_state->E;
    }
 
@@ -1949,7 +1949,7 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
       PRINTdbg( "new offset of %zd will require threads to reseek\n", offset );
       // we need to halt all threads and trigger a reseek
       signal_threads( BQ_HALT, handle, N+E, 0 );
-      resume_threads( (off_t)cur_stripe * ( bsz + sizeof(u32) ), handle, N + handle->ethreads_running, 0 );
+      resume_threads( (off_t)cur_stripe * ( bsz + sizeof(u32) ), handle, N + handle->ethreads_running, 0, 0 );
    }
    else {
       // we may still be at least a few stripes behind the given offset.  Calculate how many.
@@ -2034,7 +2034,8 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
       // only be the slightest of performance hits.  Besides, in the expected 
       // use case of reading a file start to finish, we'll eventually need this 
       // entire stripe regardless.
-      while ( nstripe_errors > handle->ethreads_running  ||  cur_block < N ) {
+      int ethreads_to_check = 0;
+      while ( nstripe_errors > ethreads_to_check  ||  cur_block < N ) {
          // check if we can even handle however many errors we've hit so far
          if ( nstripe_errors > E ) {
             PRINTdbg( "stripe %d has too many data errors (%d) to be recovered\n", cur_stripe, nstripe_errors );
@@ -2044,14 +2045,20 @@ ssize_t ne_read( ne_handle handle, void *buffer, size_t nbytes, off_t offset ) {
          int threads_to_start = (nstripe_errors - handle->ethreads_running); // previous check should insure we don't start more than E
          if ( threads_to_start > 0 ) { // ignore possible negative value
             PRINTdbg( "starting up %d erasure threads at offset (%zd) to cope with data errors\n", threads_to_start, (off_t)cur_stripe * bsz );
-            resume_threads( (off_t)cur_stripe * ( bsz + sizeof(u32) ), handle, threads_to_start, N + handle->ethreads_running );
+            // when starting up erasure threads, use block-zero's head position to keep us aligned to the rest of the stripe
+            // as the thread itself should never adjust head position, we should be safe to reference it without a lock
+            resume_threads( (off_t)cur_stripe * ( bsz + sizeof(u32) ), handle, threads_to_start, N + handle->ethreads_running, handle->blocks[0].head );
             handle->ethreads_running += threads_to_start;
          }
+
+         // limith the number of erasure blocks we verify to the number we need for data regeneration... 
+         // ...unless we are reading for a rebuild op, then we need the entire stripe.
+         ethreads_to_check = ( handle->mode == NE_REBUILD ) ? handle->erasure_state->E : nstripe_errors;
 
          // we now need to check each needed block for errors.
          // Note that neglecting to reassign cur_block in this loop allows us to avoid 
          // rechecking threads when the outer while-loop repeats.
-         for ( ; cur_block < (N + handle->ethreads_running); cur_block++ ) {
+         for ( ; cur_block < (N + ethreads_to_check); cur_block++ ) {
             if ( pthread_mutex_lock( &handle->blocks[cur_block].qlock ) ) {
                PRINTerr( "failed to acquire queue lock for erasure thread %d\n", cur_block );
                return -1;
@@ -3520,12 +3527,12 @@ int ne_rebuild1_vl( SnprintfFunc fn, void* state,
          if ( erasure_state_read->meta_status[i] || erasure_state_read->data_status[i] ) {
             // if the read handle has this block listed as being in error, we need to actually write out a new copy
             PRINTdbg( "block %d is needed for output, and will be resumed\n", i );
-            bq_resume( 0, bq );
+            bq_resume( 0, bq, 0 );
             being_rebuilt[i] = 1;
          }
          else {
             PRINTdbg( "block %d is unneeded, and will be skipped\n", i );
-            bq_resume( -1, bq ); // otherwise, use a special offset value of -1 to tell the thread to error itself out
+            bq_resume( -1, bq, 0 ); // otherwise, use a special offset value of -1 to tell the thread to error itself out
             being_rebuilt[i] = 0;
          }
          // Note: For write threads, adjusting this offset is misleading, as it refers to a queue buffer offset rather than 

@@ -534,10 +534,10 @@ while [[ $cnt -lt $ITER ]]; do
             echo
             echo -e "\033[0;31mFAIL - output does not match expected data"
             echo -e "        compared $DATAFILE and $OUTFILE"
-            echo -e "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE\033[0m"
+            echo -e "CMD = $CMD\033[0m"
             echo "   FAILURE: output of ne_read does not match the expected data" >> $LOGFILE
             echo "            compared $DATAFILE and $OUTFILE" >> $LOGFILE
-            echo "CMD = ./libneTest read $EPAT $tN $e $start -s $FSZ -o $OUTFILE" >> $LOGFILE
+            echo "CMD = $CMD" >> $LOGFILE
             exit -1
          fi
          echo "Comparison passed"

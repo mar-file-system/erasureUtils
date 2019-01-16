@@ -576,6 +576,7 @@ int main( int argc, const char** argv )
 
       if ( (show_state) ) {
          PRINTout( "Stripe state pre-rebuild:\n" ); 
+         PRINTout( "NOTE: the positions of these meta/data errors DO take stripe offset into account!\n" );
          print_erasure_state( state );
       }
 
@@ -643,6 +644,7 @@ int main( int argc, const char** argv )
          return -1;
       }
 
+      PRINTout( "NOTE: the positions of these meta/data errors DO NOT take stripe offset into account!\n" );
       print_erasure_state( state );
       // display the ne_stat return value
       PRINTout("stat rc: %d\n", ret);
@@ -811,8 +813,10 @@ int main( int argc, const char** argv )
    // close the handle and indicate it's close condition
    tmp = ne_close( handle );
 
-   if( (show_state) )
+   if( (show_state) ) {
+      PRINTout( "NOTE: the positions of these meta/data errors DO take stripe offset into account!\n" );
       print_erasure_state( state );
+   }
 
    PRINTout("close rc: %d\n",tmp);
 
