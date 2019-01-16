@@ -273,7 +273,8 @@ select_snprintf(const char* path) {
 }
 
 
-void print_erasure_state( e_state state ) {
+void print_erasure_state( e_state state, int start_block ) {
+   PRINTout( "====================== Erasure State ======================\n" );
    PRINTout( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
              state->N, state->E, state->bsz, state->O, (unsigned long long)state->totsz );
    // this complicated declaration is simply meant to ensure that we have space for 
@@ -281,19 +282,27 @@ void print_erasure_state( e_state state ) {
    char output_string[ (MAXPARTS * 5) + 1 ];
    output_string[0] = '\0'; // the initial strncat() call will expect a null terminator
    int tmp;
+   // construct a list of physical block numbers based on the provided start_block
+   for( tmp = 0; tmp < ( state->N + state->E ); tmp++ ){
+      char append_str[6];
+      snprintf( append_str, 6, "%4d", (tmp + start_block) % (state->N + state->E) );
+      strncat( output_string, append_str, 5 );
+   }
+
+   PRINTout( "%s%s\n", "Physical Block:     ", output_string );
+   output_string[0] = '\0'; // this is effectively the same as clearing the string
+
    int eerr = 0;
    // construct a list of meta_status array elements for later printing
    for( tmp = 0; tmp < ( state->N + state->E ); tmp++ ){
       if( state->meta_status[tmp] )
          eerr++;
       char append_str[6];
-      snprintf( append_str, 6, "%d", state->meta_status[tmp] );
+      snprintf( append_str, 6, "%4d", state->meta_status[tmp] );
       strncat( output_string, append_str, 5 );
-      if ( (tmp+1) < (state->N + state->E) )
-         strncat( output_string, " ", 1 );
    }
 
-   PRINTout( "%s %s\n", "Metadata Errors:     ", output_string );
+   PRINTout( "%s%s\n", "Metadata Errors:    ", output_string );
    output_string[0] = '\0'; // this is effectively the same as clearing the string
 
    int nerr = 0;
@@ -302,18 +311,17 @@ void print_erasure_state( e_state state ) {
       if( state->data_status[tmp] )
          nerr++;
       char append_str[6];
-      snprintf( append_str, 6, "%d", state->data_status[tmp] );
+      snprintf( append_str, 6, "%4d", state->data_status[tmp] );
       strncat( output_string, append_str, 5 );
-      if ( (tmp+1) < (state->N + state->E) )
-         strncat( output_string, " ", 1 );
    }
 
-   PRINTout( "%s %s\n", "Data/Erasure Errors: ", output_string );
+   PRINTout( "%s%s\n", "Data/Erasure Errors:", output_string );
 
    if( nerr > state->E  ||  eerr > state->E )
-      PRINTlog( "WARNING: the data may be unrecoverable!\n" );
+      PRINTlog( "WARNING: excessive errors were found, and the data may be unrecoverable!\n" );
    else if ( nerr > 0  ||  eerr > 0 )
       PRINTlog( "WARNING: errors were found, be sure to rebuild this object before data loss occurs!\n" );
+   PRINTout( "===========================================================\n" );
 }
 
 
@@ -576,8 +584,8 @@ int main( int argc, const char** argv )
 
       if ( (show_state) ) {
          PRINTout( "Stripe state pre-rebuild:\n" ); 
-         PRINTout( "NOTE: the positions of these meta/data errors DO take stripe offset into account!\n" );
-         print_erasure_state( state );
+         // the positions of these meta/data errors DO take stripe offset into account
+         print_erasure_state( state, state->O );
       }
 
       if ( (tmp) ) {
@@ -644,8 +652,8 @@ int main( int argc, const char** argv )
          return -1;
       }
 
-      PRINTout( "NOTE: the positions of these meta/data errors DO NOT take stripe offset into account!\n" );
-      print_erasure_state( state );
+      // the positions of these meta/data errors DO NOT take stripe offset into account
+      print_erasure_state( state, 0 );
       // display the ne_stat return value
       PRINTout("stat rc: %d\n", ret);
 
@@ -814,8 +822,8 @@ int main( int argc, const char** argv )
    tmp = ne_close( handle );
 
    if( (show_state) ) {
-      PRINTout( "NOTE: the positions of these meta/data errors DO take stripe offset into account!\n" );
-      print_erasure_state( state );
+      // the positions of these meta/data errors DO take stripe offset into account
+      print_erasure_state( state, state->O );
    }
 
    PRINTout("close rc: %d\n",tmp);
