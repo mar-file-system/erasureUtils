@@ -358,6 +358,8 @@ while [[ $cnt -lt $ITER ]]; do
             if [[ $? -eq 2 ]]; then
                (( silent_met_err_cnt++ ))
                silent_met_err_list[$errpos]=1
+            else
+               dstat=$(( dstat + 2**errpos ))
             fi
          fi
       done
@@ -393,12 +395,6 @@ while [[ $cnt -lt $ITER ]]; do
                fi
             done
             echo "RELOCATING ERROR TO POSTION $errpos"
-            silent_met_err_list[$errpos]=0
-            (( silent_met_err_cnt-- ))
-         elif [[ ${silent_met_err_list[$errpos]} -ne 0 ]]; then
-            # if we'er corrupting a block with silent meta corruption, we don't need to worry about that location any more
-            silent_met_err_list[$errpos]=0
-            (( silent_met_err_cnt-- ))
          fi
          if [[ ${dat_err_list[$errpos]} -eq 0 ]]; then
             # only corrupt the file if we are hitting a new postion
@@ -421,11 +417,18 @@ while [[ $cnt -lt $ITER ]]; do
             fi
             # only note errors which do not align with meta errors and which are removal type or in data blocks
             if [[ $cor_type -eq 0  ||  $truepos -lt $n ]]; then
-               dstat=$(( dstat + 2**errpos ))
-               if [[ ${met_err_list[$errpos]} -eq 0 ]]; then
+               if [[ ${met_err_list[$errpos]} -eq 0  ]]; then
                   tstat=$(( tstat + 2**errpos ))
+                  dstat=$(( dstat + 2**errpos ))
+               elif [[ ${silent_met_err_list[$errpos]} -ne 0 ]]; then
+                  dstat=$(( dstat + 2**errpos ))
                fi
             fi
+         fi
+         if [[ ${silent_met_err_list[$errpos]} -ne 0 ]]; then
+            # if we'er corrupting a block with silent meta corruption, we don't need to worry about that location any more
+            silent_met_err_list[$errpos]=0
+            (( silent_met_err_cnt-- ))
          fi
       done
 
