@@ -169,7 +169,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
 #endif
 
-#define UNSAFE(HANDLE, NERR) (NERR > ((HANDLE)->erasure_state->E - MIN_PROTECTION))
+#define UNSAFE(HANDLE, NERR) ( (NERR)  &&  (NERR > ((HANDLE)->erasure_state->E - MIN_PROTECTION)) )
 
 typedef uint32_t u32;
 typedef uint64_t u64;
@@ -292,8 +292,7 @@ typedef enum {
 
 typedef enum {
   BQ_OPEN     = 0x01 << 0, // indicates that this thread has successfully opened its data file
-  BQ_HALTED   = 0x01 << 1, // indicates that this thread is 'paused'
-  BQ_SKIP     = 0x01 << 2  // indicates that this thread is skipping all work assigned to it
+  BQ_HALTED   = 0x01 << 1  // indicates that this thread is 'paused'
 } BQ_State_Flags;
 
 

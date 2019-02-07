@@ -154,25 +154,45 @@ void usage(const char* prog_name, const char* op) {
    USAGE("help",       "");
    PRINTlog("\n");
 
-   if ( strncmp(op, "help", 10) ) // if help was not explicitly specified, avoid printing the entire usage block
+   if ( strncmp(op, "help", 5) ) // if help was not explicitly specified, avoid printing the entire usage block
       return;
 
+   PRINTlog("  Operations:\n");
+   PRINTlog("      read               Reads the content of the specified erasure stripe, utilizing erasure info only if necessary.\n");
+   PRINTlog("\n");
+   PRINTlog("      verify             Reads the content of the specified erasure stripe, including all erasure info.\n");
+   PRINTlog("\n");
+   PRINTlog("      write              Writes data to a new erasure stripe, overwriting any existing data.\n");
+   PRINTlog("\n");
+   PRINTlog("      rebuild            Reconstructs any damaged data/erasure blocks from valid blocks, if possible.\n");
+   PRINTlog("\n");
+   PRINTlog("      delete             Deletes all data, erasure, meta, and partial blocks of the given erasure stripe.  By default, \n");
+   PRINTlog("                          this operation prompts for confirmation before performing the deletion.\n");
+   PRINTlog("\n");
+   PRINTlog("      stat               Performs a sequential (ignoring stripe offset) read of meta information for the specified stripe \n");
+   PRINTlog("                          in order to determine N/E/O values.  Once these have been established, all remaining meta info \n");
+   PRINTlog("                          is read/verified and all data/erasure blocks are opened.  Stripe info and/or errors discovered \n");
+   PRINTlog("                          during this process are then displayed in a manner similar to that of '-e' option output for \n");
+   PRINTlog("                          for other commands (see NOTES for important output differences).\n");
+   PRINTlog("\n");
+   PRINTlog("      crc-status         Prints MAXN and MAXE values supported by libne, as well as whether intermediate crcs are active.\n");
+   PRINTlog("\n");
+   PRINTlog("      help               Prints this usage information and exits.\n");
+   PRINTlog("\n");
    PRINTlog("  Options:\n");
    PRINTlog("      -n                 For read/verfiy/write operations, specifies the use of the NE_NOINFO flag.\n");
-   PRINTlog("                         This will result in libne automatically determining values for N/E/start_file based on existing \n");
-   PRINTlog("                         stripe metadata.\n");
+   PRINTlog("                          This will result in the automatic setting of N/E/start_file values based on stripe metadata.\n");
    PRINTlog("\n");
    PRINTlog("      -t timing_flags    Specifies flags to be passed to the libne internal timer functions.  See 'NOTES' below.\n");
    PRINTlog("\n");
    PRINTlog("      -e                 For read/verify/write/rebuild, specifies the use of the NE_ESTATE flag.\n");
-   PRINTlog("                         This will allow an e_state struct to be retrieved following the operation.  Some of the contents \n");
-   PRINTlog("                         of the structure will be printed out to the console (N/E/O/bsz/totsz/meta_status/data_status).\n");
-   PRINTlog("                         See 'NOTES' for an explanation of some subtle differences between this output and that of 'stat'.\n");
+   PRINTlog("                          This will allow an e_state struct to be retrieved following the operation.  Some content of \n");
+   PRINTlog("                          the structure will be printed out to the console (N/E/O/bsz/totsz/meta_status/data_status).\n");
+   PRINTlog("                          See 'NOTES' for an explanation of subtle differences between this output and that of 'stat'.\n");
    PRINTlog("\n");
    PRINTlog("      -r                 Randomizes the read/write sizes used for data movement during the specified operation.\n");
    PRINTlog("\n");
-   PRINTlog("      -s input_size      Specifies the quantity of data to be read from the data source, whether that source be an \n");
-   PRINTlog("                         erasure stripe (for read/verify) or an input-file/zero-buffer (for write).\n");
+   PRINTlog("      -s input_size      Specifies the quantity of data to be read from the data source (stripe, file, or zero-buffer).\n");
    PRINTlog("\n");
    PRINTlog("      -o ontput_file     Specifies a standard POSIX file to which data retrieved from an erasure stripe should be stored.\n");
    PRINTlog("\n");
@@ -181,14 +201,13 @@ void usage(const char* prog_name, const char* op) {
    PRINTlog("      -f                 Used to perform a deletion without prompting for confirmation first.\n");
    PRINTlog("\n");
    PRINTlog("  NOTES:\n");
-   PRINTlog("     If an input file is not specified for write, a stream of zeros will be stored to the \n" \
-"      erasure stripe up to the given input_size.\n" );
+   PRINTlog("     If an input file is not specified for write, a stream of zeros will be stored to the erasure stripe up to the given \n");
+   PRINTlog("      input_size.  A failure to specify at least one of '-s' or '-i' for a write operation will result in an error.\n" );
    PRINTlog("\n");
-   PRINTlog("     The erasure state output produced by a 'stat' operation may differ slightly from that of \n");
-   PRINTlog("      '-e'.  The erasure structs returned by '-e' operations are adjusted by 'start_file' \n");
-   PRINTlog("      offset values, and thus indicate data/erasure status relative to the stripe format.\n");
-   PRINTlog("      The struct returned by ne_stat() has no such adjustment, and is thus relative to the \n");
-   PRINTlog("      actual file locations.\n");
+   PRINTlog("     The erasure state output produced by a 'stat' operation may differ slightly from that of '-e'.  The erasure structs \n");
+   PRINTlog("      returned by '-e' operations are adjusted by 'start_file' offset values, and thus indicate data/erasure status \n");
+   PRINTlog("      relative to the stripe format.\n");
+   PRINTlog("      The struct returned by ne_stat() has no such adjustment, and is thus relative to the actual file locations.\n");
    PRINTlog("      Return codes for all operations are relative to actual file locations (no erasure offset).\n");
    PRINTlog("\n");
    PRINTlog("     <stripe_width> refers to the total number of data/erasure parts in the target stripe (N+E).\n");
@@ -254,29 +273,55 @@ select_snprintf(const char* path) {
 }
 
 
-void print_erasure_state( e_state state ) {
+void print_erasure_state( e_state state, int start_block ) {
+   PRINTout( "====================== Erasure State ======================\n" );
    PRINTout( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
              state->N, state->E, state->bsz, state->O, (unsigned long long)state->totsz );
-   PRINTout( "Metadata Errors:      " );
+   // this complicated declaration is simply meant to ensure that we have space for 
+   //  a null terminator and up to 5 chars per potential array element
+   char output_string[ (MAXPARTS * 5) + 1 ];
+   output_string[0] = '\0'; // the initial strncat() call will expect a null terminator
    int tmp;
+   // construct a list of physical block numbers based on the provided start_block
    for( tmp = 0; tmp < ( state->N + state->E ); tmp++ ){
-      PRINTout( "%d ", state->meta_status[tmp] );
+      char append_str[6];
+      snprintf( append_str, 6, "%4d", (tmp + start_block) % (state->N + state->E) );
+      strncat( output_string, append_str, 5 );
    }
-   PRINTout( "\n" );
 
-   PRINTout( "Data/Erasure Errors:  " );
+   PRINTout( "%s%s\n", "Physical Block:     ", output_string );
+   output_string[0] = '\0'; // this is effectively the same as clearing the string
+
+   int eerr = 0;
+   // construct a list of meta_status array elements for later printing
+   for( tmp = 0; tmp < ( state->N + state->E ); tmp++ ){
+      if( state->meta_status[tmp] )
+         eerr++;
+      char append_str[6];
+      snprintf( append_str, 6, "%4d", state->meta_status[tmp] );
+      strncat( output_string, append_str, 5 );
+   }
+
+   PRINTout( "%s%s\n", "Metadata Errors:    ", output_string );
+   output_string[0] = '\0'; // this is effectively the same as clearing the string
+
    int nerr = 0;
+   // construct a list of data_status array elements for later printing
    for( tmp = 0; tmp < ( state->N + state->E ); tmp++ ){
       if( state->data_status[tmp] )
          nerr++;
-      PRINTout( "%d ", state->data_status[tmp] );
+      char append_str[6];
+      snprintf( append_str, 6, "%4d", state->data_status[tmp] );
+      strncat( output_string, append_str, 5 );
    }
-   PRINTout( "\n" );
 
-   if( nerr > state->E )
-      PRINTlog( "WARNING: the data may be unrecoverable!\n" );
-   else if ( nerr > 0 )
+   PRINTout( "%s%s\n", "Data/Erasure Errors:", output_string );
+
+   if( nerr > state->E  ||  eerr > state->E )
+      PRINTlog( "WARNING: excessive errors were found, and the data may be unrecoverable!\n" );
+   else if ( nerr > 0  ||  eerr > 0 )
       PRINTlog( "WARNING: errors were found, be sure to rebuild this object before data loss occurs!\n" );
+   PRINTout( "===========================================================\n" );
 }
 
 
@@ -539,15 +584,16 @@ int main( int argc, const char** argv )
 
       if ( (show_state) ) {
          PRINTout( "Stripe state pre-rebuild:\n" ); 
-         print_erasure_state( state );
+         // the positions of these meta/data errors DO take stripe offset into account
+         print_erasure_state( state, state->O );
       }
 
       if ( (tmp) ) {
-         PRINTout("Rebuild failed to correct all errors: errno=%d (%s)\n", tmp, errno, strerror(errno));
+         PRINTout("Rebuild failed to correct all errors: errno=%d (%s)\n", errno, strerror(errno));
          if ( tmp < 0 )
             PRINTout("libneTest: rebuild failed!\n" );
          else
-            PRINTout("libneTest: rebuild indicates only partial success\n" );
+            PRINTout("libneTest: rebuild indicates only partial success: rc = %d\n", tmp );
       }
       else
          PRINTout("libneTest: rebuild complete\n" );
@@ -583,7 +629,7 @@ int main( int argc, const char** argv )
          }
       }
       if ( NE_DELETE( erasure_path, N ) ) {
-         PRINTlog("libneTest: deletion attempt indicates a failure for path \"%s\"\n", (char*)argv[2] );
+         PRINTlog("libneTest: deletion attempt indicates a failure for path \"%s\": errno=%d (%s)\n", (char*)argv[2], errno, strerror(errno));
          return -1;
       }
       PRINTout("libneTest: deletion successful\n" );
@@ -602,11 +648,12 @@ int main( int argc, const char** argv )
 
       int ret;
       if ( ( ret = NE_STAT_CALL( erasure_path, state ) ) < 0 ) {
-         PRINTlog("libneTest: ne_stat failed!\n" );
+         PRINTlog( "libneTest: ne_stat failed: errno=%d (%s)\n", errno, strerror(errno) );
          return -1;
       }
 
-      print_erasure_state( state );
+      // the positions of these meta/data errors DO NOT take stripe offset into account
+      print_erasure_state( state, 0 );
       // display the ne_stat return value
       PRINTout("stat rc: %d\n", ret);
 
@@ -621,10 +668,13 @@ int main( int argc, const char** argv )
    srand(time(NULL));
 
    // allocate space for a data buffer and zero out so that we could zero write using it
-   buff = memset( malloc( sizeof(char) * buff_size ), 0, buff_size );
-   if ( buff == NULL ) {
-      PRINTlog( "libneTest: failed to allocate space for a data buffer\n" );
-      return -1;
+   buff = NULL;
+   if ( output_file != NULL  ||  wr == 1 ) { // only allocate this buffer if we are writing to something
+      buff = memset( malloc( sizeof(char) * buff_size ), 0, buff_size );
+      if ( buff == NULL ) {
+         PRINTlog( "libneTest: failed to allocate space for a data buffer\n" );
+         return -1;
+      }
    }
 
    int std_fd = 0; // no way this FD gets reused, so safe to initialize to this
@@ -636,10 +686,11 @@ int main( int argc, const char** argv )
    // verify a proper open of our standard file
    if ( std_fd < 0 ) {
       if ( output_file != NULL )
-         PRINTlog( "libneTest: failed to open output file \"%s\": %s\n", output_file, strerror(errno) );
+         PRINTlog( "libneTest: failed to open output file \"%s\": errno=%d (%s)\n", output_file, errno, strerror(errno) );
       else
-         PRINTlog( "libneTest: failed to open input file \"%s\": %s\n", input_file, strerror(errno) );
-      free( buff );
+         PRINTlog( "libneTest: failed to open input file \"%s\": errno=%d (%s)\n", input_file, errno, strerror(errno) );
+      if ( buff )
+         free( buff );
       return -1;
    }
 
@@ -671,7 +722,9 @@ int main( int argc, const char** argv )
 
    // check for a successful open of the handle
    if ( handle == NULL ) {
-      PRINTlog( "libneTest: failed to open the requested erasure path for a %s operation\n", operation );
+      PRINTlog( "libneTest: failed to open the requested erasure path for a %s operation: errno=%d (%s)\n", operation, errno, strerror(errno) );
+      if ( buff )
+         free( buff );
       return -1;
    }
 
@@ -696,12 +749,14 @@ int main( int argc, const char** argv )
       else if ( wr != 1 ) { // read/verify get data from the erasure stripe
          PRINTdbg("libneTest: reading %llu bytes from erasure stripe\n", toread );
          nread = ne_read( handle, buff, toread, bytes_moved );
+         // Note: if buff is NULL here, retrieved data will simply be thrown out
       }
 
       // check for a read error
       if ( (nread < 0)  ||  ( (size_arg) && (nread < toread) ) ) {
-         PRINTlog( "libneTest: expected to read %llu bytes from source but instead received: %zd\n", toread, nread );
-         free( buff );
+         PRINTlog( "libneTest: expected to read %llu bytes from source, but instead received %zd: errno=%d (%s)\n", toread, nread, errno, strerror(errno) );
+         if ( buff )
+            free( buff );
          ne_close( handle );
          if ( std_fd )
             close( std_fd );
@@ -709,32 +764,21 @@ int main( int argc, const char** argv )
       }
 
       // WRITE DATA
-      size_t written;
+      size_t written = nread; // no write performed -> success
       if ( wr == 1 ) { // for write, just output to the stripe
          PRINTdbg( "libneTest: writing %zd bytes to erasure stripe\n", nread );
-         if( ( written = ne_write( handle, buff, nread ) ) != nread ) {
-            PRINTlog( "libneTest: expected to write %llu bytes to erasure stripe, but ne_write returned: %zd\n", written );
-            ne_close( handle );
-            if ( std_fd )
-               close( std_fd );
-            return -1;
-         }
+         written = ne_write( handle, buff, nread );
       }
       else if ( std_fd ) { // for read/verify, only write out if given the -o flag
          PRINTdbg( "libneTest: writing %zd bytes to \"%s\"\n", nread, output_file );
-         if ( ( written = write( std_fd, buff, nread ) ) != nread ) {
-            PRINTlog( "libneTest: expected to write %llu bytes to output file, but write returned: %zd\n", written );
-            ne_close( handle );
-            if ( std_fd )
-               close( std_fd );
-            return -1;
-         }
+         written = write( std_fd, buff, nread );
       }
  
       // check for a write error
-      if ( (nread < 0)  ||  ( (size_arg) && (nread < toread) ) ) {
-         PRINTlog( "libneTest: expected to write %llu bytes but instead wrote: %zd\n", toread, nread );
-         free( buff );
+      if ( nread != written ) {
+         PRINTlog( "libneTest: expected to write %llu bytes to destination, but instead wrote %zd: errno=%d (%s)\n", nread, written, errno, strerror(errno) );
+         if ( buff )
+            free( buff );
          ne_close( handle );
          if ( std_fd )
             close( std_fd );
@@ -770,14 +814,17 @@ int main( int argc, const char** argv )
          PRINTlog( "libneTest: encountered an error when trying to close output file\n" );
    }
       
-   // free our work buffer
-   free( buff );
+   // free our work buffer, if we allocated one
+   if ( buff )
+      free( buff );
 
    // close the handle and indicate it's close condition
    tmp = ne_close( handle );
 
-   if( (show_state) )
-      print_erasure_state( state );
+   if( (show_state) ) {
+      // the positions of these meta/data errors DO take stripe offset into account
+      print_erasure_state( state, state->O );
+   }
 
    PRINTout("close rc: %d\n",tmp);
 
