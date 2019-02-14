@@ -610,18 +610,32 @@ int main( int argc, const char** argv )
    // -----------------------------------------------------------------
 
    if ( wr == 4 ) {
-      char response;
       char iter = 0;
-      while ( !(force_delete)  &&  response != 'y'  &&  response != 'Y' ) {
-         response = '\n';
+      while ( !(force_delete) ) {
+         char response[20] = { 0 };
+         *(response) = '\n';
          PRINTout("libneTest: deleting striping corresponding to path \"%s\" with width %d...\n"
                   "Are you sure you wish to continue? (y/n): ", (char*)argv[2], N );
          fflush( stdout );
-         while( response == '\n' )
-            response = getchar();
-         if ( response == 'n'  ||  response == 'N' )
+         while( *(response) == '\n' ) {
+            if ( response != fgets( response, 20, stdin ) ) {
+               PRINTout( "libneTest: failed to read input\n" );
+               return -1;
+            }
+         }
+         // check for y/n response
+         if ( *(response) == 'n'  ||  *(response) == 'N' )
             return -1;
+         if ( *(response) == 'y'  ||  *(response) == 'Y' )
+            break;
          PRINTout( "libneTest: input unrecognized\n" );
+         // clear excess chars from stdin, one at a time
+         while ( *(response) != '\n'  &&  *(response) != EOF )
+            *(response) = getchar();
+         if ( *(response) == EOF ) {
+            PRINTout( "libneTest: terminating due to lack of user input\n" );
+            return -1;
+         }
          iter++; // see if this has happened a lot
          if ( iter > 4 ) {
             PRINTout( "libneTest: terminating due to excessive unrecognized user input\n" );
