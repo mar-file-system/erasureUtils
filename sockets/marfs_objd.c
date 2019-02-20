@@ -1627,14 +1627,14 @@ int push_thread(int client_fd) {
 
 
 void usage(const char* progname) {
-  neERR("Usage: %s [-h] -p <port> -d <dir> [-u] [-r <seep_sec>]\n", progname);
-  neERR("\n");
-  neERR("  -h               help\n");
-  neERR("  -p <port>        port on which the server should listen\n");
-  neERR("  -d <dir>         server only allows clients to write files under <dir>\n");
-  neERR("  -u               perform a per-thread seteuid to the authenticated user\n");
-  neERR("  -r <sweep_sec>   use a 'reap' thread, to clean up stuck threads\n");
-  neERR("                     (runs every <sweep_sec> seconds))\n");
+  neLOG("Usage: %s [-h] -p <port> -d <dir> [-u] [-r <seep_sec>]\n", progname);
+  neLOG("\n");
+  neLOG("  -h               help\n");
+  neLOG("  -p <port>        port on which the server should listen\n");
+  neLOG("  -d <dir>         server only allows clients to write files under <dir>\n");
+  neLOG("  -u               perform a per-thread seteuid to the authenticated user\n");
+  neLOG("  -r <sweep_sec>   use a 'reap' thread, to clean up stuck threads\n");
+  neLOG("                     (runs every <sweep_sec> seconds))\n");
   exit(1);
 }
 
@@ -1683,7 +1683,7 @@ main(int argc, char* argv[]) {
   errno = 0;
   port = strtol(port_str, NULL, 10);
   if (errno) {
-    neERR("couldn't read integer from '%s'", port_str);
+    neLOG("couldn't read integer from '%s'", port_str);
     abort();
   }
 
@@ -1735,7 +1735,7 @@ main(int argc, char* argv[]) {
 
   int rc = rdma_getaddrinfo(NULL, (char*)port_str, &hints, &res);
   if (rc) {
-    neERR("rdma_getaddrinfo() failed: %s\n", strerror(errno));
+    neLOG("rdma_getaddrinfo() failed: %s\n", strerror(errno));
     exit(1);
   }
 
