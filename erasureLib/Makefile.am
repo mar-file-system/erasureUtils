@@ -70,7 +70,7 @@ if RDMA_SOCKETS
   SOCKET_LD  = -L../sockets -lrdma_sockets
 endif
 
-if AUTH_SOCKETS
+if AUTH_AWS
    AM_CPPFLAGS += -I$(AWS4C)
 endif
 

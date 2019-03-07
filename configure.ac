@@ -193,6 +193,8 @@ AS_IF([test x"$enable_auth" != xyes && test x"$enable_sockets" == xnone],
 
 AM_CONDITIONAL([AUTH_SOCKETS],  [test x"$enable_auth" != xno])
 
+AM_CONDITIONAL([AUTH_AWS], [test x"$enable_auth" != xno && test "$AWS4C"])
+
 AM_COND_IF([AUTH_SOCKETS],
            [AC_CHECK_LIB([crypto],      [MD5_Init],          [], [AC_MSG_ERROR(["Could not locate libcrypto!"])])
             AC_CHECK_LIB([xml2],        [xmlReadMemory],     [], [AC_MSG_ERROR(["Could not locate libxml2!"])])
