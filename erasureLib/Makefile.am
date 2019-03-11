@@ -127,7 +127,7 @@ libne_a_SOURCES = erasure.c erasure.h udal.c udal.h
 bin_PROGRAMS = libneTest data_shredder
 
 libneTest_SOURCES = libneTest.c
-libneTest_LDFLAGS =
+libneTest_LDFLAGS = -Wl,-rpath='$(libdir)'
 libneTest_LDADD = libne.a $(SOCKET_LD) $(TIMER_LD)
 
 data_shredder_SOURCES = data_shredder.c
