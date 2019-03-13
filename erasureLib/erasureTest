@@ -106,11 +106,17 @@ if [[ $ret -ne 0 ]]; then
    fi
 fi
 
-if [[ ! -e libneTest ]]; then
-   echo "erasureTest: error: could not locate executable \"libneTest\", please run this script from within the \"erasureLib\" directory!"
-   exit 1
+LIBNETEST="./libneTest"
+if [[ ! -e "$LIBNETEST" ]]; then
+   LIBNETEST="$( which libneTest 2>/dev/null )"
+   if [[ $? -ne 0 ]]; then
+      echo "erasureTest: error: could not locate executable \"libneTest\""
+      echo "erasureTest: please run this script from within the \"erasureLib\" directory or install the libneTest program to a default location!"
+      exit 1
+   fi
 fi
 
+echo "   Using libneTest located at: $LIBNETEST"
 
 # corruption insertion function
 corrupt_file() {
@@ -214,7 +220,7 @@ corrupt_file() {
 
 re=".* Active.*"
 
-ret=$( ./libneTest crc-status | tail -n 2 )
+ret=$( $LIBNETEST crc-status | tail -n 2 )
 crcs=$( echo "$ret" | tail -n 1 )
 ret=$( echo "$ret" | head -n 1 )
 maxN=$( echo "$ret" | awk '{print $2}' )
@@ -276,14 +282,14 @@ while [[ $cnt -lt $ITER ]]; do
    echo >> $LOGFILE
    echo >> $LIBTLOG
    echo "Generating $n+$e striping starting at file $start""..." >> $LOGFILE
-   { ret=$( time -p ./libneTest write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.write
+   { ret=$( time -p $LIBNETEST write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.write
 
 
    if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
       echo -e "\033[0;31mFAIL - write operation returned an unexpected status"
-      echo -e "CMD = ./libneTest write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE\033[0m"
+      echo -e "CMD = $LIBNETEST write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE\033[0m"
       echo "   FAILURE: wite operation returned a non-sero status" >> $LOGFILE
-      echo "CMD = ./libneTest write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE" >> $LOGFILE
+      echo "CMD = $LIBNETEST write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE" >> $LOGFILE
       exit -1
    fi
    echo "   stripe generation complete" >> $LOGFILE
@@ -472,14 +478,14 @@ while [[ $cnt -lt $ITER ]]; do
          echo -n "Verifying corruption pattern (expecting pattern $stat)..."
          echo "Verifying corruption pattern (expecting pattern $stat)..." >> $LOGFILE
 
-         { ret=$( time -p ./libneTest verify $EPAT $n $e $start 2>&1 | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
+         { ret=$( time -p $LIBNETEST verify $EPAT $n $e $start 2>&1 | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
 
          if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
             echo
             echo -e "\033[0;31mFAIL - status check returned an unexpected error pattern"
-            echo -e "CMD = ./libneTest verify $EPAT $n $e $start\033[0m"
+            echo -e "CMD = $LIBNETEST verify $EPAT $n $e $start\033[0m"
             echo "FAIL - status check returned an unexpected error pattern" >> $LOGFILE
-            echo "CMD = ./libneTest verify $EPAT $n $e $start" >> $LOGFILE
+            echo "CMD = $LIBNETEST verify $EPAT $n $e $start" >> $LOGFILE
             exit -1
          fi
          echo "corruption pattern matches"
@@ -491,12 +497,12 @@ while [[ $cnt -lt $ITER ]]; do
          noinfo=$RANDOM
          let "noinfo %= 2"
 
-         CMD="./libneTest read $EPAT $n $e $start -s $FSZ -o $OUTFILE"
+         CMD="$LIBNETEST read $EPAT $n $e $start -s $FSZ -o $OUTFILE"
 
          if [[ $noinfo -eq 1 ]]; then
             echo -n "ignoring stripe state for this read..."
             echo "   Using '-n' option to perform read while ignoring stripe state..." >> $LOGFILE
-            CMD="./libneTest read $EPAT -n -s $FSZ -o $OUTFILE"
+            CMD="$LIBNETEST read $EPAT -n -s $FSZ -o $OUTFILE"
          fi
 
          { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.read
@@ -558,12 +564,12 @@ while [[ $cnt -lt $ITER ]]; do
          noinfo=$RANDOM
          let "noinfo %= 2"
          
-         CMD="./libneTest read $EPAT $n $e $start -s $FSZ"
+         CMD="$LIBNETEST read $EPAT $n $e $start -s $FSZ"
 
          if [[ $noinfo -eq 1 ]]; then
             echo -n "ignoring stripe state for this read..."
             echo "   Using '-n' option to perform read while ignoring stripe state..." >> $LOGFILE
-            CMD="./libneTest read $EPAT -n -s $FSZ"
+            CMD="$LIBNETEST read $EPAT -n -s $FSZ"
          fi
 
          { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.no_read
@@ -594,12 +600,12 @@ while [[ $cnt -lt $ITER ]]; do
          noinfo=$RANDOM
          let "noinfo %= 2"
 
-         CMD="./libneTest rebuild $EPAT $n $e $start"
+         CMD="$LIBNETEST rebuild $EPAT $n $e $start"
          
          if [[ $noinfo -eq 1 ]]; then
             echo -n "ignoring stripe state for this rebuild..."
             echo "   Using '-n' option to perform rebuild while ignoring stripe state..." >> $LOGFILE
-            CMD="./libneTest rebuild $EPAT -n"
+            CMD="$LIBNETEST rebuild $EPAT -n"
          fi
 
          { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.recovery
@@ -672,14 +678,14 @@ while [[ $cnt -lt $ITER ]]; do
          echo -n "Checking the striping for corruption..."
          echo "Checking the striping for corruption..." >> $LOGFILE
 
-         { ret=$( time -p ./libneTest verify $EPAT $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
+         { ret=$( time -p $LIBNETEST verify $EPAT $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
 
          if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
             echo
             echo -e "\033[0;31mFAIL - status check indicates corruption present in erasure striping ( code : $ret )"
-            echo -e "CMD = ./libneTest verify $EPAT $n $e $start\033[0m"
+            echo -e "CMD = $LIBNETEST verify $EPAT $n $e $start\033[0m"
             echo "FAIL - status check indicates corruption present in erasure striping ( code : $ret )" >> $LOGFILE
-            echo "CMD = ./libneTest verify $EPAT $n $e $start" >> $LOGFILE
+            echo "CMD = $LIBNETEST verify $EPAT $n $e $start" >> $LOGFILE
             exit $ret
          fi
          echo "done"
@@ -711,7 +717,7 @@ while [[ $cnt -lt $ITER ]]; do
    done
 
    echo -n "Cleaning up file array..."
-   ./libneTest delete $EPAT $(( n + e )) -f > /dev/null
+   $LIBNETEST delete $EPAT $(( n + e )) -f > /dev/null
    if [[ $? -ne 0 ]]; then
       echo
       echo -e "\033[0;31mDeletion failure...continuing.\033[0m"

@@ -133,6 +133,9 @@ libneTest_LDADD = libne.a $(SOCKET_LD) $(TIMER_LD)
 data_shredder_SOURCES = data_shredder.c
 
 
+# ---
+bin_SCRIPTS = erasureTest
+
 
 # ---
 check_PROGRAMS = test_read_offset testLink
