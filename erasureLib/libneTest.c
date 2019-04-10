@@ -600,7 +600,7 @@ int main( int argc, const char** argv )
 
       PRINTout("rebuild rc: %d\n",tmp);
 
-      return tmp;
+      return 0;
    }
 
 
@@ -671,7 +671,7 @@ int main( int argc, const char** argv )
       // display the ne_stat return value
       PRINTout("stat rc: %d\n", ret);
 
-      return ret;
+      return 0;
    }
 
 
@@ -842,6 +842,6 @@ int main( int argc, const char** argv )
 
    PRINTout("close rc: %d\n",tmp);
 
-   return tmp;
+   return 0;
 }
 
