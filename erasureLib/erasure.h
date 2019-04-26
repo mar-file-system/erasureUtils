@@ -140,26 +140,39 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
  */
 
 
-#if (DEBUG_NE == 2)
+// out -- stdout only used by libneTest
+// err -- errors (fuse/pftool users will not want to see these)
+// dbg -- low-level details that might assist debugging
+// log -- e.g. timing data.  syslog/stderr depending on configuration
+
+#if (DEBUG_NE && USE_SYSLOG)
 #  include <syslog.h>
-#  define PRINTout(...)   SYSLOG(LOG_INFO,  ##__VA_ARGS__)
+#  define PRINTout(...)   fprintf(stdout, ##__VA_ARGS__)
 #  define PRINTerr(...)   SYSLOG(LOG_ERR,   ##__VA_ARGS__)
-#  define PRINTlog(...)   SYSLOG(LOG_ERR,   ##__VA_ARGS__)
 #  define PRINTdbg(...)   SYSLOG(LOG_DEBUG, ##__VA_ARGS__)
+#  define PRINTlog(...)   SYSLOG(LOG_INFO,  ##__VA_ARGS__)
 #  define LOG_INIT()      openlog(NE_LOG_PREFIX, LOG_CONS|LOG_PID, LOG_USER)
 
 #elif (DEBUG_NE)
-#  define PRINTout(...)   FPRINTF(stderr, ##__VA_ARGS__) /* stderr for 'fuse -f ...' */
-#  define PRINTerr(...)   FPRINTF(stderr, ##__VA_ARGS__)
-#  define PRINTlog(...)   FPRINTF(stderr, ##__VA_ARGS__)
+#  define PRINTout(...)   fprintf(stdout, ##__VA_ARGS__)
+#  define PRINTerr(...)   FPRINTF(stderr, ##__VA_ARGS__) /* stderr for 'fuse -f ...' */
 #  define PRINTdbg(...)   FPRINTF(stderr, ##__VA_ARGS__)
+#  define PRINTlog(...)   FPRINTF(stderr, ##__VA_ARGS__)
 #  define LOG_INIT()
+
+#elif (USE_SYSLOG)
+#  include <syslog.h>
+#  define PRINTout(...)   fprintf(stdout, ##__VA_ARGS__)
+#  define PRINTerr(...)
+#  define PRINTdbg(...)
+#  define PRINTlog(...)   SYSLOG(LOG_INFO,  ##__VA_ARGS__)
+#  define LOG_INIT()      openlog(NE_LOG_PREFIX, LOG_CONS|LOG_PID, LOG_USER)
 
 #else
 #  define PRINTout(...)   fprintf(stdout, ##__VA_ARGS__)
-#  define PRINTerr(...)   /* fprintf(stderr, ##__VA_ARGS__) */
-#  define PRINTlog(...)   fprintf(stdout, ##__VA_ARGS__)
+#  define PRINTerr(...)
 #  define PRINTdbg(...)
+#  define PRINTlog(...)   FPRINTF(stderr, ##__VA_ARGS__) /* stderr for 'fuse -f ...' */
 #  define LOG_INIT()
 #endif
 
@@ -173,33 +186,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 typedef uint32_t u32;
 typedef uint64_t u64;
-
-
-// One of these for each channel.
-// A channel that is opened O_WRONLY still does "reads"
-// to fill its buffers.
-#include "fast_timer.h"
-typedef struct {
-   FastTimer   thread;
-   FastTimer   open;
-   LogHisto    open_h;
-
-   FastTimer   read;
-   LogHisto    read_h;
-
-   FastTimer   write;
-   LogHisto    write_h;
-
-   FastTimer   close;
-   LogHisto    close_h;
-
-   FastTimer   rename;
-   FastTimer   stat;
-   FastTimer   xattr;
-
-   FastTimer   crc;
-   LogHisto    crc_h;
-} BenchStats;
 
 
 // (co-maintain help message in libneTest)
@@ -224,6 +210,33 @@ typedef enum {
 typedef  uint16_t  TimingFlagsValue;
 
 const char* timing_flag_name(TimingFlags flags);
+
+
+// One struct for each channel.  Each stat corresponds with a TimingFlag.
+// A channel that is opened O_WRONLY still does "reads" to fill its buffers.
+#include "fast_timer.h"
+typedef struct {
+   FastTimer   thread;
+   FastTimer   open;
+   LogHisto    open_h;
+
+   FastTimer   read;
+   LogHisto    read_h;
+
+   FastTimer   write;
+   LogHisto    write_h;
+
+   FastTimer   close;
+   LogHisto    close_h;
+
+   FastTimer   rename;
+   FastTimer   stat;
+   FastTimer   xattr;
+
+   FastTimer   crc;
+   LogHisto    crc_h;
+} BenchStats;
+
 
 
 // The TimingData in ne_handle can be superseded by an alternative, for

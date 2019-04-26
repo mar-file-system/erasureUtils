@@ -101,15 +101,15 @@ endif
 
 
 if USE_SYSLOG
-   DEBUG_SOCKETS_VALUE=2
+   DEFS       += -DUSE_SYSLOG=1
 else
-   DEBUG_SOCKETS_VALUE=1
+   DEFS       += -DUSE_SYSLOG=0
 endif
 
 # These don't affect .h files, so we can do this from the makefile
 if DEBUG_SOCKETS
   AM_CFLAGS    = -g -O0
-  DEFS        += -DDEBUG_SOCKETS=$(DEBUG_SOCKETS_VALUE)
+  DEFS        += -DDEBUG_SOCKETS=1
   AM_CPPFLAGS += -fstack-protector-all -fstack-check
 else
   AM_CFLAGS    = -g -O3

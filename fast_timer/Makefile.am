@@ -62,6 +62,13 @@ AM_CFLAGS =
 AM_LDFLAGS =
 
 
+if USE_SYSLOG
+   DEFS        += -DUSE_SYSLOG=1
+else
+   DEFS        += -DUSE_SYSLOG=0
+endif
+
+
 if DEBUG_FT
   AM_CFLAGS   += -g -O0
   DEFS        += -DDEBUG_FT=1
