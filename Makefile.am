@@ -59,6 +59,8 @@ ACLOCAL_AMFLAGS = -I m4
 AUTOMAKE_OPTIONS = foreign
 
 
+### nodist_include_HEADERS = libne_auto_config.h
+
 if ANY_SOCKETS
   MAYBE_SOCKETS = sockets
 endif

@@ -1,0 +1,18 @@
+#ifndef ERASURE_CONFIG_H__
+#define ERASURE_CONFIG_H__
+
+
+// This will be <sys/xattr.h>, or <attr/attr.h>
+// use it like this:
+//
+//    #include LIBNE_XATTR_H  /* the xattr.h file found by libne's config */
+//
+#define LIBNE_XATTR_H    <@AXATTR_INC@>
+
+
+// number of arguments used by the get/set-xattr() functions found at libne config-time
+#define AXATTR_GET_FUNC  @AXATTR_GET_FUNC@
+#define AXATTR_SET_FUNC  @AXATTR_SET_FUNC@
+
+
+#endif

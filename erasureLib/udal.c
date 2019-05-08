@@ -65,7 +65,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <errno.h>
 
 #include "erasure.h"
-//#include "udal.h"
+#include LIBNE_XATTR_H
 
 
 

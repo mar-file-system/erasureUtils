@@ -57,10 +57,23 @@
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 
+
+# NOTE: Instead of generating libne_auto_config.h for inclusion in our
+#    .h files, which would contain #defines matching AC_DEFINE() calls
+#    in this config, we now generate erasure_config.h which contains
+#    hand-built #defines matching AC_SUBST() calls in this config.  As
+#    a result, we generate only the symbols we really want to export,
+#    which lets us avoid name-conflicts with #defines that might be
+#    used within other libraries (e.g. pftool) which include our .h
+#    files, plus their own config.h.
+#
+#    HOWEVER, erasure.c still uses HAVE_LIBISAL internally.  Therefore,
+#    we do generate this file, but we avoid exporting it.
+
 AC_PREREQ([2.69])
 AC_INIT([erasureUtils], [1.0], [gransom@lanl.gov])
 AC_CONFIG_SRCDIR([COPYRIGHT.h])
-AC_CONFIG_HEADERS([config.h])
+AC_CONFIG_HEADERS([libne_auto_config.h])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
 
@@ -98,9 +111,9 @@ AC_CHECK_FUNCS([bzero ftruncate memset strerror strtol strtoul])
 ### AC_FUNC_MALLOC
 AC_CHECK_FUNCS([malloc])
 
+
 AXATTR_GET_FUNC_CHECK
 AXATTR_SET_FUNC_CHECK
-
 
 
 
@@ -331,6 +344,7 @@ AM_CONDITIONAL([HAVE_C_BUFSIZE], [test x"$C_BUFSIZE" != x])
 
 AC_CONFIG_FILES([Makefile
                  fast_timer/Makefile
+                 config/erasure_config.h:config/erasure_config.h.in
                  config/udal_config.h:config/udal_config.h.in
                  config/Makefile
                  sockets/Makefile

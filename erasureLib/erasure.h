@@ -69,12 +69,10 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define INT_CRC
 #define META_FILES
 
-#include "config.h"
 #include <stdlib.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <pthread.h>
-
 
 #define NE_LOG_PREFIX "libne"
 #include "ne_logging.h"
@@ -176,11 +174,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  define LOG_INIT()
 #endif
 
-
-#ifndef HAVE_LIBISAL
-#  define crc32_ieee(...)     crc32_ieee_base(__VA_ARGS__)
-#  define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
-#endif
 
 #define UNSAFE(HANDLE, NERR) ( (NERR)  &&  (NERR > ((HANDLE)->erasure_state->E - MIN_PROTECTION)) )
 

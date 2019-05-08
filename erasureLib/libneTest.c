@@ -106,7 +106,7 @@ int crc_status() {
 //     from the configuration.
 // 
 //     Here, we don't have that.  Instead, this is just hardwired to match
-//     the latest config on the VLE testbed.  If the testbed changes, and
+//     the latest config on the pre-prod testbed.  If the testbed changes, and
 //     you change your MARFSCONFIGRC to try to fix things ... things still
 //     won't be fixed, this hardwired thing will be the thing that's
 //     broken.
@@ -120,7 +120,8 @@ int snprintf_for_vle(char*       dest,
                      void*       state) {
 
   int pod_offset   = 0;
-  int host_offset  = 1 + (block / 2);
+  // int host_offset  = 1 + (block / 2);  // VLE
+  int host_offset  = 7 + block;  // pre-prod
   int block_offset = 0;
 
   return snprintf(dest, size, format,
@@ -554,7 +555,7 @@ int main( int argc, const char** argv )
 
    SktAuth  auth;
    if (DEFAULT_AUTH_INIT(auth)) {
-      PRINTerr("%s: failed to initialize default socket-authentication credentials\n", argv[0] );
+      PRINTlog("%s: failed to initialize default socket-authentication credentials\n", argv[0] );
       return -1;
    }
    int tmp;

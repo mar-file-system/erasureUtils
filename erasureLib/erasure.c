@@ -107,6 +107,7 @@ underlying skt_etc() functions.
 
 #include "erasure.h"
 #include "udal.h"
+#include "libne_auto_config.h"   /* HAVE_LIBISAL */
 
 #include <stdio.h>
 #include <string.h>
@@ -116,16 +117,8 @@ underlying skt_etc() functions.
 #include <unistd.h>
 #include <sys/stat.h>
 #include <errno.h>
-
-#if (AXATTR_RES == 2)
-#  include <attr/xattr.h>
-#else
-#  include <sys/xattr.h>
-#endif
-
 #include <assert.h>
 #include <pthread.h>
-
 
 static int set_block_xattr(ne_handle handle, int block);
 
@@ -136,15 +129,20 @@ static int set_block_xattr(ne_handle handle, int block);
 //
 // #include "erasure_internals.h"
 
+
 /* The following are defined here, so as to hide them from users of the library */
 // erasure functions
 #ifdef HAVE_LIBISAL
 extern uint32_t      crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
 extern void          ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
+
 #else
+#  define crc32_ieee(...)     crc32_ieee_base(__VA_ARGS__)
+#  define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
 extern uint32_t      crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len);
 extern void          ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 #endif
+
 
 static int gf_gen_decode_matrix(unsigned char *encode_matrix,
                                 unsigned char *decode_matrix,
@@ -159,6 +157,7 @@ int ne_set_xattr   ( const char *path, const char *xattrval, size_t len );
 int ne_get_xattr   ( const char *path, char *xattrval, size_t len );
 int ne_delete_block( const char *path );
 int ne_link_block  ( const char *link_path, const char *target );
+
 int       ne_set_xattr1   ( const uDAL* impl, SktAuth auth,
                             const char *path, const char *xattrval, size_t len );
 

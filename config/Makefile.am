@@ -58,4 +58,5 @@
 
 
 
-include_HEADERS = udal_config.h
+include_HEADERS = udal_config.h \
+	erasure_config.h
