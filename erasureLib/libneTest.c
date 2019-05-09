@@ -555,7 +555,7 @@ int main( int argc, const char** argv )
 
    SktAuth  auth;
    if (DEFAULT_AUTH_INIT(auth)) {
-      PRINTlog("%s: failed to initialize default socket-authentication credentials\n", argv[0] );
+      PRINTout("%s: failed to initialize default socket-authentication credentials\n", argv[0] );
       return -1;
    }
    int tmp;
