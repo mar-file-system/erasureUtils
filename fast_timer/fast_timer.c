@@ -66,6 +66,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <syslog.h>
 #include <errno.h>
 
+#define NE_LOG_PREFIX "marfs_timing"
+#include "../erasureLib/ne_logging.h"
+
 #include "fast_timer.h"
 
 
@@ -300,7 +303,7 @@ int fast_timer_show(FastTimer* ft, int simple, const char* str, int use_syslog) 
 
    if (simple) {
       if (use_syslog)
-         syslog(LOG_INFO, "%s%7.5f sec\n",  str1, fast_timer_sec(ft));
+         SYSLOG(LOG_INFO, "%s%7.5f sec\n",  str1, fast_timer_sec(ft));
       else
          printf("%s%7.5f sec\n",  str1, fast_timer_sec(ft));
       return 0;
@@ -381,14 +384,14 @@ int log_histo_reset(LogHisto* hist) {
 //    Thus, the display shows bins in order descending by significance.
 
 int log_histo_show(LogHisto* hist, int simple, const char* str, int use_syslog) {
-   static const size_t PRINTED_UINT16 = 10;
+#  define PRINTED_UINT16  10
    static const size_t BUF_SIZE = 512 + (65 * PRINTED_UINT16);
 
    char  buf[BUF_SIZE];
    char* buf_p  = buf;
    int   remain = BUF_SIZE;
 
-#define PRINTF(FMT, ...)                              \
+#  define SPRTINF(FMT, ...)			      \
    do {                                               \
       int rc = snprintf(buf_p, remain, FMT, ##__VA_ARGS__);  \
       if (rc < 0)                                     \
@@ -404,31 +407,31 @@ int log_histo_show(LogHisto* hist, int simple, const char* str, int use_syslog) 
    int i;
    const char* str1 = ((str) ? str : "");
 
-   PRINTF(str1);
+   SPRTINF(str1);
    if (!simple)
-      PRINTF("\n\t");
+      SPRTINF("\n\t");
 
    for (i=0; i<65; ++i) {
 
       // spacing and newlines
       if (i && !(i%4))
-         PRINTF("  ");
+         SPRTINF("  ");
       if ((i && !(i%16)) && (! simple))
-         PRINTF("\n\t");
+         SPRTINF("\n\t");
 
       if ((hist->bin[64 - i]) || simple)
-         PRINTF("%2d ", hist->bin[64 - i]);
+         SPRTINF("%2d ", hist->bin[64 - i]);
       else
-         PRINTF("-- ");
+         SPRTINF("-- ");
    }
-   PRINTF("\n");
+   SPRTINF("\n");
 
    if (! simple)
-      PRINTF("\n");
+      SPRTINF("\n");
 
    // --- send to syslog or stdout
    if (use_syslog)
-      syslog(LOG_INFO, buf);
+      SYSLOG(LOG_INFO, "%s", buf);
    else
       printf(buf);
 }

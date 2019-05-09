@@ -13,7 +13,7 @@
 !README*
 
 *~
-config.h
+*config.h
 skt_config.h
 foo*
 *.old
@@ -21,6 +21,7 @@ old/
 *.tgz
 *.[ch].*
 !udal_config.h.in
+!erasure_config.h.in
 *.log
 commit.txt
 example_*

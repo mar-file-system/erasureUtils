@@ -106,7 +106,7 @@ int crc_status() {
 //     from the configuration.
 // 
 //     Here, we don't have that.  Instead, this is just hardwired to match
-//     the latest config on the VLE testbed.  If the testbed changes, and
+//     the latest config on the pre-prod testbed.  If the testbed changes, and
 //     you change your MARFSCONFIGRC to try to fix things ... things still
 //     won't be fixed, this hardwired thing will be the thing that's
 //     broken.
@@ -120,7 +120,8 @@ int snprintf_for_vle(char*       dest,
                      void*       state) {
 
   int pod_offset   = 0;
-  int host_offset  = 1 + (block / 2);
+  // int host_offset  = 1 + (block / 2);  // VLE
+  int host_offset  = 7 + block;  // pre-prod
   int block_offset = 0;
 
   return snprintf(dest, size, format,
@@ -136,12 +137,12 @@ int snprintf_for_vle(char*       dest,
 //
 void usage(const char* prog_name, const char* op) {
 
-   PRINTlog("Usage: %s <op> [args ...]\n", prog_name);
-   PRINTlog("  <op> and args are like one of the following lines\n");
-   PRINTlog("\n");
+   PRINTout("Usage: %s <op> [args ...]\n", prog_name);
+   PRINTout("  <op> and args are like one of the following lines\n");
+   PRINTout("\n");
 
 #define USAGE(CMD, ARGS)                                       \
-   PRINTlog("  %2s %-10s %s\n",                                \
+   PRINTout("  %2s %-10s %s\n",                                \
            (!strncmp(op, CMD, 10) ? "->" : ""), (CMD), (ARGS))
 
    USAGE("read",       "erasure_path ( -n |  N E start_file ) [-t timing_flags] [-e] [-r] [-s input_size] [-o output_file]");
@@ -152,85 +153,85 @@ void usage(const char* prog_name, const char* op) {
    USAGE("stat",       "erasure_path                          [-t timing_flags]");
    USAGE("crc-status", "");
    USAGE("help",       "");
-   PRINTlog("\n");
+   PRINTout("\n");
 
    if ( strncmp(op, "help", 5) ) // if help was not explicitly specified, avoid printing the entire usage block
       return;
 
-   PRINTlog("  Operations:\n");
-   PRINTlog("      read               Reads the content of the specified erasure stripe, utilizing erasure info only if necessary.\n");
-   PRINTlog("\n");
-   PRINTlog("      verify             Reads the content of the specified erasure stripe, including all erasure info.\n");
-   PRINTlog("\n");
-   PRINTlog("      write              Writes data to a new erasure stripe, overwriting any existing data.\n");
-   PRINTlog("\n");
-   PRINTlog("      rebuild            Reconstructs any damaged data/erasure blocks from valid blocks, if possible.\n");
-   PRINTlog("\n");
-   PRINTlog("      delete             Deletes all data, erasure, meta, and partial blocks of the given erasure stripe.  By default, \n");
-   PRINTlog("                          this operation prompts for confirmation before performing the deletion.\n");
-   PRINTlog("\n");
-   PRINTlog("      stat               Performs a sequential (ignoring stripe offset) read of meta information for the specified stripe \n");
-   PRINTlog("                          in order to determine N/E/O values.  Once these have been established, all remaining meta info \n");
-   PRINTlog("                          is read/verified and all data/erasure blocks are opened.  Stripe info and/or errors discovered \n");
-   PRINTlog("                          during this process are then displayed in a manner similar to that of '-e' option output for \n");
-   PRINTlog("                          for other commands (see NOTES for important output differences).\n");
-   PRINTlog("\n");
-   PRINTlog("      crc-status         Prints MAXN and MAXE values supported by libne, as well as whether intermediate crcs are active.\n");
-   PRINTlog("\n");
-   PRINTlog("      help               Prints this usage information and exits.\n");
-   PRINTlog("\n");
-   PRINTlog("  Options:\n");
-   PRINTlog("      -n                 For read/verfiy/write operations, specifies the use of the NE_NOINFO flag.\n");
-   PRINTlog("                          This will result in the automatic setting of N/E/start_file values based on stripe metadata.\n");
-   PRINTlog("\n");
-   PRINTlog("      -t timing_flags    Specifies flags to be passed to the libne internal timer functions.  See 'NOTES' below.\n");
-   PRINTlog("\n");
-   PRINTlog("      -e                 For read/verify/write/rebuild, specifies the use of the NE_ESTATE flag.\n");
-   PRINTlog("                          This will allow an e_state struct to be retrieved following the operation.  Some content of \n");
-   PRINTlog("                          the structure will be printed out to the console (N/E/O/bsz/totsz/meta_status/data_status).\n");
-   PRINTlog("                          See 'NOTES' for an explanation of subtle differences between this output and that of 'stat'.\n");
-   PRINTlog("\n");
-   PRINTlog("      -r                 Randomizes the read/write sizes used for data movement during the specified operation.\n");
-   PRINTlog("\n");
-   PRINTlog("      -s input_size      Specifies the quantity of data to be read from the data source (stripe, file, or zero-buffer).\n");
-   PRINTlog("\n");
-   PRINTlog("      -o ontput_file     Specifies a standard POSIX file to which data retrieved from an erasure stripe should be stored.\n");
-   PRINTlog("\n");
-   PRINTlog("      -i input_file      Specifies a standard POSIX file from which data should be copied to the output erasure stripe.\n");
-   PRINTlog("\n");
-   PRINTlog("      -f                 Used to perform a deletion without prompting for confirmation first.\n");
-   PRINTlog("\n");
-   PRINTlog("  NOTES:\n");
-   PRINTlog("     If an input file is not specified for write, a stream of zeros will be stored to the erasure stripe up to the given \n");
-   PRINTlog("      input_size.  A failure to specify at least one of '-s' or '-i' for a write operation will result in an error.\n" );
-   PRINTlog("\n");
-   PRINTlog("     The erasure state output produced by a 'stat' operation may differ slightly from that of '-e'.  The erasure structs \n");
-   PRINTlog("      returned by '-e' operations are adjusted by 'start_file' offset values, and thus indicate data/erasure status \n");
-   PRINTlog("      relative to the stripe format.\n");
-   PRINTlog("      The struct returned by ne_stat() has no such adjustment, and is thus relative to the actual file locations.\n");
-   PRINTlog("      Return codes for all operations are relative to actual file locations (no erasure offset).\n");
-   PRINTlog("\n");
-   PRINTlog("     <stripe_width> refers to the total number of data/erasure parts in the target stripe (N+E).\n");
-   PRINTlog("\n");
-   PRINTlog("     <timing_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
-   PRINTlog("                   OPEN    =  0x0001\n");
-   PRINTlog("                   RW      =  0x0002     /* each individual read/write, in given stream */\n");
-   PRINTlog("                   CLOSE   =  0x0004     /* cost of close */\n");
-   PRINTlog("                   RENAME  =  0x0008\n");
-   PRINTlog("                   STAT    =  0x0010\n");
-   PRINTlog("                   XATTR   =  0x0020\n");
-   PRINTlog("                   ERASURE =  0x0040\n");
-   PRINTlog("                   CRC     =  0x0080\n");
-   PRINTlog("                   THREAD  =  0x0100     /* from beginning to end  */\n");
-   PRINTlog("                   HANDLE  =  0x0200     /* from start/stop, all threads, in 1 handle */\n");
-   PRINTlog("                   SIMPLE  =  0x0400     /* diagnostic output uses terse numeric formats */\n");
-   PRINTlog("\n");
-   PRINTlog("     <erasure_path> is one of the following\n");
-   PRINTlog("       [RDMA] xx.xx.xx.%%d:pppp/local/blah/block%%d/.../fname\n");
-   PRINTlog("               ('/local/blah' is some local path on all accessed storage nodes)\n");
-   PRINTlog("       [MC]   /NFS/blah/block%%d/.../fname\n");
-   PRINTlog("               ('/NFS/blah/'  is some NFS path on the client nodes)\n");
-   PRINTlog("\n");
+   PRINTout("  Operations:\n");
+   PRINTout("      read               Reads the content of the specified erasure stripe, utilizing erasure info only if necessary.\n");
+   PRINTout("\n");
+   PRINTout("      verify             Reads the content of the specified erasure stripe, including all erasure info.\n");
+   PRINTout("\n");
+   PRINTout("      write              Writes data to a new erasure stripe, overwriting any existing data.\n");
+   PRINTout("\n");
+   PRINTout("      rebuild            Reconstructs any damaged data/erasure blocks from valid blocks, if possible.\n");
+   PRINTout("\n");
+   PRINTout("      delete             Deletes all data, erasure, meta, and partial blocks of the given erasure stripe.  By default, \n");
+   PRINTout("                          this operation prompts for confirmation before performing the deletion.\n");
+   PRINTout("\n");
+   PRINTout("      stat               Performs a sequential (ignoring stripe offset) read of meta information for the specified stripe \n");
+   PRINTout("                          in order to determine N/E/O values.  Once these have been established, all remaining meta info \n");
+   PRINTout("                          is read/verified and all data/erasure blocks are opened.  Stripe info and/or errors discovered \n");
+   PRINTout("                          during this process are then displayed in a manner similar to that of '-e' option output for \n");
+   PRINTout("                          for other commands (see NOTES for important output differences).\n");
+   PRINTout("\n");
+   PRINTout("      crc-status         Prints MAXN and MAXE values supported by libne, as well as whether intermediate crcs are active.\n");
+   PRINTout("\n");
+   PRINTout("      help               Prints this usage information and exits.\n");
+   PRINTout("\n");
+   PRINTout("  Options:\n");
+   PRINTout("      -n                 For read/verfiy/write operations, specifies the use of the NE_NOINFO flag.\n");
+   PRINTout("                          This will result in the automatic setting of N/E/start_file values based on stripe metadata.\n");
+   PRINTout("\n");
+   PRINTout("      -t timing_flags    Specifies flags to be passed to the libne internal timer functions.  See 'NOTES' below.\n");
+   PRINTout("\n");
+   PRINTout("      -e                 For read/verify/write/rebuild, specifies the use of the NE_ESTATE flag.\n");
+   PRINTout("                          This will allow an e_state struct to be retrieved following the operation.  Some content of \n");
+   PRINTout("                          the structure will be printed out to the console (N/E/O/bsz/totsz/meta_status/data_status).\n");
+   PRINTout("                          See 'NOTES' for an explanation of subtle differences between this output and that of 'stat'.\n");
+   PRINTout("\n");
+   PRINTout("      -r                 Randomizes the read/write sizes used for data movement during the specified operation.\n");
+   PRINTout("\n");
+   PRINTout("      -s input_size      Specifies the quantity of data to be read from the data source (stripe, file, or zero-buffer).\n");
+   PRINTout("\n");
+   PRINTout("      -o ontput_file     Specifies a standard POSIX file to which data retrieved from an erasure stripe should be stored.\n");
+   PRINTout("\n");
+   PRINTout("      -i input_file      Specifies a standard POSIX file from which data should be copied to the output erasure stripe.\n");
+   PRINTout("\n");
+   PRINTout("      -f                 Used to perform a deletion without prompting for confirmation first.\n");
+   PRINTout("\n");
+   PRINTout("  NOTES:\n");
+   PRINTout("     If an input file is not specified for write, a stream of zeros will be stored to the erasure stripe up to the given \n");
+   PRINTout("      input_size.  A failure to specify at least one of '-s' or '-i' for a write operation will result in an error.\n" );
+   PRINTout("\n");
+   PRINTout("     The erasure state output produced by a 'stat' operation may differ slightly from that of '-e'.  The erasure structs \n");
+   PRINTout("      returned by '-e' operations are adjusted by 'start_file' offset values, and thus indicate data/erasure status \n");
+   PRINTout("      relative to the stripe format.\n");
+   PRINTout("      The struct returned by ne_stat() has no such adjustment, and is thus relative to the actual file locations.\n");
+   PRINTout("      Return codes for all operations are relative to actual file locations (no erasure offset).\n");
+   PRINTout("\n");
+   PRINTout("     <stripe_width> refers to the total number of data/erasure parts in the target stripe (N+E).\n");
+   PRINTout("\n");
+   PRINTout("     <timing_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
+   PRINTout("                   OPEN    =  0x0001\n");
+   PRINTout("                   RW      =  0x0002     /* each individual read/write, in given stream */\n");
+   PRINTout("                   CLOSE   =  0x0004     /* cost of close */\n");
+   PRINTout("                   RENAME  =  0x0008\n");
+   PRINTout("                   STAT    =  0x0010\n");
+   PRINTout("                   XATTR   =  0x0020\n");
+   PRINTout("                   ERASURE =  0x0040\n");
+   PRINTout("                   CRC     =  0x0080\n");
+   PRINTout("                   THREAD  =  0x0100     /* from beginning to end  */\n");
+   PRINTout("                   HANDLE  =  0x0200     /* from start/stop, all threads, in 1 handle */\n");
+   PRINTout("                   SIMPLE  =  0x0400     /* diagnostic output uses terse numeric formats */\n");
+   PRINTout("\n");
+   PRINTout("     <erasure_path> is one of the following\n");
+   PRINTout("       [RDMA] xx.xx.xx.%%d:pppp/local/blah/block%%d/.../fname\n");
+   PRINTout("               ('/local/blah' is some local path on all accessed storage nodes)\n");
+   PRINTout("       [MC]   /NFS/blah/block%%d/.../fname\n");
+   PRINTout("               ('/NFS/blah/'  is some NFS path on the client nodes)\n");
+   PRINTout("\n");
 
 #undef USAGE
 }
@@ -245,7 +246,7 @@ int parse_flags(TimingFlagsValue* flags, const char* str) {
       // strtol() already detects the '0x' prefix for us
       *flags = (TimingFlagsValue)strtol(str, NULL, 0);
       if (errno) {
-         PRINTlog("couldn't parse flags from '%s'\n", str);
+         PRINTout("couldn't parse flags from '%s'\n", str);
          return -1;
       }
    }
@@ -318,9 +319,9 @@ void print_erasure_state( e_state state, int start_block ) {
    PRINTout( "%s%s\n", "Data/Erasure Errors:", output_string );
 
    if( nerr > state->E  ||  eerr > state->E )
-      PRINTlog( "WARNING: excessive errors were found, and the data may be unrecoverable!\n" );
+      PRINTout( "WARNING: excessive errors were found, and the data may be unrecoverable!\n" );
    else if ( nerr > 0  ||  eerr > 0 )
-      PRINTlog( "WARNING: errors were found, be sure to rebuild this object before data loss occurs!\n" );
+      PRINTout( "WARNING: errors were found, be sure to rebuild this object before data loss occurs!\n" );
    PRINTout( "===========================================================\n" );
 }
 
@@ -361,7 +362,7 @@ int main( int argc, const char** argv )
          char* endptr;
          case 't':
             if ( parse_flags(&timing_flags, optarg) ) {
-               PRINTlog( "failed to parse timing flags value: \"%s\"\n", optarg );
+               PRINTout( "failed to parse timing flags value: \"%s\"\n", optarg );
                pr_usage = 1;
             }
             break;
@@ -376,7 +377,7 @@ int main( int argc, const char** argv )
             totbytes = strtoll(optarg, &endptr, 10);
             // afterwards, check for a parse error
             if ( *endptr != '\0' ) {
-               PRINTlog( "%s: failed to parse argument for '-s' option: \"%s\"\n", argv[0], optarg );
+               PRINTout( "%s: failed to parse argument for '-s' option: \"%s\"\n", argv[0], optarg );
                usage( argv[0], "help" );
                return -1;
             }
@@ -400,7 +401,7 @@ int main( int argc, const char** argv )
             pr_usage = 1;
             break;
          default:
-            PRINTlog( "failed to parse command line options\n" );
+            PRINTout( "failed to parse command line options\n" );
             return -1;
       }
    }
@@ -431,7 +432,7 @@ int main( int argc, const char** argv )
             return 0;
          }
          else {
-            PRINTlog( "%s: unrecognized operation argument provided: \"%s\"\n", argv[0], argv[c] );
+            PRINTout( "%s: unrecognized operation argument provided: \"%s\"\n", argv[0], argv[c] );
             usage( argv[0], "help" );
             return -1;
          }
@@ -457,7 +458,7 @@ int main( int argc, const char** argv )
          }
          // afterwards, check for a parse error
          if ( *endptr != '\0' ) {
-            PRINTlog( "%s: failed to parse value for %c: \"%s\"\n", argv[0], val, argv[c] );
+            PRINTout( "%s: failed to parse value for %c: \"%s\"\n", argv[0], val, argv[c] );
             usage( argv[0], operation );
             return -1;
          }
@@ -466,13 +467,13 @@ int main( int argc, const char** argv )
          char* endptr;
          N = strtol( argv[c], &endptr, 10 );
          if ( *endptr != '\0' ) {
-            PRINTlog( "%s: failed to parse value for stripe-width: \"%s\"\n", argv[0], argv[c] );
+            PRINTout( "%s: failed to parse value for stripe-width: \"%s\"\n", argv[0], argv[c] );
             usage( argv[0], operation );
             return -1;
          }
       }
       else {
-         PRINTlog( "%s: encountered unrecognized argument: \"%s\"\n", argv[0], argv[c] );
+         PRINTout( "%s: encountered unrecognized argument: \"%s\"\n", argv[0], argv[c] );
          usage( argv[0], operation );
          return -1;
       }
@@ -480,52 +481,52 @@ int main( int argc, const char** argv )
 
    // verify that we received all required args
    if ( operation == NULL ) {
-      PRINTlog( "%s: no operation specified\n", argv[0] );
+      PRINTout( "%s: no operation specified\n", argv[0] );
       usage( argv[0], "help" );
       return -1;
    }
    if ( erasure_path == NULL  ||  ( (wr == 4) && (N == -1) )  ||  ( (wr < 4)  &&  !(no_info)  && (O == -1) ) ) {
-      PRINTlog( "%s: missing required arguments for operation: \"%s\"\n", argv[0], operation );
+      PRINTout( "%s: missing required arguments for operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
    }
 
    // warn if improper options were specified for a given operation
    if ( ( input_file != NULL )  &&  ( wr != 1 ) ) {
-      PRINTlog( "%s: the '-i' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
+      PRINTout( "%s: the '-i' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
    }
    if ( (rand_size)  &&  ( wr > 2 ) ) {
-      PRINTlog( "%s: the '-r' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
+      PRINTout( "%s: the '-r' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
    }
    if ( (size_arg)  &&  ( wr > 2 ) ) {
-      PRINTlog( "%s: the '-s' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
+      PRINTout( "%s: the '-s' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
    }
    if ( (no_info)  &&  ( wr != 0  &&  wr != 2  &&  wr != 3 ) ) {
-      PRINTlog( "%s: the '-n' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
+      PRINTout( "%s: the '-n' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
    }
    if ( (show_state)  &&  ( wr > 3 ) ) {
-      PRINTlog( "%s: the '-e' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
+      PRINTout( "%s: the '-e' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
    }
    if ( ( output_file != NULL )  &&  ( wr != 0  &&  wr != 2 ) ) {
-      PRINTlog( "%s: the '-o' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
+      PRINTout( "%s: the '-o' flag is not applicable to operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
    }
 
    // check specifically that a write operation has at least an input file and/or a write size
    if ( (wr == 1)  &&  (input_file == NULL)  &&  !(size_arg) ) {
-      PRINTlog( "%s: missing required arguments for operation: \"%s\"\n", argv[0], operation );
-      PRINTlog( "%s: write operations require one or both of the '-s' and '-i' options\n", argv[0] );
+      PRINTout( "%s: missing required arguments for operation: \"%s\"\n", argv[0], operation );
+      PRINTout( "%s: write operations require one or both of the '-s' and '-i' options\n", argv[0] );
       usage( argv[0], operation );
       return -1;
    }
@@ -554,7 +555,7 @@ int main( int argc, const char** argv )
 
    SktAuth  auth;
    if (DEFAULT_AUTH_INIT(auth)) {
-      PRINTerr("%s: failed to initialize default socket-authentication credentials\n", argv[0] );
+      PRINTlog("%s: failed to initialize default socket-authentication credentials\n", argv[0] );
       return -1;
    }
    int tmp;
@@ -643,7 +644,8 @@ int main( int argc, const char** argv )
          }
       }
       if ( NE_DELETE( erasure_path, N ) ) {
-         PRINTlog("libneTest: deletion attempt indicates a failure for path \"%s\": errno=%d (%s)\n", (char*)argv[2], errno, strerror(errno));
+         PRINTout("libneTest: deletion attempt indicates a failure for path \"%s\": errno=%d (%s)\n",
+                  (char*)argv[2], errno, strerror(errno));
          return -1;
       }
       PRINTout("libneTest: deletion successful\n" );
@@ -662,7 +664,7 @@ int main( int argc, const char** argv )
 
       int ret;
       if ( ( ret = NE_STAT_CALL( erasure_path, state ) ) < 0 ) {
-         PRINTlog( "libneTest: ne_stat failed: errno=%d (%s)\n", errno, strerror(errno) );
+         PRINTout( "libneTest: ne_stat failed: errno=%d (%s)\n", errno, strerror(errno) );
          return -1;
       }
 
@@ -686,7 +688,7 @@ int main( int argc, const char** argv )
    if ( output_file != NULL  ||  wr == 1 ) { // only allocate this buffer if we are writing to something
       buff = memset( malloc( sizeof(char) * buff_size ), 0, buff_size );
       if ( buff == NULL ) {
-         PRINTlog( "libneTest: failed to allocate space for a data buffer\n" );
+         PRINTout( "libneTest: failed to allocate space for a data buffer\n" );
          return -1;
       }
    }
@@ -700,9 +702,11 @@ int main( int argc, const char** argv )
    // verify a proper open of our standard file
    if ( std_fd < 0 ) {
       if ( output_file != NULL )
-         PRINTlog( "libneTest: failed to open output file \"%s\": errno=%d (%s)\n", output_file, errno, strerror(errno) );
+         PRINTout( "libneTest: failed to open output file \"%s\": errno=%d (%s)\n",
+                   output_file, errno, strerror(errno) );
       else
-         PRINTlog( "libneTest: failed to open input file \"%s\": errno=%d (%s)\n", input_file, errno, strerror(errno) );
+         PRINTout( "libneTest: failed to open input file \"%s\": errno=%d (%s)\n",
+                   input_file, errno, strerror(errno) );
       if ( buff )
          free( buff );
       return -1;
@@ -736,7 +740,8 @@ int main( int argc, const char** argv )
 
    // check for a successful open of the handle
    if ( handle == NULL ) {
-      PRINTlog( "libneTest: failed to open the requested erasure path for a %s operation: errno=%d (%s)\n", operation, errno, strerror(errno) );
+      PRINTout( "libneTest: failed to open the requested erasure path for a %s operation: errno=%d (%s)\n",
+                operation, errno, strerror(errno) );
       if ( buff )
          free( buff );
       return -1;
@@ -768,7 +773,8 @@ int main( int argc, const char** argv )
 
       // check for a read error
       if ( (nread < 0)  ||  ( (size_arg) && (nread < toread) ) ) {
-         PRINTlog( "libneTest: expected to read %llu bytes from source, but instead received %zd: errno=%d (%s)\n", toread, nread, errno, strerror(errno) );
+         PRINTout( "libneTest: expected to read %llu bytes from source, but instead received %zd: errno=%d (%s)\n",
+                   toread, nread, errno, strerror(errno) );
          if ( buff )
             free( buff );
          ne_close( handle );
@@ -790,7 +796,8 @@ int main( int argc, const char** argv )
  
       // check for a write error
       if ( nread != written ) {
-         PRINTlog( "libneTest: expected to write %llu bytes to destination, but instead wrote %zd: errno=%d (%s)\n", nread, written, errno, strerror(errno) );
+         PRINTout( "libneTest: expected to write %llu bytes to destination, but instead wrote %zd: errno=%d (%s)\n",
+                   nread, written, errno, strerror(errno) );
          if ( buff )
             free( buff );
          ne_close( handle );
@@ -823,9 +830,9 @@ int main( int argc, const char** argv )
 
    if ( std_fd  &&  close( std_fd ) ) {
       if ( wr == 1 )
-         PRINTlog( "libneTest: encountered an error when trying to close input file\n" );
+         PRINTout( "libneTest: encountered an error when trying to close input file\n" );
       else
-         PRINTlog( "libneTest: encountered an error when trying to close output file\n" );
+         PRINTout( "libneTest: encountered an error when trying to close output file\n" );
    }
       
    // free our work buffer, if we allocated one

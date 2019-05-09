@@ -107,6 +107,7 @@ underlying skt_etc() functions.
 
 #include "erasure.h"
 #include "udal.h"
+#include "libne_auto_config.h"   /* HAVE_LIBISAL */
 
 #include <stdio.h>
 #include <string.h>
@@ -116,16 +117,8 @@ underlying skt_etc() functions.
 #include <unistd.h>
 #include <sys/stat.h>
 #include <errno.h>
-
-#if (AXATTR_RES == 2)
-#  include <attr/xattr.h>
-#else
-#  include <sys/xattr.h>
-#endif
-
 #include <assert.h>
 #include <pthread.h>
-
 
 static int set_block_xattr(ne_handle handle, int block);
 
@@ -136,15 +129,20 @@ static int set_block_xattr(ne_handle handle, int block);
 //
 // #include "erasure_internals.h"
 
+
 /* The following are defined here, so as to hide them from users of the library */
 // erasure functions
 #ifdef HAVE_LIBISAL
 extern uint32_t      crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
 extern void          ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
+
 #else
+#  define crc32_ieee(...)     crc32_ieee_base(__VA_ARGS__)
+#  define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
 extern uint32_t      crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len);
 extern void          ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 #endif
+
 
 static int gf_gen_decode_matrix(unsigned char *encode_matrix,
                                 unsigned char *decode_matrix,
@@ -159,6 +157,7 @@ int ne_set_xattr   ( const char *path, const char *xattrval, size_t len );
 int ne_get_xattr   ( const char *path, char *xattrval, size_t len );
 int ne_delete_block( const char *path );
 int ne_link_block  ( const char *link_path, const char *target );
+
 int       ne_set_xattr1   ( const uDAL* impl, SktAuth auth,
                             const char *path, const char *xattrval, size_t len );
 
@@ -186,7 +185,8 @@ typedef struct buffer_queue {
   size_t             buffer_size;        /* size of an individual data buffer */
   struct GenericFD   file;               /* file descriptor */
   char               path[2048];         /* path to the file */
-  int                block_number;       /* block num of the file for this queue */
+  int                block_number;       /* block num (within stripe) of the file for this queue */
+  int                block_number_abs;   /* absolute block corresponding to block_number */
   ne_handle          handle;             /* pointer back up to the ne_handle */
   off_t              offset;             /* for write - amount of partial block 
                                              that has been stored in the buffer[tail]
@@ -382,15 +382,17 @@ int bq_init(BufferQueue *bq, int block_number, ne_handle handle) {
 //    bq->buffers[i] = buffers[i];
 //  }
 
-  bq->block_number = block_number;
-  bq->qdepth       = 0;
-  bq->head         = 0;
-  bq->tail         = 0;
-  bq->con_flags    = 0;
-  bq->state_flags  = 0;
-  bq->buffer_size  = handle->erasure_state->bsz;
-  bq->handle       = handle;
-  bq->offset       = 0;
+  bq->block_number     = block_number;
+  bq->block_number_abs = ((block_number + handle->erasure_state->O)
+                          % (handle->erasure_state->N + handle->erasure_state->E));
+  bq->qdepth           = 0;
+  bq->head             = 0;
+  bq->tail             = 0;
+  bq->con_flags        = 0;
+  bq->state_flags      = 0;
+  bq->buffer_size      = handle->erasure_state->bsz;
+  bq->handle           = handle;
+  bq->offset           = 0;
 
   FD_INIT(bq->file, handle);
 
@@ -450,7 +452,10 @@ void bq_finish(void* arg) {
 void *bq_writer(void *arg) {
   BufferQueue *bq      = (BufferQueue *)arg;
   ne_handle    handle  = bq->handle;
+
   TimingData*  timing = handle->timing_data_ptr;
+  int          server = bq->block_number_abs; // absolute "block number" of the server
+
   size_t       written = 0;
   int          error;
   char         aborted = 0; // set to 1 on abort and 2 on pthread lock error
@@ -465,7 +470,7 @@ void *bq_writer(void *arg) {
 #endif
 
   if (timing->flags & TF_THREAD)
-     fast_timer_start(&timing->stats[bq->block_number].thread);
+     fast_timer_start(&timing->stats[server].thread);
   
   // debugging, assure we see thread entry/exit, even via cancellation
   PRINTdbg("entering write thread for block %d, in %s\n", bq->block_number, bq->path);
@@ -474,16 +479,16 @@ void *bq_writer(void *arg) {
 // ---------------------- OPEN DATA FILE ----------------------
 
   if (timing->flags & TF_OPEN)
-     fast_timer_start(&timing->stats[bq->block_number].open);
+     fast_timer_start(&timing->stats[server].open);
 
   // open the file.
   OPEN(bq->file, handle->auth, handle->impl, bq->path, O_WRONLY|O_CREAT, 0666);
 
   if (timing->flags & TF_OPEN)
   {
-     fast_timer_stop(&timing->stats[bq->block_number].open);
-     log_histo_add_interval(&timing->stats[bq->block_number].open_h,
-                            &timing->stats[bq->block_number].open);
+     fast_timer_stop(&timing->stats[server].open);
+     log_histo_add_interval(&timing->stats[server].open_h,
+                            &timing->stats[server].open);
   }
 
   PRINTdbg("open issued for file %d\n", bq->block_number);
@@ -495,7 +500,7 @@ void *bq_writer(void *arg) {
   // holding the queue lock, and partially because time spent waiting for our 
   // queue lock to be released is indicative of ne_write() copying data around
   if (timing->flags & TF_RW)
-     fast_timer_start(&timing->stats[bq->block_number].read);
+     fast_timer_start(&timing->stats[server].read);
 
   if(pthread_mutex_lock(&bq->qlock) != 0) {
     PRINTerr("failed to lock queue lock: %s\n", strerror(error));
@@ -580,9 +585,9 @@ void *bq_writer(void *arg) {
 
     // stop the 'read' timer once we have work to do
     if (timing->flags & TF_RW) {
-       fast_timer_stop(&timing->stats[bq->block_number].read);
-       log_histo_add_interval(&timing->stats[bq->block_number].read_h,
-                              &timing->stats[bq->block_number].read);
+       fast_timer_stop(&timing->stats[server].read);
+       log_histo_add_interval(&timing->stats[server].read_h,
+                              &timing->stats[server].read);
     }
 
 
@@ -591,7 +596,7 @@ void *bq_writer(void *arg) {
 // ---------------------- WRITE TO THE DATA FILE ----------------------
 
       if (timing->flags & TF_RW)
-         fast_timer_start(&timing->stats[bq->block_number].write);
+         fast_timer_start(&timing->stats[server].write);
 
 // removing this since the newer NFS clients are better behaved
 /*
@@ -610,9 +615,9 @@ void *bq_writer(void *arg) {
 
       PRINTdbg("write done for block %d at offset %zd\n", bq->block_number, written);
       if (timing->flags & TF_RW) {
-         fast_timer_stop(&timing->stats[bq->block_number].write);
-         log_histo_add_interval(&timing->stats[bq->block_number].write_h,
-                                &timing->stats[bq->block_number].write);
+         fast_timer_stop(&timing->stats[server].write);
+         log_histo_add_interval(&timing->stats[server].write_h,
+                                &timing->stats[server].write);
       }
 
     }
@@ -632,7 +637,7 @@ void *bq_writer(void *arg) {
 
     // use 'read' to time how long it takes us to receive work
     if (timing->flags & TF_RW)
-       fast_timer_start(&timing->stats[bq->block_number].read);
+       fast_timer_start(&timing->stats[server].read);
 
     // get the queue lock so that we can adjust the head position
     if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
@@ -663,9 +668,9 @@ void *bq_writer(void *arg) {
 
   // stop the 'read' timer, which will still be running after any loop breakout
   if (timing->flags & TF_RW) {
-    fast_timer_stop(&timing->stats[bq->block_number].read);
-    log_histo_add_interval(&timing->stats[bq->block_number].read_h,
-                           &timing->stats[bq->block_number].read);
+    fast_timer_stop(&timing->stats[server].read);
+    log_histo_add_interval(&timing->stats[server].read_h,
+                           &timing->stats[server].read);
   }
 
   // for whatever reason, this thread's work is done
@@ -673,12 +678,12 @@ void *bq_writer(void *arg) {
   int close_rc = 1;
   if ( !(FD_ERR(bq->file)) ) {
      if (timing->flags & TF_CLOSE)
-        fast_timer_start(&timing->stats[bq->block_number].close);
+        fast_timer_start(&timing->stats[server].close);
      close_rc = HNDLOP(close, bq->file);
      if (timing->flags & TF_CLOSE) {
-        fast_timer_stop(&timing->stats[bq->block_number].close);
-        log_histo_add_interval(&timing->stats[bq->block_number].close_h,
-                               &timing->stats[bq->block_number].close);
+        fast_timer_stop(&timing->stats[server].close);
+        log_histo_add_interval(&timing->stats[server].close_h,
+                               &timing->stats[server].close);
      }
   }
 
@@ -703,7 +708,7 @@ void *bq_writer(void *arg) {
       PATHOP(unlink, handle->impl, handle->auth, bq->path); // try to clean up after ourselves.
 
     if (timing->flags & TF_THREAD)
-       fast_timer_stop(&timing->stats[bq->block_number].thread);
+       fast_timer_stop(&timing->stats[server].thread);
 
     return NULL; // don't bother trying to rename
   }
@@ -718,7 +723,7 @@ void *bq_writer(void *arg) {
     // if we failed to set the xattr, don't bother with the rename.
     PRINTerr("error setting xattr for block %d\n", bq->block_number);
     if (timing->flags & TF_THREAD)
-       fast_timer_stop(&timing->stats[bq->block_number].thread);
+       fast_timer_stop(&timing->stats[server].thread);
     return NULL;
   }
 
@@ -735,7 +740,7 @@ void *bq_writer(void *arg) {
   PRINTdbg("                    new:  %s\n", block_file_path );
 
   if (timing->flags & TF_RENAME)
-     fast_timer_start(&timing->stats[bq->block_number].rename);
+     fast_timer_start(&timing->stats[server].rename);
 
   if( PATHOP( rename, handle->impl, handle->auth, bq->path, block_file_path ) != 0 ) {
     PRINTerr("bq_writer: rename failed: %s\n", strerror(errno) );
@@ -743,7 +748,7 @@ void *bq_writer(void *arg) {
   }
 
   if (timing->flags & TF_RENAME)
-     fast_timer_stop(&timing->stats[bq->block_number].rename);
+     fast_timer_stop(&timing->stats[server].rename);
 
   if ( handle->mode == NE_REBUILD ) {
     PRINTdbg( "performing chown of rebuilt file \"%s\"\n", block_file_path );
@@ -759,7 +764,7 @@ void *bq_writer(void *arg) {
   PRINTdbg("                         new:  %s\n", block_file_path );
 
   if (timing->flags & TF_RENAME)
-     fast_timer_start(&timing->stats[bq->block_number].rename);
+     fast_timer_start(&timing->stats[server].rename);
 
   if ( PATHOP( rename, handle->impl, handle->auth, bq->path, block_file_path ) != 0 ) {
      PRINTerr("bq_writer: rename failed: %s\n", strerror(errno) );
@@ -767,7 +772,7 @@ void *bq_writer(void *arg) {
   }
 
   if (timing->flags & TF_RENAME)
-     fast_timer_stop(&timing->stats[bq->block_number].rename);
+     fast_timer_stop(&timing->stats[server].rename);
 
   if ( handle->mode == NE_REBUILD ) {
     PRINTdbg( "performing chown of rebuilt meta file \"%s\"\n", block_file_path );
@@ -777,7 +782,7 @@ void *bq_writer(void *arg) {
 #endif
 
   if (timing->flags & TF_THREAD)
-     fast_timer_stop(&timing->stats[bq->block_number].thread);
+     fast_timer_stop(&timing->stats[server].thread);
 
   pthread_cleanup_pop(1);
   return NULL;
@@ -788,11 +793,14 @@ void *bq_writer(void *arg) {
 void* bq_reader(void* arg) {
    BufferQueue* bq      = (BufferQueue *)arg;
    ne_handle    handle  = bq->handle;
+
    TimingData*  timing  = handle->timing_data_ptr;
+   int          server = bq->block_number_abs;
+
    int          error   = 0;
 
    if (timing->flags & TF_THREAD)
-      fast_timer_start(&timing->stats[bq->block_number].thread);
+      fast_timer_start(&timing->stats[server].thread);
   
    // debugging, assure we see thread entry/exit, even via cancellation
    PRINTdbg("entering read thread for block %d, in %s\n", bq->block_number, bq->path);
@@ -875,15 +883,15 @@ void* bq_reader(void* arg) {
 // ---------------------- OPEN DATA FILE ----------------------
 
    if (timing->flags & TF_OPEN)
-      fast_timer_start(&timing->stats[bq->block_number].open);
+      fast_timer_start(&timing->stats[server].open);
 
    OPEN( bq->file, handle->auth, handle->impl, bq->path, O_RDONLY );
 
    if (timing->flags & TF_OPEN)
    {
-      fast_timer_stop(&timing->stats[bq->block_number].open);
-      log_histo_add_interval(&timing->stats[bq->block_number].open_h,
-                            &timing->stats[bq->block_number].open);
+      fast_timer_stop(&timing->stats[server].open);
+      log_histo_add_interval(&timing->stats[server].open_h,
+                            &timing->stats[server].open);
    }
 
    PRINTdbg("opened file %d\n", bq->block_number);
@@ -899,7 +907,7 @@ void* bq_reader(void* arg) {
    // holding the queue lock, and partially because time spent waiting for our 
    // queue lock to be released is indicative of ne_read() copying data around
    if (timing->flags & TF_RW)
-      fast_timer_start(&timing->stats[bq->block_number].write);
+      fast_timer_start(&timing->stats[server].write);
 
    // attempt to lock the queue before beginning the main loop
    if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
@@ -1000,9 +1008,9 @@ void* bq_reader(void* arg) {
 
       // stop the 'write' timer once we have work to do
       if (timing->flags & TF_RW) {
-          fast_timer_stop(&timing->stats[bq->block_number].write);
-          log_histo_add_interval(&timing->stats[bq->block_number].write_h,
-                                 &timing->stats[bq->block_number].write);
+          fast_timer_stop(&timing->stats[server].write);
+          log_histo_add_interval(&timing->stats[server].write_h,
+                                 &timing->stats[server].write);
       }
 
 
@@ -1016,14 +1024,14 @@ void* bq_reader(void* arg) {
          u32 crc_val = 0;
 
          if (timing->flags & TF_RW)
-            fast_timer_start(&timing->stats[bq->block_number].read);
+            fast_timer_start(&timing->stats[server].read);
 
          error     = read_all(&bq->file, bq->buffers[bq->tail], bq->buffer_size + sizeof(u32));
 
          if (timing->flags & TF_RW) {
-            fast_timer_stop(&timing->stats[bq->block_number].read);
-            log_histo_add_interval(&timing->stats[bq->block_number].read_h,
-                                   &timing->stats[bq->block_number].read);
+            fast_timer_stop(&timing->stats[server].read);
+            log_histo_add_interval(&timing->stats[server].read_h,
+                                   &timing->stats[server].read);
          }
 
          if ( error != bq->buffer_size + sizeof(u32) ) {
@@ -1085,7 +1093,7 @@ void* bq_reader(void* arg) {
 
       // use 'write' to time how long it takes us to receive work
       if (timing->flags & TF_RW)
-         fast_timer_start(&timing->stats[bq->block_number].write);
+         fast_timer_start(&timing->stats[server].write);
 
       // get the queue lock so that we can adjust the tail position
       if((error = pthread_mutex_lock(&bq->qlock)) != 0) {
@@ -1118,14 +1126,14 @@ void* bq_reader(void* arg) {
 
    // stop the 'write' timer, which will still be running after any loop breakout
    if (timing->flags & TF_RW) {
-      fast_timer_stop(&timing->stats[bq->block_number].write);
-      log_histo_add_interval(&timing->stats[bq->block_number].write_h,
-                           &timing->stats[bq->block_number].write);
+      fast_timer_stop(&timing->stats[server].write);
+      log_histo_add_interval(&timing->stats[server].write_h,
+                           &timing->stats[server].write);
    }
 
    // for whatever reason, this thread's work is done.  close the file
    if (timing->flags & TF_CLOSE)
-      fast_timer_start(&timing->stats[bq->block_number].close);
+      fast_timer_start(&timing->stats[server].close);
 
    int close_rc = 1;
 
@@ -1135,9 +1143,9 @@ void* bq_reader(void* arg) {
 
    if (timing->flags & TF_CLOSE)
    {
-      fast_timer_stop(&timing->stats[bq->block_number].close);
-      log_histo_add_interval(&timing->stats[bq->block_number].close_h,
-                            &timing->stats[bq->block_number].close);
+      fast_timer_stop(&timing->stats[server].close);
+      log_histo_add_interval(&timing->stats[server].close_h,
+                            &timing->stats[server].close);
    }
    // at least note any close error, even though this shouldn't matter for reads
    if ( close_rc ) {
@@ -1147,7 +1155,7 @@ void* bq_reader(void* arg) {
 
    // all done!
    if (timing->flags & TF_THREAD)
-      fast_timer_stop(&timing->stats[bq->block_number].thread);
+      fast_timer_stop(&timing->stats[server].thread);
 
    pthread_cleanup_pop(1);
    return NULL;
@@ -2456,7 +2464,7 @@ int show_handle_stats(ne_handle handle) {
       int N = handle->erasure_state->N;
       int E = handle->erasure_state->E;
       for (i=0; i<N+E; ++i) {
-         printf("-- block %d\n", i);
+         printf("\n-- block %d\n", i);
 
          fast_timer_show(&timing->stats[i].thread, simple, "thread:  ", 0);
          fast_timer_show(&timing->stats[i].open,   simple, "open:    ", 0);
@@ -2984,7 +2992,7 @@ int print_timing_data(TimingData* timing, const char* hdr, int avg, int use_sysl
    int   do_avg = (avg && (timing->event_count > 1));
 
    // keep things simple for parsers of our log-output
-   const char* avg_str_not = "-----"; // i.e. no averaging was done on this value
+   const char* avg_str_not = "(tot)"; // i.e. no averaging was done on this value
    const char* avg_str     = (avg ? "(avg)" : avg_str_not);
 
    size_t header_len = strlen(header);
@@ -4154,7 +4162,7 @@ int ne_get_xattr1( const uDAL* impl, SktAuth auth,
 #ifdef META_FILES
    char meta_file_path[2048];
    strncpy(meta_file_path, path, 2048);
-   strncat(meta_file_path, META_SFX, strlen(META_SFX)+1);
+    strncat(meta_file_path, META_SFX, strlen(META_SFX)+1);
 
    OPEN( fd, handle->auth, handle->impl, meta_file_path, O_RDONLY );
    if (FD_ERR(fd)) {

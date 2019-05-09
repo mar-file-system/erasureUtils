@@ -414,7 +414,9 @@ int log_histo_add_value(LogHisto* hist, uint64_t timer_value) {
    // find the 1-based bit-position of highest-bit
    // 1-based bit-position is the bin-index
    // select histogram bin
+   //
    // TBD: vectorize this, for speed
+   //      (or at least do a binary search)
    uint64_t bit = (uint64_t)1 << 63;
    for (i=64; i; --i) {
       if (timer_value & bit)

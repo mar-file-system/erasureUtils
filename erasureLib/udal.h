@@ -74,6 +74,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 // forward-decls
 typedef struct uDALImpl uDAL;
 
+// defines for AXATTR_blah
+#include "erasure_config.h"
+
 // generated to #define SOCKETS, etc, based on configuration options.
 #include "udal_config.h"
 

@@ -76,15 +76,15 @@ endif
 
 
 if USE_SYSLOG
-   DEBUG_NE_VALUE=2
+   DEFS       += -DUSE_SYSLOG=1
 else
-   DEBUG_NE_VALUE=1
+   DEFS       += -DUSE_SYSLOG=0
 endif
 
 
 if DEBUG_NE
   AM_CFLAGS   += -g -O0
-  DEFS        += -DDEBUG_NE=$(DEBUG_NE_VALUE)  -fstack-protector-all -fstack-check
+  DEFS        += -DDEBUG_NE=1  -fstack-protector-all -fstack-check
 else
   AM_CFLAGS   += -g -O3
   DEFS        += -DDEBUG_NE=0

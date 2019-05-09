@@ -57,10 +57,23 @@
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 
+
+# NOTE: Instead of generating libne_auto_config.h for inclusion in our
+#    .h files, which would contain #defines matching AC_DEFINE() calls
+#    in this config, we now generate erasure_config.h which contains
+#    hand-built #defines matching AC_SUBST() calls in this config.  As
+#    a result, we generate only the symbols we really want to export,
+#    which lets us avoid name-conflicts with #defines that might be
+#    used within other libraries (e.g. pftool) which include our .h
+#    files, plus their own config.h.
+#
+#    HOWEVER, erasure.c still uses HAVE_LIBISAL internally.  Therefore,
+#    we do generate this file, but we avoid exporting it.
+
 AC_PREREQ([2.69])
 AC_INIT([erasureUtils], [1.0], [gransom@lanl.gov])
 AC_CONFIG_SRCDIR([COPYRIGHT.h])
-AC_CONFIG_HEADERS([config.h])
+AC_CONFIG_HEADERS([libne_auto_config.h])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
 
@@ -98,9 +111,9 @@ AC_CHECK_FUNCS([bzero ftruncate memset strerror strtol strtoul])
 ### AC_FUNC_MALLOC
 AC_CHECK_FUNCS([malloc])
 
+
 AXATTR_GET_FUNC_CHECK
 AXATTR_SET_FUNC_CHECK
-
 
 
 
@@ -249,21 +262,23 @@ AM_CONDITIONAL([SUPPRESS_FILE_IO],  [test "$enable_file_io" != yes])
 
 
 # Allow turning on debugging flags
+# NOTE: There are currently no fast-timer diagnostics.
+#       If there were, we probably would only want to see them for specialized debugging.
 AC_ARG_ENABLE([debug],
                AS_HELP_STRING([--enable-debug],
-                              [Turn on internal debugging.  One of {ne,sockets,all,allft,no}]),
+                              [Turn on internal debugging.  One of {ne,sockets,ft,yes,no}]),
                [case "${enableval}" in
                   ne)        enable_debug=ne ;;
                   sockets)   enable_debug=sockets ;;
-                  all)       enable_debug=all ;;
-                  allft)     enable_debug=allft ;;
-                  *)    AC_MSG_FAILURE([enable-debug={ne,sockets,all,allft,no}.]) ;;
+                  ft)        enable_debug=ft ;;
+                  yes)       enable_debug=all ;;
+                  *)    AC_MSG_FAILURE([enable-debug={ne,sockets,ft,yes,no}.]) ;;
                 esac],
                [enable_debug=no])
 
 AM_CONDITIONAL([DEBUG_NE],      [test "$enable_debug" = ne      || test "$enable_debug" = all ])
 AM_CONDITIONAL([DEBUG_SOCKETS], [test "$enable_debug" = sockets || test "$enable_debug" = all ])
-AM_CONDITIONAL([DEBUG_FT],      [test "$enable_debug" = allft ])
+AM_CONDITIONAL([DEBUG_FT],      [test "$enable_debug" = ft ])
 
 
 
@@ -274,7 +289,7 @@ AC_ARG_ENABLE([syslog],
               [enable_syslog=$enableval],
               [enable_syslog=no])
 
-AM_CONDITIONAL([USE_SYSLOG], [test "x$enable_syslog" != xno])
+AM_CONDITIONAL([USE_SYSLOG], [test x"$enable_syslog" != xno])
 
 
 
@@ -331,6 +346,7 @@ AM_CONDITIONAL([HAVE_C_BUFSIZE], [test x"$C_BUFSIZE" != x])
 
 AC_CONFIG_FILES([Makefile
                  fast_timer/Makefile
+                 config/erasure_config.h:config/erasure_config.h.in
                  config/udal_config.h:config/udal_config.h.in
                  config/Makefile
                  sockets/Makefile

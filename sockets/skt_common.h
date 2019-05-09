@@ -77,7 +77,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #define FAIL_STR   "* fail: "
 
-#if (DEBUG_SOCKETS == 2)
+#if (DEBUG_SOCKETS && USE_SYSLOG)
 #  include <syslog.h>
 #  define neLOG(FMT,...)  SYSLOG(LOG_INFO,           FMT, ##__VA_ARGS__)
 #  define neERR(FMT,...)  SYSLOG(LOG_ERR,   FAIL_STR FMT, ##__VA_ARGS__)
@@ -88,10 +88,16 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #  define neERR(FMT,...)  FPRINTF(stderr,   FAIL_STR FMT, ##__VA_ARGS__)
 #  define neDBG(FMT,...)  FPRINTF(stderr,            FMT, ##__VA_ARGS__)
 
+#elif (USE_SYSLOG)
+#  include <syslog.h>
+#  define neLOG(FMT,...)  SYSLOG(LOG_INFO,           FMT, ##__VA_ARGS__)
+#  define neERR(FMT,...)
+#  define neDBG(FMT,...)
+
 #else
 #  define neLOG(FMT,...)  fprintf(stdout,            FMT, ##__VA_ARGS__)
 #  define neERR(FMT,...)  /* fprintf(stderr,   FAIL_STR FMT, ##__VA_ARGS__) */
-#  define neDBG(...)
+#  define neDBG(FMT,...)
 #endif
 
 // always goes to stderr, regardless of DEBUG setting
