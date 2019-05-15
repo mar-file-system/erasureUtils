@@ -487,44 +487,43 @@ int read_raw(int fd, char* buf, size_t size, int peek_p) {
 
 
 
-      if (! interrupted) {
-
-         // --- do the read
-         //     NOTE: HUP also shows POLLIN.  RECV() then returns 0.
-         neDBG("recv(%d, 0x%lx, %ld, 0x%02x) [iter: %d]\n",
-               fd, (size_t)buf1, size1, (peek_p ? MSG_PEEK : MSG_DONTWAIT), i);
-         read_count = RECV(fd, buf1, size1, (peek_p ? MSG_PEEK : MSG_DONTWAIT));
-      }
-
-
-
-      // --- analyze read-results
       if (unlikely(interrupted))
-         neDBG("interrupted.  Will try again [iter: %d]\n", i);
+        neDBG("interrupted.  Will try again [iter: %d]\n", i);
 
-      //      else if (unlikely(timed_out))
-      //         neDBG("period time-out.  Will try again [iter: %d]\n", i);
+      else if (unlikely(timed_out))
+        neDBG("timed-out.  Will try again [iter: %d]\n", i);
 
-      else if (likely(read_count == size1)) {
-         neDBG("read OK [iter: %d]\n", i);
-         return 0;
-      }
-      else if (! read_count) {
-         neERR("read EOF [iter: %d]\n", i);
-         return -1;
-      }
-      else if (read_count > 0) {
-         neERR("read %lld instead of %lld bytes [iter: %d]\n",
-               read_count, size1, i);
+      else {
 
-         // got part of our expected read.  Iterate to get the rest.
-         buf1  += read_count;
-         size1 -= read_count;
-      }
-      else if ((errno != EAGAIN)
-               && (errno != EWOULDBLOCK)) {
-         neERR("read failed [iter: %d]: %s\n", i, strerror(errno));
-         return -1;
+        // --- do the read
+        //     NOTE: HUP also shows POLLIN.  RECV() then returns 0.
+        neDBG("recv(%d, 0x%lx, %ld, 0x%02x) [iter: %d]\n",
+              fd, (size_t)buf1, size1, (peek_p ? MSG_PEEK : MSG_DONTWAIT), i);
+        read_count = RECV(fd, buf1, size1, (peek_p ? MSG_PEEK : MSG_DONTWAIT));
+
+
+        // --- analyze read-results
+        if (likely(read_count == size1)) {
+          neDBG("read OK [iter: %d]\n", i);
+          return 0;
+        }
+        else if (! read_count) {
+          neERR("read EOF [iter: %d]\n", i);
+          return -1;     // you called read_raw() because you expected something
+        }
+        else if (read_count > 0) {
+          neERR("read %lld instead of %lld bytes [iter: %d]\n",
+           read_count, size1, i);
+
+          // got part of our expected read.  Iterate to get the rest.
+          buf1  += read_count;
+          size1 -= read_count;
+        }
+        else if ((errno != EAGAIN)
+            && (errno != EWOULDBLOCK)) {
+          neERR("read failed [iter: %d]: %s\n", i, strerror(errno));
+          return -1;
+        }
       }
 
 
@@ -617,42 +616,43 @@ int write_raw(int fd, char* buf, size_t size) {
       }
 
 
-      if (! interrupted) {
 
-         // --- do the write
-         neDBG("send(%d, 0x%lx, %ld, 0x%02x) [iter: %d]\n",
-               fd, (size_t)buf1, size1, MSG_DONTWAIT, i);
-         write_count = SEND(fd, buf1, size1, MSG_DONTWAIT);
-      }
-
-
-      // --- analyze write-results
       if (unlikely(interrupted))
          neDBG("interrupted.  Will try again [iter: %d]\n", i);
 
-      //      else if (unlikely(timed_out))
-      //         neDBG("period time-out.  Will try again [iter: %d]\n", i);
+      else if (unlikely(timed_out))
+        neDBG("timed-out.  Will try again [iter: %d]\n", i);
 
-      else if (likely(write_count == size1)) {
-         neDBG("write OK [iter: %d]\n", i);
-         return 0;
-      }
-      else if (! write_count) {
-         neERR("write EOF [iter: %d]\n", i);
-         return -1;             // you called read_raw() expecting something
-      }
-      else if (write_count > 0) {
-         neERR("wrote %lld instead of %lld bytes [iter: %d]\n",
-               write_count, size1, i);
+      else {
 
-         // got part of our expected read.  Iterate to get the rest.
-         buf1  += write_count;
-         size1 -= write_count;
-      }
-      else if ((errno != EAGAIN)
-               && (errno != EWOULDBLOCK)) {
-         neERR("write failed [iter: %d]: %s\n", i, strerror(errno));
-         return -1;
+        // --- do the write
+        neDBG("send(%d, 0x%lx, %ld, 0x%02x) [iter: %d]\n",
+              fd, (size_t)buf1, size1, MSG_DONTWAIT, i);
+        write_count = SEND(fd, buf1, size1, MSG_DONTWAIT);
+
+
+        // --- analyze write-results
+        if (likely(write_count == size1)) {
+          neDBG("write OK [iter: %d]\n", i);
+          return 0;
+        }
+        else if (! write_count) {
+          // apparently, this can happen (e.g. if destination is overworked)
+          neDBG("wrote 0, technically not an error [iter: %d]\n", i);
+        }
+        else if (write_count > 0) {
+          neERR("wrote %lld instead of %lld bytes [iter: %d]\n",
+           write_count, size1, i);
+
+          // got part of our expected read.  Iterate to get the rest.
+          buf1  += write_count;
+          size1 -= write_count;
+        }
+        else if ((errno != EAGAIN)
+            && (errno != EWOULDBLOCK)) {
+          neERR("write failed [iter: %d]: %s\n", i, strerror(errno));
+          return -1;
+        }
       }
 
 
