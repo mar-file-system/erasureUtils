@@ -800,7 +800,7 @@ int fake_open(SocketHandle* handle, int flags, char* buf, size_t size) {
   // RD/WR with RDMA would require riomaps on both ends, or else
   // two different channels, each with a single riomap.
   if (flags & (O_RDWR)) {
-    errno = ENOTSUP;		// TBD?
+    errno = ENOTSUP;            // TBD?
     return -1;
   }
 

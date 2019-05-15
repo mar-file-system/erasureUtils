@@ -2131,7 +2131,7 @@ int riomap_reader(SocketHandle* handle, void* buf, size_t size) {
     handle->flags &= ~HNDL_RIOMAPPED;
     THREAD_CANCEL(ENABLE);
   }
-    
+
 
   // send peer the offset we get from riomap()
   // She'll need this for riowrite(), in write_buffer()
@@ -2141,7 +2141,7 @@ int riomap_reader(SocketHandle* handle, void* buf, size_t size) {
 
   THREAD_CANCEL(DISABLE);
 
-  neDBG("riomap(%d, 0x%llu, ...)\n", handle->peer_fd, (size_t)buf);
+  neDBG("riomap(%d, 0x%llx, ...)\n", handle->peer_fd, (size_t)buf);
   handle->rio_offset = RIOMAP(handle->peer_fd, buf, size, PROT_WRITE, 0, -1);
   if (handle->rio_offset == (off_t)-1) {
     neERR("riomap failed: %s\n", strerror(errno));
@@ -2482,6 +2482,8 @@ int skt_fsync(SocketHandle* handle) {
 // ...........................................................................
 
 int skt_close(SocketHandle* handle) {
+
+   neDBG("skt_close(0x%llx)\n", (size_t)handle);
 
    // jNEED() macros will run this before exiting
    jHANDLER( jshut_down_handle, handle );

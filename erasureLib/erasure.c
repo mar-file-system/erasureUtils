@@ -279,8 +279,8 @@ struct handle {
 //      are currently using a "fake" handle just to use OPEN() include
 //      ne_size(), and ne_set_attr1().
 //
-#define OPEN(GFD, AUTH, IMPL, ...)              do { (GFD).auth = (AUTH); \
-                                                     (GFD).impl = (IMPL); \
+#define OPEN(GFD, AUTH, IMPL, ...)          do { (GFD).auth = (AUTH); \
+                                                 (GFD).impl = (IMPL); \
                                                  (IMPL)->open(&(GFD), ## __VA_ARGS__); } while(0)
 
 #define pHNDLOP(OP, GFDp, ...)              (GFDp)->impl->OP((GFDp), ## __VA_ARGS__)
@@ -527,7 +527,8 @@ void *bq_writer(void *arg) {
     // the thread should always be holding its queue lock at this point
 
     // check for any states that require us to wait on the master proc, but allow a FINISHED or ABORT signal to break us out
-    while ( ( bq->qdepth == 0  ||  (bq->con_flags & BQ_HALT) )  &&  !((bq->con_flags & BQ_FINISHED) || (bq->con_flags & BQ_ABORT)) ) {
+    while ( ( bq->qdepth == 0  ||  (bq->con_flags & BQ_HALT) )
+            &&  !((bq->con_flags & BQ_FINISHED) || (bq->con_flags & BQ_ABORT)) ) {
       // note the halted state if we were asked to pause
       if ( bq->con_flags & BQ_HALT ) {
          bq->state_flags |= BQ_HALTED;
@@ -948,7 +949,8 @@ void* bq_reader(void* arg) {
       // Note, it is tempting to wait on 'resetable_error' here; however, we depend upon this thread to set error states for 
       // all buffers and to advance the queue.  Otherwise, ne_read() would be forced to assume that this thread is just really 
       // darn slow.
-      while ( ( bq->qdepth == MAX_QDEPTH  ||  (bq->con_flags & BQ_HALT) )  &&  !((bq->con_flags & BQ_FINISHED) || (bq->con_flags & BQ_ABORT)) ) {
+      while ( ( bq->qdepth == MAX_QDEPTH  ||  (bq->con_flags & BQ_HALT) )
+              &&  !((bq->con_flags & BQ_FINISHED) || (bq->con_flags & BQ_ABORT)) ) {
          // note the halted state if we were asked to pause
          if ( bq->con_flags & BQ_HALT ) {
             bq->state_flags |= BQ_HALTED;
@@ -999,7 +1001,8 @@ void* bq_reader(void* arg) {
 
       // if the finished flag is set, only terminate if we've hit an error, are still halted, or the queue is full.
       // This is mean to ensure that we have the chance to reach EOF and verify the global crc
-      if( (bq->con_flags & BQ_FINISHED)  &&  ( (bq->con_flags & BQ_HALT)  ||  !(good_crc)  ||  (bq->qdepth == MAX_QDEPTH) ) ) {
+      if( (bq->con_flags & BQ_FINISHED)
+          && ( (bq->con_flags & BQ_HALT)  ||  !(good_crc)  ||  (bq->qdepth == MAX_QDEPTH) ) ) {
          PRINTdbg("BQ_reader %d finished\n", bq->block_number);
          pthread_mutex_unlock(&bq->qlock);
          break;
