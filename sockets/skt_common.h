@@ -183,11 +183,15 @@ typedef void(*jHandlerType)(void* arg);
 
 
 // These represent the max delay (in sec), waiting for protocol tokens
-// to/from client/server.  When debugging, we typically want to be able to
-// step slowly through an exchange, without provoking a timeout.  Be
-// careful, though: you might be debugging a problem that happens only
-// because of a timeout.  Also, note that when *not* debugging,
-// DEBUG_SOCKETS is #define'd, but is 0.
+// to/from client/server.  If any kind of socket communication is
+// happening faster than that, you will not see a timeout.
+//
+// When debugging, we typically want to be able to step slowly through
+// an exchange, without provoking a timeout.  You can accomplish this
+// (setting DEBIUG_SOCKETS > 1), by configuring with
+// '--enable-debug=gdb'.  Be careful, though: if the problem happens
+// only because of a timeout, you'll not see it this way.  Also, note
+// that when *not* debugging, DEBUG_SOCKETS is #define'd, but is 0.
 
 // WARNING: if these values are set small (e.g. 30 sec), and there is a
 //     small value (e.g. 100) for wait_usec in read/write_raw(), then the
@@ -197,17 +201,12 @@ typedef void(*jHandlerType)(void* arg);
 //     spontaneously dropping connections, etc, showing as getting EOF from
 //     the server.
 
-#if DEBUG_SOCKETS
+#if (DEBUG_SOCKETS > 1)
 #  define WR_TIMEOUT          10000
 #  define RD_TIMEOUT          10000
-
-// // for debugging short-timeout probs, with logging enabled.
-// #  define WR_TIMEOUT          30
-// #  define RD_TIMEOUT          30
-
 #else
-#  define WR_TIMEOUT             30
-#  define RD_TIMEOUT             30
+#  define WR_TIMEOUT             20
+#  define RD_TIMEOUT             20
 #endif
 
 
