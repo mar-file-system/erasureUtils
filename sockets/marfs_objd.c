@@ -1779,7 +1779,7 @@ main(int argc, char* argv[]) {
   // you'd think we should do this on client_fd after the accept(), but that fails, and this succeeds
   // [see fake_open()]
   //   unsigned mapsize = MAX_SOCKET_CONNS; // max number of riomap'ed buffers
-  unsigned mapsize = 1; // max number of riomap'ed buffers (for this fd?)
+  unsigned mapsize = MAX_RIOMAPS; // max number of riomap'ed buffers (for this fd?)
   REQUIRE_0( RSETSOCKOPT(socket_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
 
 

@@ -193,15 +193,23 @@ shut_down_handle(SocketHandle* handle) {
     // Without doing our own riounmap, we get a segfault in the
     // CLOSE() below, when rclose() calls riounmap() itself.
     //
-    // It's okay if handle->rio_buf only has local scope, in server_put(),
+    // It's okay that handle->riomap_spec[] only has local scope, in server_put(),
     // we're just unmapping the address here, not using it.
     //
     if (handle->flags & HNDL_RIOMAPPED) {
-      neDBG("peer_fd %3d: riounmap'ing\n", handle->peer_fd);
-      dbg = RIOUNMAP(handle->peer_fd, handle->rio_buf, handle->rio_size);
-      if (dbg)
-         handle->flags |= HNDL_DBG3;
-      neDBG("peer_fd %3d: unmap = %d\n", handle->peer_fd, dbg);
+      int i;
+      for (i=0; i<handle->riomap_count; ++i) {
+        RiomapSpec* spec = &handle->riomap_spec[i];
+
+        if (spec->rio_offset) {
+          neDBG("peer_fd %3d: riounmap[%d]\n", handle->peer_fd, i);
+          dbg = RIOUNMAP(handle->peer_fd, spec->rio_buf, spec->rio_size);
+          if (dbg)
+            handle->flags |= HNDL_DBG3;
+          neDBG("peer_fd %3d: unmap = %d\n", handle->peer_fd, dbg);
+        }
+      }
+      handle->riomap_count = 0;
       handle->flags &= ~HNDL_RIOMAPPED;
     }
 #endif
@@ -1691,7 +1699,7 @@ int  skt_open (SocketHandle* handle, const char* service_path, int flags, ...) {
   //  jNEED_0( RSETSOCKOPT( fd, SOL_RDMA, RDMA_INLINE, &disable, sizeof(disable)) );
 
   if (handle->flags & HNDL_PUT) {
-    unsigned mapsize = 1; // max number of riomap'ed buffers (on this fd ?)
+    unsigned mapsize = MAX_RIOMAPS; // max number of riomap'ed buffers (on this fd ?)
     jNEED_0( RSETSOCKOPT( fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
   }
   //  REQUIRE_0( rs_check(fd) ); // DEBUGGING (custom rsocket.h helper)
@@ -1953,7 +1961,9 @@ int write_init(SocketHandle* handle, SocketCommand cmd) {
        neERR("expected RIO_OFFSET pseudo-packet, not %s\n", command_str(HDR_CMD(&header)));
       return -1;
     }
-    handle->rio_offset = HDR_SIZE(&header);
+
+    // writers only keep track of the most-recent spot, where reader told us to write.
+    handle->riomap_spec[handle->riomap_pos].rio_offset = HDR_SIZE(&header);
     neDBG("got riomap offset from peer: 0x%llx\n", HDR_SIZE(&header));
 #endif
 
@@ -2000,8 +2010,8 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
     }
      else if (HDR_CMD(&header) == CMD_RIO_OFFSET) {
        neDBG("got RIO_OFFSET: 0x%llx\n", HDR_SIZE(&header));
-       handle->rio_offset = HDR_SIZE(&header);
-      return skt_write(handle, buf, size); // try again to read ACK ...
+       handle->riomap_spec[handle->riomap_pos].rio_offset = HDR_SIZE(&header);
+       return skt_write(handle, buf, size); // try again to read ACK ...
     }
     else {
        neERR("expected ACK, but got %s\n", command_str(HDR_CMD(&header)));
@@ -2028,7 +2038,7 @@ ssize_t skt_write(SocketHandle* handle, const void* buf, size_t size) {
 
 
   // write_buffer() is okay here, because we know how much the peer can handle
-  NEED_0( write_buffer(handle->peer_fd, buf, size, 1, handle->rio_offset) );
+  NEED_0( write_buffer(handle->peer_fd, buf, size, 1, handle->riomap_spec[handle->riomap_pos].rio_offset) );
   handle->stream_pos += size;  /* tracking for skt_lseek() */
 
   // copy_file_to_socket() now uses skt_write() to handle complications
@@ -2111,55 +2121,99 @@ int riomap_reader(SocketHandle* handle, void* buf, size_t size) {
 
 #if USE_RIOWRITE
 
-  // drop the old mapping, if the new read has a bigger read-buffer,
-  // or if caller has provided a new destination
-  if (likely (handle->flags & HNDL_RIOMAPPED)) {
+   int         pos  = 0;
+   RiomapSpec* spec = NULL;
 
-     if (likely ((size <= handle->rio_size)
-                 && (buf == handle->rio_buf)))
-      return 0;
+   if (likely (handle->flags & HNDL_RIOMAPPED)) {
 
-    THREAD_CANCEL(DISABLE);
-    neDBG("peer_fd %3d: Dropping old riomaping\n", handle->peer_fd);
-    int dbg = RIOUNMAP(handle->peer_fd, handle->rio_buf, handle->rio_size);
-    neDBG("peer_fd %3d: unmap = %d\n", handle->peer_fd, dbg);
-    if (dbg) {
-       neERR("unmap failed: %s\n", strerror(errno));
-       THREAD_CANCEL(ENABLE);
-       return -1;
-    }
-    handle->flags &= ~HNDL_RIOMAPPED;
-    THREAD_CANCEL(ENABLE);
-  }
+      // find matching spec
+      int i;
+      for (i=0; i<handle->riomap_count; ++i) {
+         if (handle->riomap_spec[i].rio_buf == buf) {
+            if  (handle->riomap_spec[i].rio_size <= size) {
+               neDBG("peer_fd %3d: found good riomaping [%d] buf: 0x%llx, size: %llu\n",
+                     handle->peer_fd, i, handle->riomap_spec[i].rio_buf, handle->riomap_spec[i].rio_size);
+               return 0;  // existing mapping will work
+            }
+
+            spec = &handle->riomap_spec[i];
+            break;
+         }
+      }
+   }
+
+   // no match means buf was not previously mapped. map it now
+   if (! spec) {
+      pos  = handle->riomap_pos;
+      spec = &handle->riomap_spec[pos];
+
+      // position for next insert (wrap around)
+      handle->riomap_pos   += 1;
+      if (handle->riomap_pos >= MAX_RIOMAPS)
+         handle->riomap_pos   = 0;
+   }
+
+   // maybe drop an old mapping, to make room for this one
+   if (spec->rio_size) {
+      THREAD_CANCEL(DISABLE);
+      neDBG("peer_fd %3d: dropping old riomaping [%d] buf: 0x%llx, size: %llu\n",
+            handle->peer_fd, pos, spec->rio_buf, spec->rio_size);
+
+      int dbg = RIOUNMAP(handle->peer_fd, spec->rio_buf, spec->rio_size);
+      neDBG("peer_fd %3d: [%d] unmap = %d\n", handle->peer_fd, pos, dbg);
+      if (dbg) {
+         neERR("[%d] unmap failed: %s\n", pos, strerror(errno));
+         THREAD_CANCEL(ENABLE);
+         return -1;
+      }
+
+      if (handle->riomap_count <= 1)
+         handle->flags &= ~HNDL_RIOMAPPED;
+      else
+         memset(spec, 0, sizeof(RiomapSpec));
+
+      THREAD_CANCEL(ENABLE);
+   }
 
 
-  // send peer the offset we get from riomap()
-  // She'll need this for riowrite(), in write_buffer()
+   //   // round size up to the nearest MB
+   //   size |= (size_t)((ssize_t)(1024 * 1024) -1);
+   //   size += 1;
 
-  //  unsigned mapsize = 1; // max number of riomap'ed buffers
-  //  NEED_0( RSETSOCKOPT(handle->peer_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
 
-  THREAD_CANCEL(DISABLE);
+   // install new riomap.
+   // send the offset we get from riomap() to peer.
+   // She'll need this for riowrite(), in write_buffer()
 
-  neDBG("riomap(%d, 0x%llx, ...)\n", handle->peer_fd, (size_t)buf);
-  handle->rio_offset = RIOMAP(handle->peer_fd, buf, size, PROT_WRITE, 0, -1);
-  if (handle->rio_offset == (off_t)-1) {
-    neERR("riomap failed: %s\n", strerror(errno));
-    THREAD_CANCEL(ENABLE);
-    return -1;
-  }
-  neDBG("riomap offset: 0x%llx\n", handle->rio_offset);
-  neDBG("riomap size:   %llu\n", size);
+   //  unsigned mapsize = MAX_RIOMAPS; // max number of riomap'ed buffers
+   //  NEED_0( RSETSOCKOPT(handle->peer_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
 
-  handle->rio_buf  = buf;     // to allow the riounmap in shut_down_thread()
-  handle->rio_size = size;    // to allow the riounmap in shut_down_thread()
-  handle->flags |= HNDL_RIOMAPPED;
-  THREAD_CANCEL(ENABLE);
+   THREAD_CANCEL(DISABLE);
 
-  NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RIO_OFFSET, handle->rio_offset, NULL) );
+   neDBG("riomap(%d, 0x%llx, %llu, ...)\n", handle->peer_fd, (size_t)buf, size);
+   spec->rio_offset = RIOMAP(handle->peer_fd, buf, size, PROT_WRITE, 0, -1);
+   if (spec->rio_offset == (off_t)-1) {
+      neERR("riomap failed: %s\n", strerror(errno));
+      THREAD_CANCEL(ENABLE);
+      return -1;
+   }
+   spec->rio_buf  = buf;     // to allow the riounmap in shut_down_thread()
+   spec->rio_size = size;    // to allow the riounmap in shut_down_thread()
+
+   neDBG("[%d] add riomap buf:    0x%llx\n", pos, spec->rio_buf);
+   neDBG("[%d] add riomap offset: 0x%llx\n", pos, spec->rio_offset);
+   neDBG("[%d] add riomap size:   %llu\n",   pos, spec->rio_size);
+
+   if (handle->riomap_count < MAX_RIOMAPS)
+         handle->riomap_count += 1;
+
+   handle->flags |= HNDL_RIOMAPPED;
+   THREAD_CANCEL(ENABLE);
+
+   NEED_0( write_pseudo_packet(handle->peer_fd, CMD_RIO_OFFSET, spec->rio_offset, NULL) );
 #endif
 
-  return 0;
+   return 0;
 }
 
 

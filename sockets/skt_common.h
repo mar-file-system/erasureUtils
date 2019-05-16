@@ -439,19 +439,41 @@ typedef enum {
 
 
 
+// ne_read() now has a queue of read-buffers, like ne_write().  Every call
+// to ne_read() with a new buffer provokes a new RIO unmap/map, via
+// skt_read() -> read_init() -> riomap_reader().  It seems that maybe the
+// unmapping is not working, or something, because after 255 of these
+// remaps, the sending of RIOMAP_OFFSET to the peer simply doesn't get
+// through.  The peer is polling but nothing arrives.
+//
+// In order to handle a large number of remappings across what is actually
+// a limited number of buffers, we will try the following.  Allow, an array
+// of known appings to exist, and only unmap one of those (the oldest) when
+// we have used them all up.  In the case described above, there are just
+// MAX_QDEPTH buffers being provided over and over.
+typedef struct {
+   off_t              rio_offset;  // reader sends mapping to writer, for riowrite()
+   char*              rio_buf;     // reader saves riomapp'ed address, for riounmap()
+   size_t             rio_size;    // reader saves riomapp'ed size, for riounmap()
+} RiomapSpec;
+
+// For now, MAX_QDEPTH (in erasure.h) should always be the same as this.
+// TBD: Fix things so we can just incude erasure, and define them equivalent
+#define MAX_RIOMAPS   2   /* should be >= MAX_QDEPTH, from erasure.h ? */
+
 // per-connection state
 typedef struct {
-  PathSpec           path_spec;   // host,port,path parsed from URL
-  int                open_flags;  // skt_open()
-  mode_t             open_mode;   // skt_open()
-  int                peer_fd;     // fd for comms with socket-peer
-  off_t              rio_offset;  // reader sends mapping to writer, for riowrite()
-  char*              rio_buf;     // reader saves riomapp'ed address, for riounmap()
-  size_t             rio_size;    // reader saves riomapp'ed size, for riounmap()
-  volatile size_t    stream_pos;  // ignore redundant skt_seek(), support reaper
-  ssize_t            seek_pos;    // ignore, unless HNDL_SEEK_ABS
-  SHFlags            flags;
-  SktAuth            aws_ctx;     // S3_AUTH credentials (e.g. cached by DAL at init-time)
+   PathSpec           path_spec;   // host,port,path parsed from URL
+   int                open_flags;  // skt_open()
+   mode_t             open_mode;   // skt_open()
+   int                peer_fd;     // fd for comms with socket-peer
+   RiomapSpec         riomap_spec[MAX_RIOMAPS];
+   int                riomap_pos;  // riomap_spec[] index for next mapping
+   int                riomap_count;
+   volatile size_t    stream_pos;  // ignore redundant skt_seek(), support reaper
+   ssize_t            seek_pos;    // ignore, unless HNDL_SEEK_ABS
+   SHFlags            flags;
+   SktAuth            aws_ctx;     // S3_AUTH credentials (e.g. cached by DAL at init-time)
 } SocketHandle;
 
 
