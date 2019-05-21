@@ -257,6 +257,7 @@ AC_ARG_ENABLE([debug],
                   sockets)   enable_debug=sockets ;;
                   all)       enable_debug=all ;;
                   allft)     enable_debug=allft ;;
+                  no)        enable_debug=no ;;
                   *)    AC_MSG_FAILURE([enable-debug={ne,sockets,all,allft,no}.]) ;;
                 esac],
                [enable_debug=no])
