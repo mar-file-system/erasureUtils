@@ -262,22 +262,23 @@ AM_CONDITIONAL([SUPPRESS_FILE_IO],  [test "$enable_file_io" != yes])
 
 
 # Allow turning on debugging flags
-# NOTE: There are currently no fast-timer diagnostics.
-#       If there were, we probably would only want to see them for specialized debugging.
+# NOTE: There are currently no fast-timer (i.e. 'ft') diagnostics.
+#       If there were, we would probably only want to see them for specialized debugging.
 # NOTE: The only point of 'gdb' is to allow sockets timeouts to be made long, in the
 #       case where a developer wants to be able to take their time stepping through
 #       protocol steps, without worrying about timeouts.  In all other ways, it is the
 #       same as 'yes' (which is the default if you just configure with '--enable-debug')
 AC_ARG_ENABLE([debug],
                AS_HELP_STRING([--enable-debug],
-                              [Turn on internal debugging.  One of {ne,sockets,ft,yes,no}]),
+                              [Turn on internal debugging.  One of {yes,no,ne,sockets,ft,gdb}]),
                [case "${enableval}" in
+                  yes)       enable_debug=all ;;
+                  no)        enable_debug=no ;;
                   ne)        enable_debug=ne ;;
                   sockets)   enable_debug=sockets ;;
                   ft)        enable_debug=ft ;;
-                  yes)       enable_debug=all ;;
                   gdb)       enable_debug=all; debug_mode=gdb ;;
-                  *)    AC_MSG_FAILURE([enable-debug={ne,sockets,ft,yes,no}.]) ;;
+                  *)    AC_MSG_FAILURE([enable-debug={yes,no,ne,sockets,ft,gdb}.]) ;;
                 esac],
                [enable_debug=no])
 
