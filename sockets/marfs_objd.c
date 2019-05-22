@@ -800,7 +800,7 @@ int fake_open(SocketHandle* handle, int flags, char* buf, size_t size) {
   // RD/WR with RDMA would require riomaps on both ends, or else
   // two different channels, each with a single riomap.
   if (flags & (O_RDWR)) {
-    errno = ENOTSUP;		// TBD?
+    errno = ENOTSUP;            // TBD?
     return -1;
   }
 
@@ -1779,7 +1779,7 @@ main(int argc, char* argv[]) {
   // you'd think we should do this on client_fd after the accept(), but that fails, and this succeeds
   // [see fake_open()]
   //   unsigned mapsize = MAX_SOCKET_CONNS; // max number of riomap'ed buffers
-  unsigned mapsize = 1; // max number of riomap'ed buffers (for this fd?)
+  unsigned mapsize = MAX_RIOMAPS; // max number of riomap'ed buffers (for this fd?)
   REQUIRE_0( RSETSOCKOPT(socket_fd, SOL_RDMA, RDMA_IOMAPSIZE, &mapsize, sizeof(mapsize)) );
 
 

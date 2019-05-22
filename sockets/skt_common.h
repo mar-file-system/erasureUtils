@@ -183,11 +183,15 @@ typedef void(*jHandlerType)(void* arg);
 
 
 // These represent the max delay (in sec), waiting for protocol tokens
-// to/from client/server.  When debugging, we typically want to be able to
-// step slowly through an exchange, without provoking a timeout.  Be
-// careful, though: you might be debugging a problem that happens only
-// because of a timeout.  Also, note that when *not* debugging,
-// DEBUG_SOCKETS is #define'd, but is 0.
+// to/from client/server.  If any kind of socket communication is
+// happening faster than that, you will not see a timeout.
+//
+// When debugging, we typically want to be able to step slowly through
+// an exchange, without provoking a timeout.  You can accomplish this
+// (setting DEBIUG_SOCKETS > 1), by configuring with
+// '--enable-debug=gdb'.  Be careful, though: if the problem happens
+// only because of a timeout, you'll not see it this way.  Also, note
+// that when *not* debugging, DEBUG_SOCKETS is #define'd, but is 0.
 
 // WARNING: if these values are set small (e.g. 30 sec), and there is a
 //     small value (e.g. 100) for wait_usec in read/write_raw(), then the
@@ -197,17 +201,12 @@ typedef void(*jHandlerType)(void* arg);
 //     spontaneously dropping connections, etc, showing as getting EOF from
 //     the server.
 
-#if DEBUG_SOCKETS
+#if (DEBUG_SOCKETS > 1)
 #  define WR_TIMEOUT          10000
 #  define RD_TIMEOUT          10000
-
-// // for debugging short-timeout probs, with logging enabled.
-// #  define WR_TIMEOUT          30
-// #  define RD_TIMEOUT          30
-
 #else
-#  define WR_TIMEOUT             30
-#  define RD_TIMEOUT             30
+#  define WR_TIMEOUT             20
+#  define RD_TIMEOUT             20
 #endif
 
 
@@ -440,19 +439,41 @@ typedef enum {
 
 
 
+// ne_read() now has a queue of read-buffers, like ne_write().  Every call
+// to ne_read() with a new buffer provokes a new RIO unmap/map, via
+// skt_read() -> read_init() -> riomap_reader().  It seems that maybe the
+// unmapping is not working, or something, because after 255 of these
+// remaps, the sending of RIOMAP_OFFSET to the peer simply doesn't get
+// through.  The peer is polling but nothing arrives.
+//
+// In order to handle a large number of remappings across what is actually
+// a limited number of buffers, we will try the following.  Allow, an array
+// of known appings to exist, and only unmap one of those (the oldest) when
+// we have used them all up.  In the case described above, there are just
+// MAX_QDEPTH buffers being provided over and over.
+typedef struct {
+   off_t              rio_offset;  // reader sends mapping to writer, for riowrite()
+   char*              rio_buf;     // reader saves riomapp'ed address, for riounmap()
+   size_t             rio_size;    // reader saves riomapp'ed size, for riounmap()
+} RiomapSpec;
+
+// For now, MAX_QDEPTH (in erasure.h) should always be the same as this.
+// TBD: Fix things so we can just incude erasure, and define them equivalent
+#define MAX_RIOMAPS   2   /* should be >= MAX_QDEPTH, from erasure.h ? */
+
 // per-connection state
 typedef struct {
-  PathSpec           path_spec;   // host,port,path parsed from URL
-  int                open_flags;  // skt_open()
-  mode_t             open_mode;   // skt_open()
-  int                peer_fd;     // fd for comms with socket-peer
-  off_t              rio_offset;  // reader sends mapping to writer, for riowrite()
-  char*              rio_buf;     // reader saves riomapp'ed address, for riounmap()
-  size_t             rio_size;    // reader saves riomapp'ed size, for riounmap()
-  volatile size_t    stream_pos;  // ignore redundant skt_seek(), support reaper
-  ssize_t            seek_pos;    // ignore, unless HNDL_SEEK_ABS
-  SHFlags            flags;
-  SktAuth            aws_ctx;     // S3_AUTH credentials (e.g. cached by DAL at init-time)
+   PathSpec           path_spec;   // host,port,path parsed from URL
+   int                open_flags;  // skt_open()
+   mode_t             open_mode;   // skt_open()
+   int                peer_fd;     // fd for comms with socket-peer
+   RiomapSpec         riomap_spec[MAX_RIOMAPS];
+   int                riomap_pos;  // riomap_spec[] index for next mapping
+   int                riomap_count;
+   volatile size_t    stream_pos;  // ignore redundant skt_seek(), support reaper
+   ssize_t            seek_pos;    // ignore, unless HNDL_SEEK_ABS
+   SHFlags            flags;
+   SktAuth            aws_ctx;     // S3_AUTH credentials (e.g. cached by DAL at init-time)
 } SocketHandle;
 
 

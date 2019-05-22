@@ -287,8 +287,9 @@ typedef enum {
   NE_SETBSZ  = 0x01 << 5  //32 -- indicates a bsz argument, to be assumed when reading/writing
 } ne_mode;
 
-#define MAX_QDEPTH 5
-#define MAX_RD_QDEPTH 3
+// For now, MAX_RIOMAPS (in skt_common.h) should always be made the same as MAX_QDEPTH
+#define MAX_QDEPTH      2
+#define MAX_RD_QDEPTH   3   /* (unused) */
 
 typedef enum {
   BQ_FINISHED = 0x01 << 0, // signals to threads that all work has been issued and/or completed

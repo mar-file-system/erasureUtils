@@ -107,9 +107,15 @@ else
 endif
 
 # These don't affect .h files, so we can do this from the makefile
+if DEBUG_SOCKETS_GDB
+  DEBUG_VALUE=2
+else
+  DEBUG_VALUE=1
+endif
+
 if DEBUG_SOCKETS
   AM_CFLAGS    = -g -O0
-  DEFS        += -DDEBUG_SOCKETS=1
+  DEFS        += -DDEBUG_SOCKETS=$(DEBUG_VALUE)
   AM_CPPFLAGS += -fstack-protector-all -fstack-check
 else
   AM_CFLAGS    = -g -O3
