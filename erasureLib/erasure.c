@@ -383,8 +383,6 @@ int bq_init(BufferQueue *bq, int block_number, ne_handle handle) {
 //  }
 
   bq->block_number     = block_number;
-  bq->block_number_abs = ((block_number + handle->erasure_state->O)
-                          % (handle->erasure_state->N + handle->erasure_state->E));
   bq->qdepth           = 0;
   bq->head             = 0;
   bq->tail             = 0;
@@ -1348,9 +1346,10 @@ static int initialize_queues(ne_handle handle) {
       int error, file_descriptor;
       char path[MAXNAME];
       BufferQueue *bq = &handle->blocks[i];
+      // handle all offset adjustments before calling bq_init()
+      bq->block_number_abs = (i + handle->erasure_state->O) % num_blocks;
       // generate the path
-      // sprintf(bq->path, handle->path_fmt, (i + handle->erasure_state->O) % num_blocks);
-      handle->snprintf(bq->path, MAXNAME, handle->path_fmt, (i + handle->erasure_state->O) % num_blocks, handle->printf_state);
+      handle->snprintf(bq->path, MAXNAME, handle->path_fmt, bq->block_number_abs, handle->printf_state);
 
       if ( handle->mode == NE_REBUILD ) {
          strcat(bq->path, REBUILD_SFX);
@@ -3841,6 +3840,7 @@ int ne_stat1( SnprintfFunc fn, void* state,
                     uDALType itype, SktAuth auth,
                     TimingFlagsValue timing_flags, TimingData* timing_data,
                     char *path, e_state e_state_struct ) {
+   // zero out the suspicious e_state_struct
    memset( e_state_struct, 0, sizeof( struct ne_state_struct ) );
    ne_handle handle = create_handle( fn, state, itype, auth,
                                      timing_flags, timing_data,
@@ -3865,7 +3865,10 @@ int ne_stat1( SnprintfFunc fn, void* state,
    /* open files and initialize BufferQueues */
    for(i = 0; i < num_blocks; i++) {
       BufferQueue *bq = &handle->blocks[i];
-      handle->snprintf(bq->path, MAXNAME, handle->path_fmt, (i + handle->erasure_state->O) % num_blocks, handle->printf_state);
+      // handle all offset adjustments before calling bq_init()
+      bq->block_number_abs = i;
+      // generate the path
+      handle->snprintf(bq->path, MAXNAME, handle->path_fmt, i, handle->printf_state);
 
       if ( (i == 1)  &&  (strncmp(bq->path, handle->blocks[0].path, MAXNAME) == 0) ) {
          // sanity check, blocks should not have matching paths
