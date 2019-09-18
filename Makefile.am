@@ -65,5 +65,5 @@ if ANY_SOCKETS
   MAYBE_SOCKETS = sockets
 endif
 
-SUBDIRS = fast_timer config  $(MAYBE_SOCKETS) erasureLib
+SUBDIRS = fast_timer config  $(MAYBE_SOCKETS) erasureLib isal_benchmark
 
