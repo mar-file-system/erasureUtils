@@ -1276,6 +1276,7 @@ if ( meta_buf->VAL >= MIN_VAL  &&  meta_buf->VAL <= MAX_VAL ) { \
    for ( i = 1; i < num_threads; i++ ) {
       // find the value with the most matches
       // For N/E: if two values are tied for matches, prefer the larger value (helps to avoid taking values from a single bad meta info)
+      // For Totsz : if two values are tied for matches, prefer the smaller value (helps to avoid returning zero-fill as 'data')
       // For other values: if two values are tied for matches, prefer the first
       if ( N_match[i] > N_match[N_index]  ||  
             ( N_match[i] == N_match[N_index]  &&  
@@ -1293,7 +1294,10 @@ if ( meta_buf->VAL >= MIN_VAL  &&  meta_buf->VAL <= MAX_VAL ) { \
          bsz_index = i;
       if ( nsz_match[i] > nsz_match[nsz_index] )
          nsz_index = i;
-      if ( totsz_match[i] > totsz_match[totsz_index] )
+      if ( totsz_match[i] > totsz_match[totsz_index]  ||  
+            ( totsz_match[i] == totsz_match[totsz_index]  &&
+              ((read_meta_buffer)(blocks[i].buffers[0]))->totsz < ((read_meta_buffer)(blocks[totsz_index].buffers[0]))->totsz )
+         )
          totsz_index = i;
    }
 
