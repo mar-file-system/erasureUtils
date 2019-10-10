@@ -329,6 +329,7 @@ void print_erasure_state( e_state state, int start_block ) {
 
 int main( int argc, const char** argv ) 
 {
+   errno = 0;  // init to zero (apparently not guaranteed)
    void* buff;
    unsigned long long totdone = 0;
 
@@ -758,7 +759,6 @@ int main( int argc, const char** argv )
 
    off_t bytes_moved = 0;
    while ( toread > 0 ) {
-
       // READ DATA
       ssize_t nread = toread; // assume success if no read takes place
       if ( (wr == 1)  &&  (std_fd) ) { // if input_file was defined, writes get data from it 

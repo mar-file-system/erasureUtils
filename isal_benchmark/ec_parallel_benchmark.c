@@ -27,6 +27,8 @@
   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 **********************************************************************/
 
+#define _GNU_SOURCE  //(added by gransom)
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,8 +45,9 @@
 #include <rdma/rsocket.h>
 #include <limits.h>
 #include "zlib.h"
-#include "crc.h"
-#include "erasure_code.h"	// use <isa-l.h> instead when linking against installed
+#include "isa-l.h"
+//#include "crc.h"		// use isa-l.h instead
+//#include "erasure_code.h"	// use isa-l.h instead
 
 /* default values */
 #define K_DEFAULT 8
