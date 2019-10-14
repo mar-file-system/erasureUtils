@@ -64,6 +64,9 @@ AUTOMAKE_OPTIONS = foreign
 if ANY_SOCKETS
   MAYBE_SOCKETS = sockets
 endif
+if BENCH
+  MAYBE_BENCHMARK = isal_benchmark
+endif
 
-SUBDIRS = fast_timer config  $(MAYBE_SOCKETS) erasureLib
+SUBDIRS = fast_timer config  $(MAYBE_SOCKETS) erasureLib $(MAYBE_BENCHMARK)
 
