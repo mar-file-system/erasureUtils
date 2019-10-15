@@ -125,11 +125,23 @@ AC_CHECK_LIB([isal],    [crc32_ieee],
     [AC_CHECK_LIB([isal], [crc32_ieee_base],
        [echo
         echo "WARNING:  Could not properly link 'crc32_ieee' from isa-l, defaulting to '_base' implementation"
-        echo "          IN THIS STATE, THESE UTILITES MAY NOT FUNCTION AND WILL ALMOST CERTAINLY HAVE VERY POOR PERFORMANCE"
+        echo "          IN THIS STATE, THESE UTILITES MAY NOT FUNCTION AS EXPECTED AND WILL ALMOST CERTAINLY HAVE VERY POOR PERFORMANCE"
         echo], 
        [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!  Please verify that the proper version of the library (v2.16.0 or higher) is installed."])])])
 
 
+# check for presence of zlib
+warnlibs=""
+AC_CHECK_LIB([z], [adler32], [], [warnlibs="zlib "])
+AC_CHECK_LIB([m], [ceil], [], [warnlibs="$warnlibs""libm "])
+librdmacm_present=true
+AC_CHECK_LIB([rdmacm], [rdma_getaddrinfo], [], [librdmacm_present=false  &&  warnlibs="$warnlibs""librdmacm "])
+AM_CONDITIONAL([BENCH], [test "$warnlibs" = ""  ])
+AM_COND_IF([BENCH], [], 
+   [echo
+    echo "WARNING: failed to properly link functions from $( echo "$warnlibs" | sed 's/ $/\./' | sed 's/ /, /g' )"
+    echo "         The 'isal_benchmark' subdir will not be built!"
+    echo ])
 
 
 # RDMA/MC is now a run-time option, rather than a configure option.  (This
@@ -197,7 +209,7 @@ AS_IF([test "$enable_sockets"  = rdma],
 # libaws4c is used to generate authentication-headers for RDMA socket server.
 AC_ARG_ENABLE([auth],
                AS_HELP_STRING([--disable-auth],
-                              [Don't require RDMA client/server to use authentication.  (Avoids link with aws4c, curl, etc)]),
+                              [Do not require RDMA client/server to use authentication.  (Avoids link with aws4c, curl, etc)]),
                [enable_auth=${enableval}],
                [enable_auth=yes])
 
@@ -357,5 +369,6 @@ AC_CONFIG_FILES([Makefile
                  config/udal_config.h:config/udal_config.h.in
                  config/Makefile
                  sockets/Makefile
+                 isal_benchmark/Makefile
                  erasureLib/Makefile])
 AC_OUTPUT
