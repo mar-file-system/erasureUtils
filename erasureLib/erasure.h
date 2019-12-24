@@ -98,7 +98,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define MIN_MD_CONSENSUS  2
 
 #define MAXN 15
-#define MAXE 5
+#define MAXE 4
 #define MAXNAME 2048
 #define MAXBUF 4096
 #define MAXBLKSZ 16777216

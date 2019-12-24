@@ -134,12 +134,14 @@ AC_CHECK_LIB([isal],    [crc32_ieee],
 warnlibs=""
 AC_CHECK_LIB([z], [adler32], [], [warnlibs="zlib "])
 AC_CHECK_LIB([m], [ceil], [], [warnlibs="$warnlibs""libm "])
+AC_CHECK_LIB([isal], [crc32_gzip_refl], [:], [warnlibs="$warnlibs""libisal(need-v2.19+) "])
 librdmacm_present=true
 AC_CHECK_LIB([rdmacm], [rdma_getaddrinfo], [], [librdmacm_present=false  &&  warnlibs="$warnlibs""librdmacm "])
 AM_CONDITIONAL([BENCH], [test "$warnlibs" = ""  ])
 AM_COND_IF([BENCH], [], 
    [echo
-    echo "WARNING: failed to properly link functions from $( echo "$warnlibs" | sed 's/ $/\./' | sed 's/ /, /g' )"
+    echo "WARNING: failed to properly link all necessary functions from $( echo "$warnlibs" | sed 's/ $/\./' | sed 's/ /, /g' )"
+    echo "         These libraries may be missing, or below the required versions."
     echo "         The 'isal_benchmark' subdir will not be built!"
     echo ])
 
