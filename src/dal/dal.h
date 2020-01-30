@@ -1,6 +1,6 @@
 
-#ifndef DAL_H_INCLUDE
-#define DAL_H_INCLUDE
+#ifndef __DAL_H_INCLUDE__
+#define __DAL_H_INCLUDE__
 
 
 /*
@@ -64,26 +64,27 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
 
-
-
 #include <libxml/tree.h>
 #include <string.h>
+#include <errno.h>
 
 #ifndef LIBXML_TREE_ENABLED
 #error "Included Libxml2 does not support tree functionality!"
 #endif
 
 
-typedef struct DAL_location_struct {
-   int pod;      //
-   int cap;
-   int block;
-   int scatter;
-} DAL_location;
-
 // just to provide some type safety (don't want to pass the wrong void*)
 typedef void* DAL_CTXT;
 typedef void* BLOCK_CTXT;
+
+// location struct
+typedef struct DAL_location_struct {
+   int pod;      //
+   int block;
+   int cap;
+   int scatter;
+} DAL_location;
+
 typedef enum {
    READ = 0,
    WRITE = 1,
@@ -161,13 +162,14 @@ DAL posix_dal_init( xmlNode* dal_conf_root, DAL_location max_loc );
 
 
 // Function to provide specific DAL initialization calls based on name
-DAL init_dal_by_name( const char* name, xmlNode* dal_conf_root, DAL_location max_loc ) {
-   if (  strncmp( name, "posix", 6 ) == 0 ) {
-      return posix_dal_init( dal_conf_root, max_loc );
-   }
-   // if no DAL found, return NULL
-   return NULL;
-}
+DAL init_dal_by_name( const char* name, xmlNode* dal_conf_root, DAL_location max_loc );// {
+//   if (  strncmp( name, "posix", 6 ) == 0 ) {
+//      return posix_dal_init( dal_conf_root, max_loc );
+//   }
+//   // if no DAL found, return NULL
+//   errno = ENODEV;
+//   return NULL;
+//}
 
 
 

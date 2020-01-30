@@ -61,10 +61,12 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #include <fcntl.h>
 #include <errno.h>
-#include "dal.h"
 
+#define DEBUG 1
+#define USE_STDOUT 1
 #define LOG_PREFIX "posix_dal"
 #include "logging/logging.h"
+#include "dal.h"
 
 
 
@@ -85,6 +87,7 @@ typedef struct posix_block_context_struct {
    char* filepath; // File Path (if open)
    int    filelen; // Length of filepath string
    off_t   offset; // Current file offset (only relevant when reading)
+   DAL_MODE  mode; // Mode in which this block was opened
 } *POSIX_BLOCK_CTXT;
 
 typedef struct posix_dal_context_struct {
@@ -149,12 +152,6 @@ int expand_dir_template( POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locat
    const char* parse = dctxt->dirtmp;
    char* fill = bctxt->filepath;
    char escp = 0;
-   // ensure we only have one instance of pod/block/cap
-   //   NOTE -- should not necessarily be a permanent restriction, but the assumption helps avoid string overflows
-   char hpod = 0;
-   char hblock = 0;
-   char hcap = 0;
-   char hscatter = 0;
    while ( *parse != '\0' ) {
 
       switch ( *parse ) {
@@ -190,14 +187,14 @@ int expand_dir_template( POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locat
                   fillval = loc.scatter;
                }
                else {
-                  LOG( LOG_WARN, "dir_template contains an unescaped '{' followed by '%c', rather than an expected 'p'/'b'/'c'/'s'\n", *parse );
+                  LOG( LOG_WARNING, "dir_template contains an unescaped '{' followed by '%c', rather than an expected 'p'/'b'/'c'/'s'\n", *parse );
                   *fill = '{';
                   fill++;
                   continue;
                }
                // ensure the '}' (end of substitution character) follows
                if ( *(parse+1) != '}' ) {
-                  LOG( LOG_WARN, "dir_template contains an '{%c' substitution sequence with no closing '}' character\n", *parse );
+                  LOG( LOG_WARNING, "dir_template contains an '{%c' substitution sequence with no closing '}' character\n", *parse );
                   *fill = '{';
                   fill++;
                   continue;
@@ -218,7 +215,7 @@ int expand_dir_template( POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locat
 
          default:
             if ( escp ) {
-               LOG( LOG_WARN, "invalid '\\%c' escape encountered in the dir_template string\n", *parse );
+               LOG( LOG_WARNING, "invalid '\\%c' escape encountered in the dir_template string\n", *parse );
                escp = 0;
             }
             *fill = *parse;
@@ -250,6 +247,8 @@ int expand_dir_template( POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locat
    }
    // ensure we null terminate the string
    *fill = '\0';
+   // user pointer arithmetic to determine length of path
+   bctxt->filelen = fill - bctxt->filepath;
    return 0;
 }
 
@@ -259,7 +258,7 @@ int block_delete( POSIX_BLOCK_CTXT bctxt ) {
    // append the meta suffix and check for success
    char* res = strncat( bctxt->filepath + bctxt->filelen, META_SFX, SFX_PADDING );
    if ( res != ( bctxt->filepath + bctxt->filelen ) ) {
-      LOG( LOG_ERR, "failed to append meta suffix \"%s\" to file path!\n", META_SFX );
+      LOG( LOG_ERR, "failed to append meta suffix \"%s\" to file path \"%s\"!\n", META_SFX, bctxt->filepath );
       errno = EBADF;
       return -1;
    }
@@ -268,8 +267,8 @@ int block_delete( POSIX_BLOCK_CTXT bctxt ) {
 
    // append the write suffix and check for success
    res = strncat( bctxt->filepath + bctxt->filelen + metalen, WRITE_SFX, SFX_PADDING - metalen );
-   if ( res != ( bctxt->filepath + bctxt->filelen ) ) {
-      LOG( LOG_ERR, "failed to append write suffix \"%s\" to file path!\n", WRITE_SFX );
+   if ( res != ( bctxt->filepath + bctxt->filelen + metalen ) ) {
+      LOG( LOG_ERR, "failed to append write suffix \"%s\" to file path \"%s\"!\n", WRITE_SFX, bctxt->filepath );
       errno = EBADF;
       *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
       return -1;
@@ -296,7 +295,7 @@ int block_delete( POSIX_BLOCK_CTXT bctxt ) {
    *(bctxt->filepath + bctxt->filelen) = '\0';
    res = strncat( bctxt->filepath + bctxt->filelen, WRITE_SFX, SFX_PADDING - metalen );
    if ( res != ( bctxt->filepath + bctxt->filelen ) ) {
-      LOG( LOG_ERR, "failed to append write suffix \"%s\" to file path!\n", WRITE_SFX );
+      LOG( LOG_ERR, "failed to append write suffix \"%s\" to file path \"%s\"!\n", WRITE_SFX, bctxt->filepath );
       errno = EBADF;
       *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
       return -1;
@@ -383,6 +382,7 @@ BLOCK_CTXT posix_open ( DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, con
 
    // populate other BLOCK context fields
    bctxt->offset = 0;
+   bctxt->mode = mode;
    
    int oflags = O_WRONLY | O_CREAT | O_TRUNC;
    if ( mode == READ ) {
@@ -437,7 +437,7 @@ int posix_set_meta ( BLOCK_CTXT ctxt, const char* meta_buf, size_t size ) {
 
    // append the write suffix and check for success
    res = strncat( bctxt->filepath + bctxt->filelen + metalen, WRITE_SFX, SFX_PADDING - metalen );
-   if ( res != ( bctxt->filepath + bctxt->filelen ) ) {
+   if ( res != ( bctxt->filepath + bctxt->filelen + metalen ) ) {
       LOG( LOG_ERR, "failed to append write suffix \"%s\" to file path!\n", WRITE_SFX );
       errno = EBADF;
       *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
@@ -507,9 +507,9 @@ ssize_t posix_get_meta ( BLOCK_CTXT ctxt, char* meta_buf, size_t size ) {
 
    // open the meta sidecar file and check for success
    int mfd = open( bctxt->filepath, O_RDONLY );
-   *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
    if ( mfd < 0 ) {
-      LOG( LOG_ERR, "failed to open meta file \"%s\" for read (%s)\n", meta_path, strerror(errno) );
+      LOG( LOG_ERR, "failed to open meta file \"%s\" for read (%s)\n", bctxt->filepath, strerror(errno) );
+      *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
       return -1;  
    }
 
@@ -518,8 +518,9 @@ ssize_t posix_get_meta ( BLOCK_CTXT ctxt, char* meta_buf, size_t size ) {
    // close the meta file and check for success
    if ( close( mfd ) != 0 ) {
       // failing this isn't actually all that relevant, probably still want to warn though
-      LOG( LOG_WARN, "failed to close meta file \"%s\" (%s)\n", meta_path, strerror(errno) );
+      LOG( LOG_WARNING, "failed to close meta file \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
    }
+   *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
 
    return result;
 }
@@ -569,7 +570,7 @@ int posix_abort ( BLOCK_CTXT ctxt ) {
 
    // close the file descriptor, note but bypass failure
    if ( close( bctxt->fd ) != 0 ) {
-      LOG( LOG_WARN, "failed to close data file \"%s\" during abort (%s)\n", bctxt->filepath, strerror(errno) );
+      LOG( LOG_WARNING, "failed to close data file \"%s\" during abort (%s)\n", bctxt->filepath, strerror(errno) );
    }
 
    // free state
@@ -587,6 +588,37 @@ int posix_close ( BLOCK_CTXT ctxt ) {
    if ( close( bctxt->fd ) != 0 ) {
       LOG( LOG_ERR, "failed to close data file \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
       return -1;
+   }
+
+   if ( bctxt->mode == WRITE  ||  bctxt->mode == REBUILD ) {
+      char* res = NULL;
+      if ( bctxt->mode == WRITE ) {
+         // append the write suffix
+         res = strncat( bctxt->filepath + bctxt->filelen, WRITE_SFX, SFX_PADDING );
+      }
+      else {
+         // append the rebuild suffix
+         res = strncat( bctxt->filepath + bctxt->filelen, REBUILD_SFX, SFX_PADDING );
+      }
+      // check for success
+      if ( res != ( bctxt->filepath + bctxt->filelen ) ) {
+         LOG( LOG_ERR, "failed to append write suffix \"%s\" to file path!\n", WRITE_SFX );
+         errno = EBADF;
+         *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
+         return -1;
+      }
+
+      // duplicate the path and check for success
+      char* write_path = strdup( bctxt->filepath );
+      *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
+
+      // attempt to rename and check for success
+      if ( rename( write_path, bctxt->filepath ) != 0 ) {
+         LOG( LOG_ERR, "failed to rename file \"%s\" to \"%s\" (%s)\n", write_path, bctxt->filepath, strerror(errno) );
+         free(write_path);
+         return -1;
+      }
+      free(write_path);
    }
 
    // free state
@@ -627,7 +659,7 @@ DAL posix_dal_init( xmlNode* root, DAL_location max_loc ) {
    }
 
    // make sure we start on a 'dir_template' node
-   if ( root->type == XML_ELEMENT_NODE  &&  strncmp( root->name, "dir_template", 13 ) == 0 ) {
+   if ( root->type == XML_ELEMENT_NODE  &&  strncmp( (char*)root->name, "dir_template", 13 ) == 0 ) {
 
       // make sure that node contains a text element within it
       if ( root->children != NULL  &&  root->children->type == XML_TEXT_NODE ) {
@@ -637,7 +669,7 @@ DAL posix_dal_init( xmlNode* root, DAL_location max_loc ) {
          if ( dctxt == NULL ) { return NULL; } // malloc will set errno
 
          // copy the dir template into the context struct
-         dctxt->dirtmp = strdup( root->children->content );
+         dctxt->dirtmp = strdup( (char*)root->children->content );
          if ( dctxt->dirtmp == NULL ) { free(dctxt); return NULL; } // strdup will set errno
 
          // initialize all other context fields
@@ -678,7 +710,11 @@ DAL posix_dal_init( xmlNode* root, DAL_location max_loc ) {
 
          // allocate and populate a new DAL structure
          DAL pdal = malloc( sizeof( struct DAL_struct ) );
-         if ( pdal == NULL ) { free(dctxt); return NULL; } // malloc will set errno
+         if ( pdal == NULL ) {
+            LOG( LOG_ERR, "failed to allocate space for a DAL_struct\n" );
+            free(dctxt);
+            return NULL;
+         } // malloc will set errno
          pdal->name = "posix";
          pdal->ctxt = (DAL_CTXT) dctxt;
          pdal->dal_verify = posix_verify;
@@ -694,7 +730,10 @@ DAL posix_dal_init( xmlNode* root, DAL_location max_loc ) {
          pdal->dal_cleanup = posix_cleanup;
          return pdal;
       }
+      else { LOG( LOG_ERR, "the \"dir_template\" node is expected to contain a template string\n" ); }
    }
+   else { LOG( LOG_ERR, "root node of config is expected to be \"dir_template\"\n" ); }
+   errno = EINVAL;
    return NULL; // failure of any condition check fails the function
 }
 
