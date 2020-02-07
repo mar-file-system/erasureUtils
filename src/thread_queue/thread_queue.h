@@ -1,5 +1,5 @@
-#ifndef THREAD_QUEUE_H
-#define THREAD_QUEUE_H
+#ifndef __THREAD_QUEUE_H__
+#define __THREAD_QUEUE_H__
 
 /*
 This file is part of MarFS, which is released under the BSD license.
@@ -73,46 +73,107 @@ OF SUCH DAMAGE.
 */
 
 
-typedef struct queue_init_struct {
-   unsigned int   num_threads;      /* number of threads to initialize */
-   unsigned int   max_qdepth;       /* maximum depth of the work queue */
-   void*          global_state;     /* reference to some global initial state, passed to the init_thread state func of all threads */
+typedef enum {
+   TQ_FINISHED = 0x01 << 0, // signals to threads that all work has been issued 
+                            //   (producers immediately exit, consumers exit when the queue is empty)
+   TQ_ABORT    = 0x01 << 1, // signals to threads that an unrecoverable errror requires early termination
+                            //   (all threads exit, work elements may be left on the queue)
+   TQ_HALT     = 0x01 << 2  // signals to threads that work should be paused
+                            //   (all threads sleep until the flag is removed)
+} TQ_Control_Flags;
 
-   /* Please note, these functions may be run by multiple threads in parallel.  Beware of referencing shared values in the 'state' arguments. */
+
+typedef struct queue_init_struct {
+   const char*  log_prefix;       /* string prefix for all log messages produced by this queue */
+   void*        global_state;     /* reference to some global initial state, passed to the init_thread state func of all threads */
+   unsigned int max_qdepth;       /* maximum depth of the work queue */
+   unsigned int num_threads;      /* number of threads to initialize */
+   unsigned int num_prod_threads; /* number of threads to utilize the thread_producer_func() (those with tID < num_prod_threads) */
+
+   /* Please note, the following functions may be run by multiple threads in parallel.
+         Beware of placing shared values in the 'state' arguments. */
+   /* NULL values for most of these function pointers will cause the corresponding function call(s) to be skipped by all threads. 
+         This is NOT true for the thread_producer_func() and thread_consumer_func(), which must be defined if producer/consumer threads 
+         exist, respectively. */
+
+   /*
+      function pointer defining the initilization behavior for each thread
+      - Arguments
+         * The first argument is an integer ID for the calling thread (value from 0 to (num_threads-1))
+         * The second argument is a copy of the global_state pointer for each thread
+         * The third argument is a reference to the user-defined state pointer for this thread
+      - Return Value
+         * A non-zero return value will cause the calling thread to ABORT the queue ( this will cause tq_init() to fail )
+         * A return value of zero will be ignored
+   */
    int (*thread_init_func) (unsigned int tID, void* global_state, void** state);
-         /*
-            function pointer defining the initilization behavior for each thread
-            - Arguments
-               * The first argument is an integer ID for the calling thread (0 to (num_threads-1))
-               * The second argument is a copy of the global_state pointer for each thread
-               * The third argument is a reference to the user-defined state pointer for this thread
-            - Return Value
-               * A non-zero return value will cause the calling thread to ABORT the queue ( will cause tq_init() to fail )
-               * A return value of zero will be ignored
-         */
-   int (*thread_work_func) (void** state, void* work);
-         /* 
-            function pointer defining the behavior of a thread for each work package
-            - Arguments
-               * The first argument is a reference to the user-defined state pointer for this thread
-               * The second argument is a reference to the current work package of the thread (passed in by tq_enqueue())
-            - Return Value
-               * A return value above zero will cause the calling thread to HALT the queue
-               * A return value below zero will cause the calling thread to ABORT the queue
-               * A return value of zero will be ignored
-         */
-   void (*thread_term_func) (void** state);
-         /*
-            function pointer defining the termination behavior of a thread
-            - Arguments
-               * The first/only argument is a reference to the user-defined state pointer for this thread
-            - Return Value (NONE)
-         */
+
+   /* 
+      function pointer defining the behavior of a consumer thread for each work package
+      - Arguments
+         * The first argument is a reference to the user-defined state pointer for this thread
+         * The second argument is a reference to a void* work package for this thread (passed in by tq_enqueue())
+      - Return Value
+         * A return value > 1 will cause the calling thread to HALT the queue
+         * A return value == 1 will cause the calling thread to FINISH the queue
+         * A return value < 0 will cause the calling thread to ABORT the queue
+         * A return value == 0 will be ignored
+   */
+   int (*thread_consumer_func) (void** state, void** work_todo);
+
+   /* 
+      function pointer defining the behavior of a producer thread for each work package
+      NOTE - It is possible for a thread to terminate before the produced work can be enqueued.  In such a case, 
+             the thread_term_func() will always be called with the previous work_tofill value as the second arg.  
+             It is the responsibility of that function to cleanup any resources associated with that unused work 
+             package.
+      - Arguments
+         * The first argument is a reference to the user-defined state pointer for this thread
+         * The second argument is a reference to a void* work package to be populated by this thread
+      - Return Value
+         * A return value > 1 will cause the calling thread to HALT the queue
+         * A return value == 1 will cause the calling thread to FINISH the queue
+         * A return value < 0 will cause the calling thread to ABORT the queue
+         * A return value == 0 will be ignored
+   */
+   int (*thread_producer_func) (void** state, void** work_tofill);
+
+   /*
+      function pointer defining the behavior of a thread just before entering a HALTED state
+      - Arguments
+         * The first/only argument is a reference to the user-defined state pointer for this thread
+      - Return Value
+         * A non-zero return value will cause the calling thread to ABORT the queue
+         * A return value of zero will be ignored
+   */
+   int (*thread_pause_func) (void** state);
+
+   /*
+      function pointer defining the behavior of a thread just after exiting a HALTED state
+      - Arguments
+         * The first/only argument is a reference to the user-defined state pointer for this thread
+      - Return Value
+         * A non-zero return value will cause the calling thread to ABORT the queue
+         * A return value of zero will be ignored
+   */
+   int (*thread_resume_func) (void** state);
+
+   /*
+      function pointer defining the termination behavior of a thread
+      - Arguments
+         * The first argument is a reference to the user-defined state pointer for this thread
+         * The second argument is a reference to the previous work package produced/consumed by this thread 
+            ** This reference will be populated with NULL if the previous work package has already been 
+               processed (passed to the consumer func), enqueued, or no previous work package exists.
+      - Return Value (NONE)
+   */
+   void (*thread_term_func) (void** state, void** prev_work);
+
 } TQ_Init_Opts;
 
 
 
-typedef struct thread_queue_struct* ThreadQueue;
+typedef struct thread_queue_struct* ThreadQueue; // forward decl.
 
 
 /**
@@ -126,65 +187,81 @@ ThreadQueue tq_init( TQ_Init_Opts* opts );
 /**
  * Insert a new element of work into the ThreadQueue
  * @param ThreadQueue tq : ThreadQueue in which to insert work
+ * @param TQ_Control_Flags ignore_flags : Indicates which queue states should be bypassed during this operation
+ *                                        (By default, any queue state will result in a failure)
  * @param void* workbuff : New element of work to be inserted
- * @return int : Zero on success and -1 on failure (such as, if the queue is FINISHED or ABORTED)
+ * @return int : Zero on success, -1 on failure (such as, if the queue is ABORTED and TQ_ABORT was not specified)
  */
-int tq_enqueue( ThreadQueue tq, void* workbuff );
+int tq_enqueue( ThreadQueue tq, TQ_Control_Flags ignore_flags, void* workbuff );
 
 
 /**
- * Sets a HALT state for the given ThreadQueue and waits for all threads to pause
- * @param ThreadQueue tq : ThreadQueue to pause
+ * Retrieve a new element of work from the ThreadQueue.
+ *  Note that, if the Queue is empty and has no state flags set, this call will block.
+ *  However, if the Queue is empty and has any state flags set, this call will return zero and 
+ *  populate workbuff with a NULL value.
+ * @param ThreadQueue tq : ThreadQueue from which to retrieve work
+ * @param TQ_Control_Flags ignore_flags : Indicates which queue states should be bypassed during this operation
+ *                                        (By default, only a TQ_FINISHED state will not result in a failure)
+ * @param void** workbuff : Reference to be populated with the work element pointer
+ * @return int : The depth of the queue (including the retrieved element) on success and -1 on failure 
+ *                (such as, if the queue is HALTED or ABORTED and those flags were not ignored)
+ */
+int tq_dequeue( ThreadQueue tq, TQ_Control_Flags ignore_flags, void** workbuff );
+
+
+/**
+ * Sets the given control flags on a specified ThreadQueue
+ * @param ThreadQueue tq : ThreadQueue on which to set flags
+ * @param TQ_Control_Flags flags : Flag values to set
  * @return int : Zero on success and non-zero on failure
  */
-int tq_halt( ThreadQueue tq );
+int tq_set_flags( ThreadQueue tq, TQ_Control_Flags flags );
 
 
 /**
- * Unsets the HALT state for a given ThreadQueue and signals all threads to resume work
- * @param ThreadQueue tq : ThreadQueue for which to unset the HALT state
+ * Unsets (disables) the given control flags on a specified ThreadQueue
+ * @param ThreadQueue tq : ThreadQueue on which to unset flags
+ * @param TQ_Control_Flags flags : Flag values to remove
  * @return int : Zero on success and non-zero on failure
  */
-int tq_resume( ThreadQueue tq );
+int tq_unset_flags( ThreadQueue tq, TQ_Control_Flags flags );
 
 
 /**
- * Checks if the HALT flag is set for a given ThreadQueue
- * @param ThreadQueue tq : ThreadQueue to check
- * @return char : 1 if the HALT flag is set, and 0 if not
- */
-char tq_halt_set( ThreadQueue tq );
-
-
-/**
- * Sets an ABORT state for the given ThreadQueue and signals all threads to terminate
- * @param ThreadQueue tq : ThreadQueue for which to set the ABORT
+ * Populates a given reference with the current control flags set on a given ThreadQueue
+ * @param ThreadQueue tq : ThreadQueue for which to get flags value
+ * @param TQ_Control_Flags* flags : Flag reference to populate
  * @return int : Zero on success and non-zero on failure
  */
-int tq_abort(ThreadQueue tq);
+int tq_get_flags( ThreadQueue tq, TQ_Control_Flags* flags );
 
 
 /**
- * Checks if the ABORT flag is set for a given ThreadQueue
- * @param ThreadQueue tq : ThreadQueue to check
- * @return char : 1 if the ABORT flag is set, and 0 if not
+ * Waits for all threads of a given ThreadQueue to pause (detect the TQ_HALT flag and stop work), then returns
+ * @param ThreadQueue tq : ThreadQueue on which to wait
+ * @return int : Zero on success and non-zero on failure (such as, if the queue is not HALTED)
  */
-char tq_abort_set( ThreadQueue tq );
+int tq_wait_for_pause( ThreadQueue tq );
 
 
 /**
- * Sets the FINISHED state for a given ThreadQueue, allowing thread status info to be collected
- * @param ThreadQueue tq : ThreadQueue to mark as FINISHED
- * @return int : Zero on success and non-zero on failure
+ * Waits for the control flags of the given ThreadQueue to be updated.  Afterwards, populates the provided 
+ *  'flags' reference with the current value of the flags on the queue (same as if tq_get_flags() were called).
+ * @param ThreadQueue tq : ThreadQueue on which to wait
+ * @param TQ_Control_Flags ignore_flags : Indicates which queue states should be ignored during this operation
+ *                                        (This call will continue to block, if only these flags are set)
+ * @param TQ_Control_Flags* flags : Flag reference to populate
+ * @return int : Zero on success and non-zero on failure (such as, if ignore_flags has all values populated)
  */
-int tq_work_done(ThreadQueue tq);
+int tq_wait_for_flags( ThreadQueue tq, TQ_Control_Flags ignore_flags, TQ_Control_Flags* flags );
 
 
 /**
  * Populates a reference to the state for the next uncollected thread in a FINISHED or ABORTED ThreadQueue
  * @param ThreadQueue tq : ThreadQueue from which to collect state info
  * @param void** tstate : Reference to a void* be populated with thread state info
- * @return int : The number of thread states to be collected (INCLUDING the state just collected), 
+ * @return int : The number of uncollected thread states (INCLUDING the state just collected), 
  *               zero if all thread states have already been collected, or -1 if a failure occured. 
  */
 int tq_next_thread_status( ThreadQueue tq, void** tstate );
@@ -193,17 +270,14 @@ int tq_next_thread_status( ThreadQueue tq, void** tstate );
 /**
  * Closes a FINISHED or ABORTED ThreadQueue for which all thread status info has already been collected.
  *  However, if the ThreadQueue still has queue elements remaining (such as if the queue ABORTED), this 
- *  function will instead remove the first of those elements and populate 'workbuff' with its reference.
- *  The function must then be called again (potentially repeatedly) to close the ThreadQueue.
+ *  function will take no action.  In such a case, the tq_dequeue() function must be used to empty the 
+ *  queue elements before the queue can then be closed by calling this function again.
  * @param ThreadQueue tq : ThreadQueue to be closed
- * @param void** workbuff : Reference to a void* to be popluated with any remaining queue element or NULL 
- *                          if tq_close() should attempt to free() all remaining queue buffers itself and 
- *                          close the queue immediately
- * @return int : Zero if the queue has been closed, -1 on failure, or a positive integer equal to the 
- *               number of buffers found still on the queue if a remaining element has been passed back 
- *               (the return value is INCLUDING the element just passed back)
+ * @return int : Zero if the queue was successfully closed, -1 on failure, or a positive integer equal to 
+ *               the number of elements found still on the queue if no action was taken.
  */
-int tq_close( ThreadQueue tq, void** workbuff );
+int tq_close( ThreadQueue tq );
+
 
 #endif
 
