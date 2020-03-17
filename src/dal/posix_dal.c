@@ -717,17 +717,17 @@ DAL posix_dal_init( xmlNode* root, DAL_location max_loc ) {
          } // malloc will set errno
          pdal->name = "posix";
          pdal->ctxt = (DAL_CTXT) dctxt;
-         pdal->dal_verify = posix_verify;
-         pdal->dal_migrate = posix_migrate;
-         pdal->dal_open = posix_open;
-         pdal->dal_set_meta = posix_set_meta;
-         pdal->dal_get_meta = posix_get_meta;
-         pdal->dal_put = posix_put;
-         pdal->dal_get = posix_get;
-         pdal->dal_abort = posix_abort;
-         pdal->dal_close = posix_close;
-         pdal->dal_del = posix_del;
-         pdal->dal_cleanup = posix_cleanup;
+         pdal->verify = posix_verify;
+         pdal->migrate = posix_migrate;
+         pdal->open = posix_open;
+         pdal->set_meta = posix_set_meta;
+         pdal->get_meta = posix_get_meta;
+         pdal->put = posix_put;
+         pdal->get = posix_get;
+         pdal->abort = posix_abort;
+         pdal->close = posix_close;
+         pdal->del = posix_del;
+         pdal->cleanup = posix_cleanup;
          return pdal;
       }
       else { LOG( LOG_ERR, "the \"dir_template\" node is expected to contain a template string\n" ); }

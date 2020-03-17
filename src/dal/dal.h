@@ -99,14 +99,14 @@ typedef struct DAL_struct {
    DAL_CTXT       ctxt;
 
    // DAL Functions -- 
-   int (*dal_verify) ( DAL_CTXT ctxt, char fix );
+   int (*verify) ( DAL_CTXT ctxt, char fix );
       // Description:
       //  Ensure that the DAL is properly configured, functional, and secure.  Log any problems encountered.
       //  If the 'fix' argument is non-zero, attempt to correct such problems.
       //  Note - the specifics of this implementaiton will depend GREATLY on the nature of the DAL.
       // Return Values:
       //  Zero on success, Non-zero if unresolved problems were found
-   int (*dal_migrate) ( DAL_CTXT ctxt, const char* objID, DAL_location src, DAL_location dest, char offline );
+   int (*migrate) ( DAL_CTXT ctxt, const char* objID, DAL_location src, DAL_location dest, char offline );
       // Description:
       //  Relocate an object referenced by 'objID' & 'src' to new location 'dest'.
       //  If the 'offline' argument is zero, this relocation will be performed such that the object can 
@@ -118,39 +118,39 @@ typedef struct DAL_struct {
       //  (Intended to avoid overwriting existing object parts)
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
-   int (*dal_del) ( DAL_CTXT ctxt, DAL_location location, const char* objID );
+   int (*del) ( DAL_CTXT ctxt, DAL_location location, const char* objID );
       // Description:
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
-   int (*dal_cleanup) ( struct DAL_struct* dal );
+   int (*cleanup) ( struct DAL_struct* dal );
       // Description:
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
-   BLOCK_CTXT (*dal_open) ( DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char* objID );
+   BLOCK_CTXT (*open) ( DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char* objID );
       // Description:
       // Return Values:
       //  Non-NULL on success, NULL if the operation could not be completed
-   int (*dal_set_meta) ( BLOCK_CTXT ctxt, const char* meta_buf, size_t size);
+   int (*set_meta) ( BLOCK_CTXT ctxt, const char* meta_buf, size_t size);
       // Description:
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
-   ssize_t (*dal_get_meta) ( BLOCK_CTXT ctxt, char* meta_buf, size_t size);
+   ssize_t (*get_meta) ( BLOCK_CTXT ctxt, char* meta_buf, size_t size);
       // Description:
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
-   int (*dal_put) ( BLOCK_CTXT ctxt, const void* buf, size_t size );
+   int (*put) ( BLOCK_CTXT ctxt, const void* buf, size_t size );
       // Description:
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
-   ssize_t (*dal_get) ( BLOCK_CTXT ctxt, void* buf, size_t size, off_t offset );
+   ssize_t (*get) ( BLOCK_CTXT ctxt, void* buf, size_t size, off_t offset );
       // Description:
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
-   int (*dal_abort) ( BLOCK_CTXT ctxt );
+   int (*abort) ( BLOCK_CTXT ctxt );
       // Description:
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
-   int (*dal_close) ( BLOCK_CTXT ctxt );
+   int (*close) ( BLOCK_CTXT ctxt );
       // Description:
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
