@@ -1,0 +1,3 @@
+<DAL name="posix">
+   <dir_template>./stripefile.{b}</dir_template>
+</DAL>

@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# shift cwd to this subdir
+cd $( dirname $0 )
+
+# create all linker objects
+gcc -Wall -I ../../ -I /usr/include/libxml2 -g -c ../dal.c
+gcc -Wall -I ../../ -I /usr/include/libxml2 -g -c ../posix_dal.c
+gcc -Wall -I ../../ -g -c ../../logging/logging.c
+
+# create the test executable
+gcc -Wall -I ../ -I /usr/include/libxml2/ -g -lxml2 posix_dal.o dal.o logging.o testdal.c -o exectestdal
+
+# cleanup all linker objects
+rm ./dal.o ./posix_dal.o ./logging.o
+
