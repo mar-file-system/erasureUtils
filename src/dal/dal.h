@@ -98,6 +98,10 @@ typedef struct DAL_struct {
    // DAL Internal Context -- passed to each DAL function
    DAL_CTXT       ctxt;
 
+   // Preferred I/O Size
+   size_t pread_size;
+   size_t pwrite_size;
+
    // DAL Functions -- 
    int (*verify) ( DAL_CTXT ctxt, char fix );
       // Description:
@@ -162,14 +166,7 @@ DAL posix_dal_init( xmlNode* dal_conf_root, DAL_location max_loc );
 
 
 // Function to provide specific DAL initialization calls based on name
-DAL init_dal_by_name( const char* name, xmlNode* dal_conf_root, DAL_location max_loc );// {
-//   if (  strncmp( name, "posix", 6 ) == 0 ) {
-//      return posix_dal_init( dal_conf_root, max_loc );
-//   }
-//   // if no DAL found, return NULL
-//   errno = ENODEV;
-//   return NULL;
-//}
+DAL init_dal( xmlNode* dal_conf_root, DAL_location max_loc );// {
 
 
 

@@ -1,4 +1,6 @@
 
+#define DEBUG 1
+#define USE_STDOUT 1
 #include "dal.h"
 #include <unistd.h>
 #include <stdio.h>
@@ -35,9 +37,23 @@ int main( int argc, char** argv ) {
 
    // Initialize a posix dal instance
    DAL_location maxloc = { .pod = 1, .block = 1, .cap = 1, .scatter = 1 };
-   DAL dal = init_dal_by_name( "posix", root_element->children, maxloc );
-   if ( dal == NULL ) { printf( "error: failed to initialize DAL: %s\n", strerror(errno) ); return -1; }
+   DAL dal = init_dal( root_element, maxloc );
 
+   /* Free the xml Doc */
+   xmlFreeDoc(doc);
+   /*
+   *Free the global variables that may
+   *have been allocated by the parser.
+   */
+   xmlCleanupParser();
+
+   // check that initialization succeeded
+   if ( dal == NULL ) {
+      printf( "error: failed to initialize DAL: %s\n", strerror(errno) );
+      return -1;
+   }
+
+ 
    // Open, write to, and set meta info for a specific block
    void* writebuffer = calloc( 10, 1024 );
    if ( writebuffer == NULL ) { printf( "error: failed to allocate write buffer\n" ); return -1; }
@@ -74,15 +90,8 @@ int main( int argc, char** argv ) {
    if ( dal->cleanup( dal ) ) { printf( "error: failed to cleanup DAL\n" ); return -1; }
 
    /*free the document */
-   xmlFreeDoc(doc);
    free( writebuffer );
    free( readbuffer );
-
-   /*
-   *Free the global variables that may
-   *have been allocated by the parser.
-   */
-   xmlCleanupParser();
 
    return 0;
 

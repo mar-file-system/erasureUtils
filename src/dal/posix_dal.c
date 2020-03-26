@@ -717,6 +717,8 @@ DAL posix_dal_init( xmlNode* root, DAL_location max_loc ) {
          } // malloc will set errno
          pdal->name = "posix";
          pdal->ctxt = (DAL_CTXT) dctxt;
+         pdal->pread_size = 1048576;
+         pdal->pwrite_size = 1048576;
          pdal->verify = posix_verify;
          pdal->migrate = posix_migrate;
          pdal->open = posix_open;
