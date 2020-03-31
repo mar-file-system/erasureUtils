@@ -151,19 +151,26 @@ typedef struct ne_state_struct {
    unsigned long ncompsz[ MAXPARTS ];
 } *e_state;
 
+// location struct
+typdef struct ne_location_struct {
+   int pod;
+   int cap;
+   int scatter;
+} ne_location;
+
 // Initialization functions, to produce a ne_ctxt
 typedef struct ne_ctxt_struct* ne_ctxt; // forward decl.
-ne_ctxt ne_path_init ( char* path,        int pods, int blocks, int caps, int scatters );
-ne_ctxt ne_init      ( xmlNode* dal_root, int pods, int blocks, int caps, int scatters );
+ne_ctxt ne_path_init ( const char* path,  ne_location max_loc );
+ne_ctxt ne_init      ( xmlNode* dal_root, ne_location max_loc );
 
 // Per-Object functions, to perform a given op on a specific object
-int ne_rebuild ( ne_ctxt ctxt, char* objID, ne_mode mode, ... );
-int ne_delete  ( ne_ctxt ctxt, char* objID, int width );
-int ne_stat    ( ne_ctxt ctxt, char* objID, e_state erasure_state_struct );
+int ne_rebuild ( ne_ctxt ctxt, char* objID, ne_location loc, ne_mode mode, ... );
+int ne_delete  ( ne_ctxt ctxt, char* objID, ne_location loc, int width );
+int ne_stat    ( ne_ctxt ctxt, char* objID, ne_location loc, e_state erasure_state_struct );
 
 // Read/Write Stream functions, to write/read a specific object
 typedef struct ne_handle_struct* ne_handle; // forward decl.
-ne_handle ne_open  ( ne_ctxt ctxt,     char*       objID,  ne_mode mode,  ... );
+ne_handle ne_open  ( ne_ctxt ctxt,     char*       objID,  ne_location loc,  ne_mode mode,  ... );
 ssize_t   ne_read  ( ne_handle handle, void*       buffer, size_t nbytes, off_t offset );
 ssize_t   ne_write ( ne_handle handle, const void* buffer, size_t nbytes );
 int       ne_close ( ne_handle handle );
