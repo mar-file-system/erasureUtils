@@ -104,10 +104,12 @@ underlying skt_etc() functions.
 
 --------------------------------------------------------------------------- */
 
-
-#include "erasure.h"
-#include "udal.h"
 #include "libne_auto_config.h"   /* HAVE_LIBISAL */
+
+#define LOG_PREFIX "ne_core"
+#include "logging/logging.h"
+#include "dal/dal.h"
+#include "erasure.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -119,6 +121,67 @@ underlying skt_etc() functions.
 #include <errno.h>
 #include <assert.h>
 #include <pthread.h>
+
+
+// NE context
+typedef struct ne_ctxt_struct {
+   // DAL definitions
+   DAL dal;
+}* ne_ctxt;
+
+
+ne_ctxt ne_path_init ( const char* path, int pods, int blocks, int caps, int scatters ) {
+   // create a stand-in XML config
+   char* configtemplate = "<DAL type=\"posix\"><dir_template>%s</dir_template></DAL>"
+   int len = strlen( path ) + strlen( configtemplate );
+   char* xml-config = malloc( len );
+   if ( xml-config == NULL ) {
+      LOG( LOG_ERR, "failed to allocate memory for the stand-in xml config!\n" );
+      return NULL;
+   }
+   if ( ( len = snprintf( xml-config, len, configtemplate, path ) ) < 0 ) {
+      free( xml-config );
+      return NULL;
+   }
+   xmlDoc *config = NULL;
+   xmlNode *root_elem = NULL;
+
+   /* initialize libxml and check for potential version mismatches */
+   LIBXML_TEST_VERSION
+
+   /* parse the stand-in XML config */
+   doc = xmlReadMemory( xml-config, len + 1, "noname.xml", NULL, XML_PARSE_NOBLANKS );
+   if ( doc == NULL ) {
+      free( xml-config );
+      return NULL;
+   }
+   root_elem = xmlDocGetRootElement( doc );
+   free( xml-config ); // done with the stand-in xml config
+
+   // Initialize a posix dal instance
+   DAL_location maxloc = { .pod = 1, .block = 1, .cap = 1, .scatter = 1 };
+   DAL dal = init_dal( root_elem, maxloc );
+   // free the xmlDoc and any parser global vars
+   xmlFreeDoc( doc );
+   xmlCleanupParser();
+   // verify that dal initialization was successful
+   if ( dal == NULL ) {
+      return NULL;
+   } 
+
+   // allocate a context struct
+   ne_ctxt ctxt = malloc( sizeof( struct ne_ctxt_struct ) );
+   if ( ctxt == NULL ) {
+      return NULL;
+   }
+
+   // fill in context elements
+   ctxt->dal = dal;
+
+   // return the new ne_ctxt
+   return ctxt;
+}
+
 
 static int set_block_xattr(ne_handle handle, int block);
 
@@ -137,8 +200,6 @@ extern uint32_t      crc32_ieee(uint32_t seed, uint8_t * buf, uint64_t len);
 extern void          ec_encode_data(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 
 #else
-#  define crc32_ieee(...)     crc32_ieee_base(__VA_ARGS__)
-#  define ec_encode_data(...) ec_encode_data_base(__VA_ARGS__)
 extern uint32_t      crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len);
 extern void          ec_encode_data_base(int len, int srcs, int dests, unsigned char *v,unsigned char **src, unsigned char **dest);
 #endif
@@ -152,26 +213,20 @@ static int gf_gen_decode_matrix_simple(unsigned char * encode_matrix,
                                        int m);
 
 
-
-// per-block
-int ne_set_xattr   ( const char *path, const char *xattrval, size_t len );
-int ne_get_xattr   ( const char *path, char *xattrval, size_t len );
-int ne_delete_block( const char *path );
-int ne_link_block  ( const char *link_path, const char *target );
-
-int       ne_set_xattr1   ( const uDAL* impl, SktAuth auth,
-                            const char *path, const char *xattrval, size_t len );
-
-int       ne_get_xattr1   ( const uDAL* impl, SktAuth auth,
-                            const char *path, char *xattrval, size_t len );
-
-int       ne_delete_block1( const uDAL* impl, SktAuth auth,
-                            const char *path );
-
-int       ne_link_block1  ( const uDAL* impl, SktAuth auth,
-                            const char *link_path, const char *target );
-
 // internal structures
+
+typedef enum {
+  BQ_FINISHED = 0x01 << 0, // signals to threads that all work has been issued and/or completed
+  BQ_ABORT    = 0x01 << 1, // signals to threads that an unrecoverable errror requires early termination
+  BQ_HALT     = 0x01 << 2  // signals to threads that work should be paused
+} BQ_Control_Flags;
+
+typedef enum {
+  BQ_OPEN     = 0x01 << 0, // indicates that this thread has successfully opened its data file
+  BQ_HALTED   = 0x01 << 1  // indicates that this thread is 'paused'
+} BQ_State_Flags;
+
+
 typedef struct buffer_queue {
   pthread_mutex_t    qlock;
   void*              buffers[MAX_QDEPTH];    /* array of buffers for passing data on the queue */
@@ -213,7 +268,7 @@ struct handle {
    /* Erasure Info */
    e_state erasure_state;
    char  alloc_state;    // indicates whether we allocated the e_state struct or not
-   char* path_fmt;
+   //char* path_fmt;
 
    /* Read/Write Info and Structures */
    ne_mode mode;
@@ -256,118 +311,6 @@ struct handle {
    TimingData*    timing_data_ptr;  /* caller of ne_open() can provide their own TimingData
                                        (e.g. so data can survive ne_close()) */
 };
-
-
-
-
-// run-time selection of sockets vs file, for uDAL
-
-#define FD_INIT(GFD, HANDLE)                (HANDLE)->impl->fd_init(&(GFD))
-#define FD_ERR(GFD)                         (GFD).impl->fd_err(&(GFD))
-#define FD_NUM(GFD)                         (GFD).impl->fd_num(&(GFD))
-
-// This is opening a file (not a handle), using the impl in the handle.
-// Save the ne_handle into the GFD at open-time, so:
-// (a) we don't have to pass handle->auth to impls that don't need it
-// (b) write_all() can just take a GFD, and impls can still get auth if they need it
-//
-// TBD: It's awkward for some of the new functions to create a dummy
-//      handle, just so they can OPEN() a GFD.  Better would be to just
-//      have OPEN() take impl and auth, and store just those onto the gfd.
-//      The only UDAL op that cares is udal_skt_open() which only needs the
-//      auth.  [p]HNDLOP() could then just use the impl directly from the
-//      gfd.  The handle is never really needed.  Callers of OPEN() that
-//      are currently using a "fake" handle just to use OPEN() include
-//      ne_size(), and ne_set_attr1().
-//
-#define OPEN(GFD, AUTH, IMPL, ...)          do { (GFD).auth = (AUTH); \
-                                                 (GFD).impl = (IMPL); \
-                                                 (IMPL)->open(&(GFD), ## __VA_ARGS__); } while(0)
-
-#define pHNDLOP(OP, GFDp, ...)              (GFDp)->impl->OP((GFDp), ## __VA_ARGS__)
-#define HNDLOP(OP, GFD, ...)                (GFD).impl->OP(&(GFD), ## __VA_ARGS__)
-
-#define PATHOP(OP, IMPL, AUTH, PATH, ...)   (IMPL)->OP((AUTH), (PATH), ## __VA_ARGS__)
-
-#define UMASK(GFD, MASK)                    umask(MASK) /* TBD */
-
-
-
-
-/**
- * write(2) may return less than the requested write-size, without there being any errors.
- * Call write() repeatedly until the buffer has been completely written, or an error has occurred.
- *
- * @param GenericFD fd: the file/socket to write to
- * @param void* buffer: buffer to be written
- * @param size_t nbytes: size of the buffer
- *
- * @return ssize_t: the amount written.  negative for errors.
- */
-
-static ssize_t write_all(GenericFD* fd, const void* buffer, size_t nbytes) {
-  ssize_t     result = 0;
-  size_t      remain = nbytes;
-  const char* buf    = buffer;  /* assure ourselves pointer arithmetic is by onezies  */
-
-  while (remain) {
-    errno = 0;
-
-    ssize_t count = pHNDLOP(write, fd, buf+result, remain);
-
-    if (count < 0)
-      return count;
-
-    //    // this is EAGAIN, even after successful writes
-    //    else if (errno)
-    //      return -1;
-
-    remain -= count;
-    result += count;
-  }
-
-  return result;
-}
-
-
-/**
- * read(2) may return less than the requested read-size, without there being any errors.
- * Call read() repeatedly until the buffer has been completely filled, or an error (or EOF) has occurred.
- *
- * @param GenericFD fd: the file/socket to read from
- * @param void* buffer: buffer to be filled
- * @param size_t nbytes: size of the buffer
- *
- * @return ssize_t: the amount read.  negative for errors.
- */
-
-ssize_t read_all(GenericFD* fd, void* buffer, size_t nbytes) {
-  ssize_t     result = 0;
-  size_t      remain = nbytes;
-  char*       buf    = buffer;  /* assure ourselves pointer arithmetic is by onezies  */
-
-  while (remain) {
-    errno = 0;
-
-    ssize_t count = pHNDLOP(read, fd, buf+result, remain);
-
-    if (count < 0)
-      return count;
-
-    else if (count == 0)
-      return result;            /* EOF */
-
-    //    // COMMENTED OUT: see write_all()
-    //    else if (errno)
-    //      return -1;
-
-    remain -= count;
-    result += count;
-  }
-
-  return result;
-}
-
 
 
 void bq_destroy(BufferQueue *bq) {
@@ -821,13 +764,13 @@ void* bq_reader(void* arg) {
    char* data_status = &(handle->erasure_state->data_status[bq->block_number]);
 
    // pull the meta info for this thread's block
-   char xattrval[XATTRLEN];
-   if ( ne_get_xattr1( handle->impl, handle->auth, bq->path, xattrval, XATTRLEN ) < 0 ) {
+   char metaval[METALEN];
+   if ( ne_get_xattr1( handle->impl, handle->auth, bq->path, metaval, METALEN ) < 0 ) {
       PRINTerr( "bq_reader: failed to retrieve meta info for file \"%s\"\n", bq->path );
       *meta_status = 1;
    }
    else {
-      PRINTdbg( "retrieved meta string for block %d (file %s): \"%s\"\n", bq->block_number, bq->path, xattrval );
+      PRINTdbg( "retrieved meta string for block %d (file %s): \"%s\"\n", bq->block_number, bq->path, metaval );
       // declared here so that the compiler can hopefully free up this memory outside of the 'else' block
       char xattrN[5];            /* char array to get n parts from xattr */
       char xattrE[5];            /* char array to get erasure parts from xattr */
@@ -839,7 +782,7 @@ void* bq_reader(void* arg) {
       char xattrtotsize[160];    /* char array to get totsz from xattr */
 
       // only process the xattr if we successfully retreived it
-      int ret = sscanf(xattrval,"%4s %4s %4s %19s %19s %19s %49s %159s",
+      int ret = sscanf(metaval,"%4s %4s %4s %19s %19s %19s %49s %159s",
             xattrN,
             xattrE,
             xattrO,
@@ -849,7 +792,7 @@ void* bq_reader(void* arg) {
             xattrcsum,
             xattrtotsize);
       if (ret != 8) {
-         PRINTerr( "bq_reader: sscanf parsed only %d values from meta info of block %d: \"%s\"\n", ret, bq->block_number, xattrval);
+         PRINTerr( "bq_reader: sscanf parsed only %d values from meta info of block %d: \"%s\"\n", ret, bq->block_number, metaval);
          *meta_status = 1;
       }
 
@@ -1538,49 +1481,6 @@ int bq_enqueue(BufferQueue *bq, const void *buf, size_t size) {
   pthread_mutex_unlock(&bq->qlock);
 
   return 0;
-}
-
-
-// unused.  These all devolve to memset(0), which is already done on all
-// the BenchStats in a handle, when the handle is initialized
-int init_bench_stats(BenchStats* stats) {
-
-   fast_timer_reset(&stats->thread);
-   fast_timer_reset(&stats->open);
-   log_histo_reset(&stats->open_h);
-
-   fast_timer_reset(&stats->read);
-   log_histo_reset(&stats->read_h);
-
-   fast_timer_reset(&stats->write);
-   log_histo_reset(&stats->write_h);
-
-   fast_timer_reset(&stats->close);
-   log_histo_reset(&stats->open_h);
-   fast_timer_reset(&stats->rename);
-
-   fast_timer_reset(&stats->stat);
-   fast_timer_reset(&stats->xattr);
-
-   fast_timer_reset(&stats->crc);
-   log_histo_reset(&stats->crc_h);
-
-   return 0;
-}
-
-
-// This might work, if you have an NFS Multi-Component implementation,
-// and your block-directories are named something like /path/to/block%d/more/path/filename,
-// and the name of the block 0 dir is /path/to/block0
-//
-// This is the default, for MC repos.  We ignore <printf_state>
-//
-// There's an opportunity for MC repos to handle e.g. non-zero naming, etc, by extending the
-// the default marfs configuration for MC repos, something like is done for MC_SOCKETS,
-// and passing that in as <stat>, here.
-
-int ne_default_snprintf(char* dest, size_t size, const char* format, u32 block, void* printf_state) {
-  return snprintf(dest, size, format, block);
 }
 
 
@@ -2451,688 +2351,6 @@ ssize_t ne_write( ne_handle handle, const void *buffer, size_t nbytes )
 
 
 
-int show_handle_stats(ne_handle handle) {
-
-   TimingData* timing = handle->timing_data_ptr; /* shorthand */
-
-   if (! timing->flags)
-      printf("No stats\n");
-
-   else {
-      int simple = (timing->flags & TF_SIMPLE);
-
-      fast_timer_show(&timing->handle_timer,  simple, "handle:  ", 0);
-      fast_timer_show(&timing->erasure, simple, "erasure: ", 0);
-      printf("\n");
-         
-      int i;
-      int N = handle->erasure_state->N;
-      int E = handle->erasure_state->E;
-      for (i=0; i<N+E; ++i) {
-         printf("\n-- block %d\n", i);
-
-         fast_timer_show(&timing->stats[i].thread, simple, "thread:  ", 0);
-         fast_timer_show(&timing->stats[i].open,   simple, "open:    ", 0);
-
-         fast_timer_show(&timing->stats[i].read,   simple, "read:    ", 0);
-         log_histo_show(&timing->stats[i].read_h,  simple, "read_h:  ", 0);
-
-         fast_timer_show(&timing->stats[i].write,  simple, "write:   ", 0);
-         log_histo_show(&timing->stats[i].write_h, simple, "write_h: ", 0);
-
-         fast_timer_show(&timing->stats[i].close,  simple, "close:   ", 0);
-         fast_timer_show(&timing->stats[i].rename, simple, "rename:  ", 0);
-         fast_timer_show(&timing->stats[i].stat,   simple, "stat:    ", 0);
-         fast_timer_show(&timing->stats[i].xattr,  simple, "xattr:   ", 0);
-
-         fast_timer_show(&timing->stats[i].crc,    simple, "CRC:     ", 0);
-         log_histo_show(&timing->stats[i].crc_h,   simple, "CRC_h:   ", 0);
-      }
-   }
-
-   return 0;
-}
-
-void extract_repo_name(char* path, char* repo, int* pod_id)
-{
-   char* token;
-   char* path_ = strdup(path);
-   char* pod = NULL;
-   char* repo_name = NULL;
-   //walk through path to get information
-   token = strtok(path_, "/");
-   while (token != NULL)
-   {
-      if ((pod = strstr(token, "pod")) != NULL)
-      {
-         //get the pod ID
-         *pod_id = atoi(pod+3);
-      }
-      else if((repo_name = strstr(token, "_repo")) != NULL)
-      {
-         //got repo name
-         char* underscore = strstr(token, "_");
-         size_t len = underscore - token;
-         memcpy(repo, token, len);
-      }
-      token = strtok(NULL, "/");
-   }
-
-   free(path_); //test
-}
-
-
-
-// it's an error to give us more than one flag at a time
-const char* timing_flag_name(TimingFlags flag) {
-   switch (flag) {
-   case TF_OPEN:    return "open";
-   case TF_RW:      return "rd/wr";
-   case TF_CLOSE:   return "close";
-   case TF_RENAME:  return "rename";
-   case TF_STAT:    return "stat";
-   case TF_XATTR:   return "xattr";
-   case TF_ERASURE: return "erasure";
-   case TF_CRC:     return "crc";
-   case TF_THREAD:  return "thread";
-   case TF_HANDLE:  return "handle";
-   case TF_SIMPLE:  return "simple";
-   default:         return "UNKNOWN_TIMING_FLAG";
-   }
-}
-
-// copy active parts of TimingData into a buffer.  This could be used for
-// moving data between MPI ranks.  Note that in this case, there is no need
-// to translate the data into network-byte-order, as we can assume that
-// both hosts have the same host-byte-order.  We can also assume that they
-// are both using the same compiled image of TimingData (so no worries
-// about relative struct-member alignment, etc).
-//
-// return amount of data installed, or -1 if we ran out of room in the buffer.
-// 
-ssize_t export_timing_data(TimingData* const timing, char* buffer, size_t buf_size)
-{
-   const size_t header_size = (char*)&timing->agg_stats - (char*)timing;
-   char*        buf_ptr     = buffer;
-   ssize_t      remain      = buf_size;
-   int          flag_count  = 0;
-
-#define PUSH(BUF, DATA, SIZE, REMAIN)           \
-   do {                                         \
-      if ((SIZE) > REMAIN)                      \
-         return -1;                             \
-      memcpy(BUF, DATA, (SIZE));                \
-      BUF    += (SIZE);                         \
-      REMAIN -= (SIZE);                         \
-   } while (0)
-
-#define PUSH_STAT(BUF, STAT, SIZE, REMAIN)                              \
-   for (i=0; i<timing->blk_count; ++i) {                                \
-      PUSH(BUF, (char*)&timing->stats[i].STAT, SIZE, REMAIN);           \
-   }                                                                    \
-
-   // copy top-level single values
-   PUSH(buf_ptr, (char*)timing, header_size, remain);
-
-   TimingFlagsValue mask;
-   for (mask=0x1; mask; mask <<= 1) {
-      int i;
-      switch (timing->flags & mask) {
-
-      case TF_OPEN:
-         PUSH_STAT(buf_ptr, open,   sizeof(FastTimer), remain);
-         PUSH_STAT(buf_ptr, open_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-         break;
-
-      case TF_RW:
-         PUSH_STAT(buf_ptr, read,   sizeof(FastTimer), remain);
-         PUSH_STAT(buf_ptr, read_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-
-         PUSH_STAT(buf_ptr, write,   sizeof(FastTimer), remain);
-         PUSH_STAT(buf_ptr, write_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-         break;
-
-      case TF_CLOSE:
-         PUSH_STAT(buf_ptr, close,   sizeof(FastTimer), remain);
-         PUSH_STAT(buf_ptr, close_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-         break;
-
-      case TF_RENAME:
-         PUSH_STAT(buf_ptr, rename,  sizeof(FastTimer), remain);
-         ++flag_count;
-         break;
-
-      case TF_STAT:
-         PUSH_STAT(buf_ptr, stat,  sizeof(FastTimer), remain);
-         ++flag_count;
-         break;
-
-      case TF_XATTR:
-         PUSH_STAT(buf_ptr, xattr,  sizeof(FastTimer), remain);
-         ++flag_count;
-         break;
-
-      case TF_CRC:
-         PUSH_STAT(buf_ptr, crc,   sizeof(FastTimer), remain);
-         PUSH_STAT(buf_ptr, crc_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-         break;
-
-      case TF_THREAD:
-         PUSH_STAT(buf_ptr, thread,   sizeof(FastTimer), remain);
-         ++flag_count;
-         break;
-
-
-      case TF_ERASURE:        // not per-thread; already moved at top-level
-         break;
-
-      case TF_HANDLE:         // not per-thread; already moved at top-level
-         break;
-
-      case TF_SIMPLE:         // meta-flag
-         break;
-      }
-   }
-
-#undef PUSH
-#undef PUSH_STAT
-
-   return buf_size - remain;
-}
-
-
-// complement of export_timing_data().  Here we would be on the receiving-side
-// of MPI transport, installing values into our TimingData struct.
-//
-// NOTE: for convenience, we keep this identical to export_timing_data(),
-// but we just swap source/destination, by using PULL() instead of PUSH().
-
-int import_timing_data(TimingData* timing, char* const buffer, size_t buf_size)
-{
-   char*   buf_ptr     = buffer;
-   ssize_t remain      = buf_size;
-   int     flag_count  = 0;
-   size_t  header_size = (char*)&timing->agg_stats - (char*)timing;
-
-#define PULL(BUF, DATA, SIZE, REMAIN)           \
-   do {                                         \
-      if ((SIZE) > REMAIN)                      \
-         return -1;                             \
-      memcpy(DATA, BUF, (SIZE));                \
-      BUF    += (SIZE);                         \
-      REMAIN -= (SIZE);                         \
-   } while (0)
-
-#define PULL_STAT(BUF, STAT, SIZE, REMAIN)                              \
-   for (i=0; i<timing->blk_count; ++i) {                                \
-      PULL(BUF, (char*)&timing->stats[i].STAT, SIZE, REMAIN);           \
-   }                                                                    \
-   
-   // restore top-level single values
-   PULL(buf_ptr, (char*)timing, header_size, remain);
-
-   TimingFlagsValue mask;
-   for (mask=0x1; mask; mask <<= 1) {
-
-      int i;
-      switch (timing->flags & mask) {
-
-      case TF_OPEN:
-         PULL_STAT(buf_ptr, open,   sizeof(FastTimer), remain);
-         PULL_STAT(buf_ptr, open_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-         break;
-
-      case TF_RW:
-         PULL_STAT(buf_ptr, read,   sizeof(FastTimer), remain);
-         PULL_STAT(buf_ptr, read_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-
-         PULL_STAT(buf_ptr, write,   sizeof(FastTimer), remain);
-         PULL_STAT(buf_ptr, write_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-         break;
-
-      case TF_CLOSE:
-         PULL_STAT(buf_ptr, close,   sizeof(FastTimer), remain);
-         PULL_STAT(buf_ptr, close_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-         break;
-
-      case TF_RENAME:
-         PULL_STAT(buf_ptr, rename,  sizeof(FastTimer), remain);
-         ++flag_count;
-         break;
-
-      case TF_STAT:
-         PULL_STAT(buf_ptr, stat,  sizeof(FastTimer), remain);
-         ++flag_count;
-         break;
-
-      case TF_XATTR:
-         PULL_STAT(buf_ptr, xattr,  sizeof(FastTimer), remain);
-         ++flag_count;
-         break;
-
-      case TF_CRC:
-         PULL_STAT(buf_ptr, crc,   sizeof(FastTimer), remain);
-         PULL_STAT(buf_ptr, crc_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-         break;
-
-      case TF_THREAD:
-         PULL_STAT(buf_ptr, thread,   sizeof(FastTimer), remain);
-         ++flag_count;
-         break;
-
-
-      case TF_ERASURE:        // not per-thread; already moved at top-level
-         break;
-
-      case TF_HANDLE:         // not per-thread; already moved at top-level
-         break;
-
-      case TF_SIMPLE:         // meta-flag
-         break;
-      }
-   }
-
-#undef PULL
-#undef PULL_STAT
-
-   return 0;
-}
-
-
-#if 0
-// TBD ...
-
-// like import_timing_data(), but add the values into what is already in
-// place in <timing> This means we add the values from the buffer, directly
-// into our timing structure, instead of first building a new timing
-// structuere with installed values, and then accumulating all the restored
-// elements into some other TimingData.
-//
-// Among other things, this means that we don't simply pull the "single"
-// (per-handle) values at the head of TimingData, because some of those
-// need to be accumulated, as well.
-ssize_t accumulate_timing_data2(TimingData* timing, char* const buffer, size_t buf_size)
-{
-   char*   buf_ptr     = buffer;
-   ssize_t remain      = buf_size;
-   int     flag_count  = 0;
-   size_t  header_size = (char*)&timing->agg_stats - (char*)timing;
-
-#define PULL_TIMER(BUF, DATA, SIZE, REMAIN)     \
-   do {                                         \
-      if ((SIZE) > REMAIN)                      \
-         return -1;                             \
-      fast_timer_add2(DATA, BUF);               \
-      BUF    += (SIZE);                         \
-      REMAIN -= (SIZE);                         \
-   } while (0)
-
-#define PULL_TIMERS(BUF, STAT, SIZE, REMAIN)                            \
-   for (i=0; i<timing->blk_count; ++i) {                                \
-      PULL_TIMER(BUF, (char*)&timing->stats[i].STAT, SIZE, REMAIN);     \
-   }                                                                    \
-
-
-#define PULL_HISTO(BUF, DATA, SIZE, REMAIN)     \
-   do {                                         \
-      if ((SIZE) > REMAIN)                      \
-         return -1;                             \
-      log_histo_add2(DATA, BUF);                \
-      BUF    += (SIZE);                         \
-      REMAIN -= (SIZE);                         \
-   } while (0)
-
-#define PULL_HISTOS(BUF, STAT, SIZE, REMAIN)                            \
-   for (i=0; i<timing->blk_count; ++i) {                                \
-      PULL_HISTO(BUF, (char*)&timing->stats[i].STAT, SIZE, REMAIN);     \
-   }                                                                    \
-   
-   // copy top-level single values
-   PULL(buf_ptr, (char*)timing, header_size, remain);
-
-   TimingFlagsValue mask;
-   for (mask=0x1; mask; mask <<= 1) {
-
-      int i;
-      switch (timing->flags & mask) {
-
-      case TF_OPEN:
-         PULL_TIMER(buf_ptr, open,   sizeof(FastTimer), remain);
-         PULL_HISTO(buf_ptr, open_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-         break;
-
-      case TF_RW:
-         PULL_TIMER(buf_ptr, read,   sizeof(FastTimer), remain);
-         PULL_HISTO(buf_ptr, read_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-
-         PULL_TIMER(buf_ptr, write,   sizeof(FastTimer), remain);
-         PULL_HISTO(buf_ptr, write_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-         break;
-
-      case TF_CLOSE:
-         PULL_TIMER(buf_ptr, close,   sizeof(FastTimer), remain);
-         PULL_HISTO(buf_ptr, close_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-         break;
-
-      case TF_RENAME:
-         PULL_TIMER(buf_ptr, rename,  sizeof(FastTimer), remain);
-         ++flag_count;
-         break;
-
-      case TF_STAT:
-         PULL_TIMER(buf_ptr, stat,  sizeof(FastTimer), remain);
-         ++flag_count;
-         break;
-
-      case TF_XATTR:
-         PULL_TIMER(buf_ptr, xattr,  sizeof(FastTimer), remain);
-         ++flag_count;
-         break;
-
-      case TF_CRC:
-         PULL_TIMER(buf_ptr, crc,   sizeof(FastTimer), remain);
-         PULL_HISTO(buf_ptr, crc_h, sizeof(LogHisto),  remain);
-         ++flag_count;
-         break;
-
-      case TF_THREAD:
-         PULL_TIMER(buf_ptr, thread,   sizeof(FastTimer), remain);
-         ++flag_count;
-         break;
-
-
-      case TF_ERASURE:        // not per-thread; already moved at top-level
-         break;
-
-      case TF_HANDLE:         // not per-thread; already moved at top-level
-         break;
-
-      case TF_SIMPLE:         // meta-flag
-         break;
-      }
-   }
-
-#undef PULL_TIMER
-#undef PULL_HISTO
-#undef PULL_STAT
-
-   return flag_count;
-}
-#endif
-
-
-// accumulate timings in <src> into <dest>.  Currently, pftool uses this to
-// accumulate timing data across copy-operations that occur in one
-// reporting interval.  
-int accumulate_timing_data(TimingData* dest, TimingData* src)
-{
-   int i;
-   int flag_count = 0;
-
-   if (! dest->flags) {
-      dest->flags     |= src->flags;
-      dest->blk_count  = src->blk_count;
-      dest->pod_id     = src->pod_id;
-   }
-
-   // counting the number of accumulation-events allows us to compute averages
-   dest->event_count += 1;
-
-#define ADD_TIMERS(DST, SRC, STAT)                                      \
-   for (i=0; i<(SRC)->blk_count; ++i) {                                 \
-      fast_timer_add(&(DST)->stats[i].STAT, &(SRC)->stats[i].STAT);     \
-   }                                                                    \
-
-#define ADD_HISTOS(DST, SRC, STAT)                                      \
-   for (i=0; i<(SRC)->blk_count; ++i) {                                 \
-      log_histo_add(&(DST)->stats[i].STAT, &(SRC)->stats[i].STAT);      \
-   }                                                                    \
-
-
-   TimingFlagsValue mask;
-   for (mask=0x1; mask; mask <<= 1) {
-
-      int i;
-      switch (src->flags & mask) {
-
-      case TF_OPEN:
-         ADD_TIMERS(dest, src, open);
-         ADD_HISTOS(dest, src, open_h);
-         ++flag_count;
-         break;
-
-      case TF_RW:
-         ADD_TIMERS(dest, src, read);
-         ADD_HISTOS(dest, src, read_h);
-         ++flag_count;
-
-         ADD_TIMERS(dest, src, write);
-         ADD_HISTOS(dest, src, write_h);
-         ++flag_count;
-         break;
-
-      case TF_CLOSE:
-         ADD_TIMERS(dest, src, close);
-         ADD_HISTOS(dest, src, close_h);
-         ++flag_count;
-         break;
-
-      case TF_RENAME:
-         ADD_TIMERS(dest, src, rename);
-         ++flag_count;
-         break;
-
-      case TF_STAT:
-         ADD_TIMERS(dest, src, stat);
-         ++flag_count;
-         break;
-
-      case TF_XATTR:
-         ADD_TIMERS(dest, src, xattr);
-         ++flag_count;
-         break;
-
-      case TF_CRC:
-         ADD_TIMERS(dest, src, crc);
-         ADD_HISTOS(dest, src, crc_h);
-         ++flag_count;
-         break;
-
-      case TF_THREAD:
-         ADD_TIMERS(dest, src, thread);
-         ++flag_count;
-         break;
-
-
-      case TF_ERASURE:        // not per-thread
-         fast_timer_add(&dest->erasure,   &src->erasure);
-         log_histo_add(&dest->erasure_h, &src->erasure_h);
-         ++flag_count;
-         break;
-
-      case TF_HANDLE:         // not per-thread
-         fast_timer_add(&dest->handle_timer, &src->handle_timer);
-         ++flag_count;
-         break;
-
-      case TF_SIMPLE:         // meta-flag
-         ++flag_count;
-         break;
-      }
-   }
-
-#undef ADD_TIMERS
-#undef ADD_HISTOS
-
-   return flag_count;
-}
-
-
-// <avg> non-zero means show timer-values as averages (across multiple
-// events).  In this case, we still print histograms without averaging, to
-// avoid hiding single outlier elements.
-//
-int print_timing_data(TimingData* timing, const char* hdr, int avg, int use_syslog)
-{
-   static const size_t HEADER_SIZE = 512;
-   char header[HEADER_SIZE];
-
-   header[0] = 0;
-   strncat(header, hdr, HEADER_SIZE);
-   header[HEADER_SIZE -1] = 0;  // manpage wrong.  strncat() doesn't assure terminal-NULL
-   int   do_avg = (avg && (timing->event_count > 1));
-
-   // keep things simple for parsers of our log-output
-   const char* avg_str_not = "(tot)"; // i.e. no averaging was done on this value
-   const char* avg_str     = (avg ? "(avg)" : avg_str_not);
-
-   size_t header_len = strlen(header);
-   size_t remain     = HEADER_SIZE - header_len -1;
-   char*  tail       = header + header_len;
-   size_t tail_len   = 0;
-   char*  tail2      = tail;
-   size_t remain2    = 0;
-
-   // number of accumulation-events (e.g. file-closures resulting in
-   // TimingData being accumulated).  Divide by this to get averages.
-   int event_count = timing->event_count;
-
-   int i;
-   int flag_count = 0;
-
-   fast_timer_inits();
-
-   // "erasure_h" is currently the longest timing-stat name
-#define MAKE_HEADER(STAT, AVG_STR)                                      \
-   snprintf(tail, remain, " evt %2d %-10s %s ", event_count, #STAT, AVG_STR); \
-   tail_len = strlen(tail);                                             \
-   tail2    = tail + tail_len;                                          \
-   remain2  = remain - tail_len;
-
-#define PRINT_TIMERS(TIMING, STAT)                                      \
-   MAKE_HEADER(STAT, avg_str);                                          \
-   for (i=0; i<(TIMING)->blk_count; ++i) {                              \
-      snprintf(tail2, remain2, "blk %2d   ", i);                        \
-      if (do_avg) /* side-effect ... */                                 \
-         fast_timer_div(&(TIMING)->stats[i].STAT, timing->event_count); \
-      fast_timer_show(&(TIMING)->stats[i].STAT, 1, header, use_syslog); \
-   }
-
-   // histo elements are printed "%2d", and high-order bin is typically 0,
-   // so one-less space in the header lines up better with timer values.
-#define PRINT_HISTOS(TIMING, STAT)                                      \
-   MAKE_HEADER(STAT, avg_str_not);                                      \
-   for (i=0; i<(TIMING)->blk_count; ++i) {                              \
-      snprintf(tail2, remain2, "blk %2d  ", i);                         \
-      log_histo_show(&(TIMING)->stats[i].STAT, 1, header, use_syslog);  \
-   }
-
-
-   TimingFlagsValue mask;
-   for (mask=0x1; mask; mask <<= 1) {
-
-      int i;
-      switch (timing->flags & mask) {
-
-      case TF_OPEN:
-         PRINT_TIMERS(timing, open);
-         PRINT_HISTOS(timing, open_h);
-         ++flag_count;
-         break;
-
-      case TF_RW:
-         PRINT_TIMERS(timing, read);
-         PRINT_HISTOS(timing, read_h);
-         ++flag_count;
-
-         PRINT_TIMERS(timing, write);
-         PRINT_HISTOS(timing, write_h);
-         ++flag_count;
-         break;
-
-      case TF_CLOSE:
-         PRINT_TIMERS(timing, close);
-         PRINT_HISTOS(timing, close_h);
-         ++flag_count;
-         break;
-
-      case TF_RENAME:
-         PRINT_TIMERS(timing, rename);
-         ++flag_count;
-         break;
-
-      case TF_STAT:
-         PRINT_TIMERS(timing, stat);
-         ++flag_count;
-         break;
-
-      case TF_XATTR:
-         PRINT_TIMERS(timing, xattr);
-         ++flag_count;
-         break;
-
-      case TF_CRC:
-         PRINT_TIMERS(timing, crc);
-         PRINT_HISTOS(timing, crc_h);
-         ++flag_count;
-         break;
-
-      case TF_THREAD:
-         PRINT_TIMERS(timing, thread);
-         ++flag_count;
-         break;
-
-
-
-      case TF_ERASURE:        // not per-thread
-         MAKE_HEADER(erasure, avg_str);
-         if (do_avg)
-            fast_timer_div(&timing->erasure, timing->event_count);
-         fast_timer_show(&timing->erasure,  1, header,   use_syslog);
-
-         MAKE_HEADER(erasure_h, avg_str_not);
-         log_histo_show(&timing->erasure_h, 1, header, use_syslog);
-         ++flag_count;
-         break;
-
-      case TF_HANDLE:         // not per-thread
-         MAKE_HEADER(handle, avg_str);
-         if (do_avg)
-            fast_timer_div(&timing->handle_timer, timing->event_count);
-         fast_timer_show(&timing->handle_timer, 1, header, use_syslog);
-         ++flag_count;
-         break;
-
-      case TF_SIMPLE:         // meta-flag
-         break;
-      }
-   }
-
-#undef MAKE_HEADER
-#undef PRINT_TIMERS
-#undef PRINT_HISTOS
-
-   return flag_count;
-}
-
-
-
-
-
 /**
  * Closes the erasure striping indicated by the provided handle and flushes
  * the handle buffer, if necessary.
@@ -3157,7 +2375,6 @@ int ne_close( ne_handle handle )
 {
    int            counter;
    int            ret = 0;
-   //extract_repo_name(handle->path_fmt, handle->repo, handle->pod_id);
    
    PRINTdbg( "entering ne_close()\n" );
 
@@ -3933,7 +3150,7 @@ int ne_stat( char* path, e_state erasure_state_struct ) {
 
 
 int ne_set_xattr1(const uDAL* impl, SktAuth auth,
-                  const char *path, const char *xattrval, size_t len) {
+                  const char *path, const char *metaval, size_t len) {
    int ret = -1;
 
    // see comments above OPEN() defn
@@ -3963,8 +3180,8 @@ int ne_set_xattr1(const uDAL* impl, SktAuth auth,
       ret = -1;
    }
    else {
-      // int val = HNDLOP( write, fd, xattrval, strlen(xattrval) + 1 );
-      int val = write_all(&fd, xattrval, len );
+      // int val = HNDLOP( write, fd, metaval, strlen(metaval) + 1 );
+      int val = write_all(&fd, metaval, len );
       if ( val != len ) {
          PRINTerr( "ne_close: failed to write to file %s\n", meta_file);
          ret = -1;
@@ -3990,9 +3207,9 @@ int ne_set_xattr1(const uDAL* impl, SktAuth auth,
    else {
 
 #   if (AXATTR_SET_FUNC == 5) // XXX: not functional with threads!!!
-      ret = HNDLOP(fsetxattr, fd, XATTRKEY, xattrval, len, 0);
+      ret = HNDLOP(fsetxattr, fd, XATTRKEY, metaval, len, 0);
 #   else
-      ret = HNDLOP(fsetxattr, fd, XATTRKEY, xattrval, len, 0, 0);
+      ret = HNDLOP(fsetxattr, fd, XATTRKEY, metaval, len, 0, 0);
 #   endif
    }
 
@@ -4005,7 +3222,7 @@ int ne_set_xattr1(const uDAL* impl, SktAuth auth,
    return ret;
 }
 
-int ne_set_xattr( const char *path, const char *xattrval, size_t len) {
+int ne_set_xattr( const char *path, const char *metaval, size_t len) {
 
    // this is safe for builds with/without sockets enabled
    // and with/without socket-authentication enabled
@@ -4017,13 +3234,13 @@ int ne_set_xattr( const char *path, const char *xattrval, size_t len) {
       return -1;
    }
 
-   return ne_set_xattr1(get_impl(UDAL_POSIX), auth, path, xattrval, len);
+   return ne_set_xattr1(get_impl(UDAL_POSIX), auth, path, metaval, len);
 }
 
 
 
 int ne_get_xattr1( const uDAL* impl, SktAuth auth,
-                   const char *path, char *xattrval, size_t len) {
+                   const char *path, char *metaval, size_t len) {
    int ret = 0;
 
    // see comments above OPEN() defn
@@ -4051,8 +3268,8 @@ int ne_get_xattr1( const uDAL* impl, SktAuth auth,
       PRINTerr("ne_get_xattr: failed to open file %s\n", meta_file_path);
    }
    else {
-      // ssize_t size = HNDLOP( read, fd, xattrval, len );
-      ssize_t size = read_all(&fd, xattrval, len);
+      // ssize_t size = HNDLOP( read, fd, metaval, len );
+      ssize_t size = read_all(&fd, metaval, len);
       if ( size < 0 ) {
          PRINTerr("ne_get_xattr: failed to read from file %s\n", meta_file_path);
          ret = -1;
@@ -4088,9 +3305,9 @@ int ne_get_xattr1( const uDAL* impl, SktAuth auth,
    else {
 
 #   if (AXATTR_GET_FUNC == 4)
-      ret = HNDLOP(fgetxattr, fd, XATTRKEY, &xattrval[0], len);
+      ret = HNDLOP(fgetxattr, fd, XATTRKEY, &metaval[0], len);
 #   else
-      ret = HNDLOP(fgetxattr, fd, XATTRKEY, &xattrval[0], len, 0, 0);
+      ret = HNDLOP(fgetxattr, fd, XATTRKEY, &metaval[0], len, 0, 0);
 #   endif
    }
 
@@ -4102,12 +3319,12 @@ int ne_get_xattr1( const uDAL* impl, SktAuth auth,
 
    // make sure that our xattr values are null terminated strings
    if ( ret >= 0 )
-      *(xattrval + ret) = '\0';
+      *(metaval + ret) = '\0';
 
    return ret;
 }
 
-int ne_get_xattr( const char *path, char *xattrval, size_t len) {
+int ne_get_xattr( const char *path, char *metaval, size_t len) {
 
    // this is safe for builds with/without sockets enabled
    // and with/without socket-authentication enabled
@@ -4119,22 +3336,22 @@ int ne_get_xattr( const char *path, char *xattrval, size_t len) {
       return -1;
    }
 
-   return ne_get_xattr1(get_impl(UDAL_POSIX), auth, path, xattrval, len);
+   return ne_get_xattr1(get_impl(UDAL_POSIX), auth, path, metaval, len);
 }
 
 static int set_block_xattr(ne_handle handle, int block) {
   int tmp = 0;
   TimingData* timing = handle->timing_data_ptr;
 
-  char xattrval[1024];
-  int xvalen = snprintf(xattrval,1024,"%d %d %d %d %lu %lu %llu %llu\n",
+  char metaval[1024];
+  int xvalen = snprintf(metaval,1024,"%d %d %d %d %lu %lu %llu %llu\n",
                         handle->erasure_state->N, handle->erasure_state->E, handle->erasure_state->O,
                         handle->erasure_state->bsz, handle->erasure_state->nsz,
                         handle->erasure_state->ncompsz[block], (unsigned long long)handle->erasure_state->csum[block],
                         (unsigned long long)handle->erasure_state->totsz);
 
   PRINTdbg( "ne_close: setting file %d xattr = \"%s\"\n",
-            block, xattrval );
+            block, metaval );
 
   char block_file_path[2048];
   handle->snprintf(block_file_path, MAXNAME, handle->path_fmt,
@@ -4150,7 +3367,7 @@ static int set_block_xattr(ne_handle handle, int block) {
    if (timing->flags & TF_XATTR)
       fast_timer_start(&timing->stats[block].xattr);
 
-   int rc = ne_set_xattr1(handle->impl, handle->auth, block_file_path, xattrval, xvalen);
+   int rc = ne_set_xattr1(handle->impl, handle->auth, block_file_path, metaval, xvalen);
 
    if (timing->flags & TF_XATTR)
       fast_timer_stop(&timing->stats[block].xattr);
