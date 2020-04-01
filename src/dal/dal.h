@@ -162,7 +162,7 @@ typedef struct DAL_struct {
 
 
 // Forward decls of specific DAL initializations
-DAL posix_dal_init( xmlNode* dal_conf_root, DAL_location max_loc );
+DAL posix_dal_init( xmlNode* posix_dal_conf_root, DAL_location max_loc );
 
 
 // Function to provide specific DAL initialization calls based on name

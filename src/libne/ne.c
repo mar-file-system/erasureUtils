@@ -130,7 +130,14 @@ typedef struct ne_ctxt_struct {
 }* ne_ctxt;
 
 
-ne_ctxt ne_path_init ( const char* path, int pods, int blocks, int caps, int scatters ) {
+/**
+ * Initializes an ne_ctxt with a default posix DAL configuration.
+ * This fucntion is intended primarily for use with test utilities and commandline tools.
+ * @param const char* path : The complete path template for the erasure stripe
+ * @param ne_location max_loc : The maximum pod/cap/scatter values for this context
+ * @return ne_ctxt : The initialized ne_ctxt or NULL if an error occurred
+ */
+ne_ctxt ne_path_init ( const char* path, ne_location max_loc, int max_block ) {
    // create a stand-in XML config
    char* configtemplate = "<DAL type=\"posix\"><dir_template>%s</dir_template></DAL>"
    int len = strlen( path ) + strlen( configtemplate );
@@ -181,6 +188,149 @@ ne_ctxt ne_path_init ( const char* path, int pods, int blocks, int caps, int sca
    // return the new ne_ctxt
    return ctxt;
 }
+
+
+
+/**
+ * Initializes a new ne_ctxt
+ * @param xmlNode* dal_root : Root of a libxml2 DAL node describing data access
+ * @param ne_location max_loc : ne_location struct containing maximum allowable pod/cap/scatter 
+ *                              values for this context
+ * @param int max_block : Integer maximum block value ( N + E ) for this context
+ * @return ne_ctxt : New ne_ctxt or NULL if an error was encountered
+ */
+ne_ctxt ne_init( xmlNode* dal_root, ne_location max_loc, int max_block ) {
+   // Initialize a DAL instance
+   DAL_location maxdal = { .pod = max_loc.pod, .block = max_block, .cap = max_loc.cap, .scatter = max_loc.scatter };
+   DAL dal = init_dal( dal_root, maxdal );
+   // Verify that the dal intialized successfully
+   if ( dal == NULL ) {
+      LOG( LOG_ERR, "DAL instance failed to properly initialize!\n" );
+      return NULL;
+   }
+
+   // allocate a new context struct
+   ne_ctxt ctxt = malloc( sizeof( struct ne_ctxt_struct ) );
+   if ( ctxt == NULL ) {
+      LOG( LOG_ERR, "failed to allocate memory for a new ne_ctxt struct!\n" );
+      dal->cleanup( dal ); // cleanup our DAL context, ignoring errors
+      return NULL;
+   }
+
+   // fill in context values (just the DAL context, for now) and return
+   ctxt->dal = dal;
+   return ctxt;
+}
+
+
+
+/**
+ * Destroys and existing ne_ctxt
+ * @param ne_ctxt ctxt : Reference to the ne_ctxt to be destroyed
+ * @return int : Zero on a success, and -1 on a failure
+ */
+int ne_term ( ne_ctxt ctxt ) {
+   // Cleanup the DAL context
+   if ( ctxt->dal->cleanup( ctxt->dal ) != 0 ) {
+      LOG( LOG_ERR, "failed to cleanup DAL context!\n" );
+      return -1;
+   }
+   free( ctxt );
+   return 0;
+}
+
+
+
+/**
+ * Determine the erasure structure of a given object
+ * @param ne_ctxt ctxt : The ne_ctxt used to access this data stripe
+ * @param const char* objID : ID of the object to stat
+ * @param ne_location loc : Location of the object to stat
+ * @param ne_erasure* epat : Address of an ne_erasure struct to be populated
+ * @param ne_state* state : Address of an ne_state struct to be populated (ignored, if NULL)
+ * @return int : Zero if no stripe errors were found, a positive integer bitmask of any repaired 
+ *               errors, or a negative value if an unrecoverable failure occurred
+ */
+int ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc, ne_erasure* epat, ne_state* state ) {
+}
+
+
+
+/**
+ * Verify a given erasure striped object and reconstruct any damaged data, if possible
+ * @param ne_ctxt ctxt : The ne_ctxt used to access this data stripe
+ * @param const char* objID : ID of the object to be rebuilt
+ * @param ne_location loc : Location of the object to be rebuilt
+ * @param ne_erasure epat : Erasure pattern of the object to be rebuilt
+ * @param ne_state* state : Address of an ne_state struct to be populated (ignored, if NULL)
+ * @return int : Zero if no stripe errors were found, a positive integer bitmask of any repaired 
+ *               errors, or a negative value if an unrecoverable failure occurred
+ */
+int ne_rebuild( ne_ctxt ctxt, const char* objID, ne_location loc, ne_erasure epat, ne_state* state ) {
+}
+
+
+
+/**
+ * Delete a given object
+ * @param ne_ctxt ctxt : The ne_ctxt used to access this data stripe
+ * @param const char* objID : ID of the object to be rebuilt
+ * @param ne_location loc : Location of the object to be rebuilt
+ * @return int : Zero on success and -1 on failure
+ */
+int ne_delete( ne_ctxt ctxt, const char* objID, ne_location loc ) {
+}
+
+
+
+/**
+ * Create a new handle for reading or writing a specific object
+ * @param ne_ctxt ctxt : The ne_ctxt used to access this data stripe
+ * @param const char* objID : ID of the object to be rebuilt
+ * @param ne_location loc : Location of the object to be rebuilt
+ * @param ne_erasure epat : Erasure pattern of the object to be rebuilt
+ * @param ne_mode mode : Handle mode (NE_RDONLY || NE_RDALL || NE_WRONLY || NE_WRALL)
+ * @return ne_handle : Newly created ne_handle, or NULL if an error occured
+ */
+ne_handle ne_open( ne_ctxt ctxt, const char* objID, ne_location loc, ne_erasure epat, ne_mode mode ) {
+}
+
+
+
+/**
+ * Read from a given NE_RDONLY or NE_RDALL handle
+ * @param ne_handle handle : The ne_handle reference to read from
+ * @param off_t offset : Offset at which to read
+ * @param void* buffer : Reference to a buffer to be filled with read data
+ * @param size_t bytes : Number of bytes to be read
+ * @return ssize_t : The number of bytes successfully read, or -1 on a failure
+ */
+ssize_t ne_read( ne_handle handle, off_t offset, void* buffer, size_t bytes ) {
+}
+
+
+
+/**
+ * Write to a given NE_WRONLY or NE_WRALL handle
+ * @param ne_handle handle : The ne_handle reference to write to
+ * @param const void* buffer : Buffer to be written to the handle
+ * @param size_t bytes : Number of bytes to be written from the buffer
+ * @return ssize_t : The number of bytes successfully written, or -1 on a failure
+ */
+ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
+}
+
+
+
+/**
+ * Close an open ne_handle
+ * @param ne_handle handle : The ne_handle reference to close
+ * @param ne_state* state : Address of an ne_state struct to be populated (ignored, if NULL)
+ * @return int : Zero on success, and -1 on a failure
+ */
+int ne_close( ne_handle handle, ne_state* state ) {
+}
+
 
 
 static int set_block_xattr(ne_handle handle, int block);

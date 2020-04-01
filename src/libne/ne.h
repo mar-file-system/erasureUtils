@@ -121,35 +121,31 @@ typedef enum {
   NE_RDALL,               //2  -- read data and all erasure, regardless of data state
   NE_WRONLY,              //3  -- write data and erasure to new stripe
   NE_WRALL = NE_WRONLY,   //   -- same as above, defined just to avoid confusion
-  NE_REBUILD,             //4  -- reconstruct data and/or erasure for an existing stripe  (lib use only)
-  NE_STAT,                //5  -- read meta info for all files, but skip data and erasure (lib use only)
-  NE_ESTATE  = 0x01 << 3, //8  -- indicates a e_state argument, to be populated during the operation
-  NE_NOINFO  = 0x01 << 4, //16 -- indicates the absence of N/E/O arguments
-  NE_SETBSZ  = 0x01 << 5  //32 -- indicates a bsz argument, to be assumed when reading/writing
 } ne_mode;
 
 #define MAX_QDEPTH      2
 #define MAX_RD_QDEPTH   3   /* (unused) */
 
-typedef struct ne_state_struct {
-   // erasure structure
+typedef struct ne_erasure_struct {
    int N;
    int E;
    int O;
-   unsigned int bsz;
+   size_t partsz;
+} ne_erasure;
 
+typedef struct ne_state_struct {
    // striping size
-   unsigned long nsz;
-   u64 totsz;
+   size_t blocksz;
+   size_t totsz;
 
    // striping health
-   char meta_status[ MAXPARTS ];
-   char data_status[ MAXPARTS ];
+   char* meta_status; // user allocated region, must be at least ( sizeof(char) * max_block ) bytes; ignored if NULL
+   char* data_status; // user allocated region, must be at least ( sizeof(char) * max_block ) bytes; ignored if NULL
 
    // per-part info
-   u64 csum[ MAXPARTS ];
-   unsigned long ncompsz[ MAXPARTS ];
-} *e_state;
+   u64* csum;       // user allocated region, must be at least ( sizeof(u64) * max_block ) bytes; ignored if NULL
+   size_t* ncompsz; // user allocated region, must be at least ( sizeof(size_t) * max_block ) bytes; ignored if NULL
+} ne_state;
 
 // location struct
 typdef struct ne_location_struct {
@@ -158,26 +154,117 @@ typdef struct ne_location_struct {
    int scatter;
 } ne_location;
 
-// Initialization functions, to produce a ne_ctxt
+
+
+/*
+ ---  Initialization/Termination functions, to produce and destroy a ne_ctxt  ---
+*/
+
+// context struct
 typedef struct ne_ctxt_struct* ne_ctxt; // forward decl.
-ne_ctxt ne_path_init ( const char* path,  ne_location max_loc );
-ne_ctxt ne_init      ( xmlNode* dal_root, ne_location max_loc );
 
-// Per-Object functions, to perform a given op on a specific object
-int ne_rebuild ( ne_ctxt ctxt, char* objID, ne_location loc, ne_mode mode, ... );
-int ne_delete  ( ne_ctxt ctxt, char* objID, ne_location loc, int width );
-int ne_stat    ( ne_ctxt ctxt, char* objID, ne_location loc, e_state erasure_state_struct );
+/**
+ * Initializes a new ne_ctxt
+ * @param xmlNode* dal_root : Root of a libxml2 DAL node describing data access
+ * @param ne_location max_loc : ne_location struct containing maximum allowable pod/cap/scatter 
+ *                              values for this context
+ * @param int max_block : Integer maximum block value ( N + E ) for this context
+ * @return ne_ctxt : New ne_ctxt or NULL if an error was encountered
+ */
+ne_ctxt ne_init( xmlNode* dal_root, ne_location max_loc, int max_block );
 
-// Read/Write Stream functions, to write/read a specific object
-typedef struct ne_handle_struct* ne_handle; // forward decl.
-ne_handle ne_open  ( ne_ctxt ctxt,     char*       objID,  ne_location loc,  ne_mode mode,  ... );
-ssize_t   ne_read  ( ne_handle handle, void*       buffer, size_t nbytes, off_t offset );
-ssize_t   ne_write ( ne_handle handle, const void* buffer, size_t nbytes );
-int       ne_close ( ne_handle handle );
-
-// Termination function, to destroy an established ne_ctxt
+/**
+ * Destroys and existing ne_ctxt
+ * @param ne_ctxt ctxt : Reference to the ne_ctxt to be destroyed
+ * @return int : Zero on a success, and -1 on a failure
+ */
 int ne_term ( ne_ctxt ctxt );
 
+
+
+/*
+ ---  Per-Object functions, to perform a given op on a specific object  ---
+*/
+
+/**
+ * Determine the erasure structure of a given object
+ * @param ne_ctxt ctxt : The ne_ctxt used to access this data stripe
+ * @param const char* objID : ID of the object to stat
+ * @param ne_location loc : Location of the object to stat
+ * @param ne_erasure* epat : Address of an ne_erasure struct to be populated
+ * @param ne_state* state : Address of an ne_state struct to be populated (ignored, if NULL)
+ * @return int : Zero if no stripe errors were found, a positive integer bitmask of any repaired 
+ *               errors, or a negative value if an unrecoverable failure occurred
+ */
+int ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc, ne_erasure* epat, ne_state* state );
+
+/**
+ * Verify a given erasure striped object and reconstruct any damaged data, if possible
+ * @param ne_ctxt ctxt : The ne_ctxt used to access this data stripe
+ * @param const char* objID : ID of the object to be rebuilt
+ * @param ne_location loc : Location of the object to be rebuilt
+ * @param ne_erasure epat : Erasure pattern of the object to be rebuilt
+ * @param ne_state* state : Address of an ne_state struct to be populated (ignored, if NULL)
+ * @return int : Zero if no stripe errors were found, a positive integer bitmask of any repaired 
+ *               errors, or a negative value if an unrecoverable failure occurred
+ */
+int ne_rebuild( ne_ctxt ctxt, const char* objID, ne_location loc, ne_erasure epat, ne_state* state );
+
+/**
+ * Delete a given object
+ * @param ne_ctxt ctxt : The ne_ctxt used to access this data stripe
+ * @param const char* objID : ID of the object to be rebuilt
+ * @param ne_location loc : Location of the object to be rebuilt
+ * @return int : Zero on success and -1 on failure
+ */
+int ne_delete( ne_ctxt ctxt, const char* objID, ne_location loc );
+
+
+
+/*
+ ---  Stream functions, to write/read a specific object  ---
+*/
+
+// handle struct
+typedef struct ne_handle_struct* ne_handle; // forward decl.
+
+/**
+ * Create a new handle for reading or writing a specific object
+ * @param ne_ctxt ctxt : The ne_ctxt used to access this data stripe
+ * @param const char* objID : ID of the object to be rebuilt
+ * @param ne_location loc : Location of the object to be rebuilt
+ * @param ne_erasure epat : Erasure pattern of the object to be rebuilt
+ * @param ne_mode mode : Handle mode (NE_RDONLY || NE_RDALL || NE_WRONLY || NE_WRALL)
+ * @return ne_handle : Newly created ne_handle, or NULL if an error occured
+ */
+ne_handle ne_open( ne_ctxt ctxt, const char* objID, ne_location loc, ne_erasure epat, ne_mode mode );
+
+/**
+ * Read from a given NE_RDONLY or NE_RDALL handle
+ * @param ne_handle handle : The ne_handle reference to read from
+ * @param off_t offset : Offset at which to read
+ * @param void* buffer : Reference to a buffer to be filled with read data
+ * @param size_t bytes : Number of bytes to be read
+ * @return ssize_t : The number of bytes successfully read, or -1 on a failure
+ */
+ssize_t ne_read( ne_handle handle, off_t offset, void* buffer, size_t nbytes );
+
+/**
+ * Write to a given NE_WRONLY or NE_WRALL handle
+ * @param ne_handle handle : The ne_handle reference to write to
+ * @param const void* buffer : Buffer to be written to the handle
+ * @param size_t bytes : Number of bytes to be written from the buffer
+ * @return ssize_t : The number of bytes successfully written, or -1 on a failure
+ */
+ssize_t ne_write( ne_handle handle, const void* buffer, size_t nbytes );
+
+/**
+ * Close an open ne_handle
+ * @param ne_handle handle : The ne_handle reference to close
+ * @param ne_state* state : Address of an ne_state struct to be populated (ignored, if NULL)
+ * @return int : Zero on success, and -1 on a failure
+ */
+int ne_close( ne_handle handle, ne_state* state );
 
 
 #ifdef __cplusplus
@@ -185,3 +272,4 @@ int ne_term ( ne_ctxt ctxt );
 #endif
 
 #endif
+
