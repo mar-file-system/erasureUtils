@@ -84,9 +84,13 @@ typedef enum {
 
 
 typedef struct queue_init_struct {
-   const char*  log_prefix;       /* string prefix for all log messages produced by this queue */
+   // Queue Info
+   const char*       log_prefix;  /* string prefix for all log messages produced by this queue */
+   TQ_Control_Flags  init_flags;  /* state flags to set at the moment of queue creation, before threads initialize */
+   unsigned int      max_qdepth;  /* maximum depth of the work queue */
+
+   // Thread Info
    void*        global_state;     /* reference to some global initial state, passed to the init_thread state func of all threads */
-   unsigned int max_qdepth;       /* maximum depth of the work queue */
    unsigned int num_threads;      /* number of threads to initialize */
    unsigned int num_prod_threads; /* number of threads to utilize the thread_producer_func() (those with tID < num_prod_threads) */
 
@@ -142,21 +146,27 @@ typedef struct queue_init_struct {
       function pointer defining the behavior of a thread just before entering a HALTED state
       - Arguments
          * The first/only argument is a reference to the user-defined state pointer for this thread
+         * The second argument is a reference to the previous work package produced/consumed by this thread 
+            ** This reference will be populated with NULL if the previous work package has already been 
+               processed (passed to the consumer func), enqueued, or no previous work package exists.
       - Return Value
          * A non-zero return value will cause the calling thread to ABORT the queue
          * A return value of zero will be ignored
    */
-   int (*thread_pause_func) (void** state);
+   int (*thread_pause_func) (void** state, void** prev_work);
 
    /*
       function pointer defining the behavior of a thread just after exiting a HALTED state
       - Arguments
          * The first/only argument is a reference to the user-defined state pointer for this thread
+         * The second argument is a reference to the previous work package produced/consumed by this thread 
+            ** This reference will be populated with NULL if the previous work package has already been 
+               processed (passed to the consumer func), enqueued, or no previous work package exists.
       - Return Value
          * A non-zero return value will cause the calling thread to ABORT the queue
          * A return value of zero will be ignored
    */
-   int (*thread_resume_func) (void** state);
+   int (*thread_resume_func) (void** state, void** prev_work);
 
    /*
       function pointer defining the termination behavior of a thread

@@ -57,7 +57,7 @@ int main( int argc, char** argv ) {
    // Open, write to, and set meta info for a specific block
    void* writebuffer = calloc( 10, 1024 );
    if ( writebuffer == NULL ) { printf( "error: failed to allocate write buffer\n" ); return -1; }
-   BLOCK_CTXT block = dal->open( dal->ctxt, WRITE, maxloc, "" );
+   BLOCK_CTXT block = dal->open( dal->ctxt, DAL_WRITE, maxloc, "" );
    if ( block == NULL ) { printf( "error: failed to open block context for write: %s\n", strerror(errno) ); return -1; }
    if ( dal->put( block, writebuffer, (10*1024) ) ) {
       printf( "warning: put did not return expected value\n" );
@@ -71,7 +71,7 @@ int main( int argc, char** argv ) {
    // Open the same block for read and verify all values
    void* readbuffer = malloc( sizeof(char) * 10 * 1024 );
    if ( readbuffer == NULL ) { printf( "error: failed to allocate read buffer\n" ); return -1; }
-   block = dal->open( dal->ctxt, READ, maxloc, "" );
+   block = dal->open( dal->ctxt, DAL_READ, maxloc, "" );
    if ( block == NULL ) { printf( "error: failed to open block context for read: %s\n", strerror(errno) ); return -1; }
    if ( dal->get( block, readbuffer, (10*1024), 0 ) != (10*1024) ) {
       printf( "warning: get did not return expected value\n" );

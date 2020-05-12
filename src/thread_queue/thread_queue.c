@@ -104,9 +104,9 @@ typedef struct thread_queue_worker_pool_struct {
       /* function pointer defining the initialization behavior of threads */
    int (*thread_work_func) (void** state, void** work_tofill);
       /* function pointer defining the behavior of a thread for each work package */
-   int (*thread_pause_func) (void** state);
+   int (*thread_pause_func) (void** state, void** prev_work);
       /* function pointer defining the behavior of a thread just before entering a HALTED state */
-   int (*thread_resume_func) (void** state);
+   int (*thread_resume_func) (void** state, void** prev_work);
       /* function pointer defining the behavior of a thread just after exiting a HALTED state */
    void (*thread_term_func) (void** state, void** prev_work);
       /* function pointer defining the termination behavior of threads */
@@ -219,12 +219,12 @@ int general_thread_init_behavior( ThreadQueue tq, TQWorkerPool wp, unsigned int 
 
 
 // call the thread_pause_func (if supplied), set the HALTED state, and signal any master threads to resume
-int general_thread_pause_behavior( ThreadQueue tq, TQWorkerPool wp, unsigned int tID, void** tstate ) {
+int general_thread_pause_behavior( ThreadQueue tq, TQWorkerPool wp, unsigned int tID, void** tstate, void** prev_work ) {
    // Queue lock MUST be held at this point
    if ( tq->con_flags & TQ_HALT ) {
       // if we have a thread_pause_func(), call it now
       if ( wp->thread_pause_func != NULL ) {
-         if ( wp->thread_pause_func( tstate ) != 0 ) {
+         if ( wp->thread_pause_func( tstate, prev_work ) != 0 ) {
             // pause func indicates we should abort
             LOG( LOG_ERR, "%s %s Thread[%u]: setting ABORT state due to pause func result\n", tq->log_prefix, wp->pname, tID );
             tq->con_flags |= TQ_ABORT;
@@ -248,7 +248,7 @@ int general_thread_pause_behavior( ThreadQueue tq, TQWorkerPool wp, unsigned int
 }
 
 
-int general_thread_resume_behavior( ThreadQueue tq, TQWorkerPool wp, unsigned int tID, void** tstate ) {
+int general_thread_resume_behavior( ThreadQueue tq, TQWorkerPool wp, unsigned int tID, void** tstate, void** prev_work ) {
    // Queue lock MUST be held at this point
    wp->act_thrds++;
    LOG( LOG_INFO, "%s %s Thread[%u]: Awake and holding lock\n", tq->log_prefix, wp->pname, tID );
@@ -259,7 +259,7 @@ int general_thread_resume_behavior( ThreadQueue tq, TQWorkerPool wp, unsigned in
       tq->state_flags[tID] &= ~(TQ_HALTED);
       // if we have a thread_resume_func(), call it now
       if ( wp->thread_resume_func != NULL ) {
-         if ( wp->thread_resume_func( tstate ) != 0 ) {
+         if ( wp->thread_resume_func( tstate, prev_work ) != 0 ) {
             // resume func indicates we should abort
             LOG( LOG_ERR, "%s %s Thread[%u]: setting ABORT state due to resume func result\n", tq->log_prefix, wp->pname, tID );
             tq->con_flags |= TQ_ABORT;
@@ -357,11 +357,11 @@ void* consumer_thread( void* arg ) {
                 (tq->con_flags & TQ_HALT) )
                &&  !(tq->con_flags & TQ_ABORT) ) {
 
-         if ( general_thread_pause_behavior( tq, wp, tID, &tstate ) < 0 ) { break; } // hit standard abort logic
+         if ( general_thread_pause_behavior( tq, wp, tID, &tstate, &cur_work ) < 0 ) { break; } // hit standard abort logic
          // if our queue is empty, make sure we have all producers running
          if ( tq->qdepth == 0 ) { pthread_cond_broadcast( &tq->producer_resume ); }
          pthread_cond_wait( &tq->consumer_resume, &tq->qlock );
-         if ( general_thread_resume_behavior( tq, wp, tID, &tstate ) < 0 ) { break; } // hit standard abort logic
+         if ( general_thread_resume_behavior( tq, wp, tID, &tstate, &cur_work ) < 0 ) { break; } // hit standard abort logic
          
       } // end of holding pattern -- this thread has some action to take
 
@@ -421,10 +421,21 @@ void* producer_thread( void* arg ) {
    if ( general_thread_init_behavior( tq, wp, tID, global_state, &tstate ) ) { // non-zero return means failure to acquire lock or initialize
       pthread_exit( tstate );
    }
+
+   // define pointer for current work package
+   void* cur_work = NULL;
+
+   // special check for HALT flag before producing first work package
+   while ( ( tq->con_flags & TQ_HALT ) 
+           &&  !( (tq->con_flags & TQ_ABORT)  ||  (tq->con_flags & TQ_FINISHED) ) ) {
+      if ( general_thread_pause_behavior( tq, wp, tID, &tstate, &cur_work ) < 0 ) { break; } // hit standard abort logic
+      pthread_cond_wait( &tq->producer_resume, &tq->qlock );
+      if ( general_thread_resume_behavior( tq, wp, tID, &tstate, &cur_work ) < 0 ) { break; } // hit standard abort logic
+   }
+
    pthread_mutex_unlock( &tq->qlock ); // release the lock
 
    // begin main loop
-   void* cur_work = NULL;
    while ( 1 ) {
       // This thread should never be holding the queue lock here
       // Create our new work pkg
@@ -442,11 +453,11 @@ void* producer_thread( void* arg ) {
                 (tq->con_flags & TQ_HALT) )
                 &&  !( (tq->con_flags & TQ_ABORT)  ||  (tq->con_flags & TQ_FINISHED) ) ) {
 
-         if ( general_thread_pause_behavior( tq, wp, tID, &tstate ) < 0 ) { break; } // hit standard abort logic
+         if ( general_thread_pause_behavior( tq, wp, tID, &tstate, &cur_work ) < 0 ) { break; } // hit standard abort logic
          // if our queue is full, make sure we have all consumers running
          if ( tq->qdepth == tq->max_qdepth ) { pthread_cond_broadcast( &tq->consumer_resume ); }
          pthread_cond_wait( &tq->producer_resume, &tq->qlock );
-         if ( general_thread_resume_behavior( tq, wp, tID, &tstate ) < 0 ) { break; } // hit standard abort logic
+         if ( general_thread_resume_behavior( tq, wp, tID, &tstate, &cur_work ) < 0 ) { break; } // hit standard abort logic
          
       } // end of holding pattern -- this thread has some action to take
 
@@ -455,27 +466,31 @@ void* producer_thread( void* arg ) {
          break;
       }
 
-      // If not, then we have space to enqueue...
-      LOG( LOG_INFO, "%s %s Thread[%u]: Storing work package (pos = %d, depth = %d)\n", tq->log_prefix, wp->pname, tID, tq->tail, tq->qdepth );
-      tq->workpkg[ tq->tail ] = cur_work; // insert our work pkg at the tail
-      tq->tail = ( tq->tail + 1 ) % tq->max_qdepth; // adjust the tail position to the next slot
-      tq->qdepth++;                       // finally, increment the queue depth
+      // check if we have a work package to enqueue
+      if ( cur_work != NULL ) {
+         // If we got this far, then we have space to enqueue...
+         LOG( LOG_INFO, "%s %s Thread[%u]: Storing work package (pos = %d, depth = %d)\n", tq->log_prefix, wp->pname, tID, tq->tail, tq->qdepth );
+         tq->workpkg[ tq->tail ] = cur_work; // insert our work pkg at the tail
+         tq->tail = ( tq->tail + 1 ) % tq->max_qdepth; // adjust the tail position to the next slot
+         tq->qdepth++;                       // finally, increment the queue depth
 
-      // if the queue length exceeds the work being processed, tell a thread to resume
-      if ( tq->cons_pool != NULL ) {
-         if ( tq->qdepth > tq->cons_pool->act_thrds   &&  tq->cons_pool->act_thrds < tq->cons_pool->num_thrds ) {
-            LOG( LOG_INFO, "%s %s Thread[%u]: signaling %s Thread ( running=%u, depth=%u )\n", 
-                           tq->log_prefix, wp->pname, tID, tq->cons_pool->pname, tq->cons_pool->act_thrds, tq->qdepth );
+         // if the queue length exceeds the work being processed, tell a thread to resume
+         if ( tq->cons_pool != NULL ) {
+            if ( tq->qdepth > tq->cons_pool->act_thrds   &&  tq->cons_pool->act_thrds < tq->cons_pool->num_thrds ) {
+               LOG( LOG_INFO, "%s %s Thread[%u]: signaling %s Thread ( running=%u, depth=%u )\n", 
+                              tq->log_prefix, wp->pname, tID, tq->cons_pool->pname, tq->cons_pool->act_thrds, tq->qdepth );
+               pthread_cond_signal( &tq->consumer_resume );
+            }
+         }
+         else if ( tq->qdepth == 1 ) { // no consumer threads and the queue was empty, signal
+            LOG( LOG_INFO, "%s %s Thread[%u]: blindly signaling a consumer\n", tq->log_prefix, wp->pname, tID );
             pthread_cond_signal( &tq->consumer_resume );
          }
-      }
-      else if ( tq->qdepth == 1 ) { // no consumer threads and the queue was empty, signal
-         LOG( LOG_INFO, "%s %s Thread[%u]: blindly signaling a consumer\n", tq->log_prefix, wp->pname, tID );
-         pthread_cond_signal( &tq->consumer_resume );
+
+         cur_work = NULL; // clear this value to avoid confusion if we exit
       }
 
       pthread_mutex_unlock( &tq->qlock ); // release the lock
-      cur_work = NULL; // clear this value to avoid confusion if we exit
    }
    // end of main loop (still holding lock)
 
@@ -564,7 +579,7 @@ ThreadQueue tq_init( TQ_Init_Opts* opts ) {
    tq->head   = 0;
    tq->tail   = 0;
    // initialize control flags
-   tq->con_flags = 0;
+   tq->con_flags = opts->init_flags;
    // initialize worker pools to NULL (simplifies cleanup logic)
    tq->prod_pool = NULL;
    tq->cons_pool = NULL;
@@ -639,8 +654,8 @@ ThreadQueue tq_init( TQ_Init_Opts* opts ) {
       }
       TQWorkerPool wp = tq->prod_pool; // shorthand reference
       wp->pname              = "Producer";
-      wp->num_thrds        = opts->num_prod_threads;
-      wp->act_thrds    = wp->num_thrds;
+      wp->num_thrds          = opts->num_prod_threads;
+      wp->act_thrds          = wp->num_thrds;
       wp->thread_init_func   = opts->thread_init_func;
       wp->thread_work_func   = opts->thread_producer_func;
       wp->thread_pause_func  = opts->thread_pause_func;

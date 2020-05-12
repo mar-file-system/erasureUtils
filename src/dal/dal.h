@@ -86,9 +86,9 @@ typedef struct DAL_location_struct {
 } DAL_location;
 
 typedef enum {
-   READ = 0,
-   WRITE = 1,
-   REBUILD = 2
+   DAL_READ = 0,
+   DAL_WRITE = 1,
+   DAL_REBUILD = 2
 } DAL_MODE;
 
 typedef struct DAL_struct {
@@ -99,8 +99,7 @@ typedef struct DAL_struct {
    DAL_CTXT       ctxt;
 
    // Preferred I/O Size
-   size_t pread_size;
-   size_t pwrite_size;
+   size_t io_size;
 
    // DAL Functions -- 
    int (*verify) ( DAL_CTXT ctxt, char fix );

@@ -98,8 +98,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
    connect to a non-existent server, which must then time out.  */
 #define MIN_MD_CONSENSUS  2
 
-#define MAXN 15
-#define MAXE 4
+#define MAXN 9999
+#define MAXE 9999
+
 #define MAXNAME 2048
 #define MAXBUF 4096
 #define MAXBLKSZ 16777216
@@ -131,6 +132,7 @@ typedef struct ne_erasure_struct {
    int E;
    int O;
    size_t partsz;
+   char crcs;
 } ne_erasure;
 
 typedef struct ne_state_struct {
@@ -174,7 +176,7 @@ typedef struct ne_ctxt_struct* ne_ctxt; // forward decl.
 ne_ctxt ne_init( xmlNode* dal_root, ne_location max_loc, int max_block );
 
 /**
- * Destroys and existing ne_ctxt
+ * Destroys an existing ne_ctxt
  * @param ne_ctxt ctxt : Reference to the ne_ctxt to be destroyed
  * @return int : Zero on a success, and -1 on a failure
  */

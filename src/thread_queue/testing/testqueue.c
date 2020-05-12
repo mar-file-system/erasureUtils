@@ -6,11 +6,11 @@
 #include <pthread.h>
 #include <time.h>
 
-#define NUM_CONS 32
-#define NUM_PROD 16
+#define NUM_CONS 10
+#define NUM_PROD 5
 #define QDEPTH  1000
-#define TOT_WRK 300
-#define HLT_AT  150
+#define TOT_WRK 100
+#define HLT_AT  50
 #define ABT_AT  -1
 #define SLP_PER_CONS 2
 #define SLP_PER_PROD 1
@@ -85,12 +85,12 @@ int my_producer( void** state, void** work ) {
 }
 
 
-int my_pause( void** state ) {
+int my_pause( void** state, void** prev_work ) {
    return 0;
 }
 
 
-int my_resume( void** state ) {
+int my_resume( void** state, void** prev_work ) {
    return 0;
 }
 
@@ -116,6 +116,7 @@ int main( int argc, char** argv ) {
 
 	TQ_Init_Opts tqopts;
    tqopts.log_prefix = "MyTQ";
+   tqopts.init_flags = TQ_HALT;
 	tqopts.global_state = (void*) &gstruct;
 	tqopts.num_threads = NUM_PROD + NUM_CONS;
    tqopts.num_prod_threads = NUM_PROD;

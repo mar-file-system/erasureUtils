@@ -385,16 +385,16 @@ BLOCK_CTXT posix_open ( DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, con
    bctxt->mode = mode;
    
    int oflags = O_WRONLY | O_CREAT | O_TRUNC;
-   if ( mode == READ ) {
+   if ( mode == DAL_READ ) {
       oflags = O_RDONLY;
    }
    else {
       char* res = NULL;
       // append the proper suffix
-      if ( mode == WRITE ) {
+      if ( mode == DAL_WRITE ) {
          res = strncat( bctxt->filepath + bctxt->filelen, WRITE_SFX, SFX_PADDING );
       }
-      else if ( mode == REBUILD ) {
+      else if ( mode == DAL_REBUILD ) {
          res = strncat( bctxt->filepath + bctxt->filelen, REBUILD_SFX, SFX_PADDING );
       } // NOTE -- invalid mode will leave res == NULL
       // check for success appending the suffix
@@ -590,9 +590,9 @@ int posix_close ( BLOCK_CTXT ctxt ) {
       return -1;
    }
 
-   if ( bctxt->mode == WRITE  ||  bctxt->mode == REBUILD ) {
+   if ( bctxt->mode == DAL_WRITE  ||  bctxt->mode == DAL_REBUILD ) {
       char* res = NULL;
-      if ( bctxt->mode == WRITE ) {
+      if ( bctxt->mode == DAL_WRITE ) {
          // append the write suffix
          res = strncat( bctxt->filepath + bctxt->filelen, WRITE_SFX, SFX_PADDING );
       }
@@ -717,8 +717,7 @@ DAL posix_dal_init( xmlNode* root, DAL_location max_loc ) {
          } // malloc will set errno
          pdal->name = "posix";
          pdal->ctxt = (DAL_CTXT) dctxt;
-         pdal->pread_size = 1048576;
-         pdal->pwrite_size = 1048576;
+         pdal->io_size = 1048576;
          pdal->verify = posix_verify;
          pdal->migrate = posix_migrate;
          pdal->open = posix_open;
