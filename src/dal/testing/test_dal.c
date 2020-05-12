@@ -1,7 +1,7 @@
 
 #define DEBUG 1
 #define USE_STDOUT 1
-#include "dal.h"
+#include "dal/dal.h"
 #include <unistd.h>
 #include <stdio.h>
 
@@ -11,11 +11,6 @@ int main( int argc, char** argv ) {
    xmlDoc *doc = NULL;
    xmlNode *root_element = NULL;
 
-   if (argc != 2) {
-     errno=EINVAL;
-     printf( "error: missing required argument: <filename>\n" );
-     return -1;
-   }
 
    /*
    * this initialize the library and check potential ABI mismatches
@@ -24,11 +19,11 @@ int main( int argc, char** argv ) {
    */
    LIBXML_TEST_VERSION
 
-     /*parse the file and get the DOM */
-   doc = xmlReadFile(argv[1], NULL, XML_PARSE_NOBLANKS);
+   /*parse the file and get the DOM */
+   doc = xmlReadFile("./dal/testing/config.xml", NULL, XML_PARSE_NOBLANKS);
 
    if (doc == NULL) {
-     printf("error: could not parse file %s\n", argv[1]);
+     printf("error: could not parse file %s\n", "./dal/testing/config.xml");
      return -1;
    }
 

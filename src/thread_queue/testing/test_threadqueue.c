@@ -1,5 +1,5 @@
 
-#include "thread_queue.h"
+#include "thread_queue/thread_queue.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>

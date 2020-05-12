@@ -53,17 +53,36 @@
 #LANL contributions is found at https://github.com/jti-lanl/aws4c.
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
-#
-
-ACLOCAL_AMFLAGS = -I m4
-AUTOMAKE_OPTIONS = foreign
 
 
-### nodist_include_HEADERS = libne_auto_config.h
+# automake requires '=' before '+=', even for these built-in vars
+AM_CPPFLAGS =
+AM_CFLAGS   =
+AM_LDFLAGS  =
 
-if BENCH
-  MAYBE_BENCHMARK = isal_benchmark
-endif
 
-SUBDIRS = config src
+include_HEADERS = thread_queue/thread_queue.h logging/logging.h
+
+
+# define sources used by many programs as noinst libraries, to avoid multiple compilations
+noinst_LIBRARIES = libdal.a libTQ.a
+
+libTQ_a_SOURCES = logging/logging.c thread_queue/thread_queue.c
+TQ_LIBS = libTQ.a
+
+libdal_a_SOURCES = logging/logging.c dal/posix_dal.c dal/dal.c
+libdal_a_CFLAGS = $(XML_CFLAGS)
+DAL_LIBS = libdal.a
+
+# ---
+check_PROGRAMS = test_dal test_threadqueue
+
+test_threadqueue_SOURCES = thread_queue/testing/test_threadqueue.c
+test_threadqueue_LDADD = $(TQ_LIBS)
+
+test_dal_SOURCES = dal/testing/test_dal.c
+test_dal_LDADD = $(DAL_LIBS)
+test_dal_CFLAGS= $(XML_CFLAGS)
+
+TESTS=test_threadqueue test_dal
 
