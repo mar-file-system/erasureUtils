@@ -54,5 +54,29 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-SUBDIRS = thread_queue dal
+
+# automake requires '=' before '+=', even for these built-in vars
+AM_CPPFLAGS = -I ${top_srcdir}/src
+AM_CFLAGS   =
+AM_LDFLAGS  =
+
+
+include_HEADERS = dal.h
+
+
+# define sources used by many programs as noinst libraries, to avoid multiple compilations
+noinst_LIBRARIES = libdal.a
+
+libdal_a_SOURCES = ../logging/logging.c posix_dal.c dal.c
+libdal_a_CFLAGS = $(XML_CFLAGS)
+DAL_LIBS = libdal.a
+
+# ---
+check_PROGRAMS = test_dal
+
+test_dal_SOURCES = testing/test_dal.c
+test_dal_LDADD = $(DAL_LIBS)
+test_dal_CFLAGS= $(XML_CFLAGS)
+
+TESTS = test_dal
 

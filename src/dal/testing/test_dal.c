@@ -20,7 +20,7 @@ int main( int argc, char** argv ) {
    LIBXML_TEST_VERSION
 
    /*parse the file and get the DOM */
-   doc = xmlReadFile("./dal/testing/config.xml", NULL, XML_PARSE_NOBLANKS);
+   doc = xmlReadFile("./testing/config.xml", NULL, XML_PARSE_NOBLANKS);
 
    if (doc == NULL) {
      printf("error: could not parse file %s\n", "./dal/testing/config.xml");

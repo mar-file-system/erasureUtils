@@ -54,5 +54,5 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-SUBDIRS = thread_queue dal
+include_HEADERS = logging.h
 

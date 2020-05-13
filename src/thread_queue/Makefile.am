@@ -54,5 +54,26 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-SUBDIRS = thread_queue dal
+
+# automake requires '=' before '+=', even for these built-in vars
+AM_CPPFLAGS = -I ${top_srcdir}/src
+AM_CFLAGS   =
+AM_LDFLAGS  =
+
+
+include_HEADERS = thread_queue.h
+
+# define sources used by many programs as noinst libraries, to avoid multiple compilations
+noinst_LIBRARIES = libTQ.a
+
+libTQ_a_SOURCES = ../logging/logging.c thread_queue.c
+TQ_LIBS = libTQ.a
+
+# ---
+check_PROGRAMS = test_threadqueue
+
+test_threadqueue_SOURCES = testing/test_threadqueue.c
+test_threadqueue_LDADD = $(TQ_LIBS)
+
+TESTS = test_threadqueue
 

@@ -174,6 +174,9 @@ AM_COND_IF([BENCH], [],
 
 AC_CONFIG_FILES([Makefile
                  src/Makefile
+                 src/logging/Makefile
+                 src/thread_queue/Makefile
+                 src/dal/Makefile
                  config/erasure_config.h:config/erasure_config.h.in
                  config/udal_config.h:config/udal_config.h.in
                  config/Makefile
