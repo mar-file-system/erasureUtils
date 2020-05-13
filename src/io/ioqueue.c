@@ -266,6 +266,12 @@ int reserve_ioblock( ioblock** cur_block, ioblock** push_block, ioqueue* ioq ) {
    size_t cpysz  = 0;
    ioblock* prev_block = (*cur_block);
 
+   // sanity check that we can dereference the ioq
+   if ( ioq == NULL ) {
+      LOG( LOG_ERR, "Received NULL ioq!\n" );
+      return -1;
+   }
+
    // if we have a previous IO block...
    if ( prev_block != NULL ) {
       // check if that block has room remaining

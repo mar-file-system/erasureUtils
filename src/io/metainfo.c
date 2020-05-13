@@ -109,7 +109,7 @@ underlying skt_etc() functions.
 #define LOG_PREFIX "metainfo"
 #include "logging/logging.h"
 
-#include "io/metainfo.h"
+#include "io/io.h"
 #include "dal/dal.h"
 
 #include <stdio.h>
@@ -137,24 +137,6 @@ size_t get_minfo_strlen( ) {
 }
 
 
-// Internal helper function
-// Converts a meta_info struct into a string format
-int minfo_to_string( const meta_info* minfo, char* str, size_t strmax ) {
-   // Format the meta_info values into the allocated string
-   if ( snprintf(str,strmax,"%d %d %d %zu %zu %zu %llu %zu\n",
-                  minfo->N, minfo->E, minfo->O,
-                  minfo->partsz, minfo->blocksz,
-                  minfo->bcompsz, minfo->crcsum,
-                  minfo->totsz) < 0 ) {
-      LOG( LOG_ERR, "failed to convert meta_info to string format!\n" );
-      free( str );
-      return -1;
-   }
-
-	return 0;
-}
-
-
 
 /* ------------------------------   META INFO TRANSLATION   ------------------------------ */
 
@@ -165,7 +147,9 @@ int minfo_to_string( const meta_info* minfo, char* str, size_t strmax ) {
  * @param DAL dal : Dal on which to perfrom the get_meta operation
  * @param int block : Block on which this operation is being performed (for logging only)
  * @param meta_info* minfo : meta_info reference to populate with values 
- * @return int : Zero on success, the number of 
+ * @return int : Zero on success, a negative value if a failure occurred, or the number of 
+ *               meta values successfully parsed if only portions of the meta info could 
+ *               be recovered.
  */
 int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
    // Allocate space for a string
@@ -249,5 +233,42 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
    return ( status == 8 ) ? 0 : status;
 }
 
+
+/**
+ * Perform a DAL get_meta call and parse the resulting string 
+ * into the provided meta_info_struct reference.
+ * @param DAL dal : Dal on which to perfrom the get_meta operation
+ * @param BLOCK_CTXT handle : Block on which this operation is being performed (for logging only)
+ * @param meta_info* minfo : meta_info reference to populate with values 
+ * @return int : Zero on success, or a negative value if an error occurred 
+ */
+int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
+   // Allocate space for a string
+   size_t strmax = get_minfo_strlen();
+   char* str = (char*) malloc( strmax );
+   if ( str == NULL ) {
+      LOG( LOG_ERR, "failed to allocate space for a meta_info string!\n" );
+      return -1;
+   }
+
+	// fill the string allocation with meta_info values
+   if ( snprintf(str,strmax,"%d %d %d %zu %zu %zu %llu %zu\n",
+                  minfo->N, minfo->E, minfo->O,
+                  minfo->partsz, minfo->blocksz,
+                  minfo->bcompsz, minfo->crcsum,
+                  minfo->totsz) < 0 ) {
+      LOG( LOG_ERR, "failed to convert meta_info to string format!\n" );
+      free( str );
+      return -1;
+   }
+
+	if ( dal->set_meta( handle, str, strlen( str ) ) ) {
+		LOG( LOG_ERR, "failed to set meta value!\n" );
+		free( str );
+		return -1;
+	}
+
+	return 0;
+}
 
 

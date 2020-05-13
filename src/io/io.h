@@ -71,6 +71,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define CRC_SEED 
 
 
+// forward declaration of DAL reference (anything actually using this file will need to include "dal.h" as well!)
+typedef struct DAL_struct* DAL;
+
 
 /* ------------------------------   META INFO   ------------------------------ */
 
@@ -214,6 +217,7 @@ typedef struct global_state_struct {
 typedef struct thread_state_struct {
    wthread_global_state* gstate;
    BLOCK_CTXT   handle;
+   ioblock*     iob;
 } thread_state;
 
 
