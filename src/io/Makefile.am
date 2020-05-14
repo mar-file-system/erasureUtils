@@ -54,5 +54,29 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-SUBDIRS = thread_queue dal io
+
+# automake requires '=' before '+=', even for these built-in vars
+AM_CPPFLAGS = -I ${top_srcdir}/src
+AM_CFLAGS   =
+AM_LDFLAGS  =
+
+
+include_HEADERS = io.h
+
+
+# define sources used by many programs as noinst libraries, to avoid multiple compilations
+noinst_LIBRARIES = libioqueue.a
+
+libioqueue_a_SOURCES = ../logging/logging.c ioqueue.c
+libioqueue_a_CFLAGS = $(XML_CFLAGS)
+IOQ_LIBS = libioqueue.a
+
+# ---
+check_PROGRAMS = test_ioqueue
+
+test_ioqueue_SOURCES = testing/test_ioqueue.c
+test_ioqueue_LDADD = $(IOQ_LIBS)
+test_ioqueue_CFLAGS= $(XML_CFLAGS)
+
+TESTS = test_ioqueue
 
