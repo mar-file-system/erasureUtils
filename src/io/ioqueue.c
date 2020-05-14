@@ -106,6 +106,8 @@ underlying skt_etc() functions.
 
 // #include "libne_auto_config.h"   /* HAVE_LIBISAL */
 
+// #define DEBUG 1
+// #define USE_STDOUT 1
 #define LOG_PREFIX "ioqueue"
 #include "logging/logging.h"
 
@@ -134,6 +136,7 @@ underlying skt_etc() functions.
  * @return ioqueue* : Reference to the newly created IOQueue
  */
 ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
+   LOG( LOG_INFO, "Creating IOQueue with IOSZ=%zu, PARTSZ=%zu, MODE=%s\n", iosz, partsz, ( mode == DAL_READ ) ? "read" : "write" );
    // sanity check that our IO Size is sufficient to at least do something
    if ( iosz <= CRC_BYTES ) {
       LOG( LOG_ERR, "IO Size of %zu is too small for CRC size of %d!\n", iosz, CRC_BYTES );
@@ -145,8 +148,8 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
    int    partcnt = (int) (iosz / partsz); // number of complete parts per IO
    if ( partsz > iosz ) {
       // swap our values around so that subsz is the lesser
-      supersz = partsz;
-      subsz = iosz;
+      subsz = iosz - CRC_BYTES;
+      supersz = partsz + CRC_BYTES + subsz;
       overlap = partsz % ( iosz - CRC_BYTES ); // check for IO overlap
       partcnt = 1;
    }
@@ -154,7 +157,7 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
       // NOTE: I am deliberately allowing misalignment between erasure parts and IO size.
       //       This could be simplified by shrinking sizes to fit, but seems more flexible this way.
       //       Definitely increases complexity by a fair bit though.
-      LOG( LOG_WARN, "IO size (%zu) does not cleanly align with erasure part size (%zu)\n", iosz, partsz );
+      LOG( LOG_WARNING, "IO size (%zu) does not cleanly align with erasure part size (%zu)\n", iosz, partsz );
       supersz += (subsz * 2); // need space for leading and trailing subsz fragments
    }
    // create an ioqueue struct
@@ -180,6 +183,7 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
    ioq->fill_threshold = ( (iosz - CRC_BYTES) > partsz ) ? (iosz - CRC_BYTES) : partsz;
    // NOTE -- if we're writing, we need to get both a complete part and a complete IO
    ioq->split_threshold = ( mode == DAL_READ ) ? (partcnt * partsz) : (iosz - CRC_BYTES);
+   LOG( LOG_INFO, "Using fill_threshold=%zu & split_treshold=%zu\n", ioq->fill_threshold, ioq->split_threshold );
    // NOTE -- if we're writing, we need to split blocks on IO alignment to make room for CRCs
    ioq->partsz = partsz;
    ioq->iosz = iosz;
@@ -226,6 +230,7 @@ int destroy_ioqueue( ioqueue* ioq ) {
    pthread_cond_destroy( &(ioq->avail_block) );
    pthread_mutex_destroy( &(ioq->qlock) );
    free( ioq );
+   LOG( LOG_INFO, "IOQueue successfully destroyed\n" );
    return 0;
 }
 
@@ -261,6 +266,7 @@ int reserve_ioblock( ioblock** cur_block, ioblock** push_block, ioqueue* ioq ) {
    if ( prev_block != NULL ) {
       // check if that block has room remaining
       if ( prev_block->data_size < ioq->fill_threshold ) {
+         LOG( LOG_INFO, "Continuing to use current block, as %zu is below fill_threshold\n", prev_block->data_size );
          return 0;
       }
       // otherwise, we may need to copy data over to the new ioblock
@@ -279,6 +285,7 @@ int reserve_ioblock( ioblock** cur_block, ioblock** push_block, ioqueue* ioq ) {
    }
    // wait for a block to be available for use
    while ( ioq->depth == 0 ) {
+      LOG( LOG_INFO, "Waiting for ioblock to become available\n" );
       pthread_cond_wait( &ioq->avail_block, &ioq->qlock );
    }
    // update the current block to the new reference
@@ -295,6 +302,7 @@ int reserve_ioblock( ioblock** cur_block, ioblock** push_block, ioqueue* ioq ) {
 
    // we have the new block; check if we need to copy data over to it
    if ( datacpy != NULL ) {
+      LOG( LOG_INFO, "Copying %zu bytes to next ioblock\n", cpysz );
       memcpy( (*cur_block)->buff, datacpy, cpysz );
       (*cur_block)->data_size = cpysz;
       prev_block->data_size = ioq->split_threshold; // update prev block to exclude copied data

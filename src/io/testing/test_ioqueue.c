@@ -20,24 +20,28 @@ size_t fill_buffer( size_t prev_data, size_t iosz, size_t partsz, void* buffer, 
       data_to_write -= CRC_BYTES;
    }
    size_t total_written = data_to_write; // don't count CRC bytes
-   printf( "Writing %zu bytes to buffer...\n", data_to_write );
    unsigned int parts = ( prev_data / partsz );
+   printf( "Writing %zu bytes of part %u to buffer...\n", data_to_write, parts );
    // loop over parts, filling in data
    while ( data_to_write > 0 ) {
       size_t prev_pfill = prev_data % partsz;
       // check if we need to write out a head sentinel
       if ( prev_pfill < sizeof( unsigned int ) ) {
-         memcpy( buffer, &parts, sizeof( unsigned int ) );
-         buffer += sizeof( unsigned int );
-         prev_data += sizeof( unsigned int );
-         prev_pfill += sizeof( unsigned int );
-         data_to_write -= sizeof( unsigned int );
+         size_t fill_size = sizeof( unsigned int ) - prev_pfill;
+         if ( fill_size > data_to_write ) { fill_size = data_to_write; }
+         printf( "   %zu bytes of header value %u at offset %zu\n", fill_size, parts, prev_pfill );
+         memcpy( buffer, ((void*)(&parts)) + prev_pfill, fill_size );
+         buffer += fill_size;
+         prev_data += fill_size;
+         prev_pfill += fill_size;
+         data_to_write -= fill_size;
       }
       // check if we need to write out any filler data
       if ( data_to_write > 0 ) {
          // check if our data to be written is less than a complete filler
          size_t fill_size = ( data_to_write < ((partsz - prev_pfill) - sizeof(char)) ) ? 
                                  data_to_write : ((partsz - prev_pfill) - sizeof(char));
+         printf( "   %zu bytes of zero-fill\n", fill_size );
          bzero( buffer, fill_size );
          buffer += fill_size;
          prev_data += fill_size;
@@ -47,11 +51,13 @@ size_t fill_buffer( size_t prev_data, size_t iosz, size_t partsz, void* buffer, 
       // check if we need to write out a tail sentinel
       if ( data_to_write > 0 ) {
          memcpy( buffer, &tail_sent, sizeof( char ) );
+         printf( "   1 byte tail\n" );
          buffer += sizeof( char );
          prev_data += sizeof( char );
          prev_pfill += sizeof( char );
          data_to_write -= sizeof( char );
       }
+      printf( "Filled part %d, up to total data size %zu\n", parts, prev_data );
       // sanity check that we have properly filled a part
       if ( prev_pfill == partsz ) {
          parts++;
@@ -90,21 +96,24 @@ size_t verify_data( size_t prev_ver, size_t partsz, size_t buffsz, void* buffer,
       data_to_chk -= CRC_BYTES;
    }
    size_t total_ver = data_to_chk; //don't count CRC bytes
-   printf( "Verifying %zu bytes in buffer...\n", total_ver );
    unsigned int parts = ( prev_ver / partsz );
+   printf( "Verifying %zu bytes starting at part %u in buffer...", total_ver, parts );
    // loop over parts, filling in data
    while ( data_to_chk > 0 ) {
       size_t prev_pfill = prev_ver % partsz;
       // check if we need to write out a head sentinel
       if ( prev_pfill < sizeof( unsigned int ) ) {
-         if ( memcmp( buffer, &parts, sizeof( unsigned int ) ) ) {
-            printf( "ERROR: Failed to verify header of part %d!\n", parts );
+         size_t fill_size = sizeof( unsigned int ) - prev_pfill;
+         if ( fill_size > data_to_chk ) { fill_size = data_to_chk; }
+         if ( memcmp( buffer, ((void*)(&parts)) + prev_pfill, fill_size ) ) {
+            printf( "ERROR: Failed to verify %zu bytes of header for part %u (offset=%zu)!\n", fill_size, parts, prev_pfill );
+            free( zerobuff );
             return 0;
          }
-         buffer += sizeof( unsigned int );
-         prev_ver += sizeof( unsigned int );
-         prev_pfill += sizeof( unsigned int );
-         data_to_chk -= sizeof( unsigned int );
+         buffer += fill_size;
+         prev_ver += fill_size;
+         prev_pfill += fill_size;
+         data_to_chk -= fill_size;
       }
       // check if we need to write out any filler data
       if ( data_to_chk > 0 ) {
@@ -113,6 +122,7 @@ size_t verify_data( size_t prev_ver, size_t partsz, size_t buffsz, void* buffer,
                                  data_to_chk : ((partsz - prev_pfill) - sizeof(char));
          if ( memcmp( buffer, zerobuff, fill_size ) ) {
             printf( "ERROR: Failed to verify filler of part %d!\n", parts );
+            free( zerobuff );
             return 0;
          }
          buffer += fill_size;
@@ -124,6 +134,7 @@ size_t verify_data( size_t prev_ver, size_t partsz, size_t buffsz, void* buffer,
       if ( data_to_chk > 0 ) {
          if ( memcmp( buffer, &tail_sent, sizeof( char ) ) ) {
             printf( "ERROR: failed to verify tail of part %d!\n", parts );
+            free( zerobuff );
             return 0;
          }
          buffer += sizeof( char );
@@ -137,6 +148,7 @@ size_t verify_data( size_t prev_ver, size_t partsz, size_t buffsz, void* buffer,
       }
       else if ( data_to_chk != 0 ) {
          printf( "ERROR: data remains to verify, but we haven't completed a part!\n" );
+         free( zerobuff );
          return 0;
       }
    }
@@ -146,11 +158,12 @@ size_t verify_data( size_t prev_ver, size_t partsz, size_t buffsz, void* buffer,
       printf( "Checking CRC sentinel at end of target buffer after checking to part %u\n", parts );
       if ( memcmp( buffer, &crc_sent, CRC_BYTES ) ) {
          printf( "ERROR: failed to verify CRC sentinel after part %u!\n", parts );
+         free( zerobuff );
          return 0;
       }
    }
    else {
-      printf( "Checked up to part %u in buffer\n", parts );
+      printf( "checked up to part %u in buffer\n", parts );
    }
 
    free( zerobuff );
@@ -160,12 +173,15 @@ size_t verify_data( size_t prev_ver, size_t partsz, size_t buffsz, void* buffer,
 
 
 int test_values( size_t iosz, size_t partsz, DAL_MODE mode ) {
+   printf( "\nTesting queue with iosz=%zu / partsz=%zu / mode=%s\n", iosz, partsz, (mode == DAL_READ) ? "read" : "write" );
    // create a new ioqueue
    ioqueue* ioq = create_ioqueue( iosz, partsz, mode );
    if ( ioq == NULL ) {
       printf( "ERROR: Failed to create new ioqueue with iosz=%zu and partsz=%zu\n", iosz, partsz );
       return -1;
    }
+
+   printf( "IOQueue created with fsize=%zu, ssize=%zu, bsize=%zu\n", ioq->fill_threshold, ioq->split_threshold, ioq->blocksz );
 
    // reserver our first block
    ioblock* cur_block = NULL;
@@ -206,6 +222,7 @@ int test_values( size_t iosz, size_t partsz, DAL_MODE mode ) {
                destroy_ioqueue( ioq );
                return -1;
             }
+            printf( "   writing %d bytes of CRC sentinel value to tail of the buffer\n", CRC_BYTES );
             memcpy( (readtgt + buffsz), &crc_sent, CRC_BYTES );
             buffsz += CRC_BYTES;
          }
@@ -213,6 +230,9 @@ int test_values( size_t iosz, size_t partsz, DAL_MODE mode ) {
          size_t ver_sz = verify_data( verified_data, partsz, buffsz, readtgt, mode );
          if ( ver_sz == 0 ) {
             printf( "ERROR: failed to verify data!\n" );
+            // have to release two blocks ( push_block and cur_block )
+            release_ioblock( ioq );
+            release_ioblock( ioq );
             destroy_ioqueue( ioq );
             return -1;
          }
@@ -238,6 +258,12 @@ int test_values( size_t iosz, size_t partsz, DAL_MODE mode ) {
    size_t buffsz = 0;
    void* readtgt = ioblock_read_target( cur_block, &buffsz );
    if ( buffsz != 0 ) {
+      // if we're 'writing', we should have room to stuff a CRC into this buffer
+      if ( mode == DAL_WRITE ) {
+         printf( "   writing %d bytes of CRC sentinel value to tail of the buffer\n", CRC_BYTES );
+         memcpy( (readtgt + buffsz), &crc_sent, CRC_BYTES );
+         buffsz += CRC_BYTES;
+      }
       // verify its data
       size_t ver_sz = verify_data( verified_data, partsz, buffsz, readtgt, mode );
       if ( ver_sz == 0 ) {
@@ -265,9 +291,40 @@ int test_values( size_t iosz, size_t partsz, DAL_MODE mode ) {
 
 
 int main( int argc, char** argv ) {
-   // Create a new read IOQueue with a small partsz and large iosz
-   return test_values( 8224, 4096, DAL_READ );
-   
+   // Test read IOQueue with a small partsz and larger, aligned iosz
+   size_t iosz = 8196;
+   size_t partsz = 4096;
+   DAL_MODE mode = DAL_READ;
+   if ( test_values( iosz, partsz, mode ) ) { return -1; }
+   // Test write IOQueue with a small partsz and larger, aligned iosz
+   mode = DAL_WRITE;
+   if ( test_values( iosz, partsz, mode ) ) { return -1; }
+
+   // Test a read IOQueue with small partsz and larger, unaligned iosz
+   iosz = 8197;
+   mode = DAL_READ;
+   if ( test_values( iosz, partsz, mode ) ) { return -1; }
+   // Test a write IOQueue with small partsz and larger, unaligned iosz
+   mode = DAL_WRITE;
+   if ( test_values( iosz, partsz, mode ) ) { return -1; }
+
+   // Test a read IOQueue with large partsz and smaller, aligned iosz
+   iosz = 2052;
+   mode = DAL_READ;
+   if ( test_values( iosz, partsz, mode ) ) { return -1; }
+   // Test a write IOQueue with large partsz and smaller, aligned iosz
+   mode = DAL_WRITE;
+   if ( test_values( iosz, partsz, mode ) ) { return -1; }
+
+   // Test a read IOQueue with a small partsz and very large, unaligned iosz
+   iosz = 1048567;
+   mode = DAL_READ;
+   if ( test_values( iosz, partsz, mode ) ) { return -1; }
+   // Test a write IOQueue with a small partsz and very large, unaligned iosz
+   mode = DAL_WRITE;
+   if ( test_values( iosz, partsz, mode ) ) { return -1; }
+
+   return 0;
 }
 
 

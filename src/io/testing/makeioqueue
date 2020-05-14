@@ -4,12 +4,16 @@
 cd $( dirname $0 )
 
 # create all linker objects
+echo "gcc -Wall -I ../../ -g -c ../../logging/logging.c"
 gcc -Wall -I ../../ -g -c ../../logging/logging.c
-gcc -Wall -I ../../ -I /usr/lib/xml2 -g -c ../../dal/dal.c
-gcc -Wall -I ../../ -g -c ../ioqueue.c
+echo "gcc -Wall -I ../../ -I /usr/include/libxml2 -g -c ../../dal/dal.c"
+gcc -Wall -I ../../ -I /usr/include/libxml2 -g -c ../../dal/dal.c
+echo "gcc -Wall -I ../../ -I /usr/include/libxml2 -g -c ../ioqueue.c"
+gcc -Wall -I ../../ -I /usr/include/libxml2 -g -c ../ioqueue.c
 
 # create the test executable
-gcc -Wall -I ../../ -g logging.o ioqueue.o test_ioqueue.c -lpthread -o exectestioqueue
+echo "gcc -Wall -I ../../ -I /usr/include/libxml2 -g logging.o ioqueue.o test_ioqueue.c -lpthread -o exectestioqueue"
+gcc -Wall -I ../../ -I /usr/include/libxml2 -g logging.o ioqueue.o test_ioqueue.c -lpthread -o exectestioqueue
 
 # cleanup all linker objects
 rm ./dal.o ./ioqueue.o ./logging.o
