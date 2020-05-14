@@ -65,14 +65,20 @@ LANL contributions is found at https://github.com/jti-lanl/aws4c.
 GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
+// THIS INTERFACE RELIES ON THE DAL INTERFACE!
+#include "dal/dal.h"
+#include <pthread.h>
 
 #define SUPER_BLOCK_CNT 2
 #define CRC_BYTES 32 // DO NOT decrease without adjusting CRC gen and block creation code!
 #define CRC_SEED 
 
 
-// forward declaration of DAL reference (anything actually using this file will need to include "dal.h" as well!)
-typedef struct DAL_struct* DAL;
+// forward declaration of DAL references (anything actually using this file will need to include "dal.h" as well!)
+// typedef BLOCK_CTXT;
+// typedef struct DAL_location_struct DAL_location;
+// typedef enum DAL_MODE_enum DAL_MODE;
+// typedef struct DAL_struct* DAL;
 
 
 /* ------------------------------   META INFO   ------------------------------ */
@@ -202,7 +208,7 @@ int release_ioblock( ioqueue* ioq );
 // to access their respective data blocks
 typedef struct global_state_struct {
    char*        objID;
-   dal_location location;
+   DAL_location location;
    DAL_MODE     dmode;
    DAL          dal; 
    ioqueue*     ioq;
@@ -215,7 +221,7 @@ typedef struct global_state_struct {
 
 // Write thread internal state struct
 typedef struct thread_state_struct {
-   wthread_global_state* gstate;
+   global_state* gstate;
    BLOCK_CTXT   handle;
    ioblock*     iob;
 } thread_state;

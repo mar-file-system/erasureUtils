@@ -85,7 +85,7 @@ typedef struct DAL_location_struct {
    int scatter;
 } DAL_location;
 
-typedef enum {
+typedef enum DAL_MODE_enum {
    DAL_READ = 0,
    DAL_WRITE = 1,
    DAL_REBUILD = 2

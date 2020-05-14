@@ -104,37 +104,23 @@ underlying skt_etc() functions.
 
 --------------------------------------------------------------------------- */
 
-#include "libne_auto_config.h"   /* HAVE_LIBISAL */
+// #include "libne_auto_config.h"   /* HAVE_LIBISAL */
 
 #define LOG_PREFIX "ioqueue"
 #include "logging/logging.h"
 
-#include "io/ioqueue.h"
+#include "io/io.h"
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <limits.h>
 #include <unistd.h>
-#include <sys/stat.h>
 #include <errno.h>
-#include <assert.h>
 #include <pthread.h>
 
-
-
-// Queue of IOBlocks for thread communication
-typedef struct ioqueue_struct {
-   pthread_mutex_t qlock;        // lock for queue manipulation
-   pthread_cond_t  avail_block;  // condition for awaiting an available block
-   size_t          partsz;       // size of each erasure part
-   size_t          iosz;         // size of each IO
-   size_t          blocksz;      // size of each ioblock buffer
-   int             head;         // integer indicating location of the next available block
-   int             depth;        // current depth of the queue
-   ioblock         block_list[SUPER_BLOCK_CNT]; // list of ioblocks
-} ioqueue;
 
 
 
@@ -157,7 +143,7 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
    size_t subsz = partsz;
    size_t overlap = ( iosz - CRC_BYTES ) % partsz; // check for IO overlap
    int    partcnt = (int) (iosz / partsz); // number of complete parts per IO
-   if ( partsz > iosize ) {
+   if ( partsz > iosz ) {
       // swap our values around so that subsz is the lesser
       supersz = partsz;
       subsz = iosz;
@@ -172,7 +158,7 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
       supersz += (subsz * 2); // need space for leading and trailing subsz fragments
    }
    // create an ioqueue struct
-   ioqueue* ioq = malloc( sizeof( struct iqueue_struct ) );
+   ioqueue* ioq = malloc( sizeof( struct ioqueue_struct ) );
    if ( ioq == NULL ) {
       LOG( LOG_ERR, "failed to allocate memory for an ioqueue_struct!\n" );
       return NULL;
@@ -217,7 +203,6 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
          return NULL;
       }
       ioq->block_list[i].data_size   = 0;
-      ioq->block_list[i].excess_data = 0;
       ioq->block_list[i].error_start = -1;
    }
    return ioq;
@@ -297,7 +282,7 @@ int reserve_ioblock( ioblock** cur_block, ioblock** push_block, ioqueue* ioq ) {
       pthread_cond_wait( &ioq->avail_block, &ioq->qlock );
    }
    // update the current block to the new reference
-   (*cur_block) = ioq->block_list[ioq->head];
+   (*cur_block) = &(ioq->block_list[ioq->head]);
    // update queue values to reflect the block being in use
    ioq->depth--;
    ioq->head += 1;
@@ -335,6 +320,7 @@ void* ioblock_write_target( ioblock* block ) {
  * @return void* : Buffer reference to read from
  */
 void* ioblock_read_target( ioblock* block, size_t* bytes ) {
+   (*bytes) = block->data_size;
    return block->buff;
 }
 
@@ -362,6 +348,7 @@ int release_ioblock( ioqueue* ioq ) {
    ioq->depth++;
    pthread_cond_signal(&ioq->avail_block);
    pthread_mutex_unlock(&ioq->qlock);
+   return 0;
 }
 
 
