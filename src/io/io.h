@@ -90,11 +90,11 @@ typedef struct meta_info_struct {
    int N;
    int E;
    int O;
-   size_t partsz; 
-   size_t versz;
-   size_t blocksz; 
-   unsigned long long crcsum;
-   size_t totsz;
+   ssize_t partsz; 
+   ssize_t versz;
+   ssize_t blocksz; 
+   long long crcsum;
+   ssize_t totsz;
 } meta_info;
 
 
@@ -108,6 +108,14 @@ typedef struct meta_info_struct {
  */
 int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo );
 
+/**
+ * Convert a meta_info struct to string format and perform a DAL set_meta call
+ * @param DAL dal : Dal on which to perfrom the get_meta operation
+ * @param BLOCK_CTXT handle : Block on which this operation is being performed
+ * @param meta_info* minfo : meta_info reference to populate with values 
+ * @return int : Zero on success, or a negative value if an error occurred 
+ */
+int dal_set_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo );
 
 
 /* ------------------------------   IO QUEUE   ------------------------------ */

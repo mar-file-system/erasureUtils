@@ -1,0 +1,3 @@
+<DAL type="posix">
+   <dir_template>./IO_TESTS-stripefile.{b}</dir_template>
+</DAL>

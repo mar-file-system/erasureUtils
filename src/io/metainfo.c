@@ -104,8 +104,10 @@ underlying skt_etc() functions.
 
 --------------------------------------------------------------------------- */
 
-#include "libne_auto_config.h"   /* HAVE_LIBISAL */
+// #include "libne_auto_config.h"   /* HAVE_LIBISAL */
 
+#define DEBUG 1
+#define USE_STDOUT 1
 #define LOG_PREFIX "metainfo"
 #include "logging/logging.h"
 
@@ -133,7 +135,7 @@ underlying skt_etc() functions.
 size_t get_minfo_strlen( ) {
    // Note: Binary 3bits == max value of 7, so decimal representation requires at most 1byte per 3bits of the struct 
    //       plus an additional 8bytes for whitespace and the terminating null character.
-   return ( ( sizeof( meta_info_struct ) * 8 ) / 3 ) + 8;
+   return ( ( sizeof( struct meta_info_struct ) * 8 ) / 3 ) + 8;
 }
 
 
@@ -159,17 +161,18 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
       LOG( LOG_ERR, "failed to allocate space for a meta_info string!\n" );
       return -1;
    }
+   // set stand-ins for all values
+   minfo->N = 0;
+   minfo->E = -1;
+   minfo->O = -1;
+   minfo->partsz  = -1;
+   minfo->versz   = -1;
+   minfo->blocksz = -1;
+   minfo->crcsum  = -1;
+   minfo->totsz   = -1;
    // get the meta info for the given object
-   if ( dal->get_meta( handle, str, strmax ) != 0 
-      LOG( LOG_ERR, "failed to retrieve meta value for block %d!\n", block );
-      tstate->minfo.N = 0;
-      tstate->minfo.E = 0;
-      tstate->minfo.O = 0;
-      tstate->minfo.partsz  = 0;
-      tstate->minfo.blocksz = 0;
-      tstate->minfo.bcompsz = 0;
-      tstate->minfo.crcsum  = 0;
-      tstate->minfo.totsz   = 0;
+   if ( dal->get_meta( handle, str, strmax ) <= 0 ) {
+      LOG( LOG_ERR, "failed to retrieve meta value!\n" );
       free( str );
       return -1;
    }
@@ -177,14 +180,14 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
    int status = 8; // initialize to the number of values we expect to parse
    // Parse the string into appropriate meta_info fields
    // declared here so that the compiler can hopefully free up this memory outside of the 'else' block
-   char metaN[5];           /* char array to get n parts from the meta string */
-   char metaE[5];           /* char array to get erasure parts from the meta string */
-   char metaO[5];           /* char array to get erasure offset from the meta string */
-   char metapartsz[20];     /* char array to get erasure partsz from the meta string */
-   char metablocksz[20];    /* char array to get complete block size from the meta string */
-   char metablockcmpsz[20]; /* char array to get compressed block size from the meta string */
-   char metacrcsum[20];     /* char array to get crc sum from the meta string */
-   char metatotsize[20];    /* char array to get object totsz from the meta string */
+   char metaN[5];        /* char array to get n parts from the meta string */
+   char metaE[5];        /* char array to get erasure parts from the meta string */
+   char metaO[5];        /* char array to get erasure offset from the meta string */
+   char metapartsz[20];  /* char array to get erasure partsz from the meta string */
+   char metaversz[20];   /* char array to get compressed block size from the meta string */
+   char metablocksz[20]; /* char array to get complete block size from the meta string */
+   char metacrcsum[20];  /* char array to get crc sum from the meta string */
+   char metatotsize[20]; /* char array to get object totsz from the meta string */
    
    // only process the meta string if we successfully retreived it
    int ret = sscanf(str,"%4s %4s %4s %19s %19s %19s %19s %19s",
@@ -192,17 +195,17 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
                         metaE,
                         metaO,
                         metapartsz,
+                        metaversz,
                         metablocksz,
-                        metablockcmpsz,
                         metacrcsum,
                         metatotsize);
    free( str );
    if ( ret < 1 ) {
-      LOG( LOG_ERR, "sscanf failed to parse any values from meta info of block %d!\n", block );
+      LOG( LOG_ERR, "sscanf failed to parse any values from meta info!\n" );
       return -1;
    }
    if (ret != 8) {
-      LOG( LOG_WARN, "sscanf parsed only %d values from meta info of block %d: \"%s\"\n", ret, block, metaval);
+      LOG( LOG_WARNING, "sscanf parsed only %d values from meta info: \"%s\"\n", ret, str);
       status = ret;
    }  
    
@@ -216,33 +219,32 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
          VAL = tmp_val; \
       } \
       else { \
-         LOG( LOG_ERR, "failed to parse meta value at position %d for block %d: \"%s\"\n", GT_VAL, block, STR ); \
+         LOG( LOG_ERR, "failed to parse meta value at position %d: \"%s\"\n", GT_VAL, STR ); \
          status -= 1; \
       } \
    }
    // Parse all values into the meta_info struct
-   PARSE_VALUE(        minfo->N,          metaN, 0,   strtol, int )
-   PARSE_VALUE(        minfo->E,          metaE, 1,   strtol, int )
-   PARSE_VALUE(        minfo->O,          metaO, 2,   strtol, int )
-   PARSE_VALUE(   minfo->partsz,     metapartsz, 3,  strtoul, unsigned int )
-   PARSE_VALUE(  minfo->blocksz,    metablocksz, 4,  strtoul, unsigned int )
-   PARSE_VALUE(  minfo->bcompsz, metablockcmpsz, 5,  strtoul, unsigned int )
-   PARSE_VALUE(   minfo->crcsum,     metacrcsum, 6, strtoull, u64 )
-   PARSE_VALUE( meta_buf->totsz,    metatotsize, 7, strtoull, u64 )
+   PARSE_VALUE(       minfo->N,       metaN, 0,  strtol, int )
+   PARSE_VALUE(       minfo->E,       metaE, 1,  strtol, int )
+   PARSE_VALUE(       minfo->O,       metaO, 2,  strtol, int )
+   PARSE_VALUE(  minfo->partsz,  metapartsz, 3,  strtol, ssize_t )
+   PARSE_VALUE(   minfo->versz,   metaversz, 4,  strtol, ssize_t )
+   PARSE_VALUE( minfo->blocksz, metablocksz, 5,  strtol, ssize_t )
+   PARSE_VALUE(  minfo->crcsum,  metacrcsum, 6, strtoll, long long )
+   PARSE_VALUE(   minfo->totsz, metatotsize, 7, strtoll, ssize_t )
 
    return ( status == 8 ) ? 0 : status;
 }
 
 
 /**
- * Perform a DAL get_meta call and parse the resulting string 
- * into the provided meta_info_struct reference.
+ * Convert a meta_info struct to string format and perform a DAL set_meta call
  * @param DAL dal : Dal on which to perfrom the get_meta operation
- * @param BLOCK_CTXT handle : Block on which this operation is being performed (for logging only)
+ * @param BLOCK_CTXT handle : Block on which this operation is being performed
  * @param meta_info* minfo : meta_info reference to populate with values 
  * @return int : Zero on success, or a negative value if an error occurred 
  */
-int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
+int dal_set_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
    // Allocate space for a string
    size_t strmax = get_minfo_strlen();
    char* str = (char*) malloc( strmax );
@@ -254,8 +256,8 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
 	// fill the string allocation with meta_info values
    if ( snprintf(str,strmax,"%d %d %d %zu %zu %zu %llu %zu\n",
                   minfo->N, minfo->E, minfo->O,
-                  minfo->partsz, minfo->blocksz,
-                  minfo->bcompsz, minfo->crcsum,
+                  minfo->partsz, minfo->versz,
+                  minfo->blocksz, minfo->crcsum,
                   minfo->totsz) < 0 ) {
       LOG( LOG_ERR, "failed to convert meta_info to string format!\n" );
       free( str );

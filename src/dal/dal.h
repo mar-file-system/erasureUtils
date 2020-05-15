@@ -85,11 +85,13 @@ typedef struct DAL_location_struct {
    int scatter;
 } DAL_location;
 
+// open mode
 typedef enum DAL_MODE_enum {
    DAL_READ = 0,
    DAL_WRITE = 1,
    DAL_REBUILD = 2
 } DAL_MODE;
+
 
 typedef struct DAL_struct {
    // Name -- Used to identify and configure the DAL

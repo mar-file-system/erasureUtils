@@ -1,0 +1,22 @@
+#!/bin/bash
+
+# shift cwd to this subdir
+cd $( dirname $0 )
+
+# create all linker objects
+echo "gcc -Wall -I ../../ -g -c ../../logging/logging.c"
+gcc -Wall -I ../../ -g -c ../../logging/logging.c
+echo "gcc -Wall -I ../../ -I /usr/include/libxml2 -g -c ../../dal/dal.c"
+gcc -Wall -I ../../ -I /usr/include/libxml2 -g -c ../../dal/dal.c
+echo "gcc -Wall -I ../../ -I /usr/include/libxml2 -g -c ../../dal/posix_dal.c"
+gcc -Wall -I ../../ -I /usr/include/libxml2 -g -c ../../dal/posix_dal.c
+echo "gcc -Wall -I ../../ -I /usr/include/libxml2 -g -c ../metainfo.c"
+gcc -Wall -I ../../ -I /usr/include/libxml2 -g -c ../metainfo.c
+
+# create the test executable
+echo "gcc -Wall -I ../../ -I /usr/include/libxml2 -g logging.o dal.o posix_dal.o metainfo.o test_metainfo.c -l xml2 -o exectestmetainfo"
+gcc -Wall -I ../../ -I /usr/include/libxml2 -g logging.o dal.o posix_dal.o metainfo.o test_metainfo.c -l xml2 -o exectestmetainfo
+
+# cleanup all linker objects
+rm ./dal.o ./posix_dal.o ./metainfo.o ./logging.o
+
