@@ -235,6 +235,77 @@ typedef struct thread_state_struct {
 } thread_state;
 
 
+/**
+ * Initialize the write thread state and create a DAL BLOCK_CTXT
+ * @param unsigned int tID : The ID of this thread
+ * @param void* global_state : Reference to a gthread_state struct
+ * @param void** state : Reference to be populated with this thread's state info
+ * @return int : Zero on success and -1 on failure
+ */
+int write_init( unsigned int tID, void* global_state, void** state );
+
+/**
+ * Initialize the read thread state and create a DAL BLOCK_CTXT
+ * @param unsigned int tID : The ID of this thread
+ * @param void* global_state : Reference to a gthread_state struct
+ * @param void** state : Reference to be populated with this thread's state info
+ * @return int : Zero on success and -1 on failure
+ */
+int read_init( unsigned int tID, void* global_state, void** state );
+
+/**
+ * Consume data buffers, generate CRCs for them, and write blocks out to their targets
+ * @param void** state : Thread state reference
+ * @param void** work_todo : Reference to the data buffer / work package
+ * @return int : Integer return code ( -1 on failure, 0 on success )
+ */
+int write_consume( void** state, void** work_todo );
+
+/**
+ * Read data from our target, verify its CRC, and continue until we have a full buffer to push
+ * @param void** state : Thread state reference
+ * @param void** work_tofill : Reference to be populated with the produced buffer
+ * @return int : Integer return code ( -1 on error, 0 on success, and 2 once all buffers have been read )
+ */
+int read_produce( void** state, void** work_tofill );
+
+/**
+ * No-op function, just to fill out the TQ struct
+ */
+int write_pause( void** state, void** prev_work );
+
+/**
+ * No-op function, just to fill out the TQ struct
+ */
+int read_pause( void** state, void** prev_work );
+
+/**
+ * No-op function, just to fill out the TQ struct
+ */
+int write_resume( void** state, void** prev_work );
+
+/**
+ * Create an IOQueue (if not done already), and destory any work package we already produced (reseek possible)
+ * @param void** state : Thread state reference
+ * @param void** prev_work : Reference to any previously populated buffer
+ * @return int : Integer return code ( -1 on error, 0 on success )
+ */
+int read_resume( void** state, void** prev_work );
+
+/**
+ * Write out our meta info and close our target reference
+ * @param void** state : Thread state reference
+ * @param void** prev_work : Reference to any unused previous buffer
+ */
+void write_term( void** state, void** prev_work );
+
+/**
+ * Close our target reference
+ * @param void** state : Thread state reference
+ * @param void** prev_work : Reference to any unused previous buffer
+ */
+void read_term( void** state, void** prev_work );
+
 
 
 #ifdef __cplusplus
