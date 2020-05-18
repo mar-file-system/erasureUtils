@@ -71,7 +71,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #define SUPER_BLOCK_CNT 2
 #define CRC_BYTES 4 // DO NOT decrease without adjusting CRC gen and block creation code!
-#define CRC_SEED 
+#define CRC_SEED 57
 
 
 // forward declaration of DAL references (anything actually using this file will need to include "dal.h" as well!)
@@ -224,12 +224,12 @@ typedef struct global_state_struct {
    meta_info    minfo;
    char         meta_error;
    char         data_error;
-} global_state;
+} gthread_state;
 
 
 // Write thread internal state struct
 typedef struct thread_state_struct {
-   global_state* gstate;
+   gthread_state* gstate;
    BLOCK_CTXT   handle;
    ioblock*     iob;
 } thread_state;

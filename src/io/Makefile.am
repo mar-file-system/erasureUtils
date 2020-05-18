@@ -65,7 +65,7 @@ include_HEADERS = io.h
 
 
 # define sources used by many programs as noinst libraries, to avoid multiple compilations
-noinst_LIBRARIES = libioqueue.a libmetainfo.a
+noinst_LIBRARIES = libioqueue.a libmetainfo.a libiothreads.a
 
 libioqueue_a_SOURCES = ../logging/logging.c ioqueue.c
 libioqueue_a_CFLAGS  = $(XML_CFLAGS)
@@ -74,6 +74,10 @@ IOQ_LIBS = libioqueue.a
 libmetainfo_a_SOURCES = ../logging/logging.c metainfo.c
 libmetainfo_a_CFLAGS  = $(XML_CFLAGS)
 MIN_LIBS = libmetainfo.a
+
+libiothreads_a_SOURCES = ../logging/logging.c iothreads.c
+libiothreads_a_CFLAGS = $(XML_CFLAGS)
+IOT_LIBS = libiothreads.a
 
 # ---
 check_PROGRAMS = test_ioqueue test_metainfo

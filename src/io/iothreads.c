@@ -114,6 +114,7 @@ underlying skt_etc() functions.
 #include "dal/dal.h"
 
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -163,7 +164,8 @@ int write_init( unsigned int tID, void* global_state, void** state ) {
       return -1;
    }
 
-   global_state* gstate = (global_state*) global_state;
+   gthread_state* gstate = (gthread_state*) global_state;
+   DAL dal = gstate->dal; // shorthand reference
    // set some gstate values
    gstate->offset = 0;
    gstate->data_error = 0;
@@ -174,7 +176,6 @@ int write_init( unsigned int tID, void* global_state, void** state ) {
    gstate->minfo.totsz   = 0;
 
    // set state fields
-   DAL dal = gstate->dal; // shorthand reference
    tstate->gstate = gstate;
    tstate->iob    = NULL;
    tstate->handle = dal->open( dal->ctxt, gstate->dmode, gstate->location, gstate->objID );
@@ -210,7 +211,7 @@ int read_init( unsigned int tID, void* global_state, void** state ) {
       return -1;
    }
 
-   global_state* gstate = (global_state*) global_state;
+   gthread_state* gstate = (gthread_state*) global_state;
    // set some gstate values
    gstate->offset = 0;
    gstate->data_error = 0;
@@ -219,8 +220,7 @@ int read_init( unsigned int tID, void* global_state, void** state ) {
    // set state fields
    DAL dal = gstate->dal; // shorthand reference
    tstate->gstate = gstate;
-   tstate->error  = 0;
-   tstate->offset = 0;
+   tstate->iob    = NULL;
 
    // open a handle for this block
    tstate->handle = dal->open( dal->ctxt, gstate->dmode, gstate->location, gstate->objID );
@@ -231,7 +231,7 @@ int read_init( unsigned int tID, void* global_state, void** state ) {
 
    // populate our minfo struct with obj meta values
    if ( dal_get_minfo( dal, tstate->handle, &gstate->minfo ) != 0 ) {
-      gstate->meata_error = 1;
+      gstate->meta_error = 1;
    }
 
    return 0;
@@ -254,7 +254,7 @@ int write_consume( void** state, void** work_todo ) {
 
    // determine what and how much data we have
    size_t datasz = 0;
-   void* datasrc = ioblcok_read_target( iob, &datasz );
+   void* datasrc = ioblock_read_target( iob, &datasz );
    if ( datasrc == NULL ) {
       LOG( LOG_ERR, "Recieved a NULL read target from ioblock!\n" );
       gstate->data_error = 1;
@@ -270,7 +270,7 @@ int write_consume( void** state, void** work_todo ) {
 
    // calculate a CRC for this data and append it to the buffer
    *(uint32_t*)( datasrc + datasz ) = crc32_ieee(CRC_SEED, datasrc, datasz);
-   gstate->minfo.crcsum += *( (u32*) (datasrc + datasz) );
+   gstate->minfo.crcsum += *( (uint32_t*) (datasrc + datasz) );
    datasz += CRC_BYTES;
    gstate->minfo.blocksz += datasz;
 
@@ -313,7 +313,7 @@ int read_produce( void** state, void** work_tofill ) {
    // loop until we have filled an ioblock
    ioblock* push_block = NULL;
    int resres = 0;
-   while ( true ) {
+   while ( 1 ) {
       resres = reserve_ioblock( &(tstate->iob), &push_block, gstate->ioq );
       // check for an error condition
       if ( resres == -1 ) {
@@ -394,7 +394,7 @@ int read_resume( void** state, void** prev_work ) {
 
    // check for a NULL ioq and create one if so
    if ( gstate->ioq == NULL ) {
-      gstate->ioq = create_ioqueue( gstate->minfo.versz, gstate->minfo.partsz, gstate->dal_mode );
+      gstate->ioq = create_ioqueue( gstate->minfo.versz, gstate->minfo.partsz, gstate->dmode );
       if ( gstate->ioq == NULL ) {
          LOG( LOG_ERR, "Failed to create ioqueue!\n" );
          return -1;
