@@ -281,6 +281,9 @@ int write_consume( void** state, void** work_todo ) {
       // don't bother to abort yet, we'll do that on close
    }
 
+   // increment our block size
+   gstate->minfo.blocksz += datasz;
+
    // regardless of success, we need to free up our ioblock
    if ( release_ioblock( gstate->ioq ) ) {
       LOG( LOG_ERR, "Failed to release ioblock!\n" );

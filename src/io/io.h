@@ -219,11 +219,11 @@ typedef struct global_state_struct {
    DAL_location location;
    DAL_MODE     dmode;
    DAL          dal; 
-   ioqueue*     ioq;
    off_t        offset;
    meta_info    minfo;
    char         meta_error;
    char         data_error;
+   ioqueue*     ioq;
 } gthread_state;
 
 
