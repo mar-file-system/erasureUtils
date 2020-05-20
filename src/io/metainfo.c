@@ -270,6 +270,7 @@ int dal_set_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
 		return -1;
 	}
 
+   free( str );
 	return 0;
 }
 

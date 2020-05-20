@@ -6,11 +6,11 @@
 #include <pthread.h>
 #include <time.h>
 
-#define NUM_CONS 10
-#define NUM_PROD 5
-#define QDEPTH  1000
-#define TOT_WRK 100
-#define HLT_AT  50
+#define NUM_CONS 5
+#define NUM_PROD 2
+#define QDEPTH  100
+#define TOT_WRK 15
+#define HLT_AT  -1
 #define ABT_AT  -1
 #define SLP_PER_CONS 2
 #define SLP_PER_PROD 1

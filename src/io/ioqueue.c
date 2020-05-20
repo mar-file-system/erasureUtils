@@ -344,6 +344,16 @@ void ioblock_update_fill( ioblock* block, size_t bytes ) {
 
 
 /**
+ * Get the current data size written to the ioblock
+ * @param ioblock* block : Reference to the ioblock to update
+ * @return size_t : Data size of the ioblock
+ */
+size_t ioblock_get_fill( ioblock* block ) {
+   return block->data_size;
+}
+
+
+/**
  * Simply makes an ioblock available for use again by increasing ioqueue depth (works due to single producer & consumer assumption)
  * @param ioqueue* ioq : Reference to the ioqueue struct to have depth increased
  * @param int : Zero on success and a negative value if an error occurred

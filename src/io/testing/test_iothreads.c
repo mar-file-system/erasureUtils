@@ -64,7 +64,7 @@ int main( int argc, char** argv ) {
    gstate.minfo.E = 0;
    gstate.minfo.O = 0;
    gstate.minfo.partsz = 4096;
-   gstate.minfo.versz = 1048576;
+   gstate.minfo.versz = 16388;
    gstate.minfo.blocksz = 0;
    gstate.minfo.crcsum = 0;
    gstate.minfo.totsz = 0;
@@ -74,7 +74,7 @@ int main( int argc, char** argv ) {
    // create an ioqueue for our data blocks
    gstate.ioq = create_ioqueue( gstate.minfo.versz, gstate.minfo.partsz, gstate.dmode );
    if ( gstate.ioq == NULL ) {
-      LOG( LOG_ERR, "Failed to create IOQueue for write thread!\n" );
+      printf( "Failed to create IOQueue for write thread!\n" );
       return -1;
    }
 
@@ -82,74 +82,96 @@ int main( int argc, char** argv ) {
    void* tstate;
 
    // run our write_init function
+   printf( "initializing write thread state..." );
    if ( write_init( 0, (void*)&gstate, &tstate ) ) {
-      LOG( LOG_ERR, "write_init() function failed!\n" );
+      printf( "write_init() function failed!\n" );
       return -1;
    }
+   printf( "done\n" );
 
    // loop through writing out our test data
-   int prtcnt = 0;
-   int prtlimit = 10;
+   int partcnt = 0;
+   int partlimit = 10;
    ioblock* iob = NULL;
    ioblock* pblock = NULL;
-   while ( prtcnt < prtlimit ) {
+   while ( partcnt < partlimit ) {
       int resres = 0;
       while ( (resres = reserve_ioblock( &iob, &pblock, gstate.ioq )) == 0 ) {
          // get a target for our buffer
          void* fill_tgt = ioblock_write_target( iob );
          if ( fill_tgt == NULL ) {
-            LOG( LOG_ERR, "Failed to get fill target for ioblock!\n" );
+            printf( "Failed to get fill target for ioblock!\n" );
             return -1;
          }
 
          // fill our ioblock
-         size_t fill_sz = fill_buffer( partcnt * gstate.minfo.partsz, gstate.minfo.iosz, gstate.minfo.partsz, fill_tgt, gstate.dmode );
+         size_t fill_sz = fill_buffer( partcnt * gstate.minfo.partsz, gstate.minfo.versz, gstate.minfo.partsz, fill_tgt, gstate.dmode );
          if ( fill_sz != gstate.minfo.partsz ) {
-            LOG( LOG_ERR, "Expected to fill %zu bytes, but instead filled %zu\n", gstate.minfo.partsz, fillsz );
+            printf( "Expected to fill %zu bytes, but instead filled %zu\n", gstate.minfo.partsz, fill_sz );
             return -1;
          }
          ioblock_update_fill( iob, fill_sz );
+         partcnt++;
       }
       // check for an error condition forcing loop exit
       if ( resres < 0 ) {
-         LOG( LOG_ERR, "An error occured while trying to reserve a new IOBlock for writing\n" );
+         printf( "An error occured while trying to reserve a new IOBlock for writing\n" );
          return -1;
       }
 
       // otherwise, pblock should now be populated, run our write_consume function
+      printf( "consuming ioblock..." );
       if ( write_consume( &tstate, (void**) &pblock ) ) {
-         LOG( LOG_ERR, "write_consume() function indicates an error!\n" );
+         printf( "write_consume() function indicates an error!\n" );
          return -1;
       }
+      printf( "done\n" );
       pblock = NULL;
-      prtcnt++;
+   }
+
+   // check if any data made it into our current ioblock
+   if ( ioblock_get_fill( iob ) ) {
+      // if so, consume it as well
+      printf( "consuming final ioblock..." );
+      if ( write_consume( &tstate, (void**) &pblock ) ) {
+         printf( "write_consume() function indicates an error!\n" );
+         return -1;
+      }
+      printf( "done\n" );
+   }
+   else {
+      // otherwise, we'll need to release it
+      release_ioblock( gstate.ioq );
    }
 
    // set some of our minfo values
-   gstate.minfo.totsz = ( prtcnt * gstate.minfo.partsz );
+   gstate.minfo.totsz = ( partcnt * gstate.minfo.partsz );
 
    // finally, call our write thread termination function
    write_term( &tstate, (void**) &pblock );
 
    // check for any write errors
    if( gstate.meta_error ) {
-      LOG( LOG_ERR, "Write thread global state indicates a meta error was encountered!\n" );
+      printf( "Write thread global state indicates a meta error was encountered!\n" );
    }
    if ( gstate.data_error ) {
-      LOG( LOG_ERR, "Write thread global state indicates a data error was encountered!\n" );
+      printf( "Write thread global state indicates a data error was encountered!\n" );
    }
 
    // fix our state values
    gstate.dmode = DAL_READ;
+   if ( destroy_ioqueue( gstate.ioq ) ) {
+      printf( "Failed to destroy write IOQueue!\n" );
+   }
    tstate = NULL;
 
    // call our read_init function
-   if ( read_init( 0, (void**) &gstate, &tstate ) ) {
+//   if ( read_init( 0, (void**) &gstate, &tstate ) ) {
       
 
 
    // Delete the block we created
-   //if ( dal->del( dal->ctxt, maxloc, "" ) ) { printf( "warning: del failed!\n" ); }
+   if ( dal->del( dal->ctxt, maxloc, "" ) ) { printf( "warning: del failed!\n" ); }
 
    // Free the DAL
    if ( dal->cleanup( dal ) ) { printf( "error: failed to cleanup DAL\n" ); return -1; }

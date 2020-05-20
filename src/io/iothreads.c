@@ -106,6 +106,8 @@ underlying skt_etc() functions.
 
 #include "libne_auto_config.h"
 
+#define DEBUG 1
+#define USE_STDOUT 1
 #define LOG_PREFIX "iothreads"
 #include "logging/logging.h"
 
@@ -170,10 +172,8 @@ int write_init( unsigned int tID, void* global_state, void** state ) {
    gstate->offset = 0;
    gstate->data_error = 0;
    gstate->meta_error = 0;
-   gstate->minfo.versz   = dal->io_size;
    gstate->minfo.blocksz = 0;
    gstate->minfo.crcsum  = 0;
-   gstate->minfo.totsz   = 0;
 
    // set state fields
    tstate->gstate = gstate;
@@ -225,7 +225,7 @@ int read_init( unsigned int tID, void* global_state, void** state ) {
    // open a handle for this block
    tstate->handle = dal->open( dal->ctxt, gstate->dmode, gstate->location, gstate->objID );
    if( tstate->handle == NULL ) {
-      LOG( LOG_WARN, "failed to open handle for block %d!\n", gstate->location.block );
+      LOG( LOG_WARNING, "failed to open handle for block %d!\n", gstate->location.block );
       gstate->data_error=1;
    }
 
@@ -262,8 +262,8 @@ int write_consume( void** state, void** work_todo ) {
    }
 
    // sanity check that our data size makes sense
-   if ( datasz != gstate->minfo.versz ) {
-      LOG( LOG_ERR, "Recieved unexpected data size: %zd\n", gstate->minfo.versz );
+   if ( datasz != ( gstate->minfo.versz - CRC_BYTES ) ) {
+      LOG( LOG_ERR, "Recieved unexpected data size: %zd\n", datasz );
       gstate->data_error = 1;
       return -1;
    }
@@ -272,6 +272,7 @@ int write_consume( void** state, void** work_todo ) {
    *(uint32_t*)( datasrc + datasz ) = crc32_ieee(CRC_SEED, datasrc, datasz);
    gstate->minfo.crcsum += *( (uint32_t*) (datasrc + datasz) );
    datasz += CRC_BYTES;
+   // increment our block size
    gstate->minfo.blocksz += datasz;
 
    // write data out via the DAL, but only if we have not yet encoutered a write error
@@ -280,9 +281,6 @@ int write_consume( void** state, void** work_todo ) {
       gstate->data_error = 1;
       // don't bother to abort yet, we'll do that on close
    }
-
-   // increment our block size
-   gstate->minfo.blocksz += datasz;
 
    // regardless of success, we need to free up our ioblock
    if ( release_ioblock( gstate->ioq ) ) {
@@ -454,6 +452,10 @@ void write_term( void** state, void** prev_work ) {
          // not really much to do besides complain
       }
    }
+
+   // just free and NULL our state, there isn't any useful info in there
+   free( tstate );
+   *state = NULL;
 }
 
 
@@ -479,6 +481,10 @@ void read_term( void** state, void** prev_work ) {
       LOG( LOG_ERR, "Failed to close read handle for block %d!\n", gstate->location.block );
       // can only really complain, nothing else to be done
    }
+
+   // just free and NULL our state, there isn't any useful info in there
+   free( tstate );
+   *state = NULL;
 
    // NOTE -- it is up to the master / consumer proc to destroy our IOQueue
 }

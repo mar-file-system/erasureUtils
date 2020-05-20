@@ -80,7 +80,7 @@ libiothreads_a_CFLAGS = $(XML_CFLAGS)
 IOT_LIBS = libiothreads.a
 
 # ---
-check_PROGRAMS = test_ioqueue test_metainfo
+check_PROGRAMS = test_ioqueue test_metainfo test_iothreads
 
 test_ioqueue_SOURCES = testing/test_ioqueue.c
 test_ioqueue_LDADD   = $(IOQ_LIBS)
@@ -90,5 +90,9 @@ test_metainfo_SOURCES = testing/test_metainfo.c
 test_metainfo_LDADD   = $(MIN_LIBS) ../dal/libdal.a
 test_metainfo_CFLAGS  = $(XML_CFLAGS)
 
-TESTS = test_ioqueue test_metainfo
+test_iothreads_SOURCES = testing/test_iothreads.c
+test_iothreads_LDADD   = $(IOT_LIBS) $(MIN_LIBS) $(IOQ_LIBS) ../dal/libdal.a
+test_iothreads_CFLAGS  = $(XML_CFLAGS)
+
+TESTS = test_ioqueue test_metainfo test_iothreads
 
