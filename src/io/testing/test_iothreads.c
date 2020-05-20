@@ -194,7 +194,7 @@ int main( int argc, char** argv ) {
    int readparts = 0;
    iob = NULL;
    printf( "Producing a new read ioblock..." );
-   while ( (prodres = read_produce( &tstate, &iob )) == 0 ) {
+   while ( (prodres = read_produce( &tstate, (void**) &iob )) == 0 ) {
       printf( "done\n" );
       // get a read target
       size_t buffsz = 0;
@@ -210,13 +210,13 @@ int main( int argc, char** argv ) {
          return -1;
       }
       // release our produced ioblock
-      if ( realease_ioblock( gstate.ioq ) ) {
+      if ( release_ioblock( gstate.ioq ) ) {
          printf( "Failed to release ioblock!\n" );
          return -1;
       }
       // count how many parts we verified
       readparts += ( buffsz / gstate.minfo.partsz );
-      if ( buffsz % gstate.minfo.parts ) {
+      if ( buffsz % gstate.minfo.partsz ) {
          printf( "WARNING: read buffer size (%zu) does not align with partsz (%zu)!\n", buffsz, gstate.minfo.partsz );
       }
       printf( "Producing a new read ioblock..." );
@@ -229,7 +229,7 @@ int main( int argc, char** argv ) {
 
    // call our read term func
    printf( "Terminating read thread state..." );
-   read_term( &tstate, &iob );
+   read_term( &tstate, (void**) &iob );
    printf( "done\n" );
 
 

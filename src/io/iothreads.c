@@ -355,8 +355,8 @@ int read_produce( void** state, void** work_tofill ) {
       }
       // note how much REAL data (no CRC) we've stored to the ioblock
       ioblock_update_fill( tstate->iob, read_data );
-      // note our increased offset within the data
-      gstate->offset += read_data;
+      // note our increased offset within the data (MUST include the CRC!)
+      gstate->offset += (read_data + CRC_BYTES);
    }
 
    // populate our workpackage with the filled ioblock

@@ -188,6 +188,8 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
    char metablocksz[20]; /* char array to get complete block size from the meta string */
    char metacrcsum[20];  /* char array to get crc sum from the meta string */
    char metatotsize[20]; /* char array to get object totsz from the meta string */
+
+   LOG( LOG_INFO, "Parsing meta string: %s", str );
    
    // only process the meta string if we successfully retreived it
    int ret = sscanf(str,"%4s %4s %4s %19s %19s %19s %19s %19s",
@@ -264,7 +266,7 @@ int dal_set_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
       return -1;
    }
 
-	if ( dal->set_meta( handle, str, strlen( str ) ) ) {
+	if ( dal->set_meta( handle, str, strlen( str ) + 1 ) ) {
 		LOG( LOG_ERR, "failed to set meta value!\n" );
 		free( str );
 		return -1;
