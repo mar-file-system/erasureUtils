@@ -307,6 +307,14 @@ int read_produce( void** state, void** work_tofill ) {
 
    // check if our offset is beyond the end of the block
    if ( gstate->offset >= gstate->minfo.blocksz ) {
+      // we may still have data in our current ioblock
+      if ( tstate->iob != NULL ) {
+         if ( ioblock_get_fill( tstate->iob ) ) {
+            *work_tofill = tstate->iob;
+            tstate->iob = NULL; // NULL this out, so we don't try to release it
+            return 0;
+         }
+      }
       LOG( LOG_INFO, "Thread has reached end of block %d\n", gstate->location.block );
       return 2;
    }

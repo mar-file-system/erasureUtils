@@ -148,7 +148,9 @@ int main( int argc, char** argv ) {
    gstate.minfo.totsz = ( partcnt * gstate.minfo.partsz );
 
    // finally, call our write thread termination function
+   printf( "terminating write state..." );
    write_term( &tstate, (void**) &pblock );
+   printf( "done\n" );
 
    // check for any write errors
    if( gstate.meta_error ) {
@@ -158,17 +160,86 @@ int main( int argc, char** argv ) {
       printf( "Write thread global state indicates a data error was encountered!\n" );
    }
 
+
+
+   // Test READ thread logic
+
    // fix our state values
    gstate.dmode = DAL_READ;
+   gstate.offset = 0;
    if ( destroy_ioqueue( gstate.ioq ) ) {
       printf( "Failed to destroy write IOQueue!\n" );
    }
+   gstate.ioq = NULL;
    tstate = NULL;
 
    // call our read_init function
-//   if ( read_init( 0, (void**) &gstate, &tstate ) ) {
-      
+   printf( "Initializing our read thread state..." );
+   if ( read_init( 0, (void**) &gstate, &tstate ) ) {
+      printf( "Failure of the read_init() function!\n" );
+      return -1;
+   }
+   printf( "done\n" );
 
+   // create our ioqueue (based on minfo values gathered by the read thread)
+   gstate.ioq = create_ioqueue( gstate.minfo.versz, gstate.minfo.partsz, gstate.dmode );
+   if ( gstate.ioq == NULL ) {
+      printf( "Failed to create ioqueue for read!\n" );
+      return -1;
+   }
+
+   // NOTE -- here is where we'd signal the thread to begin work
+
+   int prodres;
+   int readparts = 0;
+   iob = NULL;
+   printf( "Producing a new read ioblock..." );
+   while ( (prodres = read_produce( &tstate, &iob )) == 0 ) {
+      printf( "done\n" );
+      // get a read target
+      size_t buffsz = 0;
+      void* readtgt = ioblock_read_target( iob, &buffsz );
+      if ( readtgt == NULL ) {
+         printf( "Failed to get read target for produced ioblock!\n" );
+         return -1;
+      }
+      // verify all data in our ioblock
+      if ( verify_data( readparts * gstate.minfo.partsz, gstate.minfo.partsz, buffsz, readtgt, DAL_READ ) != 
+            buffsz ) {
+         printf( "Failed to verify all data from produced ioblock!\n" );
+         return -1;
+      }
+      // release our produced ioblock
+      if ( realease_ioblock( gstate.ioq ) ) {
+         printf( "Failed to release ioblock!\n" );
+         return -1;
+      }
+      // count how many parts we verified
+      readparts += ( buffsz / gstate.minfo.partsz );
+      if ( buffsz % gstate.minfo.parts ) {
+         printf( "WARNING: read buffer size (%zu) does not align with partsz (%zu)!\n", buffsz, gstate.minfo.partsz );
+      }
+      printf( "Producing a new read ioblock..." );
+   }
+   if ( prodres < 0 ) {
+      printf( "read_produce indicates an error!\n" );
+      return -1;
+   }
+   printf( "all reads complete\n" );
+
+   // call our read term func
+   printf( "Terminating read thread state..." );
+   read_term( &tstate, &iob );
+   printf( "done\n" );
+
+
+   // CLEANUP
+
+   // WE still need to destroy the read thread ioqueue
+   if ( destroy_ioqueue( gstate.ioq ) ) {
+      printf( "Failed to destroy read ioqueue!\n" );
+      return -1;
+   }
 
    // Delete the block we created
    if ( dal->del( dal->ctxt, maxloc, "" ) ) { printf( "warning: del failed!\n" ); }
