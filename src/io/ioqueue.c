@@ -207,7 +207,7 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
          return NULL;
       }
       ioq->block_list[i].data_size   = 0;
-      ioq->block_list[i].error_start = -1;
+      ioq->block_list[i].error_end   = -1;
    }
    return ioq;
 }
@@ -298,13 +298,18 @@ int reserve_ioblock( ioblock** cur_block, ioblock** push_block, ioqueue* ioq ) {
 
    // clear any old values in this newly reserved block
    (*cur_block)->data_size   = 0;
-   (*cur_block)->error_start = -1;
+   (*cur_block)->error_end   = -1;
 
    // we have the new block; check if we need to copy data over to it
    if ( datacpy != NULL ) {
       LOG( LOG_INFO, "Copying %zu bytes to next ioblock\n", cpysz );
       memcpy( (*cur_block)->buff, datacpy, cpysz );
       (*cur_block)->data_size = cpysz;
+      // check for any data errors we need to propagate forward
+      if ( prev_block->error_end > ioq->split_threshold ) {
+         // this is an oversimplification, but being exact won't actually gain us anything
+         (*cur_block)->error_end = cpysz; // assume all copied data is junk
+      }
       prev_block->data_size = ioq->split_threshold; // update prev block to exclude copied data
    }
    return ( prev_block == NULL ) ? 0 : 1; // if there was a previous block, it should be pushed
@@ -325,10 +330,17 @@ void* ioblock_write_target( ioblock* block ) {
  * Retrieve a buffer target reference for reading data from the given ioblock
  * @param ioblock* block : Reference to the ioblock to retrieve a target for
  * @param size_t* bytes : Reference to be populated with the data size of the ioblock
+ * @param off_t* error_end : Reference to be populated with the offset of the final data error 
+ *                           in the buffer ( i.e. data beyond this offset is valid )
  * @return void* : Buffer reference to read from
  */
-void* ioblock_read_target( ioblock* block, size_t* bytes ) {
-   (*bytes) = block->data_size;
+void* ioblock_read_target( ioblock* block, size_t* bytes, off_t* error_end ) {
+   if ( error_end ) {
+      *error_end = block->error_end;
+   }
+   if ( bytes ) {
+      (*bytes) = block->data_size;
+   }
    return block->buff;
 }
 
@@ -337,9 +349,14 @@ void* ioblock_read_target( ioblock* block, size_t* bytes ) {
  * Update the data_size value of a given ioblock
  * @param ioblock* block : Reference to the ioblock to update
  * @param size_t bytes : Size of data added to the ioblock
+ * @param char bad_data : Indicates if the stored data contains errors ( 0 for no errors, 1 for errors )
  */
-void ioblock_update_fill( ioblock* block, size_t bytes ) {
+void ioblock_update_fill( ioblock* block, size_t bytes, char bad_data ) {
    block->data_size += bytes;
+   // if we have errors, we need to track them
+   if ( bad_data ) {
+      block->error_end = block->data_size;
+   }
 }
 
 

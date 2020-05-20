@@ -123,7 +123,8 @@ int dal_set_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo );
 
 typedef struct ioblock_struct {
    size_t data_size;    // amount of usable data contained in this buffer
-   off_t  error_start;  // offset in buffer at which data errors begin
+ //  off_t  error_start;  // offset in buffer at which data errors begin
+   off_t  error_end;    // offset in buffer at which data errors end
    void*  buff;         // buffer for data transfer
 } ioblock;
 
@@ -190,16 +191,19 @@ void* ioblock_write_target( ioblock* block );
  * Retrieve a buffer target reference for reading data from the given ioblock
  * @param ioblock* block : Reference to the ioblock to retrieve a target for
  * @param size_t* bytes : Reference to be populated with the data size of the ioblock
+ * @param off_t* error_end : Reference to be populated with the offset of the final data error 
+ *                           in the buffer ( i.e. data beyond this offset is valid )
  * @return void* : Buffer reference to read from
  */
-void* ioblock_read_target( ioblock* block, size_t* bytes );
+void* ioblock_read_target( ioblock* block, size_t* bytes, off_t* error_end );
 
 /**
  * Update the data_size value of a given ioblock
  * @param ioblock* block : Reference to the ioblock to update
  * @param size_t bytes : Size of data added to the ioblock
+ * @param char bad_data : Indicates if the stored data contains errors ( 0 for no errors, 1 for errors )
  */
-void ioblock_update_fill( ioblock* block, size_t bytes );
+void ioblock_update_fill( ioblock* block, size_t bytes, char bad_data );
 
 /**
  * Get the current data size written to the ioblock

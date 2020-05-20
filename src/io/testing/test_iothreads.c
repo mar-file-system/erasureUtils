@@ -110,7 +110,7 @@ int main( int argc, char** argv ) {
             printf( "Expected to fill %zu bytes, but instead filled %zu\n", gstate.minfo.partsz, fill_sz );
             return -1;
          }
-         ioblock_update_fill( iob, fill_sz );
+         ioblock_update_fill( iob, fill_sz, 0 );
          partcnt++;
       }
       // check for an error condition forcing loop exit
@@ -198,7 +198,7 @@ int main( int argc, char** argv ) {
       printf( "done\n" );
       // get a read target
       size_t buffsz = 0;
-      void* readtgt = ioblock_read_target( iob, &buffsz );
+      void* readtgt = ioblock_read_target( iob, &buffsz, NULL );
       if ( readtgt == NULL ) {
          printf( "Failed to get read target for produced ioblock!\n" );
          return -1;

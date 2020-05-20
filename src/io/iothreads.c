@@ -254,7 +254,7 @@ int write_consume( void** state, void** work_todo ) {
 
    // determine what and how much data we have
    size_t datasz = 0;
-   void* datasrc = ioblock_read_target( iob, &datasz );
+   void* datasrc = ioblock_read_target( iob, &datasz, NULL );
    if ( datasrc == NULL ) {
       LOG( LOG_ERR, "Recieved a NULL read target from ioblock!\n" );
       gstate->data_error = 1;
@@ -337,12 +337,13 @@ int read_produce( void** state, void** work_tofill ) {
       // otherwise, perform a read and store data to that block
       ssize_t read_data = 0;
       void* store_tgt = ioblock_write_target( tstate->iob );
+      char data_err = 0;
       if ( (read_data = gstate->dal->get( tstate->handle, store_tgt, gstate->minfo.versz, gstate->offset )) <
             gstate->minfo.versz ) {
          LOG( LOG_ERR, "Expected read return value of %zd for block %d, but recieved: %zd\n", 
                gstate->minfo.versz, gstate->location.block, read_data );
          gstate->data_error = 1;
-         return -1;
+         data_err = 1;
       }
       // check the crc
       read_data -= CRC_BYTES;
@@ -351,10 +352,10 @@ int read_produce( void** state, void** work_tofill ) {
       if ( crc != scrc ) {
          LOG( LOG_ERR, "Calculated CRC of data (%zu) does not match stored CRC: %zu\n", crc, scrc );
          gstate->data_error = 1;
-         return -1;
+         data_err = 1;
       }
       // note how much REAL data (no CRC) we've stored to the ioblock
-      ioblock_update_fill( tstate->iob, read_data );
+      ioblock_update_fill( tstate->iob, read_data, data_err );
       // note our increased offset within the data (MUST include the CRC!)
       gstate->offset += (read_data + CRC_BYTES);
    }

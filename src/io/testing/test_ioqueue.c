@@ -202,7 +202,7 @@ int test_values( size_t iosz, size_t partsz, DAL_MODE mode ) {
          destroy_ioqueue( ioq );
          return -1;
       }
-      ioblock_update_fill( cur_block, written );
+      ioblock_update_fill( cur_block, written, 0 );
       written_data += written;
       int resstat = 0;
       if ( (resstat = reserve_ioblock( &cur_block, &push_block, ioq )) < 0 ) {
@@ -214,7 +214,7 @@ int test_values( size_t iosz, size_t partsz, DAL_MODE mode ) {
          // while we have a filled ioblock...
          // get a read target
          size_t buffsz = 0;
-         void* readtgt = ioblock_read_target( push_block, &buffsz );
+         void* readtgt = ioblock_read_target( push_block, &buffsz, NULL );
          // if we're 'writing', we should have room to stuff a CRC into this buffer
          if ( mode == DAL_WRITE ) {
             if ( buffsz != ( iosz - CRC_BYTES ) ) {
@@ -256,7 +256,7 @@ int test_values( size_t iosz, size_t partsz, DAL_MODE mode ) {
    // finally, verify any data remaining in the last ioblock
    // get a read target
    size_t buffsz = 0;
-   void* readtgt = ioblock_read_target( cur_block, &buffsz );
+   void* readtgt = ioblock_read_target( cur_block, &buffsz, NULL );
    if ( buffsz != 0 ) {
       // if we're 'writing', we should have room to stuff a CRC into this buffer
       if ( mode == DAL_WRITE ) {
