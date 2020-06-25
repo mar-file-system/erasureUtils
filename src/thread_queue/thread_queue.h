@@ -74,6 +74,7 @@ OF SUCH DAMAGE.
 
 
 typedef enum {
+   TQ_NONE     = 0,  // filler value, used to indicate no flags at all
    TQ_FINISHED = 0x01 << 0, // signals to threads that all work has been issued 
                             //   (producers immediately exit, consumers exit when the queue is empty)
    TQ_ABORT    = 0x01 << 1, // signals to threads that an unrecoverable errror requires early termination
@@ -214,10 +215,19 @@ int tq_enqueue( ThreadQueue tq, TQ_Control_Flags ignore_flags, void* workbuff );
  * @param TQ_Control_Flags ignore_flags : Indicates which queue states should be bypassed during this operation
  *                                        (By default, only a TQ_FINISHED state will not result in a failure)
  * @param void** workbuff : Reference to be populated with the work element pointer
- * @return int : The depth of the queue (including the retrieved element) on success and -1 on failure 
- *                (such as, if the queue is HALTED or ABORTED and those flags were not ignored)
+ * @return int : The depth of the queue (including the retrieved element) on success,
+ *               Zero if the queue is both empty and has ANY control flags set (deadlock protection),
+ *               and -1 on failure (such as, if the queue is HALTED or ABORTED, and those flags were not ignored)
  */
 int tq_dequeue( ThreadQueue tq, TQ_Control_Flags ignore_flags, void** workbuff );
+
+
+/**
+ * Determine the current depth (number of enqueued elements) of the given ThreadQueue
+ * @param ThreadQueue tq : ThreadQueue for which to determine depth
+ * @return int : Current depth of the ThreadQueue, or -1 on a failure
+ */
+int tq_depth( ThreadQueue tq );
 
 
 /**

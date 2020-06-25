@@ -177,7 +177,9 @@ int write_init( unsigned int tID, void* global_state, void** state ) {
 
    // set state fields
    tstate->gstate = gstate;
+   tstate->offset = 0;
    tstate->iob    = NULL;
+   tstate->crcsumchk = 0;
    tstate->handle = dal->open( dal->ctxt, gstate->dmode, gstate->location, gstate->objID );
    if( tstate->handle == NULL ) {
       LOG( LOG_ERR, "failed to open handle for block %d!\n", gstate->location.block );
@@ -220,7 +222,9 @@ int read_init( unsigned int tID, void* global_state, void** state ) {
    // set state fields
    DAL dal = gstate->dal; // shorthand reference
    tstate->gstate = gstate;
+   tstate->offset = 0;
    tstate->iob    = NULL;
+   tstate->crcsumchk = 0;
 
    // open a handle for this block
    tstate->handle = dal->open( dal->ctxt, gstate->dmode, gstate->location, gstate->objID );
@@ -262,24 +266,26 @@ int write_consume( void** state, void** work_todo ) {
    }
 
    // sanity check that our data size makes sense
-   if ( datasz != ( gstate->minfo.versz - CRC_BYTES ) ) {
+   if ( datasz > ( gstate->minfo.versz - CRC_BYTES ) ) {
       LOG( LOG_ERR, "Recieved unexpected data size: %zd\n", datasz );
       gstate->data_error = 1;
       return -1;
    }
 
-   // calculate a CRC for this data and append it to the buffer
-   *(uint32_t*)( datasrc + datasz ) = crc32_ieee(CRC_SEED, datasrc, datasz);
-   gstate->minfo.crcsum += *( (uint32_t*) (datasrc + datasz) );
-   datasz += CRC_BYTES;
-   // increment our block size
-   gstate->minfo.blocksz += datasz;
+   if ( datasz > 0 ) {
+      // calculate a CRC for this data and append it to the buffer
+      *(uint32_t*)( datasrc + datasz ) = crc32_ieee(CRC_SEED, datasrc, datasz);
+      gstate->minfo.crcsum += *( (uint32_t*) (datasrc + datasz) );
+      datasz += CRC_BYTES;
+      // increment our block size
+      gstate->minfo.blocksz += datasz;
 
-   // write data out via the DAL, but only if we have not yet encoutered a write error
-   if ( (gstate->data_error == 0)  &&  gstate->dal->put( tstate->handle, datasrc, datasz ) ) {
-      LOG( LOG_ERR, "Failed to write %zu bytes to block %d!\n", datasz, gstate->location.block );
-      gstate->data_error = 1;
-      // don't bother to abort yet, we'll do that on close
+      // write data out via the DAL, but only if we have not yet encoutered a write error
+      if ( (gstate->data_error == 0)  &&  gstate->dal->put( tstate->handle, datasrc, datasz ) ) {
+         LOG( LOG_ERR, "Failed to write %zu bytes to block %d!\n", datasz, gstate->location.block );
+         gstate->data_error = 1;
+         // don't bother to abort yet, we'll do that on close
+      }
    }
 
    // regardless of success, we need to free up our ioblock
@@ -306,7 +312,15 @@ int read_produce( void** state, void** work_tofill ) {
    gthread_state* gstate = (gthread_state*) (tstate->gstate);
 
    // check if our offset is beyond the end of the block
-   if ( gstate->offset >= gstate->minfo.blocksz ) {
+   if ( tstate->offset >= gstate->minfo.blocksz ) {
+      // if we haven't hit any data errors, verify our global CRC
+      if ( gstate->data_error == 0 ) {
+         if ( tstate->crcsumchk != gstate->minfo.crcsum ) {
+            LOG( LOG_ERR, "Data CRC sum (%llu) does not match meta CRC sum (%llu)!\n", 
+                 tstate->crcsumchk, gstate->minfo.crcsum );
+            gstate->data_error = 1;
+         }
+      }
       // we may still have data in our current ioblock
       if ( tstate->iob != NULL ) {
          if ( ioblock_get_fill( tstate->iob ) ) {
@@ -338,7 +352,7 @@ int read_produce( void** state, void** work_tofill ) {
       ssize_t read_data = 0;
       void* store_tgt = ioblock_write_target( tstate->iob );
       char data_err = 0;
-      if ( (read_data = gstate->dal->get( tstate->handle, store_tgt, gstate->minfo.versz, gstate->offset )) <
+      if ( (read_data = gstate->dal->get( tstate->handle, store_tgt, gstate->minfo.versz, tstate->offset )) <
             gstate->minfo.versz ) {
          LOG( LOG_ERR, "Expected read return value of %zd for block %d, but recieved: %zd\n", 
                gstate->minfo.versz, gstate->location.block, read_data );
@@ -349,6 +363,7 @@ int read_produce( void** state, void** work_tofill ) {
       read_data -= CRC_BYTES;
       uint32_t crc = crc32_ieee(CRC_SEED, store_tgt, read_data);
       uint32_t scrc = *((uint32_t*) (store_tgt + read_data));
+      tstate->crcsumchk += scrc; // track our global crc, for reference
       if ( crc != scrc ) {
          LOG( LOG_ERR, "Calculated CRC of data (%zu) does not match stored CRC: %zu\n", crc, scrc );
          gstate->data_error = 1;
@@ -357,7 +372,7 @@ int read_produce( void** state, void** work_tofill ) {
       // note how much REAL data (no CRC) we've stored to the ioblock
       ioblock_update_fill( tstate->iob, read_data, data_err );
       // note our increased offset within the data (MUST include the CRC!)
-      gstate->offset += (read_data + CRC_BYTES);
+      tstate->offset += (read_data + CRC_BYTES);
    }
 
    // populate our workpackage with the filled ioblock
@@ -422,6 +437,10 @@ int read_resume( void** state, void** prev_work ) {
       // NULL out our IOBlock reference, causing us to immediately generate another
       *prev_work = NULL;
    }
+   // translate our new data offset to an offest in the block (including CRCs) at which we can actually issue I/O
+   unsigned int io_count = gstate->offset / (gstate->minfo.versz - CRC_BYTES); // integer truncation rounds down
+   tstate->offset = io_count * gstate->minfo.versz;
+   gstate->offset = io_count * (gstate->minfo.versz - CRC_BYTES); // indicate to the master what our actual offset is
    return 0;
 }
 

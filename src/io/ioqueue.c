@@ -236,6 +236,20 @@ int destroy_ioqueue( ioqueue* ioq ) {
 
 
 /**
+ * Calculates the maximum amount of data the queue can contain (useful for determining if seek is necessary)
+ * @param ioqueue* ioq : IOQueue for which to calculate the max data value
+ * @return size_t : Max data size value
+ */
+ssize_t ioqueue_maxdata( ioqueue* ioq ) {
+	if ( ioq == NULL ) {
+		LOG( LOG_ERR, "Received NULL ioqueue reference!\n" );
+		return -1;
+	}
+	return ( ioq->qdepth * ioq->split_threshold );
+}
+
+
+/**
  * Determines if a new ioblock is necessary to store additional data and, if so, reserves it.  Also, as ioblocks are filled, 
  * populates the 'push_block' reference with the ioblock that should be passed for read/write use.
  * @param ioblock** cur_block : Reference to be popluated with an updated ioblock (usable if return value == 0)
@@ -357,6 +371,18 @@ void ioblock_update_fill( ioblock* block, size_t bytes, char bad_data ) {
    if ( bad_data ) {
       block->error_end = block->data_size;
    }
+}
+
+
+/**
+ * Overwrites data size and error offset information for a given ioblock
+ * @param ioblock* block : Reference to the ioblock to update
+ * @param size_t bytes : Data size for this ioblock
+ * @param off_t error_end : Offset of the final data error for this block
+ */
+void ioblock_overwrite_fill( ioblock* block, size_t bytes, off_t error_end ) {
+   block->data_size = bytes;
+   block->error_end = error_end;
 }
 
 

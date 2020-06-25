@@ -72,6 +72,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define SUPER_BLOCK_CNT 2
 #define CRC_BYTES 4 // DO NOT decrease without adjusting CRC gen and block creation code!
 #define CRC_SEED 57
+#define MINFO_VER 1
 
 
 // forward declaration of DAL references (anything actually using this file will need to include "dal.h" as well!)
@@ -118,6 +119,23 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo );
 int dal_set_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo );
 
 
+/*
+ * Duplicates info from one meta_info struct to another
+ * @param meta_info* target : Target struct reference
+ * @param meta_info* source : Source struct reference
+ */
+void cpy_minfo( meta_info* target, meta_info* source );
+
+
+/**
+ * Compares the values of two meta_info structs (excluding CRCSUM!)
+ * @param meta_info* minfo1 : First struct reference
+ * @param meta_info* minfo2 : Second struct reference
+ * @return int : A zero value if the structures match, non-zero otherwise
+ */
+int cmp_minfo( meta_info* minfo1, meta_info* minfo2 );
+
+
 /* ------------------------------   IO QUEUE   ------------------------------ */
 
 
@@ -162,6 +180,13 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode );
  * @return int : Zero on success and a negative value if an error occurred
  */
 int destroy_ioqueue( ioqueue* ioq );
+
+/**
+ * Calculates the maximum amount of data the queue can contain (useful for determining if seek is necessary)
+ * @param ioqueue* ioq : IOQueue for which to calculate the max data value
+ * @return size_t : Max data size value
+ */
+ssize_t ioqueue_maxdata( ioqueue* ioq );
 
 /**
  * Determines if a new ioblock is necessary to store additional data and, if so, reserves it.  Also, as ioblocks are filled, 
@@ -228,7 +253,7 @@ int release_ioblock( ioqueue* ioq );
 typedef struct global_state_struct {
    char*        objID;
    DAL_location location;
-   DAL_MODE     dmode;
+   DAL_mode     dmode;
    DAL          dal; 
    off_t        offset;
    meta_info    minfo;
@@ -241,8 +266,10 @@ typedef struct global_state_struct {
 // Write thread internal state struct
 typedef struct thread_state_struct {
    gthread_state* gstate;
+   off_t        offset;
    BLOCK_CTXT   handle;
    ioblock*     iob;
+   uint64_t     crcsumchk;
 } thread_state;
 
 

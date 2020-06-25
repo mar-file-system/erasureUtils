@@ -134,8 +134,8 @@ underlying skt_etc() functions.
 // Estimate the space required for a meta_info string representation
 size_t get_minfo_strlen( ) {
    // Note: Binary 3bits == max value of 7, so decimal representation requires at most 1byte per 3bits of the struct 
-   //       plus an additional 8bytes for whitespace and the terminating null character.
-   return ( ( sizeof( struct meta_info_struct ) * 8 ) / 3 ) + 8;
+   //       plus an additional 13bytes for version tag, whitespace, and the terminating null character.
+   return ( ( sizeof( struct meta_info_struct ) * 8 ) / 3 ) + 13;
 }
 
 
@@ -190,17 +190,47 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
    char metatotsize[20]; /* char array to get object totsz from the meta string */
 
    LOG( LOG_INFO, "Parsing meta string: %s", str );
+
+   // check the version number
+   int vertag = 0; // assume no version tag
+   char* parse = str;
+   if ( *parse = 'v' ) {
+      // now that we know this is tagged, assume it's our current structure until proven otherwise
+      vertag = MINFO_VER;
+      // read in the version tag value, if possible
+      if ( sscanf( parse, "v%d ", vertag ) ) {
+         parse++;
+         while( *parse != ' ' ) {
+            parse++;
+         }
+         parse++; // string ref should now be beyond the ver tag and whitespace
+      }
+   }
    
-   // only process the meta string if we successfully retreived it
-   int ret = sscanf(str,"%4s %4s %4s %19s %19s %19s %19s %19s",
-                        metaN,
-                        metaE,
-                        metaO,
-                        metapartsz,
-                        metaversz,
-                        metablocksz,
-                        metacrcsum,
-                        metatotsize);
+   if ( vertag ) {
+      // only process the meta string if we successfully retreived it
+      int ret = sscanf(parse,"%4s %4s %4s %19s %19s %19s %19s %19s",
+                           metaN,
+                           metaE,
+                           metaO,
+                           metapartsz,
+                           metaversz,
+                           metablocksz,
+                           metacrcsum,
+                           metatotsize);
+   else {
+      // only process the meta string if we successfully retreived it
+      int ret = sscanf(parse,"%4s %4s %4s %19s %*19s %19s %19s %19s",
+                           metaN,
+                           metaE,
+                           metaO,
+                           metapartsz,
+                           metablocksz,
+                           metacrcsum,
+                           metatotsize);
+      metaversz = strcpy( metaversz, metapartsz );
+   }
+
    free( str );
    if ( ret < 1 ) {
       LOG( LOG_ERR, "sscanf failed to parse any values from meta info!\n" );
@@ -274,6 +304,40 @@ int dal_set_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
 
    free( str );
 	return 0;
+}
+
+
+/**
+ * Duplicates info from one meta_info struct to another (excluding CRCSUM!)
+ * @param meta_info* target : Target struct reference
+ * @param meta_info* source : Source struct reference
+ */
+void cpy_minfo( meta_info* target, meta_info* source ) {
+   target->N = source->N;
+   target->E = source->E;
+   target->O = source->O;
+   target->partsz = source->partsz;
+   target->versz = source->versz;
+   target->blocksz = source->blocksz;
+   target->totsz = source->totsz;
+}
+
+
+/**
+ * Compares the values of two meta_info structs (excluding CRCSUM!)
+ * @param meta_info* minfo1 : First struct reference
+ * @param meta_info* minfo2 : Second struct reference
+ * @return int : A zero value if the structures match, non-zero otherwise
+ */
+int cmp_minfo( meta_info* minfo1, meta_info* minfo2 ) {
+   if ( minfo1.N != minfo2.N ) { return -1; }
+   if ( minfo1.E != minfo2.E ) { return -1; }
+   if ( minfo1.O != minfo2.O ) { return -1; }
+   if ( minfo1.partsz != minfo2.partsz ) { return -1; }
+   if ( minfo1.versz != minfo2.versz ) { return -1; }
+   if ( minfo1.blocksz != minfo2.blocksz ) { return -1; }
+   if ( minfo1.totsz != minfo2.totsz ) { return -1; }
+   return 0;
 }
 
 

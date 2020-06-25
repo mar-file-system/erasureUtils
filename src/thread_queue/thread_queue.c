@@ -815,8 +815,9 @@ int tq_enqueue( ThreadQueue tq, TQ_Control_Flags ignore_flags, void* workbuff ) 
  * @param TQ_Control_Flags ignore_flags : Indicates which queue states should be bypassed during this operation
  *                                        (By default, only a TQ_FINISHED state will not result in a failure)
  * @param void** workbuff : Reference to be populated with the work element pointer
- * @return int : The depth of the queue (including the retrieved element) on success and 
- *               -1 on failure (such as, if the queue is HALTED or ABORTED)
+ * @return int : The depth of the queue (including the retrieved element) on success,
+ *               Zero if the queue is both empty and has ANY control flags set (deadlock protection),
+ *               and -1 on failure (such as, if the queue is HALTED or ABORTED, and those flags were not ignored)
  */
 int tq_dequeue( ThreadQueue tq, TQ_Control_Flags ignore_flags, void** workbuff ) {
    if ( pthread_mutex_lock( &tq->qlock ) ) { return -1; }
@@ -875,6 +876,18 @@ int tq_dequeue( ThreadQueue tq, TQ_Control_Flags ignore_flags, void** workbuff )
    return depth;
 }
 
+
+/**
+ * Determine the current depth (number of enqueued elements) of the given ThreadQueue
+ * @param ThreadQueue tq : ThreadQueue for which to determine depth
+ * @return int : Current depth of the ThreadQueue, or -1 on a failure
+ */
+int tq_depth( ThreadQueue tq ) {
+   if ( pthread_mutex_lock( &tq->qlock ) ) { return -1; }
+   int depth = tq->qdepth;
+   pthread_mutex_unlock( &tq->qlock );
+   return depth;
+}
 
 
 /**

@@ -357,6 +357,27 @@ int posix_del (  DAL_CTXT ctxt, DAL_location location, const char* objID ) {
 
 
 
+int posix_stat ( DAL_CTXT ctxt, DAL_location location, const char* objID ) {
+   POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT) ctxt; // should have been passed a posix context
+
+   // allocate space for a new BLOCK context
+   POSIX_BLOCK_CTXT bctxt = malloc( sizeof( struct posix_block_context_struct ) );
+   if ( bctxt == NULL ) { return -1; } // malloc will set errno
+
+   // popultate the full file path for this object
+   if ( expand_dir_template( dctxt, bctxt, location, objID ) != 0 ) { free( bctxt ); return -1; }
+
+   // perform a stat() call, and just check the return code
+   struct stat sstr;
+   int res = stat( bctxt->filepath, &sstr );
+
+   free( bctxt->filepath );
+   free( bctxt );
+   return res;
+}
+
+
+
 int posix_cleanup ( DAL dal ) {
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT) dal->ctxt; // should have been passed a posix context
 
@@ -388,6 +409,10 @@ BLOCK_CTXT posix_open ( DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, con
    if ( mode == DAL_READ ) {
       oflags = O_RDONLY;
    }
+   else if ( mode == DAL_METAREAD ) {
+      // we don't need to open a file descriptor, as we won't be touching data
+      bctxt->fd = -1;
+   }
    else {
       char* res = NULL;
       // append the proper suffix
@@ -406,16 +431,19 @@ BLOCK_CTXT posix_open ( DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, con
          return NULL;
       }
    }
-   // open the file and check for success
-   bctxt->fd = open( bctxt->filepath, oflags, S_IRWXU | S_IRWXG | S_IRWXO ); // mode arg should be harmlessly ignored if reading
-   if ( bctxt->fd < 0 ) {
-      LOG( LOG_ERR, "failed to open file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
-      free( bctxt->filepath );
-      free( bctxt );
-      return NULL;
+
+   if ( mode != DAL_METAREAD ) {
+      // open the file and check for success
+      bctxt->fd = open( bctxt->filepath, oflags, S_IRWXU | S_IRWXG | S_IRWXO ); // mode arg should be harmlessly ignored if reading
+      if ( bctxt->fd < 0 ) {
+         LOG( LOG_ERR, "failed to open file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
+         free( bctxt->filepath );
+         free( bctxt );
+         return NULL;
+      }
+      // remove any suffix in the simplest possible manner
+      *(bctxt->filepath + bctxt->filelen) = '\0';
    }
-   // remove any suffix in the simplest possible manner
-   *(bctxt->filepath + bctxt->filelen) = '\0';
    // finally, return a reference to our BLOCK context
    return bctxt;
 }
@@ -424,6 +452,12 @@ BLOCK_CTXT posix_open ( DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, con
 
 int posix_set_meta ( BLOCK_CTXT ctxt, const char* meta_buf, size_t size ) {
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT) ctxt; // should have been passed a posix context
+
+   // abort, unless we're writing
+   if ( bctxt->mode != DAL_WRITE ) {
+      LOG( LOG_ERR, "Can only perform set_meta ops on a DAL_WRITE block handle!\n" );
+      return -1;
+   }
 
    // append the meta suffix and check for success
    char* res = strncat( bctxt->filepath + bctxt->filelen, META_SFX, SFX_PADDING );

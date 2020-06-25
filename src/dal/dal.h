@@ -89,7 +89,8 @@ typedef struct DAL_location_struct {
 typedef enum DAL_MODE_enum {
    DAL_READ = 0,
    DAL_WRITE = 1,
-   DAL_REBUILD = 2
+   DAL_REBUILD = 2,
+   DAL_METAREAD = 4
 } DAL_MODE;
 
 
@@ -127,6 +128,11 @@ typedef struct DAL_struct {
       // Description:
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
+   int (*stat) ( DAL_CTXT ctxt, DAL_location location, const char* objID );
+      // Description:
+      //  Simply check for object existance
+      // Retrun Values:
+      //  Zero on success, Non-zero if the object was not found
    int (*cleanup) ( struct DAL_struct* dal );
       // Description:
       // Return Values:
