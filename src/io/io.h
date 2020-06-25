@@ -68,6 +68,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 // THIS INTERFACE RELIES ON THE DAL INTERFACE!
 #include "dal/dal.h"
 #include <pthread.h>
+#include <stdint.h>
 
 #define SUPER_BLOCK_CNT 2
 #define CRC_BYTES 4 // DO NOT decrease without adjusting CRC gen and block creation code!
@@ -253,7 +254,7 @@ int release_ioblock( ioqueue* ioq );
 typedef struct global_state_struct {
    char*        objID;
    DAL_location location;
-   DAL_mode     dmode;
+   DAL_MODE     dmode;
    DAL          dal; 
    off_t        offset;
    meta_info    minfo;

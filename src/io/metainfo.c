@@ -198,7 +198,7 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
       // now that we know this is tagged, assume it's our current structure until proven otherwise
       vertag = MINFO_VER;
       // read in the version tag value, if possible
-      if ( sscanf( parse, "v%d ", vertag ) ) {
+      if ( sscanf( parse, "v%d ", &vertag ) ) {
          parse++;
          while( *parse != ' ' ) {
             parse++;
@@ -207,9 +207,10 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
       }
    }
    
+   int ret = 0;
    if ( vertag ) {
       // only process the meta string if we successfully retreived it
-      int ret = sscanf(parse,"%4s %4s %4s %19s %19s %19s %19s %19s",
+      ret = sscanf(parse,"%4s %4s %4s %19s %19s %19s %19s %19s",
                            metaN,
                            metaE,
                            metaO,
@@ -218,9 +219,10 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
                            metablocksz,
                            metacrcsum,
                            metatotsize);
+   }
    else {
       // only process the meta string if we successfully retreived it
-      int ret = sscanf(parse,"%4s %4s %4s %19s %*19s %19s %19s %19s",
+      ret = sscanf(parse,"%4s %4s %4s %19s %*19s %19s %19s %19s",
                            metaN,
                            metaE,
                            metaO,
@@ -228,7 +230,7 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
                            metablocksz,
                            metacrcsum,
                            metatotsize);
-      metaversz = strcpy( metaversz, metapartsz );
+      strncpy( metaversz, metapartsz, 20 );
    }
 
    free( str );
@@ -286,8 +288,8 @@ int dal_set_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
    }
 
 	// fill the string allocation with meta_info values
-   if ( snprintf(str,strmax,"%d %d %d %zu %zu %zu %llu %zu\n",
-                  minfo->N, minfo->E, minfo->O,
+   if ( snprintf(str,strmax,"v%d %d %d %d %zu %zu %zu %llu %zu\n",
+                  MINFO_VER, minfo->N, minfo->E, minfo->O,
                   minfo->partsz, minfo->versz,
                   minfo->blocksz, minfo->crcsum,
                   minfo->totsz) < 0 ) {
@@ -330,13 +332,13 @@ void cpy_minfo( meta_info* target, meta_info* source ) {
  * @return int : A zero value if the structures match, non-zero otherwise
  */
 int cmp_minfo( meta_info* minfo1, meta_info* minfo2 ) {
-   if ( minfo1.N != minfo2.N ) { return -1; }
-   if ( minfo1.E != minfo2.E ) { return -1; }
-   if ( minfo1.O != minfo2.O ) { return -1; }
-   if ( minfo1.partsz != minfo2.partsz ) { return -1; }
-   if ( minfo1.versz != minfo2.versz ) { return -1; }
-   if ( minfo1.blocksz != minfo2.blocksz ) { return -1; }
-   if ( minfo1.totsz != minfo2.totsz ) { return -1; }
+   if ( minfo1->N != minfo2->N ) { return -1; }
+   if ( minfo1->E != minfo2->E ) { return -1; }
+   if ( minfo1->O != minfo2->O ) { return -1; }
+   if ( minfo1->partsz != minfo2->partsz ) { return -1; }
+   if ( minfo1->versz != minfo2->versz ) { return -1; }
+   if ( minfo1->blocksz != minfo2->blocksz ) { return -1; }
+   if ( minfo1->totsz != minfo2->totsz ) { return -1; }
    return 0;
 }
 

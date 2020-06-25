@@ -83,7 +83,7 @@ IOT_LIBS = libiothreads.a
 check_PROGRAMS = test_ioqueue test_metainfo test_iothreads
 
 test_ioqueue_SOURCES = testing/test_ioqueue.c
-test_ioqueue_LDADD   = $(IOQ_LIBS)
+test_ioqueue_LDADD   = $(IOQ_LIBS) ../dal/libdal.a
 test_ioqueue_CFLAGS  = $(XML_CFLAGS)
 
 test_metainfo_SOURCES = testing/test_metainfo.c
