@@ -73,10 +73,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <stdint.h>
 #include <sys/types.h>
 #include <pthread.h>
-
-#define LOG_PREFIX "libne"
-#include "logging/logging.h"
-
 #include <libxml/tree.h>
 
 #ifndef LIBXML_TREE_ENABLED
@@ -153,7 +149,7 @@ typedef struct ne_state_struct {
 } ne_state;
 
 // location struct
-typdef struct ne_location_struct {
+typedef struct ne_location_struct {
    int pod;
    int cap;
    int scatter;
@@ -295,26 +291,25 @@ int ne_seed_status( ne_handle handle, ne_state* sref );
  * @return int : Zero if no stripe errors were found, a positive integer bitmask of any repaired 
  *               errors, or a negative value if an unrecoverable failure occurred
  */
-int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_status* sref );
+int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref );
 
 
 /**
  * Seek to a new offset on a read ne_handle
  * @param ne_handle handle : Handle on which to seek (must be open for read)
  * @param off_t offset : Offset to seek to
- * @return int : Zero on success and -1 on a failure
+ * @return off_t : The resulting handle offset or -1 on a failure
  */
-int ne_seek( ne_handle handle, off_t offset );
+off_t ne_seek( ne_handle handle, off_t offset );
 
 /**
  * Read from a given NE_RDONLY or NE_RDALL handle
  * @param ne_handle handle : The ne_handle reference to read from
- * @param off_t offset : Offset at which to read
  * @param void* buffer : Reference to a buffer to be filled with read data
  * @param size_t bytes : Number of bytes to be read
  * @return ssize_t : The number of bytes successfully read, or -1 on a failure
  */
-ssize_t ne_read( ne_handle handle, off_t offset, void* buffer, size_t nbytes );
+ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes );
 
 /**
  * Write to a given NE_WRONLY or NE_WRALL handle

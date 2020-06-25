@@ -110,6 +110,7 @@ underlying skt_etc() functions.
 #define USE_STDOUT 1
 #define LOG_PREFIX "ne_core"
 #include "logging/logging.h"
+#include "libne/ne.h"
 #include "io/io.h"
 #include "dal/dal.h"
 #include "thread_queue/thread_queue.h"
@@ -137,7 +138,7 @@ typedef struct ne_ctxt_struct {
    DAL dal;
 }* ne_ctxt;
 
-struct handle {
+typedef struct ne_handle_struct {
    /* Reference back to our global context */
    ne_ctxt ctxt;
 
@@ -159,7 +160,7 @@ struct handle {
    ssize_t   sub_offset;
 
    /* Threading fields */
-   thread_queue*  thread_queues;
+   ThreadQueue*   thread_queues;
    gthread_state* thread_states;
    unsigned int ethreads_running;
 
@@ -173,7 +174,7 @@ struct handle {
    unsigned char* g_tbls;
    unsigned char* decode_index;
 
-};
+}* ne_handle;
 
 static int gf_gen_decode_matrix_simple(unsigned char * encode_matrix,
                                        unsigned char * decode_matrix,
@@ -219,36 +220,36 @@ ne_handle allocate_handle( ne_ctxt ctxt, const char* objID, ne_location loc, met
    }
 
    // set erasure struct info
-   handle->epat->N = consensus.N;
-   handle->epat->E = consensus.E;
-   handle->epat->O = consensus.O;
-   handle->epat->partsz = consensus.partsz;
-   handle->epat->crcs = 0;
-   if ( consensus.versz > 0 ) { handle->epat->crcs = 1; }
+   handle->epat.N = consensus->N;
+   handle->epat.E = consensus->E;
+   handle->epat.O = consensus->O;
+   handle->epat.partsz = consensus->partsz;
+//   handle->epat.crcs = 0;
+//   if ( consensus->versz > 0 ) { handle->epat.crcs = 1; }
 
    // set data info values
-   handle->versz = consensus.versz;
-   handle->blocksz = consensus.blocksz;
-   handle->totsz = consensus.totsz;
+   handle->versz = consensus->versz;
+   handle->blocksz = consensus->blocksz;
+   handle->totsz = consensus->totsz;
 
    // set some additional handle info
    handle->ctxt = ctxt;
-   handle->objID = strcpy( objID );
+   handle->objID = strdup( objID );
    handle->loc.pod = loc.pod;
    handle->loc.cap = loc.cap;
    handle->loc.scatter = loc.scatter;
    handle->iob_offset = -1; // mark for initialization
 
    // allocate context elements
-   int num_blocks = consensus.N + consensus.E;
-//   handle->state.meta_status = calloc( num_blocks, sizeof(char) );
-//   if ( handle->state.meta_status == NULL ) {
+   int num_blocks = consensus->N + consensus->E;
+//   handle->meta_status = calloc( num_blocks, sizeof(char) );
+//   if ( handle->meta_status == NULL ) {
 //      LOG( LOG_ERR, "Failed to allocate space for a meta_status array!\n" );
 //      free( handle );
 //      return NULL;
 //   }
-//   handle->state.data_status = calloc( num_blocks, sizeof(char) );
-//   if ( handle->state.data_status == NULL ) {
+//   handle->data_status = calloc( num_blocks, sizeof(char) );
+//   if ( handle->data_status == NULL ) {
 //      LOG( LOG_ERR, "Failed to allocate space for a data_status array!\n" );
 //      free( handle.state.meta_status );
 //      free( handle );
@@ -261,7 +262,7 @@ ne_handle allocate_handle( ne_ctxt ctxt, const char* objID, ne_location loc, met
       free( handle );
       return NULL;
    }
-   handle->thread_queues = calloc( num_blocks, sizeof( thread_queue ) );
+   handle->thread_queues = calloc( num_blocks, sizeof( ThreadQueue ) );
    if ( handle->thread_queues == NULL ) {
       LOG( LOG_ERR, "Failed to allocate space for thread_queues!\n" );
       free( handle->iob );
@@ -300,7 +301,7 @@ ne_handle allocate_handle( ne_ctxt ctxt, const char* objID, ne_location loc, met
       return NULL;
    }
    /* allocate matrices */
-   handle->encode_matrix = calloc( num_blocks * consensus.N, sizeof(char) );
+   handle->encode_matrix = calloc( num_blocks * consensus->N, sizeof(char) );
    if ( handle->encode_matrix == NULL ) {
       LOG( LOG_ERR, "Failed to allocate space for an encode_matrix!\n" );
       free( handle->decode_index );
@@ -312,7 +313,7 @@ ne_handle allocate_handle( ne_ctxt ctxt, const char* objID, ne_location loc, met
       free( handle );
       return NULL;
    }
-   handle->decode_matrix = calloc( num_blocks * consensus.N, sizeof(char) );
+   handle->decode_matrix = calloc( num_blocks * consensus->N, sizeof(char) );
    if ( handle->decode_matrix == NULL ) {
       LOG( LOG_ERR, "Failed to allocate space for a decode_matrix!\n" );
       free( handle->encode_matrix );
@@ -325,7 +326,7 @@ ne_handle allocate_handle( ne_ctxt ctxt, const char* objID, ne_location loc, met
       free( handle );
       return NULL;
    }
-   handle->invert_matrix = calloc( num_blocks * consensus.N, sizeof(char) );
+   handle->invert_matrix = calloc( num_blocks * consensus->N, sizeof(char) );
    if ( handle->invert_matrix == NULL ) {
       LOG( LOG_ERR, "Failed to allocate space for an invert_matrix!\n" );
       free( handle->decode_matrix );
@@ -339,7 +340,7 @@ ne_handle allocate_handle( ne_ctxt ctxt, const char* objID, ne_location loc, met
       free( handle );
       return NULL;
    }
-   handle->g_tbls = calloc( consensus.N * consensus.E * 32, sizeof(char) );
+   handle->g_tbls = calloc( consensus->N * consensus->E * 32, sizeof(char) );
    if ( handle->g_tbls == NULL ) {
       LOG( LOG_ERR, "Failed to allocate space for g_tbls!\n" );
       free( handle->invert_matrix );
@@ -359,27 +360,27 @@ ne_handle allocate_handle( ne_ctxt ctxt, const char* objID, ne_location loc, met
    for ( i = 0; i < num_blocks; i++ ) {
       // assign values to thread states
       // object attributes
-      handle->thread_states[i].objID = objID;
+      handle->thread_states[i].objID = handle->objID;
       handle->thread_states[i].location.pod = loc.pod;
-      handle->thread_states[i].location.block = (i + consensus.O) % num_blocks;
+      handle->thread_states[i].location.block = (i + consensus->O) % num_blocks;
       handle->thread_states[i].location.cap = loc.cap;
       handle->thread_states[i].location.scatter = loc.scatter;
       handle->thread_states[i].dal = ctxt->dal;
       handle->thread_states[i].offset = 0;
       // meta info values
-      handle->thread_states[i].minfo.N = consensus.N;
-      handle->thread_states[i].minfo.E = consensus.E;
-      handle->thread_states[i].minfo.O = consensus.O;
-      handle->thread_states[i].minfo.partsz = consensus.partsz;
-      handle->thread_states[i].minfo.versz = consensus.versz;
-      handle->thread_states[i].minfo.blocksz = consensus.blocksz;
+      handle->thread_states[i].minfo.N = consensus->N;
+      handle->thread_states[i].minfo.E = consensus->E;
+      handle->thread_states[i].minfo.O = consensus->O;
+      handle->thread_states[i].minfo.partsz = consensus->partsz;
+      handle->thread_states[i].minfo.versz = consensus->versz;
+      handle->thread_states[i].minfo.blocksz = consensus->blocksz;
       handle->thread_states[i].minfo.crcsum = 0;
-      handle->thread_states[i].minfo.totsz = consensus.totsz;
+      handle->thread_states[i].minfo.totsz = consensus->totsz;
       handle->thread_states[i].meta_error = 0;
       handle->thread_states[i].data_error = 0;
-//      size_t iosz = consensus.versz;
+//      size_t iosz = consensus->versz;
 //      if ( iosz <= 0 ) { iosz = handle->dal->io_size; }
-//      handle->thread_states[i].ioq = create_ioqueue( iosz, consensus.partsz, mode );
+//      handle->thread_states[i].ioq = create_ioqueue( iosz, consensus->partsz, mode );
 //      if ( handle->thread_states[i].ioq == NULL ) {
 //         LOG( LOG_ERR, "Failed to create an ioqueue for block %d!\n", i );
 //         for ( i -= 1; i >= 0; i-- ) {
@@ -617,7 +618,7 @@ int read_stripes( ne_handle handle ) {
          handle->ethreads_running++;
       }
       // retrieve a new ioblock from this thread
-      if ( tq_dequeue( handle->thread_queues[cur_block], TQ_NONE, &(handle->iob[cur_block]) ) < 0 ) {
+      if ( tq_dequeue( handle->thread_queues[cur_block], TQ_NONE, (void**)&(handle->iob[cur_block]) ) < 0 ) {
          LOG( LOG_ERR, "Failed to retrieve new buffer for block %d!\n", cur_block );
          errno=EBADF;
          return -1;
@@ -627,14 +628,14 @@ int read_stripes( ne_handle handle ) {
       if ( cur_iob->error_end > 0 ) { nstripe_errors++; }
       // make sure our stripecnt is logical
       if ( stripecnt ) {
-         if ( (cur_iob->datasz / partsz) != stripecnt ) {
+         if ( (cur_iob->data_size / partsz) != stripecnt ) {
             LOG( LOG_ERR, "Detected a ioblock of size %zd from block %d which conflicts with stripe count of %d!\n", 
-                           cur_iob->datasz, cur_block, stripecnt );
+                           cur_iob->data_size, cur_block, stripecnt );
             errno=EBADF;
             return -1;
          }
       }
-      else { stripecnt = ( cur_iob->datasz / partsz ); } // or set it, if we haven't yet
+      else { stripecnt = ( cur_iob->data_size / partsz ); } // or set it, if we haven't yet
    }
 
    int block_cnt = cur_block;
@@ -813,15 +814,15 @@ int read_stripes( ne_handle handle ) {
  */
 ne_ctxt ne_path_init ( const char* path, ne_location max_loc, int max_block ) {
    // create a stand-in XML config
-   char* configtemplate = "<DAL type=\"posix\"><dir_template>%s</dir_template></DAL>"
+   char* configtemplate = "<DAL type=\"posix\"><dir_template>%s</dir_template></DAL>";
    int len = strlen( path ) + strlen( configtemplate );
-   char* xml-config = malloc( len );
-   if ( xml-config == NULL ) {
+   char* xmlconfig = malloc( len );
+   if ( xmlconfig == NULL ) {
       LOG( LOG_ERR, "failed to allocate memory for the stand-in xml config!\n" );
       return NULL;
    }
-   if ( ( len = snprintf( xml-config, len, configtemplate, path ) ) < 0 ) {
-      free( xml-config );
+   if ( ( len = snprintf( xmlconfig, len, configtemplate, path ) ) < 0 ) {
+      free( xmlconfig );
       return NULL;
    }
    xmlDoc *config = NULL;
@@ -831,19 +832,19 @@ ne_ctxt ne_path_init ( const char* path, ne_location max_loc, int max_block ) {
    LIBXML_TEST_VERSION
 
    /* parse the stand-in XML config */
-   doc = xmlReadMemory( xml-config, len + 1, "noname.xml", NULL, XML_PARSE_NOBLANKS );
-   if ( doc == NULL ) {
-      free( xml-config );
+   config = xmlReadMemory( xmlconfig, len + 1, "noname.xml", NULL, XML_PARSE_NOBLANKS );
+   if ( config == NULL ) {
+      free( xmlconfig );
       return NULL;
    }
-   root_elem = xmlDocGetRootElement( doc );
-   free( xml-config ); // done with the stand-in xml config
+   root_elem = xmlDocGetRootElement( config );
+   free( xmlconfig ); // done with the stand-in xml config
 
    // Initialize a posix dal instance
    DAL_location maxloc = { .pod = 1, .block = 1, .cap = 1, .scatter = 1 };
    DAL dal = init_dal( root_elem, maxloc );
    // free the xmlDoc and any parser global vars
-   xmlFreeDoc( doc );
+   xmlFreeDoc( config );
    xmlCleanupParser();
    // verify that dal initialization was successful
    if ( dal == NULL ) {
@@ -956,19 +957,25 @@ ne_handle ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc ) {
 
    // allocate space for a full set of meta_info structs
    meta_info consensus;
-   meta_info* minfo_list = calloc( ctxt->max_blocks, sizeof( meta_info_struct ) );
+   meta_info* minfo_list = calloc( ctxt->max_block, sizeof( struct meta_info_struct ) );
    if ( minfo_list == NULL ) {
       LOG( LOG_ERR, "Failed to allocate space for a meta_info_struct list!\n" );
+      return NULL;
+   }
+   meta_info** minfo_refs = calloc( ctxt->max_block, sizeof( meta_info* ) );
+   if ( minfo_refs == NULL ) {
+      LOG( LOG_ERR, "Failed to allocate space for a meta_info refs list!\n" );
+      free( minfo_list );
       return NULL;
    }
 
    // loop through all blocks, getting meta_info for each
    int curblock = 0;
+   int valid_meta = 0;
    int maxblock = ctxt->max_block;
    for( ; curblock < maxblock; curblock++ ) {
    
       DAL_location dloc = { .pod = loc.pod, .block = curblock, .cap = loc.cap, .scatter = loc.scatter };
-      char got_meta = 0;
 
       // first, we need to get a block reference
       BLOCK_CTXT dblock = ctxt->dal->open( ctxt->dal->ctxt, DAL_METAREAD, dloc, objID );
@@ -978,12 +985,15 @@ ne_handle ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc ) {
       }
       else {
          // attempt to retrive meta info
-         if ( dal_get_minfo( ctxt->dal, dblock, &minfo ) ) {
+         if ( dal_get_minfo( ctxt->dal, dblock, &(minfo_list[curblock]) ) ) {
             tmp_meta_errs[curblock] = 1;
          }
          else {
+            // set a reference to the retrieved meta info
+            minfo_refs[valid_meta] = &(minfo_list[curblock]);
+            valid_meta++;
             // get new consensus values, including this info
-            int match_count = check_matches( minfo_list, curblock + 1, ctxt->max_blocks, &consensus );
+            int match_count = check_matches( minfo_refs, valid_meta, ctxt->max_block, &consensus );
             // if we have sufficient agreement, update our maxblock value and save us some time
             if ( match_count > MIN_MD_CONSENSUS ) {
                maxblock = consensus.N + consensus.E;
@@ -1001,6 +1011,7 @@ ne_handle ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc ) {
    // create a handle structure
    ne_handle handle = allocate_handle( ctxt, objID, loc, &consensus );
    if ( handle == NULL ) {
+      free( minfo_refs );
       free( minfo_list );
       return NULL;
    }
@@ -1033,7 +1044,7 @@ ne_handle ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc ) {
    if ( retval ) {
       for ( i = 0; i < curblock; i++ ) {
          if ( handle->thread_states[i].meta_error == 0 ) { 
-            handle->thread_states[i].minfo.csum = minfo_list[ (i+consensus.O) % (consensus.N+consensus.E) ].csum;
+            handle->thread_states[i].minfo.crcsum = minfo_list[ (i+consensus.O) % (consensus.N+consensus.E) ].crcsum;
          }
       }
    }
@@ -1083,7 +1094,7 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
    tqopts.max_qdepth = QDEPTH;
    tqopts.num_threads = 1;
    tqopts.num_prod_threads = ( mode == NE_WRONLY || mode == NE_WRALL ) ? 0 : 1;
-   DAL_mode dmode = DAL_READ;
+   DAL_MODE dmode = DAL_READ;
    if ( mode == NE_WRONLY || mode == NE_WRALL ) {
       dmode = DAL_WRITE;
       tqopts.thread_init_func = write_init;
@@ -1095,8 +1106,8 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
    }
    else {
       tqopts.thread_init_func = read_init;
-      tqopts.thread_consumer_func = read_consume;
-      tqopts.thread_producer_func = NULL;
+      tqopts.thread_consumer_func = NULL;
+      tqopts.thread_producer_func = read_produce;
       tqopts.thread_pause_func = read_pause;
       tqopts.thread_resume_func = read_resume;
       tqopts.thread_term_func = read_term;
@@ -1104,7 +1115,7 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
    // finally, startup the threads
    int i;
    for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
-      handle->thread_states.dmode = dmode;
+      handle->thread_states[i].dmode = dmode;
       tqopts.global_state = &(handle->thread_states[i]);
       handle->thread_queues[i] = tq_init( &tqopts );
       if ( handle->thread_queues[i] == NULL ) {
@@ -1136,14 +1147,18 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
          return NULL;
       }
 
+      int meta_count = 0;
       for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
-         // set references for every thread struct
-         minforefs[i] = &(handle->thread_states[i].minfo);
+         // set references for every thread struct with no meta errors
+         if ( handle->thread_states[i].meta_error == 0 ) {
+            minforefs[meta_count] = &(handle->thread_states[i].minfo);
+            meta_count++;
+         }
       }
 
       // get consensus values across all threads
       meta_info consensus;
-      int match_count = check_matches( minfo_list, curblock + 1, ctxt->max_blocks, &consensus );
+      int match_count = check_matches( minforefs, meta_count, handle->epat.N + handle->epat.E, &consensus );
       free( minforefs ); // now unneeded
       if ( consensus.N != handle->epat.N  ||  consensus.E != handle->epat.E  ||  
             consensus.O != handle->epat.O  ||  consensus.partsz != handle->epat.partsz ) {
@@ -1161,8 +1176,8 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
       // confirm and correct meta info values
       for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
          if ( cmp_minfo( &(handle->thread_states[i].minfo), &(consensus) ) ) {
-            LOG( LOG_WARN, "Meta values of thread %d do not match consensus!\n" );
-            handle->thread_states[i].meta_err = 1;
+            LOG( LOG_WARNING, "Meta values of thread %d do not match consensus!\n" );
+            handle->thread_states[i].meta_error = 1;
             cpy_minfo( &(handle->thread_states[i].minfo), &(consensus) );
          } 
       }
@@ -1176,8 +1191,8 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
    // unpause threads
    for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
       // determine our iosize
-      size_t iosz = ctxt->dal->io_size; // need to know our iosz
-      if ( handle->state.versz ) { iosz = handle->state.versz; } // if we already have a versz, use that instead
+      size_t iosz = handle->ctxt->dal->io_size; // need to know our iosz
+      if ( handle->versz ) { iosz = handle->versz; } // if we already have a versz, use that instead
 
       // initialize ioqueues
       handle->thread_states[i].ioq = create_ioqueue( iosz, handle->epat.partsz, dmode );
@@ -1187,7 +1202,7 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
       }
       // remove the PAUSE flag, allowing thread to begin processing
       if ( i < handle->epat.N + handle->ethreads_running ) {
-         if( tq_unset_flags( handle->thread_queues[i], TQ_PAUSE ) ) {
+         if( tq_unset_flags( handle->thread_queues[i], TQ_HALT ) ) {
             LOG( LOG_ERR, "Failed to unset PAUSE flag for block %d\n", i );
             break;
          }
@@ -1312,7 +1327,7 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
    for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
       // make sure to release any remaining ioblocks
       if ( handle->iob[i] ) {
-         if ( handle->iob[i]->datasz  &&  ( handle->mode == NE_WRONLY  ||  handle->mode == NE_WRALL ) ) {
+         if ( handle->iob[i]->data_size  &&  ( handle->mode == NE_WRONLY  ||  handle->mode == NE_WRALL ) ) {
             // if data remains, push it now
             if ( tq_enqueue( handle->thread_queues[i], TQ_NONE, (void*)(handle->iob[i]) ) ) {
                LOG( LOG_ERR, "Failed to enqueue final ioblock to thread_queue %d!\n", i );
@@ -1343,11 +1358,11 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
    // populate in info structs
    if ( ne_get_info( handle, epat, sref ) < 0 ) { ret_val = -1; }
 
-   if ( handle->mode == NE_WRITE  ||  handle->mode == NE_REBUILD ) {
+   int numerrs = 0; // for checking write safety
+   if ( handle->mode == NE_WRONLY  ||  handle->mode == NE_WRALL  ||  handle->mode == NE_REBUILD ) {
       // check the status of all blocks
-      int numerrs = 0; // for checking write safety
       for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
-         if ( handle->thread_states[i].meta_err  ||  handle->thread_states[i].data_err ) { 
+         if ( handle->thread_states[i].meta_error  ||  handle->thread_states[i].data_error ) { 
             numerrs++;
          }
       }
@@ -1402,21 +1417,21 @@ int ne_get_info( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
       if ( sref->meta_status ) {
          int i;
          for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
-            if ( handle->thread_states[i].meta_err ) { sref->meta_status[i] = 1; }
+            if ( handle->thread_states[i].meta_error ) { sref->meta_status[i] = 1; }
             else { sref->meta_status[i] = 0; }
          }
       }
       if ( sref->data_status ) {
          int i;
          for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
-            if ( handle->thread_states[i].data_err ) { sref->data_status[i] = 1; }
+            if ( handle->thread_states[i].data_error ) { sref->data_status[i] = 1; }
             else { sref->data_status[i] = 0; }
          }
       }
       if ( sref->csum ) {
          int i;
          for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
-            sref->csum[i] = handle->thread_state[i].minfo.crcsum;
+            sref->csum[i] = handle->thread_states[i].minfo.crcsum;
          }
       }
    }
@@ -1453,15 +1468,15 @@ int ne_seed_status( ne_handle handle, ne_state* sref ) {
    if ( sref->meta_status ) {
       int i;
       for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
-         if ( sref->meta_status[i] ) { handle->thread_states[i].meta_err = 1; }
-         else { handle->thread_states[i].meta_err = 0; }
+         if ( sref->meta_status[i] ) { handle->thread_states[i].meta_error = 1; }
+         else { handle->thread_states[i].meta_error = 0; }
       }
    }
    if ( sref->data_status ) {
       int i;
       for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
-         if ( sref->data_status[i] ) { handle->thread_states[i].data_err = 1; }
-         else { handle->thread_states[i].data_err = 0; }
+         if ( sref->data_status[i] ) { handle->thread_states[i].data_error = 1; }
+         else { handle->thread_states[i].data_error = 0; }
       }
    }
    // ignore csum values!
@@ -1482,7 +1497,7 @@ int ne_seed_status( ne_handle handle, ne_state* sref ) {
  * @return int : Zero if no stripe errors were found, a positive integer bitmask of any repaired 
  *               errors, or a negative value if an unrecoverable failure occurred
  */
-int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_status* sref ) {
+int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
    // TODO
    return -1;
 }
@@ -1522,7 +1537,7 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
 
    unsigned int cur_stripe = (unsigned int)( handle->iob_offset / partsz ); // I think int truncation actually works out in our favor here
    unsigned int tgt_stripe = (unsigned int)( offset / stripesz );
-   ssize_t max_data = ioqueue_maxdata( handle->thread_states[0]->ioq );
+   ssize_t max_data = ioqueue_maxdata( handle->thread_states[0].ioq );
    if ( max_data < 0 ) { max_data = 0; } // if we hit an error, just assume no read-ahead
 
    // if the offset is behind us or so far in front that there is no chance of the work having already been done...
@@ -1553,7 +1568,7 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
          // empty all remaining queue elements
          int depth = tq_depth( handle->thread_queues[i] );
          while ( depth > 0 ) {
-            depth = tq_dequeue( handle->thread_queue[i], TQ_HALT, &(handle->iob[i]) );
+            depth = tq_dequeue( handle->thread_queues[i], TQ_HALT, (void**)&(handle->iob[i]) );
             if ( depth < 0 ) {
                LOG( LOG_ERR, "Failed to dequeue from HALTED thread_queue %d!\n", i );
                break;
@@ -1573,7 +1588,7 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
             break;
          }
          // retrieve a new ioblock
-         if ( tq_dequeue( handle->thread_queues[i], TQ_NONE, &(handle->iob[i]) ) < 0 ) {
+         if ( tq_dequeue( handle->thread_queues[i], TQ_NONE, (void**)&(handle->iob[i]) ) < 0 ) {
             LOG( LOG_ERR, "Failed to retrieve ioblock for block %d after seek!\n", i );
             break;
          }
@@ -1587,15 +1602,15 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
          // if this is our first block, remember this value and set ioblock data size
          if( new_iob_off < 0 ) {
             new_iob_off = real_iob_off;
-            handle->iob_datasz = handle->iob[i]->datasz;
+            handle->iob_datasz = handle->iob[i]->data_size;
          }
          else if ( new_iob_off != real_iob_off ) { //otherwise, further sanity check
             LOG( LOG_ERR, "Real offset of block %d (%zd) does not match previous value of %zd!\n", i, real_iob_off, new_iob_off );
             break;
          }
-         else if ( handle->iob[i]->datasz != handle->iob_datasz ) {
+         else if ( handle->iob[i]->data_size != handle->iob_datasz ) {
             LOG( LOG_ERR, "Data size of ioblock for position %d (%zd) does not match that of previous ioblocks (%zd)!\n", 
-                           handle->iob[i]->datasz, handle->iob_datasz );
+                           handle->iob[i]->data_size, handle->iob_datasz );
             break;
          }
       }
@@ -1624,7 +1639,7 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
          unsigned int thread_munched = 1;
          for ( ; thread_munched < munch_stripes; thread_munched++ ) {
 
-            if ( handle->sub_off >= handle->iob_datasz ) {
+            if ( handle->sub_offset >= handle->iob_datasz ) {
                if ( read_stripes( handle ) ) {
                   LOG( LOG_ERR, "Failed to read additional stripes!\n" );
                   return -1;
@@ -1632,12 +1647,12 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
             }
 
             // skip to the start of the next stripe
-            handle->sub_off += stripesz;
+            handle->sub_offset += stripesz;
 
          }
          LOG( LOG_INFO, "Finished buffer 'cunching'\n" );
       }
-      handle->sub_off += offset % stripesz;
+      handle->sub_offset += offset % stripesz;
    }
    LOG( LOG_INFO, "Post seek: IOBlock_Offset=%zd, Sub_Offset=%zd\n", handle->iob_offset, handle->sub_offset );
    return ( handle->iob_offset * N ) + handle->sub_offset; // should equal our target offset
@@ -1710,14 +1725,14 @@ ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes ) {
       for( ; cur_block < N; cur_block++ ) {
          ioblock* cur_iob = handle->iob[ cur_block ];
          // make sure the ioblock has sufficient data
-         if ( ( cur_iob->datasz - handle->iob_offset ) < partsz ) {
+         if ( ( cur_iob->data_size - handle->iob_offset ) < partsz ) {
             LOG( LOG_ERR, "Ioblock at position %d of stripe %d is subsized!\n", cur_block, cur_stripe + iob_stripe );
             return -1;
          }
          // make sure the ioblock has no errors in this stripe
          if ( cur_iob->error_end > ( cur_stripe * partsz ) ) {
-            LOG( LOG_ERR, "Ioblock at position %d of stripe %d has an error beyond requested stripe (err_end = %zu)!\n", 
-                          cur_block, cur_stripe + iob_stripe, cur_iob->err_end );
+            LOG( LOG_ERR, "Ioblock at position %d of stripe %d has an error beyond requested stripe (error_end = %zu)!\n", 
+                          cur_block, cur_stripe + iob_stripe, cur_iob->error_end );
             return -1;
          }
          // otherwise, copy this data off to our caller's buffer
@@ -1806,7 +1821,7 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
       ioblock* push_block = NULL;
       int reserved;
       // check that the current ioblock has room for our data
-      if ( (reserved = reserve_ioblock( &(handle->iob[outblock]), &(push_block), handle->thread_states[i].ioq )) == 0 ) {
+      if ( (reserved = reserve_ioblock( &(handle->iob[outblock]), &(push_block), handle->thread_states[outblock].ioq )) == 0 ) {
          // if this is a data part, we need to fill it now
          if ( outblock < N ) {
             // make sure we don't try to store more data than we were given
@@ -1815,16 +1830,11 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
                to_write = (bytes - written);
                complete_part = 0;
             }
-            void* tgt = ioblock_write_tgt( handle->iob[outblock] );
+            void* tgt = ioblock_write_target( handle->iob[outblock] );
             // copy caller data into our ioblock
             memcpy( tgt, buffer + written, to_write ); // no error check, SEGFAULT or nothing
             // update any data tracking values
-            if ( ioblock_update_fill( handle->iob[outblock], to_write, 0 ) ) {
-               LOG( LOG_ERR, "Failed to update data size of ioblock reference %d!\n", outblock );
-               errno = EBADF;
-               free( tgt_refs );
-               return -1;
-            }
+            ioblock_update_fill( handle->iob[outblock], to_write, 0 );
             written += to_write;
             handle->sub_offset += to_write;
             handle->totsz += to_write;
@@ -1833,12 +1843,7 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
          }
          else {
             // assume we will successfully generate erasure
-            if ( ioblock_update_fill( handle->iob[outblock], partsz, 0 ) ) {
-               LOG( LOG_ERR, "Failed to update data size of ioblock reference %d!\n", outblock );
-               errno = EBADF;
-               free( tgt_refs );
-               return -1;
-            }
+            ioblock_update_fill( handle->iob[outblock], partsz, 0 );
             outblock++;
          }
 
@@ -1851,7 +1856,7 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
                tgt_refs[outblock] = ioblock_write_target( handle->iob[outblock] ) - partsz;
             }
             // generate erasure parts
-            ec_encode_data(bsz, N, E, handle->g_tbls,
+            ec_encode_data(partsz, N, E, handle->g_tbls,
                            (unsigned char **)tgt_refs,
                            (unsigned char **)&(tgt_refs[N]));
          }
