@@ -238,7 +238,6 @@ ne_handle allocate_handle( ne_ctxt ctxt, const char* objID, ne_location loc, met
    handle->loc.pod = loc.pod;
    handle->loc.cap = loc.cap;
    handle->loc.scatter = loc.scatter;
-   handle->iob_offset = -1; // mark for initialization
 
    // allocate context elements
    int num_blocks = consensus->N + consensus->E;
@@ -395,6 +394,9 @@ ne_handle allocate_handle( ne_ctxt ctxt, const char* objID, ne_location loc, met
 //         return NULL;
 //      }
    }
+
+   // indicate that handle is ready for conversion
+   handle->mode = NE_STAT;
 
    return handle;
 }
@@ -711,7 +713,7 @@ int read_stripes( ne_handle handle ) {
 
             // Generate an encoding matrix
             LOG( LOG_INFO, "Initializing erasure structs...\n");
-            gf_gen_crs_matrix(handle->encode_matrix, N+E, N);
+            gf_gen_cauchy1_matrix(handle->encode_matrix, N+E, N);
 
             // Generate g_tbls from encode matrix
             ec_init_tables(N, E, &(handle->encode_matrix[N * N]), handle->g_tbls);
@@ -841,7 +843,7 @@ ne_ctxt ne_path_init ( const char* path, ne_location max_loc, int max_block ) {
    free( xmlconfig ); // done with the stand-in xml config
 
    // Initialize a posix dal instance
-   DAL_location maxloc = { .pod = 1, .block = 1, .cap = 1, .scatter = 1 };
+   DAL_location maxloc = { .pod = 0, .block = max_block, .cap = 0, .scatter = 0 };
    DAL dal = init_dal( root_elem, maxloc );
    // free the xmlDoc and any parser global vars
    xmlFreeDoc( config );
@@ -1071,24 +1073,26 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
    }
 
    // check that mode is appropriate
-   if ( handle->mode != 1 ) {
+   if ( handle->mode != NE_STAT ) {
       LOG( LOG_ERR, "Received ne_handle has inappropriate mode value!\n" );
       return NULL;
    }
 
-   // set our mode to the new value
-   handle->mode = mode;
-
    // we need to startup some threads
    TQ_Init_Opts tqopts;
+   char* lprefstr = malloc( sizeof(char) * ( 6 + ( handle->ctxt->max_block / 10 ) ) );
+   if ( lprefstr == NULL ) {
+      LOG( LOG_ERR, "Failed to allocate space for TQ log prefix string!\n" );
+      return NULL;
+   }
+   tqopts.log_prefix = lprefstr;
+   // create a format string for each thread queue
+   char* preffmt = "RQ%d";
    if ( mode == NE_REBUILD ) {
-      tqopts.log_prefix = "ReReadQueue";
+      preffmt = "RRQ%d";
    }
    else if ( mode == NE_WRONLY || mode == NE_WRALL ) {
-      tqopts.log_prefix = "WriteQueue";
-   }
-   else {
-      tqopts.log_prefix = "ReadQueue";
+      preffmt = "WQ%d";
    }
    tqopts.init_flags = TQ_HALT; // initialize the threads in a HALTED state (essential for reads, doesn't hurt writes)
    tqopts.max_qdepth = QDEPTH;
@@ -1117,6 +1121,8 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
    for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
       handle->thread_states[i].dmode = dmode;
       tqopts.global_state = &(handle->thread_states[i]);
+      // set a log_prefix value for this queue
+      sprintf( lprefstr, preffmt, i );
       handle->thread_queues[i] = tq_init( &tqopts );
       if ( handle->thread_queues[i] == NULL ) {
          LOG( LOG_ERR, "Failed to create thread_queue for block %d!\n", i );
@@ -1223,6 +1229,9 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
       return NULL;
    }
 
+   // set our mode to the new value
+   handle->mode = mode;
+
    return handle;
 }
 
@@ -1287,6 +1296,7 @@ ne_handle ne_open( ne_ctxt ctxt, const char* objID, ne_location loc, ne_erasure 
  * @return int : Zero on success, and -1 on a failure
  */
 int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
+   LOG( LOG_INFO, "Closing handle\n" );
    // check error conditions
    if ( !(handle) ) {
       LOG( LOG_ERR, "Received a NULL handle!\n" );
@@ -1308,16 +1318,19 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
       // output zero-fill to complete our current stripe
       size_t partstripe = handle->totsz % stripesz; 
       if ( partstripe ) {
-         void* zerobuff = calloc( 1, partstripe );
+         void* zerobuff = calloc( 1, (stripesz - partstripe) );
          if ( zerobuff == NULL ) {
             LOG( LOG_ERR, "Failed to allocate space for a zero buffer!\n" );
             return -1;
          }
+         LOG( LOG_INFO, "Writing %zu bytes of zero-fill to write handle\n", (stripesz - partstripe) );
          if ( ne_write( handle, zerobuff, stripesz - partstripe ) != (stripesz - partstripe) ) {
             LOG( LOG_ERR, "Failed to write zero-fill to handle!\n" );
             free( zerobuff );
             return -1;
          }
+         // correct our totsz value
+         handle->totsz -= (stripesz - partstripe);
          free( zerobuff );
       }
    }
@@ -1328,6 +1341,7 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
       // make sure to release any remaining ioblocks
       if ( handle->iob[i] ) {
          if ( handle->iob[i]->data_size  &&  ( handle->mode == NE_WRONLY  ||  handle->mode == NE_WRALL ) ) {
+            LOG( LOG_INFO, "Enqueueing final ioblock at position %d\n", i );
             // if data remains, push it now
             if ( tq_enqueue( handle->thread_queues[i], TQ_NONE, (void*)(handle->iob[i]) ) ) {
                LOG( LOG_ERR, "Failed to enqueue final ioblock to thread_queue %d!\n", i );
@@ -1335,6 +1349,7 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
             }
          }
          else {
+            LOG( LOG_INFO, "Releasing final ioblock at position %d\n", i );
             release_ioblock( handle->thread_states[i].ioq );
          }
          handle->iob[i] = NULL;
@@ -1350,13 +1365,17 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
 
    // verify thread termination and close all queues
    for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
+      LOG( LOG_INFO, "Terminating queue %d\n", i );
       tq_next_thread_status( handle->thread_queues[i], NULL );
       tq_close( handle->thread_queues[i] );
       destroy_ioqueue( handle->thread_states[i].ioq );
    }
 
-   // populate in info structs
-   if ( ne_get_info( handle, epat, sref ) < 0 ) { ret_val = -1; }
+   // populate any info structs
+   if ( ne_get_info( handle, epat, sref ) < 0 ) {
+      LOG( LOG_ERR, "Failed to populate info structs!\n" );
+      ret_val = -1;
+   }
 
    int numerrs = 0; // for checking write safety
    if ( handle->mode == NE_WRONLY  ||  handle->mode == NE_WRALL  ||  handle->mode == NE_REBUILD ) {
@@ -1368,13 +1387,17 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
       }
 
       // verify that our data meets safetly thresholds
-      if ( numerrs > 0  &&  numerrs > ( handle->epat.E - MIN_PROTECTION ) ) { ret_val = -1; }
+      if ( numerrs > 0  &&  numerrs > ( handle->epat.E - MIN_PROTECTION ) ) {
+         LOG( LOG_ERR, "Errors exceed safety threshold!\n" );
+         ret_val = -1;
+      }
    }
 
    free_handle( handle );
 
    // modify our return value to reflect any errors encountered
    if ( ret_val == 0 ) { ret_val = numerrs; }
+   LOG( LOG_INFO, "Close status = %d\n", ret_val );
 
    return ret_val;
 }
@@ -1785,16 +1808,16 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
    int E = handle->epat.E;
    size_t partsz = handle->epat.partsz;
    size_t stripesz = ( N * partsz );
-   off_t offset = handle->iob_offset + handle->sub_offset;
+   off_t offset = ( handle->iob_offset * N ) + handle->sub_offset;
    unsigned int stripenum = offset / stripesz;
 
 
    // initialize erasure structs (these never change for writes, so we can just check here)
    if ( handle->e_ready == 0 ) {
-      PRINTdbg( "ne_write: initializing erasure matricies...\n");
+      LOG( LOG_INFO, "Initializing erasure matricies...\n");
       // Generate an encoding matrix
       // NOTE: The matrix generated by gf_gen_rs_matrix is not always invertable for N>=6 and E>=5!
-      gf_gen_crs_matrix(handle->encode_matrix, N+E, N);
+      gf_gen_cauchy1_matrix(handle->encode_matrix, N+E, N);
       // Generate g_tbls from encode matrix
       ec_init_tables(N, E, &(handle->encode_matrix[N * N]), handle->g_tbls);
 
@@ -1811,8 +1834,9 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
    int outblock = ( offset % stripesz ) / partsz; //determine what block we're filling
    size_t to_write = partsz - ( offset % partsz ); //determine if we need to finish writing a data part
 
-   LOG( LOG_INFO, "Write of %zu bytes at offset %zu\n   Init write block = %d\n   Init write size = %zu\n",
-                  bytes, ( handle->iob_offset * N ) + handle->sub_offset, outblock, to_write );
+   LOG( LOG_INFO, "Write of %zu bytes at offset %zu\n", bytes, offset );
+   LOG( LOG_INFO, "   Init write block = %d\n", outblock );
+   LOG( LOG_INFO, "   Init write size = %zu\n", to_write );
 
    // write out data from the buffer until we have all of it
    // NOTE - the (outblock >= N) check is meant to ensure we don't quit before outputing erasure parts
@@ -1839,7 +1863,7 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
             handle->sub_offset += to_write;
             handle->totsz += to_write;
             // check if we have completed a part (always the case for erasure parts)
-            if ( complete_part ) { outblock++; }
+            if ( complete_part ) { outblock++; to_write = partsz; }
          }
          else {
             // assume we will successfully generate erasure
@@ -1853,12 +1877,15 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
             // build an array of data/erasure references while reseting outblock to zero
             for ( outblock -= 1; outblock >= 0; outblock-- ) {
                // previously written data will be one partsz behind
+               printf( "getting ref for ioblock %d\n", outblock );
                tgt_refs[outblock] = ioblock_write_target( handle->iob[outblock] ) - partsz;
             }
             // generate erasure parts
             ec_encode_data(partsz, N, E, handle->g_tbls,
                            (unsigned char **)tgt_refs,
                            (unsigned char **)&(tgt_refs[N]));
+            // reset outblock
+            outblock = 0;
          }
       }
       else if ( reserved > 0 ) {

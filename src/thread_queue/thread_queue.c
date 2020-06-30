@@ -70,8 +70,8 @@ OF SUCH DAMAGE.
 */
 
 // TMP DEBUG DEFS
-#define DEBUG 1
-#define USE_STDOUT 1
+//#define DEBUG 1
+//#define USE_STDOUT 1
 
 #define def_queue_pref "ThreadQueue"
 #define LOG_PREFIX "thread_queue"
@@ -904,7 +904,7 @@ int tq_set_flags( ThreadQueue tq, TQ_Control_Flags flags ) {
    }
    // set the requested flags
    tq->con_flags |= flags;
-   LOG( LOG_INFO, "%s master set flag values: %zd\n", tq->log_prefix, flags );
+   LOG( LOG_INFO, "%s master set flag values: %d\n", tq->log_prefix, (int)flags );
    // wake all threads
    pthread_cond_broadcast( &tq->producer_resume );
    pthread_cond_broadcast( &tq->consumer_resume );
@@ -1148,7 +1148,7 @@ int tq_close( ThreadQueue tq ) {
    pthread_mutex_unlock( &tq->qlock );
    // free everything and terminate
    tq_free_all(tq);
-   pthread_exit(NULL);
+   //pthread_exit(NULL);
 }
 
 
