@@ -620,7 +620,7 @@ int read_stripes( ne_handle handle ) {
          handle->ethreads_running++;
       }
       // retrieve a new ioblock from this thread
-      if ( tq_dequeue( handle->thread_queues[cur_block], TQ_NONE, (void**)&(handle->iob[cur_block]) ) < 0 ) {
+      if ( tq_dequeue( handle->thread_queues[cur_block], TQ_HALT, (void**)&(handle->iob[cur_block]) ) < 0 ) {
          LOG( LOG_ERR, "Failed to retrieve new buffer for block %d!\n", cur_block );
          errno=EBADF;
          return -1;
@@ -637,7 +637,7 @@ int read_stripes( ne_handle handle ) {
             return -1;
          }
       }
-      else { stripecnt = ( cur_iob->data_size / partsz ); } // or set it, if we haven't yet
+      else { stripecnt = ( cur_iob->data_size / partsz ); handle->iob_datasz = cur_iob->data_size; } // or set it, if we haven't yet
    }
 
    int block_cnt = cur_block;
@@ -1166,6 +1166,19 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
       meta_info consensus;
       int match_count = check_matches( minforefs, meta_count, handle->epat.N + handle->epat.E, &consensus );
       free( minforefs ); // now unneeded
+      LOG( LOG_INFO, "Got consensus values (N=%d,E=%d,O=%d,partsz=%zd,versz=%zd,blocksz=%zd,totsz=%zd)\n", 
+                     consensus.N, consensus.E, consensus.O, consensus.partsz, consensus.versz, consensus.blocksz, consensus.totsz );
+      if ( match_count <= 0 ) {
+         LOG( LOG_ERR, "Insufficient meta info consensus!\n" );
+         // might as well continue to use 'i'
+         for ( i -= 1; i >= 0; i-- ) {
+            tq_set_flags( handle->thread_queues[i], TQ_ABORT );
+            tq_next_thread_status( handle->thread_queues[i], NULL );
+            tq_close( handle->thread_queues[i] );
+         }
+         return NULL;
+      }
+      // check that our erasure pattern matches expected values
       if ( consensus.N != handle->epat.N  ||  consensus.E != handle->epat.E  ||  
             consensus.O != handle->epat.O  ||  consensus.partsz != handle->epat.partsz ) {
          LOG( LOG_ERR, "Read meta values ( N=%d, E=%d, O=%d, partsz=%zd ) disagree with handle values ( N=%d, E=%d, O=%d, partsz=%zd )!\n", 
@@ -1178,6 +1191,10 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
          }
          return NULL;
       }
+      // set handle constants based on consensus values
+      handle->versz = consensus.versz;
+      handle->blocksz = consensus.blocksz;
+      handle->totsz = consensus.totsz;
 
       // confirm and correct meta info values
       for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
@@ -1712,8 +1729,10 @@ ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes ) {
    size_t offset = ( handle->iob_offset * handle->epat.N ) + handle->sub_offset;
    LOG( LOG_INFO, "Called to retrieve %zu bytes at offset %zu\n", bytes, offset );
    if ( (offset + bytes) > handle->totsz ) {
-      if ( offset >= handle->totsz )
+      if ( offset >= handle->totsz ) {
+         LOG( LOG_WARNING, "Read is at EOF, returning 0\n" );
          return 0; //EOF
+      }
       bytes = handle->totsz - offset;
       LOG( LOG_WARNING, "Read would extend beyond EOF, resizing read request to %zu\n", bytes);
    }
@@ -1731,24 +1750,29 @@ ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes ) {
    // time to start actually filling this read request
    size_t bytes_read = 0;
    while( bytes_read < bytes ) { // while data still remains to be read, loop over each stripe
-      // first, check if we need to populate additional data
-      if ( handle->sub_offset >= handle->iob_datasz ) {
-         if ( read_stripes( handle ) < 0 ) {
-            LOG( LOG_ERR, "Failed to populate stripes beyond offset %zu!", offset );
-            return -1;
-         }
-      }
-
       int    cur_stripe = (int)(handle->sub_offset / stripesz);
       off_t  off_in_stripe = handle->sub_offset % stripesz; 
       size_t to_read_in_stripe = (bytes - bytes_read) % stripesz;
+      if ( to_read_in_stripe > ( stripesz - off_in_stripe ) ) {
+         to_read_in_stripe = stripesz - off_in_stripe;
+      }
+      LOG( LOG_INFO, "Reading %zu bytes from stripe %d\n", to_read_in_stripe, cur_stripe + orig_stripe );
+
+      // first, check if we need to populate additional data
+      if ( handle->sub_offset >= ( handle->iob_datasz * N ) ) {
+         LOG( LOG_INFO, "Reading in additional stripes (datasz=%zu)\n", handle->iob_datasz );
+         if ( read_stripes( handle ) < 0 ) {
+            LOG( LOG_ERR, "Failed to populate stripes beyond offset %zu!\n", offset );
+            return -1;
+         }
+      }
 
       // copy buffers from each block
       int cur_block = off_in_stripe / partsz;
       for( ; cur_block < N; cur_block++ ) {
          ioblock* cur_iob = handle->iob[ cur_block ];
          // make sure the ioblock has sufficient data
-         if ( ( cur_iob->data_size - handle->iob_offset ) < partsz ) {
+         if ( ( cur_iob->data_size - ( cur_stripe * partsz ) ) < partsz ) {
             LOG( LOG_ERR, "Ioblock at position %d of stripe %d is subsized!\n", cur_block, cur_stripe + iob_stripe );
             return -1;
          }
@@ -1762,7 +1786,8 @@ ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes ) {
          off_t  block_off  = ( off_in_stripe % partsz );
          size_t block_read = ( to_read_in_stripe > (partsz - block_off) ) ? (partsz - block_off) : to_read_in_stripe;
          if ( block_read == 0 ) { break; } // if we've completed our reads, stop here
-         memcpy( buffer + bytes_read, cur_iob->buff + ( cur_stripe * partsz ), block_read );
+         LOG( LOG_INFO, "Reading %zu bytes from block %d\n", block_read, cur_block );
+         memcpy( buffer + bytes_read, cur_iob->buff + ( cur_stripe * partsz ) + block_off, block_read );
          // update all values
          bytes_read += block_read;
          handle->sub_offset += block_read;
@@ -1877,7 +1902,6 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
             // build an array of data/erasure references while reseting outblock to zero
             for ( outblock -= 1; outblock >= 0; outblock-- ) {
                // previously written data will be one partsz behind
-               printf( "getting ref for ioblock %d\n", outblock );
                tgt_refs[outblock] = ioblock_write_target( handle->iob[outblock] ) - partsz;
             }
             // generate erasure parts

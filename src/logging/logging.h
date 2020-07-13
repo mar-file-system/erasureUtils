@@ -37,10 +37,10 @@ extern "C" {
 
 /// // without pthread_self()
 /// #define xFMT  " [%s:%4d]%*s %-21s | %s"
-#define xFMT  "  %08x  %s:%-4d%*s %-21.21s | %s"
+#define xFMT  "%-15s  %08x  %s:%-4d%*s %-20.20s | %s"
 
 // size of longest file-name string, plus some
-#define LOG_FNAME_SIZE 26
+#define LOG_FNAME_SIZE 20
 
 
 
@@ -50,7 +50,8 @@ extern "C" {
 #  define INIT_LOG()  openlog(LOG_PREFIX, LOG_CONS|LOG_PID, LOG_USER)
 
 #  define LOG(PRIO, FMT, ...)                                           \
-   syslog((PRIO), LOG_PREFIX xFMT FMT,                                  \
+   syslog((PRIO), xFMT FMT,                                  \
+          LOG_PREFIX,                                                   \
           (unsigned int)pthread_self(),                                 \
           __FILE__, __LINE__,                                           \
           LOG_FNAME_SIZE-(int)strlen(__FILE__), "",                     \
@@ -63,7 +64,8 @@ extern "C" {
 #  define INIT_LOG()
 
 #  define LOG(PRIO, FMT, ...)                                           \
-   printf_log((PRIO), LOG_PREFIX xFMT FMT,                              \
+   printf_log((PRIO), xFMT FMT,                                         \
+              LOG_PREFIX,                                               \
               (unsigned int)pthread_self(),                             \
               __FILE__, __LINE__,                                       \
               LOG_FNAME_SIZE-(int)strlen(__FILE__), "",                 \

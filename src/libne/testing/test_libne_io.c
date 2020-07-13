@@ -101,7 +101,10 @@ size_t verify_data( size_t prev_ver, size_t partsz, size_t buffsz, void* buffer 
          size_t fill_size = ( data_to_chk < ((partsz - prev_pfill) - sizeof(char)) ) ? 
                                  data_to_chk : ((partsz - prev_pfill) - sizeof(char));
          if ( memcmp( buffer, zerobuff, fill_size ) ) {
-            printf( "ERROR: Failed to verify filler of part %d!\n", parts );
+            // find the explicit offset of the error
+            char* bref = (char*) buffer;
+            while ( *bref == 0 ) { prev_pfill++; bref++; }
+            printf( "ERROR: Failed to verify filler of part %d (offset=%zu)! ( %d != 0 )\n", parts, prev_pfill, *bref );
             free( zerobuff );
             return 0;
          }
@@ -113,7 +116,7 @@ size_t verify_data( size_t prev_ver, size_t partsz, size_t buffsz, void* buffer 
       // check if we need to write out a tail sentinel
       if ( data_to_chk > 0 ) {
          if ( memcmp( buffer, &tail_sent, sizeof( char ) ) ) {
-            printf( "ERROR: failed to verify tail of part %d!\n", parts );
+            printf( "ERROR: failed to verify tail of part %d (offset=%zu)!\n", parts, prev_pfill );
             free( zerobuff );
             return 0;
          }
@@ -199,13 +202,14 @@ int test_values( ne_erasure* epat, size_t iosz, size_t partsz ) {
    // read out data
    for ( i = 0; i < iocnt; i++ ) {
       // read our into our data buffer
-      if ( iosz != ne_read( read_handle, iobuff, iosz ) ) {
-         printf( "ERROR: Unexpected return value from ne_read!\n" );
+      ssize_t readsz = 0;
+      if ( (readsz = ne_read( read_handle, iobuff, iosz )) != iosz ) {
+         printf( "ERROR: Unexpected return value from ne_read: %zd\n" );
          return -1;
       }
       // populate our data buffer
       if ( iosz != verify_data( iosz * i, partsz, iosz, iobuff ) ) {
-         printf( "ERROR: Failed to populate data buffer!\n" );
+         printf( "ERROR: Failed to verify data buffer!\n" );
          return -1;
       }
    }

@@ -350,24 +350,36 @@ int read_produce( void** state, void** work_tofill ) {
       }
       // otherwise, perform a read and store data to that block
       ssize_t read_data = 0;
+      ssize_t to_read = ( gstate->minfo.versz > (gstate->minfo.blocksz - tstate->offset) ) ? 
+                           (gstate->minfo.blocksz - tstate->offset) : gstate->minfo.versz;
+      // if we have read all available data, break
+      if ( to_read == 0 ) {
+         LOG( LOG_INFO, "All available data has been read, pushing incomplete ioblock\n" );
+         push_block = tstate->iob;
+         tstate->iob = NULL;
+         break;
+      }
       void* store_tgt = ioblock_write_target( tstate->iob );
       char data_err = 0;
-      if ( (read_data = gstate->dal->get( tstate->handle, store_tgt, gstate->minfo.versz, tstate->offset )) <
-            gstate->minfo.versz ) {
+      LOG( LOG_INFO, "Reading %zd bytes\n", to_read );
+      if ( (read_data = gstate->dal->get( tstate->handle, store_tgt, to_read, tstate->offset )) <
+            to_read ) {
          LOG( LOG_ERR, "Expected read return value of %zd for block %d, but recieved: %zd\n", 
-               gstate->minfo.versz, gstate->location.block, read_data );
+               to_read, gstate->location.block, read_data );
          gstate->data_error = 1;
          data_err = 1;
       }
-      // check the crc
       read_data -= CRC_BYTES;
-      uint32_t crc = crc32_ieee(CRC_SEED, store_tgt, read_data);
-      uint32_t scrc = *((uint32_t*) (store_tgt + read_data));
-      tstate->crcsumchk += scrc; // track our global crc, for reference
-      if ( crc != scrc ) {
-         LOG( LOG_ERR, "Calculated CRC of data (%zu) does not match stored CRC: %zu\n", crc, scrc );
-         gstate->data_error = 1;
-         data_err = 1;
+      // check the crc
+      if ( data_err == 0 ) {
+         uint32_t crc = crc32_ieee(CRC_SEED, store_tgt, read_data);
+         uint32_t scrc = *((uint32_t*) (store_tgt + read_data));
+         tstate->crcsumchk += scrc; // track our global crc, for reference
+         if ( crc != scrc ) {
+            LOG( LOG_ERR, "Calculated CRC of data (%zu) does not match stored CRC: %zu\n", crc, scrc );
+            gstate->data_error = 1;
+            data_err = 1;
+         }
       }
       // note how much REAL data (no CRC) we've stored to the ioblock
       ioblock_update_fill( tstate->iob, read_data, data_err );
