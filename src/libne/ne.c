@@ -547,7 +547,9 @@ if ( minfo->VAL >= MIN_VAL  &&  minfo->VAL <= MAX_VAL ) { \
    else
       ret_buf->totsz = -1;
 
-   return ( N_match[N_index] > E_match[E_index] ) ? E_match[E_index] : N_match[N_index];
+   int retval = ( N_match[N_index] > E_match[E_index] ) ? E_match[E_index] : N_match[N_index];
+   free( N_match );
+   return retval;
 }
 
 
@@ -761,7 +763,7 @@ int read_stripes( ne_handle handle ) {
          for (cur_block = 0; cur_block < N; cur_block++) {
             //BufferQueue* bq = &handle->blocks[handle->decode_index[cur_block]];
             //recov[cur_block] = bq->buffers[ bq->head ];
-            recov[cur_block] = handle->iob[handle->decode_index[cur_block]]->buff;
+            recov[cur_block] = handle->iob[handle->decode_index[cur_block]]->buff + stripe_start;
          }
 
          unsigned char** temp_buffs = calloc( nstripe_errors, sizeof( unsigned char* ) );
@@ -778,7 +780,7 @@ int read_stripes( ne_handle handle ) {
             //temp_buffs[ cur_block ] = bq->buffers[ bq->head ];
 
             // assign storage locations for the repaired buffers to be on top of the faulty buffers
-            temp_buffs[ cur_block ] = handle->iob[stripe_err_list[cur_block]]->buff;
+            temp_buffs[ cur_block ] = handle->iob[stripe_err_list[cur_block]]->buff + stripe_start;
             // as we are regenerating over the bad buffer, mark it as usable from this point on
             handle->iob[stripe_err_list[cur_block]]->error_end = stripe_start;
 
@@ -790,6 +792,8 @@ int read_stripes( ne_handle handle ) {
 
          ec_encode_data(partsz, N, nstripe_errors, handle->g_tbls, recov, &temp_buffs[0]);
 
+         free( recov );
+         free( temp_buffs );
       } // end of per-stripe loop
 
       // free unneeded lists
@@ -1132,9 +1136,11 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
             tq_next_thread_status( handle->thread_queues[i], NULL );
             tq_close( handle->thread_queues[i] );
          }
+         free( lprefstr );
          return NULL;
       }
    }
+   free( lprefstr );
 
    // For reading handles, we may need to get meta info consensus and correct any outliers
    if ( mode != NE_WRONLY  &&  mode != NE_WRALL  &&  handle->totsz == 0 ) {
@@ -1372,6 +1378,7 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
          handle->iob[i] = NULL;
       }
       // signal the thread to finish
+      LOG( LOG_INFO, "Setting FINISHED state for block %d\n", i );
       if ( tq_set_flags( handle->thread_queues[i], TQ_FINISHED ) ) {
          LOG( LOG_ERR, "Failed to set a FINISHED state for thread %d!\n", i );
          ret_val = -1;
@@ -1786,7 +1793,7 @@ ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes ) {
          off_t  block_off  = ( off_in_stripe % partsz );
          size_t block_read = ( to_read_in_stripe > (partsz - block_off) ) ? (partsz - block_off) : to_read_in_stripe;
          if ( block_read == 0 ) { break; } // if we've completed our reads, stop here
-         LOG( LOG_INFO, "Reading %zu bytes from block %d\n", block_read, cur_block );
+         LOG( LOG_INFO, "   Reading %zu bytes from block %d\n", block_read, cur_block );
          memcpy( buffer + bytes_read, cur_iob->buff + ( cur_stripe * partsz ) + block_off, block_read );
          // update all values
          bytes_read += block_read;
@@ -1795,6 +1802,8 @@ ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes ) {
          to_read_in_stripe -= block_read;
       }
    }
+
+   LOG( LOG_INFO, "Completed read of %zd bytes\n", bytes_read );
 
    return bytes_read;
 }

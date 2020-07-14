@@ -106,8 +106,9 @@ underlying skt_etc() functions.
 
 #include "libne_auto_config.h"
 
-#define DEBUG 1
-#define USE_STDOUT 1
+//#define DEBUG 1
+//#define USE_STDOUT 1
+
 #define LOG_PREFIX "iothreads"
 #include "logging/logging.h"
 
@@ -354,14 +355,14 @@ int read_produce( void** state, void** work_tofill ) {
                            (gstate->minfo.blocksz - tstate->offset) : gstate->minfo.versz;
       // if we have read all available data, break
       if ( to_read == 0 ) {
-         LOG( LOG_INFO, "All available data has been read, pushing incomplete ioblock\n" );
+         LOG( LOG_INFO, "All data read from block %d, pushing incomplete ioblock\n", gstate->location.block );
          push_block = tstate->iob;
          tstate->iob = NULL;
          break;
       }
       void* store_tgt = ioblock_write_target( tstate->iob );
       char data_err = 0;
-      LOG( LOG_INFO, "Reading %zd bytes\n", to_read );
+      LOG( LOG_INFO, "Reading %zd bytes from block %d\n", to_read, gstate->location.block );
       if ( (read_data = gstate->dal->get( tstate->handle, store_tgt, to_read, tstate->offset )) <
             to_read ) {
          LOG( LOG_ERR, "Expected read return value of %zd for block %d, but recieved: %zd\n", 
@@ -369,11 +370,11 @@ int read_produce( void** state, void** work_tofill ) {
          gstate->data_error = 1;
          data_err = 1;
       }
-      read_data -= CRC_BYTES;
+      to_read -= CRC_BYTES;
       // check the crc
       if ( data_err == 0 ) {
-         uint32_t crc = crc32_ieee(CRC_SEED, store_tgt, read_data);
-         uint32_t scrc = *((uint32_t*) (store_tgt + read_data));
+         uint32_t crc = crc32_ieee(CRC_SEED, store_tgt, to_read);
+         uint32_t scrc = *((uint32_t*) (store_tgt + to_read));
          tstate->crcsumchk += scrc; // track our global crc, for reference
          if ( crc != scrc ) {
             LOG( LOG_ERR, "Calculated CRC of data (%zu) does not match stored CRC: %zu\n", crc, scrc );
@@ -382,9 +383,9 @@ int read_produce( void** state, void** work_tofill ) {
          }
       }
       // note how much REAL data (no CRC) we've stored to the ioblock
-      ioblock_update_fill( tstate->iob, read_data, data_err );
+      ioblock_update_fill( tstate->iob, to_read, data_err );
       // note our increased offset within the data (MUST include the CRC!)
-      tstate->offset += (read_data + CRC_BYTES);
+      tstate->offset += (to_read + CRC_BYTES);
    }
 
    // populate our workpackage with the filled ioblock

@@ -207,7 +207,7 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
          return NULL;
       }
       ioq->block_list[i].data_size   = 0;
-      ioq->block_list[i].error_end   = -1;
+      ioq->block_list[i].error_end   = 0;
    }
    return ioq;
 }
@@ -312,17 +312,20 @@ int reserve_ioblock( ioblock** cur_block, ioblock** push_block, ioqueue* ioq ) {
 
    // clear any old values in this newly reserved block
    (*cur_block)->data_size   = 0;
-   (*cur_block)->error_end   = -1;
+   (*cur_block)->error_end   = 0;
 
    // we have the new block; check if we need to copy data over to it
    if ( datacpy != NULL ) {
       LOG( LOG_INFO, "Copying %zu bytes to next ioblock\n", cpysz );
-      memcpy( (*cur_block)->buff, datacpy, cpysz );
       (*cur_block)->data_size = cpysz;
       // check for any data errors we need to propagate forward
       if ( prev_block->error_end > ioq->split_threshold ) {
          // this is an oversimplification, but being exact won't actually gain us anything
          (*cur_block)->error_end = cpysz; // assume all copied data is junk
+      }
+      else {
+         // only bother copying good data over to the new block
+         memcpy( (*cur_block)->buff, datacpy, cpysz );
       }
       prev_block->data_size = ioq->split_threshold; // update prev block to exclude copied data
    }

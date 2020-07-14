@@ -529,6 +529,10 @@ int posix_set_meta ( BLOCK_CTXT ctxt, const char* meta_buf, size_t size ) {
 
 
 ssize_t posix_get_meta ( BLOCK_CTXT ctxt, char* meta_buf, size_t size ) {
+   if ( ctxt == NULL ) {
+      LOG( LOG_ERR, "received a NULL block context!\n" );
+      return -1;
+   }
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT) ctxt; // should have been passed a posix context
 
    // append the meta suffix and check for success
@@ -576,6 +580,10 @@ int posix_put ( BLOCK_CTXT ctxt, const void* buf, size_t size ) {
 
 
 ssize_t posix_get ( BLOCK_CTXT ctxt, void* buf, size_t size, off_t offset ) {
+   if ( ctxt == NULL ) {
+      LOG( LOG_ERR, "received a NULL block context!\n" );
+      return -1;
+   }
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT) ctxt; // should have been passed a posix context
 
    // check if we need to seek
@@ -600,6 +608,10 @@ ssize_t posix_get ( BLOCK_CTXT ctxt, void* buf, size_t size, off_t offset ) {
 
 
 int posix_abort ( BLOCK_CTXT ctxt ) {
+   if ( ctxt == NULL ) {
+      LOG( LOG_ERR, "received a NULL block context!\n" );
+      return -1;
+   }
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT) ctxt; // should have been passed a posix context
 
    // close the file descriptor, note but bypass failure
@@ -616,6 +628,10 @@ int posix_abort ( BLOCK_CTXT ctxt ) {
 
 
 int posix_close ( BLOCK_CTXT ctxt ) {
+   if ( ctxt == NULL ) {
+      LOG( LOG_ERR, "received a NULL block context!\n" );
+      return -1;
+   }
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT) ctxt; // should have been passed a posix context
 
    // attempt to close and check for success

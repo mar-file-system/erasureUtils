@@ -23,7 +23,7 @@ size_t fill_buffer( size_t prev_data, size_t iosz, size_t partsz, void* buffer )
       if ( prev_pfill < sizeof( unsigned int ) ) {
          size_t fill_size = sizeof( unsigned int ) - prev_pfill;
          if ( fill_size > to_write ) { fill_size = to_write; }
-         printf( "   %zu bytes of header value %u at offset %zu\n", fill_size, parts, prev_pfill );
+         //printf( "   %zu bytes of header value %u at offset %zu\n", fill_size, parts, prev_pfill );
          memcpy( buffer, ((void*)(&parts)) + prev_pfill, fill_size );
          buffer += fill_size;
          prev_data += fill_size;
@@ -35,7 +35,7 @@ size_t fill_buffer( size_t prev_data, size_t iosz, size_t partsz, void* buffer )
          // check if our data to be written is less than a complete filler
          size_t fill_size = ( to_write < ((partsz - prev_pfill) - sizeof(char)) ) ? 
                                  to_write : ((partsz - prev_pfill) - sizeof(char));
-         printf( "   %zu bytes of zero-fill\n", fill_size );
+         //printf( "   %zu bytes of zero-fill\n", fill_size );
          bzero( buffer, fill_size );
          buffer += fill_size;
          prev_data += fill_size;
@@ -45,7 +45,7 @@ size_t fill_buffer( size_t prev_data, size_t iosz, size_t partsz, void* buffer )
       // check if we need to write out a tail sentinel
       if ( to_write > 0 ) {
          memcpy( buffer, &tail_sent, sizeof( char ) );
-         printf( "   1 byte tail\n" );
+         //printf( "   1 byte tail\n" );
          buffer += sizeof( char );
          prev_data += sizeof( char );
          prev_pfill += sizeof( char );
@@ -172,7 +172,6 @@ int test_values( ne_erasure* epat, size_t iosz, size_t partsz ) {
    int iocnt = 10;
    int i;
    for ( i = 0; i < iocnt; i++ ) {
-      printf( "IO %d!\n", i );
       // populate our data buffer
       if ( iosz != fill_buffer( iosz * i, iosz, partsz, iobuff ) ) {
          printf( "ERROR: Failed to populate data buffer!\n" );
@@ -263,7 +262,7 @@ int main( int argc, char** argv ) {
    // Test read IOQueue with a small partsz and larger, aligned iosz
    size_t iosz = 8196;
    size_t partsz = 4096;
-   ne_erasure epat = { .N = 10, .E = 2, .partsz = 1024 };
+   ne_erasure epat = { .N = 10, .E = 2, .O = 1, .partsz = 1024 };
    if ( test_values( &epat, iosz, partsz ) ) { return -1; }
 
    return 0;

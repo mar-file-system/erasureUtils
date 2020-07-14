@@ -69,7 +69,6 @@ IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
 OF SUCH DAMAGE.
 */
 
-// TMP DEBUG DEFS
 //#define DEBUG 1
 //#define USE_STDOUT 1
 
@@ -253,8 +252,8 @@ int general_thread_resume_behavior( ThreadQueue tq, TQWorkerPool wp, unsigned in
    wp->act_thrds++;
    LOG( LOG_INFO, "%s %s Thread[%u]: Awake and holding lock\n", tq->log_prefix, wp->pname, tID );
 
-   // if we were halted, make sure we immediately indicate that we aren't any more
-   if ( tq->state_flags[tID] & TQ_HALTED ) {
+   // if we were halted, but the control flag is gone, make sure we immediately indicate that we aren't any more
+   if ( (tq->state_flags[tID] & TQ_HALTED)  &&  !(tq->con_flags & TQ_HALT) ) {
       LOG( LOG_INFO, "%s %s Thread[%u]: Clearing HALTED state\n", tq->log_prefix, wp->pname, tID );
       tq->state_flags[tID] &= ~(TQ_HALTED);
       // if we have a thread_resume_func(), call it now
@@ -1078,8 +1077,15 @@ int tq_next_thread_status( ThreadQueue tq, void** tstate ) {
       return -1;
    }
    // make sure the queue has been marked FINISHED/ABORTED but not HALTED
-   if ( !( tq->con_flags & (TQ_FINISHED | TQ_ABORT) )  ||  (tq->con_flags & TQ_HALT) ) {
-      LOG( LOG_ERR, "%s cannont retrieve thread states from a HALTED or non-FINISHED/ABORTED queue!\n", tq->log_prefix );
+   if ( !( tq->con_flags & (TQ_FINISHED | TQ_ABORT) ) ) {
+      LOG( LOG_ERR, "%s cannont retrieve thread states from a non-FINISHED/ABORTED queue!\n", tq->log_prefix );
+      errno = EINVAL;
+      pthread_mutex_unlock( &tq->qlock );
+      return -1;
+   }
+   // make sure the queue is not HALTED with queue elements remaining
+   if ( (tq->con_flags & TQ_HALT)  &&  (tq->qdepth > 0) ) {
+      LOG( LOG_ERR, "%s cannont retrieve thread states from a HALTED and non-empty queue!\n", tq->log_prefix );
       errno = EINVAL;
       pthread_mutex_unlock( &tq->qlock );
       return -1;
