@@ -214,6 +214,8 @@ int main( int argc, char** argv ) {
          printf( "Failed to release ioblock!\n" );
          return -1;
       }
+      // NULL out our ioblock reference
+      iob = NULL;
       // count how many parts we verified
       readparts += ( buffsz / gstate.minfo.partsz );
       if ( buffsz % gstate.minfo.partsz ) {

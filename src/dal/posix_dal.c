@@ -254,7 +254,7 @@ int expand_dir_template( POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locat
 
 
 
-int block_delete( POSIX_BLOCK_CTXT bctxt ) {
+int block_delete( POSIX_BLOCK_CTXT bctxt, char plus_meta ) {
    // append the meta suffix and check for success
    char* res = strncat( bctxt->filepath + bctxt->filelen, META_SFX, SFX_PADDING );
    if ( res != ( bctxt->filepath + bctxt->filelen ) ) {
@@ -284,11 +284,13 @@ int block_delete( POSIX_BLOCK_CTXT bctxt ) {
    // trim the write suffix off
    *(bctxt->filepath + bctxt->filelen + metalen) = '\0';
 
-   // unlink any meta file (only failure with ENOENT is acceptable)
-   if ( unlink( bctxt->filepath ) != 0  &&  errno != ENOENT ) {
-      LOG( LOG_ERR, "failed to unlink \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
-      *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
-      return -1; 
+   if ( plus_meta ) {
+      // unlink any meta file (only failure with ENOENT is acceptable)
+      if ( unlink( bctxt->filepath ) != 0  &&  errno != ENOENT ) {
+         LOG( LOG_ERR, "failed to unlink \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
+         *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
+         return -1; 
+      }
    }
 
    // trim the meta suffix off and attach a write suffix in its place
@@ -348,7 +350,7 @@ int posix_del (  DAL_CTXT ctxt, DAL_location location, const char* objID ) {
    // popultate the full file path for this object
    if ( expand_dir_template( dctxt, bctxt, location, objID ) != 0 ) { free( bctxt ); return -1; }
 
-   int res = block_delete( bctxt );
+   int res = block_delete( bctxt, 1 );
 
    free( bctxt->filepath );
    free( bctxt );
@@ -614,15 +616,20 @@ int posix_abort ( BLOCK_CTXT ctxt ) {
    }
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT) ctxt; // should have been passed a posix context
 
+   int retval = 0;
    // close the file descriptor, note but bypass failure
    if ( close( bctxt->fd ) != 0 ) {
       LOG( LOG_WARNING, "failed to close data file \"%s\" during abort (%s)\n", bctxt->filepath, strerror(errno) );
+   }
+   if ( block_delete( bctxt, 0 ) ) {
+      LOG( LOG_ERR, "failed to delete data file \"%s\" during abort (%s)\n", bctxt->filepath, strerror(errno) );
+      retval = 1;
    }
 
    // free state
    free( bctxt->filepath );
    free( bctxt );
-   return 0;
+   return retval;
 }
 
 
@@ -634,8 +641,8 @@ int posix_close ( BLOCK_CTXT ctxt ) {
    }
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT) ctxt; // should have been passed a posix context
 
-   // attempt to close and check for success
-   if ( close( bctxt->fd ) != 0 ) {
+   // if this is not a meta-only reference, attempt to close our FD and check for success
+   if ( (bctxt->mode != DAL_METAREAD)  &&  (close( bctxt->fd ) != 0) ) {
       LOG( LOG_ERR, "failed to close data file \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
       return -1;
    }
@@ -778,6 +785,7 @@ DAL posix_dal_init( xmlNode* root, DAL_location max_loc ) {
          pdal->abort = posix_abort;
          pdal->close = posix_close;
          pdal->del = posix_del;
+         pdal->stat = posix_stat;
          pdal->cleanup = posix_cleanup;
          return pdal;
       }

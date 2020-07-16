@@ -568,7 +568,7 @@ int read_stripes( ne_handle handle ) {
    unsigned int start_stripe = (unsigned int) ( offset / stripesz ); // get a stripe num based on offset
 
    // make sure our sub_offset is stripe aligned
-   if ( handle->sub_offset % stripesz  ||  handle->sub_offset != handle->iob_datasz ) {
+   if ( handle->sub_offset % stripesz  ||  handle->sub_offset != (handle->iob_datasz * N) ) {
       LOG( LOG_ERR, "Called on handle with an inappropriate sub_offset (%zd)!\n", handle->sub_offset );
       return -1;
    }
@@ -627,6 +627,7 @@ int read_stripes( ne_handle handle ) {
          errno=EBADF;
          return -1;
       } 
+      LOG( LOG_INFO, "Dequeued ioblock at position %d\n", cur_block );
       // check if this new ioblock will require a rebuild
       ioblock* cur_iob = handle->iob[cur_block];
       if ( cur_iob->error_end > 0 ) { nstripe_errors++; }
@@ -651,6 +652,7 @@ int read_stripes( ne_handle handle ) {
          handle->prev_err_cnt = nstripe_errors;
       // ...and halt all others
       for ( cur_block = (N + nstripe_errors); cur_block < (N + handle->prev_err_cnt); cur_block++ ) {
+         LOG( LOG_INFO, "Setting HALT state for unneded thread %d\n", cur_block );
          if ( tq_set_flags( handle->thread_queues[cur_block], TQ_HALT ) ) {
             // nothing to do besides complain
             LOG( LOG_ERR, "Failed to pause erasure thread for block %d!\n", cur_block );
@@ -936,7 +938,26 @@ int ne_term ( ne_ctxt ctxt ) {
  * @return int : Zero on success and -1 on failure
  */
 int ne_delete( ne_ctxt ctxt, const char* objID, ne_location loc ){
-   return -1;
+   // check for NULL context
+   if ( ctxt == NULL ) {
+      LOG( LOG_ERR, "Received NULL context!\n" );
+      return -1;
+   }
+   int retval = 0;
+   DAL_location dalloc = { .pod = loc.pod, .cap = loc.cap, .scatter = loc.scatter };
+   LOG( LOG_INFO, "Deleting object %s (%d blocks)\n", objID, ctxt->max_block );
+
+   // loop through and delete all blocks
+   int i;
+   for ( i = 0; i < ctxt->max_block; i++ ) {
+      dalloc.block = i;
+      if( ctxt->dal->del( ctxt->dal->ctxt, dalloc, objID ) ) {
+         LOG( LOG_ERR, "Failed to delete block %d of object \"%s\"!\n", i, objID );
+         retval = -1;
+      }
+   }
+
+   return retval;
 }
 
 
@@ -966,11 +987,13 @@ ne_handle ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc ) {
    meta_info* minfo_list = calloc( ctxt->max_block, sizeof( struct meta_info_struct ) );
    if ( minfo_list == NULL ) {
       LOG( LOG_ERR, "Failed to allocate space for a meta_info_struct list!\n" );
+      free( tmp_meta_errs );
       return NULL;
    }
    meta_info** minfo_refs = calloc( ctxt->max_block, sizeof( meta_info* ) );
    if ( minfo_refs == NULL ) {
       LOG( LOG_ERR, "Failed to allocate space for a meta_info refs list!\n" );
+      free( tmp_meta_errs );
       free( minfo_list );
       return NULL;
    }
@@ -1005,6 +1028,8 @@ ne_handle ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc ) {
                maxblock = consensus.N + consensus.E;
             }
          }
+         // close our block reference
+         ctxt->dal->close( dblock );
       }
 
       // verify that data exists for this block
@@ -1014,10 +1039,13 @@ ne_handle ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc ) {
 
    }
 
+   // we're done with our minfo_refs
+   free( minfo_refs );
+
    // create a handle structure
    ne_handle handle = allocate_handle( ctxt, objID, loc, &consensus );
    if ( handle == NULL ) {
-      free( minfo_refs );
+      free( tmp_meta_errs );
       free( minfo_list );
       return NULL;
    }
@@ -1042,6 +1070,7 @@ ne_handle ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc ) {
          if ( tmp_data_errs[ (i+consensus.O) % (consensus.N+consensus.E) ] ) { handle->thread_states[i].data_error = 1; }
       }
    }
+   free( tmp_meta_errs );
    if ( consensus.partsz <= 0 ) { retval = 0; }
    if ( consensus.versz < 0 )   { retval = 0; }
    if ( consensus.blocksz < 0 ) { retval = 0; }
@@ -1363,12 +1392,23 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
    for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
       // make sure to release any remaining ioblocks
       if ( handle->iob[i] ) {
-         if ( handle->iob[i]->data_size  &&  ( handle->mode == NE_WRONLY  ||  handle->mode == NE_WRALL ) ) {
-            LOG( LOG_INFO, "Enqueueing final ioblock at position %d\n", i );
-            // if data remains, push it now
-            if ( tq_enqueue( handle->thread_queues[i], TQ_NONE, (void*)(handle->iob[i]) ) ) {
-               LOG( LOG_ERR, "Failed to enqueue final ioblock to thread_queue %d!\n", i );
-               ret_val = -1;
+         if ( handle->mode == NE_WRONLY  ||  handle->mode == NE_WRALL ) {
+            ioblock* push_block = NULL;
+            // perform a final reserve call to split any excess data
+            if ( reserve_ioblock( &(handle->iob[i]), &(push_block), handle->thread_states[i].ioq ) > 0 ) {
+               LOG( LOG_INFO, "Final ioblock is full, enqueueing it and reserving another\n" );
+               if ( tq_enqueue( handle->thread_queues[i], TQ_NONE, (void*)(push_block) ) ) {
+                  LOG( LOG_ERR, "Failed to enqueue semi-final ioblock to thread_queue %d!\n", i );
+                  ret_val = -1;
+               }
+            }
+            if ( handle->iob[i]->data_size ) {
+               LOG( LOG_INFO, "Enqueueing final ioblock at position %d\n", i );
+               // if data remains, push it now
+               if ( tq_enqueue( handle->thread_queues[i], TQ_NONE, (void*)(handle->iob[i]) ) ) {
+                  LOG( LOG_ERR, "Failed to enqueue final ioblock to thread_queue %d!\n", i );
+                  ret_val = -1;
+               }
             }
          }
          else {
@@ -1582,6 +1622,7 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
 
    // skip to appropriate stripe
 
+   LOG( LOG_INFO, "Current offset = %zu\n", ( handle->iob_offset * handle->epat.N ) + handle->sub_offset );
    unsigned int cur_stripe = (unsigned int)( handle->iob_offset / partsz ); // I think int truncation actually works out in our favor here
    unsigned int tgt_stripe = (unsigned int)( offset / stripesz );
    ssize_t max_data = ioqueue_maxdata( handle->thread_states[0].ioq );
@@ -1589,7 +1630,7 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
 
    // if the offset is behind us or so far in front that there is no chance of the work having already been done...
    if ( (cur_stripe > tgt_stripe)  ||  
-         ( (handle->iob_offset + max_data) < ( tgt_stripe * partsz )) ) {
+         ((handle->iob_offset + max_data) < ( tgt_stripe * partsz )) ) {
       LOG( LOG_INFO, "New offset of %zd will require threads to reseek\n", offset );
       off_t new_iob_off = -1;
       int i;
@@ -1635,7 +1676,7 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
             break;
          }
          // retrieve a new ioblock
-         if ( tq_dequeue( handle->thread_queues[i], TQ_NONE, (void**)&(handle->iob[i]) ) < 0 ) {
+         if ( tq_dequeue( handle->thread_queues[i], TQ_HALT, (void**)&(handle->iob[i]) ) < 0 ) {
             LOG( LOG_ERR, "Failed to retrieve ioblock for block %d after seek!\n", i );
             break;
          }
@@ -1673,11 +1714,14 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
       handle->sub_offset = offset - ( iob_stripe * stripesz );
    }
    else {
+      // reset out sub_offset to the start of the ioblock data
+      handle->sub_offset = 0;
+      LOG( LOG_INFO, "Offset of %zd is within readable bounds (tgt_stripe=%d / cur_stripe=%d)\n", offset, tgt_stripe, cur_stripe );
       // we may still be many stripes behind the given offset.  Calculate how many.
       unsigned int munch_stripes = tgt_stripe - cur_stripe;
       // if we're at all behind...
       if (munch_stripes) {
-         LOG( LOG_INFO, "Attempting to 'munch' %d stripes to reach offset of %zd\n", munch_stripes, offset );
+         LOG( LOG_INFO, "Attempting to 'munch' %d stripes to reach offset of %zu\n", munch_stripes, offset );
 
          // first, skip our sub_offset ahead to the next stripe boundary
          handle->sub_offset = ( (cur_stripe+1) * stripesz ) - ( handle->iob_offset * N );
@@ -1686,7 +1730,7 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
          unsigned int thread_munched = 1;
          for ( ; thread_munched < munch_stripes; thread_munched++ ) {
 
-            if ( handle->sub_offset >= handle->iob_datasz ) {
+            if ( handle->sub_offset >= (handle->iob_datasz * N) ) {
                if ( read_stripes( handle ) ) {
                   LOG( LOG_ERR, "Failed to read additional stripes!\n" );
                   return -1;
@@ -1699,7 +1743,8 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
          }
          LOG( LOG_INFO, "Finished buffer 'cunching'\n" );
       }
-      handle->sub_offset += offset % stripesz;
+      // add any sub-stripe offset which remains
+      handle->sub_offset += offset - ( tgt_stripe * stripesz );
    }
    LOG( LOG_INFO, "Post seek: IOBlock_Offset=%zd, Sub_Offset=%zd\n", handle->iob_offset, handle->sub_offset );
    return ( handle->iob_offset * N ) + handle->sub_offset; // should equal our target offset
@@ -1749,22 +1794,12 @@ ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes ) {
    int     E = handle->epat.E;
    ssize_t partsz = handle->epat.partsz;
    size_t  stripesz = partsz * N;
-   int     orig_stripe = (int)( offset / stripesz ); // getting help from integer truncation
-   int     iob_stripe = (int)( handle->iob_offset / stripesz );
 
 // ---------------------- BEGIN MAIN READ LOOP ----------------------
 
    // time to start actually filling this read request
    size_t bytes_read = 0;
    while( bytes_read < bytes ) { // while data still remains to be read, loop over each stripe
-      int    cur_stripe = (int)(handle->sub_offset / stripesz);
-      off_t  off_in_stripe = handle->sub_offset % stripesz; 
-      size_t to_read_in_stripe = (bytes - bytes_read) % stripesz;
-      if ( to_read_in_stripe > ( stripesz - off_in_stripe ) ) {
-         to_read_in_stripe = stripesz - off_in_stripe;
-      }
-      LOG( LOG_INFO, "Reading %zu bytes from stripe %d\n", to_read_in_stripe, cur_stripe + orig_stripe );
-
       // first, check if we need to populate additional data
       if ( handle->sub_offset >= ( handle->iob_datasz * N ) ) {
          LOG( LOG_INFO, "Reading in additional stripes (datasz=%zu)\n", handle->iob_datasz );
@@ -1774,13 +1809,22 @@ ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes ) {
          }
       }
 
+      int     iob_stripe = (int)( handle->iob_offset / stripesz );
+      int    cur_stripe = (int)(handle->sub_offset / stripesz);
+      off_t  off_in_stripe = handle->sub_offset % stripesz; 
+      size_t to_read_in_stripe = (bytes - bytes_read) % stripesz;
+      if ( to_read_in_stripe > ( stripesz - off_in_stripe ) ) {
+         to_read_in_stripe = stripesz - off_in_stripe;
+      }
+      LOG( LOG_INFO, "Reading %zu bytes from stripe %d\n", to_read_in_stripe, cur_stripe + iob_stripe );
+
       // copy buffers from each block
       int cur_block = off_in_stripe / partsz;
       for( ; cur_block < N; cur_block++ ) {
          ioblock* cur_iob = handle->iob[ cur_block ];
          // make sure the ioblock has sufficient data
          if ( ( cur_iob->data_size - ( cur_stripe * partsz ) ) < partsz ) {
-            LOG( LOG_ERR, "Ioblock at position %d of stripe %d is subsized!\n", cur_block, cur_stripe + iob_stripe );
+            LOG( LOG_ERR, "Ioblock at position %d of stripe %d is subsized (%zu)!\n", cur_block, cur_stripe + iob_stripe, cur_iob->data_size );
             return -1;
          }
          // make sure the ioblock has no errors in this stripe

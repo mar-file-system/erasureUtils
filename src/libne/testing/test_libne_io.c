@@ -212,6 +212,26 @@ int test_values( ne_erasure* epat, size_t iosz, size_t partsz ) {
          return -1;
       }
    }
+   // seek back to the beginning and re-read
+   printf( "...seeking to offset zero to re-read...\n" );
+   if ( ne_seek( read_handle, 0 ) != 0 ) {
+      printf( "ERROR: Failed to seek to zero!\n" );
+      return -1;
+   }
+   // read all data, again
+   for ( i = 0; i < iocnt; i++ ) {
+      // read our into our data buffer
+      ssize_t readsz = 0;
+      if ( (readsz = ne_read( read_handle, iobuff, iosz )) != iosz ) {
+         printf( "ERROR: Unexpected return value from ne_read: %zd\n" );
+         return -1;
+      }
+      // populate our data buffer
+      if ( iosz != verify_data( iosz * i, partsz, iosz, iobuff ) ) {
+         printf( "ERROR: Failed to verify data buffer!\n" );
+         return -1;
+      }
+   }
    // close our handle
    if ( ne_close( read_handle, NULL, NULL ) ) {
       printf( "ERROR: Failure of ne_close!\n" );
@@ -245,6 +265,44 @@ int test_values( ne_erasure* epat, size_t iosz, size_t partsz ) {
       return -1;
    }
 
+   // open a handle by stating (no epat struct)
+   printf( "...Verifying written data (NE_STAT/RD_ONLY)...\n" );
+   ne_handle stat_handle = ne_stat( ctxt, "", cur_loc );
+   if ( stat_handle == NULL ) {
+      printf( "ERROR: Failed to open a ne_stat handle!\n" );
+      return -1;
+   }
+   // convert to a RD_ONLY handle
+   read_handle = ne_convert_handle( stat_handle, NE_RDONLY );
+   if ( read_handle == NULL ) {
+      printf( "ERROR: Failed to convert to a read handle!\n" );
+      return -1;
+   }
+   // read out data
+   for ( i = 0; i < iocnt; i++ ) {
+      // read our into our data buffer
+      if ( iosz != ne_read( read_handle, iobuff, iosz ) ) {
+         printf( "ERROR: Unexpected return value from ne_read!\n" );
+         return -1;
+      }
+      // populate our data buffer
+      if ( iosz != verify_data( iosz * i, partsz, iosz, iobuff ) ) {
+         printf( "ERROR: Failed to populate data buffer!\n" );
+         return -1;
+      }
+   }
+   // close our handle
+   if ( ne_close( read_handle, NULL, NULL ) ) {
+      printf( "ERROR: Failure of ne_close!\n" );
+      return -1;
+   }
+
+   // delete our test object
+   if ( ne_delete( ctxt, "", cur_loc ) ) {
+      printf( "ERROR: Failed to delete written object!\n" );
+      return -1;
+   }
+
 
    // close our ne_ctxt
    if ( ne_term( ctxt ) ) {
@@ -259,10 +317,15 @@ int test_values( ne_erasure* epat, size_t iosz, size_t partsz ) {
 
 
 int main( int argc, char** argv ) {
-   // Test read IOQueue with a small partsz and larger, aligned iosz
+   // Test with a small partsz and larger, aligned iosz
    size_t iosz = 8196;
    size_t partsz = 4096;
    ne_erasure epat = { .N = 10, .E = 2, .O = 1, .partsz = 1024 };
+   if ( test_values( &epat, iosz, partsz ) ) { return -1; }
+   // Test with a larger partsz and much larger iosz
+   partsz = 524288;
+   iosz = 1048576;
+   epat.partsz = partsz;
    if ( test_values( &epat, iosz, partsz ) ) { return -1; }
 
    return 0;

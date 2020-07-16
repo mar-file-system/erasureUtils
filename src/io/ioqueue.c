@@ -106,8 +106,8 @@ underlying skt_etc() functions.
 
 // #include "libne_auto_config.h"   /* HAVE_LIBISAL */
 
-// #define DEBUG 1
-// #define USE_STDOUT 1
+#define DEBUG 1
+#define USE_STDOUT 1
 #define LOG_PREFIX "ioqueue"
 #include "logging/logging.h"
 
@@ -145,7 +145,7 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
    size_t supersz = iosz; // try to issue IO at the appropriate size
    size_t subsz = partsz;
    size_t overlap = ( iosz - CRC_BYTES ) % partsz; // check for IO overlap
-   int    partcnt = (int) (iosz / partsz); // number of complete parts per IO
+   int    partcnt = (int) ( (iosz - CRC_BYTES) / partsz); // number of complete parts per IO
    if ( partsz > iosz ) {
       // swap our values around so that subsz is the lesser
       subsz = iosz - CRC_BYTES;
@@ -409,7 +409,12 @@ int release_ioblock( ioqueue* ioq ) {
       LOG( LOG_ERR, "Failed to aquire ioqueue lock!\n" );
       return -1;
    }
+   if ( ioq->depth == SUPER_BLOCK_CNT ) {
+      LOG( LOG_ERR, "No outstanding ioblocks to be released!\n" );
+      return -1;
+   }
    ioq->depth++;
+   LOG( LOG_INFO, "%d out of %d ioblocks available\n", ioq->depth, SUPER_BLOCK_CNT );
    pthread_cond_signal(&ioq->avail_block);
    pthread_mutex_unlock(&ioq->qlock);
    return 0;

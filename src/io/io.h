@@ -271,6 +271,7 @@ typedef struct thread_state_struct {
    BLOCK_CTXT   handle;
    ioblock*     iob;
    uint64_t     crcsumchk;
+   char         continuous;
 } thread_state;
 
 

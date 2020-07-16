@@ -69,8 +69,8 @@ IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
 OF SUCH DAMAGE.
 */
 
-//#define DEBUG 1
-//#define USE_STDOUT 1
+#define DEBUG 1
+#define USE_STDOUT 1
 
 #define def_queue_pref "ThreadQueue"
 #define LOG_PREFIX "thread_queue"
