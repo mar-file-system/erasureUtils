@@ -74,11 +74,13 @@ NE_LIBS = libne.a ../dal/libdal.a ../io/libioqueue.a ../io/libiothreads.a ../io/
 
 # ---
 
-check_PROGRAMS = test_libne_io
+check_PROGRAMS = test_libne_io data_shredder
 
 test_libne_io_SOURCES = testing/test_libne_io.c
 test_libne_io_LDADD   = $(NE_LIBS)
 test_libne_io_CFLAGS  = $(XML_CFLAGS)
+
+data_shredder_SOURCES = testing/data_shredder.c
 
 TESTS = test_libne_io
 

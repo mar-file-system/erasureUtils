@@ -1410,6 +1410,10 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
                   ret_val = -1;
                }
             }
+            else {
+               LOG( LOG_INFO, "Releasing empty final ioblock!\n" );
+               release_ioblock( handle->thread_states[i].ioq );
+            }
          }
          else {
             LOG( LOG_INFO, "Releasing final ioblock at position %d\n", i );
@@ -1585,8 +1589,295 @@ int ne_seed_status( ne_handle handle, ne_state* sref ) {
  *               errors, or a negative value if an unrecoverable failure occurred
  */
 int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
-   // TODO
-   return -1;
+   // check boundary and invalid call conditions
+   if ( !(handle) ) {
+      LOG( LOG_ERR, "Received a NULL handle!\n" );
+      errno = EINVAL;
+      return -1;
+   }
+   if ( handle->mode != NE_REBUILD ) {
+      LOG( LOG_ERR, "Handle is in improper mode for reading!\n" );
+      errno = EPERM;
+      return -1;
+   }
+   // make sure our handle is set to a zero offset
+   size_t offset = ( handle->iob_offset * handle->epat.N ) + handle->sub_offset;
+   if ( handle->iob_offset != 0  ||  handle->sub_offset != 0 ) {
+      LOG( LOG_INFO, "Reseeking to zero prior to rebuild op\n" );
+      if ( ne_seek( handle, 0 ) ) {
+         LOG( LOG_ERR, "Failed to reseek handle to zero!\n" );
+         return -1;
+      }
+   }
+
+   // get some useful reference values
+   int     N = handle->epat.N;
+   int     E = handle->epat.E;
+   int     O = handle->epat.O;
+   ssize_t partsz = handle->epat.partsz;
+   size_t  stripesz = partsz * N;
+
+   // NOTE -- a REBUILD handle is 'effectively' a READ handle
+   //         However, we now need to spin up write threads to output any repaired data
+   // prep structs for output threads
+   ThreadQueue* OutTQs = calloc( N+E, sizeof( ThreadQueue ) );
+   if ( OutTQs == NULL ) {
+      LOG( LOG_ERR, "Failed to allocate space for Output ThreadQueues!\n" );
+      return -1;
+   }
+   gthread_state* outstates = calloc( N+E, sizeof( gthread_state ) );
+   if ( outstates == NULL ) {
+      LOG( LOG_ERR, "Failed to allocate space for Output Thread states!\n" );
+      free( OutTQs );
+      return -1;
+   }
+   // allocate space for ioblock references
+   ioblock** outblocks = calloc( N+E, sizeof(ioblock*) );
+   if ( outblocks == NULL ) {
+      LOG( LOG_ERR, "Failed to allocate space for ioblock references!\n" );
+      free( OutTQs );
+      free( outstates );
+      return -1;
+   }
+
+   // assign values to thread states
+   int i;
+   for ( i = 0; i < N+E; i++ ) {
+      // object attributes
+      outstates[i].objID = handle->objID;
+      outstates[i].location.pod = handle->loc.pod;
+      outstates[i].location.block = (i + O) % (N+E);
+      outstates[i].location.cap = handle->loc.cap;
+      outstates[i].location.scatter = handle->loc.scatter;
+      outstates[i].dal = handle->ctxt->dal;
+      outstates[i].offset = 0; 
+      // meta info values
+      outstates[i].minfo.N = N;
+      outstates[i].minfo.E = E;
+      outstates[i].minfo.O = O;
+      outstates[i].minfo.partsz = partsz;
+      outstates[i].minfo.versz = handle->versz;
+      outstates[i].minfo.blocksz = handle->blocksz;
+      outstates[i].minfo.crcsum = 0; 
+      outstates[i].minfo.totsz = 0;
+      outstates[i].meta_error = 0; 
+      outstates[i].data_error = 0; 
+   }
+
+   TQ_Init_Opts tqopts;
+   char* lprefstr = malloc( sizeof(char) * ( 6 + ( handle->ctxt->max_block / 10 ) ) );
+   if ( lprefstr == NULL ) {
+      LOG( LOG_ERR, "Failed to allocate space for TQ log prefix string!\n" );
+      return -1;
+   }
+   tqopts.log_prefix = lprefstr;
+   // create a format string for each thread queue
+   tqopts.init_flags = TQ_HALT; // initialize the threads in a HALTED state (essential for reads, doesn't hurt writes)
+   tqopts.max_qdepth = QDEPTH;
+   tqopts.num_threads = 1;
+   tqopts.num_prod_threads = 0;
+   tqopts.thread_init_func = write_init;
+   tqopts.thread_consumer_func = write_consume;
+   tqopts.thread_producer_func = NULL;
+   tqopts.thread_pause_func = write_pause;
+   tqopts.thread_resume_func = write_resume;
+   tqopts.thread_term_func = write_term;
+   // finally, startup the output threads for each in-error block
+   for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
+      outstates[i].dmode = DAL_REBUILD;
+      tqopts.global_state = &(handle->thread_states[i]);
+      // only initialize threads for blocks with errors
+      if ( handle->thread_states[i].data_error  ||  handle->thread_states[i].meta_error ) {
+         // set a log_prefix value for this queue
+         sprintf( lprefstr, "RWQ%d", i );
+         OutTQs[i] = tq_init( &tqopts );
+         if ( OutTQs[i] == NULL ) {
+            LOG( LOG_ERR, "Failed to create output thread_queue for block %d!\n", i );
+            // if we failed to initialize any thread_queue, attempt to abort everything else
+            for ( i -= 1; i >= 0; i-- ) {
+               if ( OutTQs[i] != NULL ) {
+                  tq_set_flags( OutTQs[i], TQ_ABORT );
+                  tq_next_thread_status( OutTQs[i], NULL );
+                  tq_close( OutTQs[i] );
+               }
+            }
+            free( lprefstr );
+            free( OutTQs );
+            free( outstates );
+            return -1;
+         }
+      }
+   }
+   free( lprefstr );
+
+   // unpause threads
+   for ( i = 0; i < N + E; i++ ) {
+      // only bother with thread queues we've initialized
+      if ( OutTQs[i] != NULL ) {
+         // initialize ioqueues
+         outstates[i].ioq = create_ioqueue( handle->versz, handle->epat.partsz, DAL_REBUILD );
+         if ( outstates[i].ioq == NULL ) {
+            LOG( LOG_ERR, "Failed to create ioqueue for thread %d!\n", i );
+            break;
+         }
+         // remove the PAUSE flag, allowing thread to begin processing
+         if( tq_unset_flags( OutTQs[i], TQ_HALT ) ) {
+            LOG( LOG_ERR, "Failed to unset PAUSE flag for block %d\n", i );
+            break;
+         }
+      }
+   }
+   // abort if any errors occurred
+   if ( i != N + E ) { // any 'break' condition should trigger this
+      for( ; i >= 0; i-- ) {
+         if ( OutTQs[i] != NULL  &&  outstates[i].ioq ) {
+            destroy_ioqueue( outstates[i].ioq );
+         }
+      }
+      for ( i = 0; i < N + E; i++ ) {
+         if ( OutTQs[i] != NULL ) {
+            tq_set_flags( OutTQs[i], TQ_ABORT );
+            tq_next_thread_status( OutTQs[i], NULL );
+            tq_close( OutTQs[i] );
+         }
+      }
+      return -1;
+   }
+
+   // actually perform the rebuild
+   size_t rebuilt = 0;
+   while ( rebuilt < handle->totsz ) {
+      // read in new ioblocks
+      if ( read_stripes( handle ) ) {
+         LOG( LOG_ERR, "Failed to read in additional stripes!\n" );
+         for ( i = 0; i < N + E; i++ ) {
+            if ( OutTQs[i] != NULL ) {
+               tq_set_flags( OutTQs[i], TQ_ABORT );
+               tq_next_thread_status( OutTQs[i], NULL );
+               tq_close( OutTQs[i] );
+            }
+         }        
+         return -1;
+      }
+
+      // copy ioblock data off to our writer threads
+      for ( i = 0; i < N+E; i++ ) {
+         // only copy to running output threads
+         if ( OutTQs[i] != NULL ) {
+            size_t block_cpy = 0;
+            while ( block_cpy < handle->iob_datasz ) {
+
+               // check that the current ioblock has room for our data
+               int reserved;
+               ioblock* push_block;
+               if ( (reserved = reserve_ioblock( &(outblocks[i]), &(push_block), outstates[i].ioq )) == 0 ) {
+                  void* tgt = ioblock_write_target( outblocks[i] );
+                  // copy caller data into our ioblock
+                  memcpy( tgt, handle->iob[i]->buff, partsz ); // no error check, SEGFAULT or nothing
+                  block_cpy+=partsz;
+                  ioblock_update_fill( outblocks[i], partsz, 0 );
+               }
+               else if ( reserved > 0 ) {
+                  // the block is full and must be pushed to our iothread
+                  if ( tq_enqueue( OutTQs[i], TQ_NONE, (void*) push_block ) ) {
+                     LOG( LOG_ERR, "Failed to push ioblock to thread_queue %d\n", i );
+                     for ( i = 0; i < N + E; i++ ) {
+                        if ( OutTQs[i] != NULL ) {
+                           tq_set_flags( OutTQs[i], TQ_ABORT );
+                           tq_next_thread_status( OutTQs[i], NULL );
+                           tq_close( OutTQs[i] );
+                        }
+                     }        
+                     errno = EBADF;
+                     return -1;
+                  }
+               }
+               else {
+                  LOG( LOG_ERR, "Failed to reserve ioblock for position %d!\n", i );
+                  for ( i = 0; i < N + E; i++ ) {
+                     if ( OutTQs[i] != NULL ) {
+                        tq_set_flags( OutTQs[i], TQ_ABORT );
+                        tq_next_thread_status( OutTQs[i], NULL );
+                        tq_close( OutTQs[i] );
+                     }
+                  }        
+                  errno = EBADF;
+                  return -1;
+               }
+            }
+         }
+      } // end of per-block for-loop
+      rebuilt += stripesz;
+   }
+
+   // finally, terminate the output threads
+   //
+   // propagate our current totsz value to all threads
+   for ( i = 0; i < N + E; i++ ) {
+      outstates[i].minfo.totsz = handle->totsz;
+   }
+
+   // set a FINISHED state for all threads
+   int ret_val = 0;
+   for ( i = 0; i < N + E; i++ ) {
+      // make sure to release any remaining ioblocks
+      if ( outblocks[i] ) {
+         ioblock* push_block = NULL;
+         // perform a final reserve call to split any excess data
+         if ( reserve_ioblock( &(handle->iob[i]), &(push_block), handle->thread_states[i].ioq ) > 0 ) {
+            LOG( LOG_INFO, "Final ioblock is full, enqueueing it and reserving another\n" );
+            if ( tq_enqueue( handle->thread_queues[i], TQ_NONE, (void*)(push_block) ) ) {
+               LOG( LOG_ERR, "Failed to enqueue semi-final ioblock to thread_queue %d!\n", i );
+               ret_val = -1;
+            }
+         }
+         if ( handle->iob[i]->data_size ) {
+            LOG( LOG_INFO, "Enqueueing final ioblock at position %d\n", i );
+            // if data remains, push it now
+            if ( tq_enqueue( handle->thread_queues[i], TQ_NONE, (void*)(handle->iob[i]) ) ) {
+               LOG( LOG_ERR, "Failed to enqueue final ioblock to thread_queue %d!\n", i );
+               ret_val = -1;
+            }
+         }
+         else {
+            LOG( LOG_INFO, "Releasing empty final ioblock!\n" );
+            release_ioblock( outstates[i].ioq );
+         }
+         handle->iob[i] = NULL;
+      }
+      // signal the thread to finish
+      LOG( LOG_INFO, "Setting FINISHED state for block %d\n", i );
+      if ( ret_val != 0  ||  tq_set_flags( OutTQs[i], TQ_FINISHED ) ) {
+         LOG( LOG_ERR, "Failed to set a FINISHED state for thread %d!\n", i );
+         ret_val = -1;
+         // attempt to abort, ignoring errors
+         tq_set_flags( OutTQs[i], TQ_ABORT );
+      }
+   }
+
+   // verify thread termination and close all queues
+   for ( i = 0; i < N + E; i++ ) {
+      LOG( LOG_INFO, "Terminating queue %d\n", i );
+      tq_next_thread_status( OutTQs[i], NULL );
+      tq_close( OutTQs[i] );
+      destroy_ioqueue( outstates[i].ioq );
+   }
+
+   int numerrs = 0; // for checking write safety
+   // check the status of all blocks
+   for ( i = 0; i < N + E; i++ ) {
+      if ( outstates[i].meta_error  ||  outstates[i].data_error ) { 
+         LOG( LOG_ERR, "Detected error in regenerated block %d!\n" );
+         numerrs++;
+      }
+   }
+
+   // any error is a failure
+   if ( numerrs > 0 ) {
+      return -1;
+   }
+
+   return 0;
 }
 
 
@@ -1604,7 +1895,7 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
       return -1;
    }
 
-   if ( handle->mode != NE_RDONLY  &&  handle->mode != NE_RDALL ) {
+   if ( handle->mode != NE_RDONLY  &&  handle->mode != NE_RDALL  &&  (handle->mode == NE_REBUILD  &&  offset != 0) ) {
       LOG( LOG_ERR, "Handle is in improper mode for reading!\n" );
       errno = EPERM;
       return -1;

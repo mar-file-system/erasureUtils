@@ -72,18 +72,18 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <unistd.h>
 #include <time.h>
 
-#include "erasure.h"
+#include "ne.h"
 
 
-int crc_status() {
-#ifdef INT_CRC
-   printf("Intermediate-CRCs: Active\n");
-   return 0;
-#else
-   printf("Intermediate-CRCs: Inactive\n");
-   return 1;
-#endif
-}
+//int crc_status() {
+//#ifdef INT_CRC
+//   printf("Intermediate-CRCs: Active\n");
+//   return 0;
+//#else
+//   printf("Intermediate-CRCs: Inactive\n");
+//   return 1;
+//#endif
+//}
 
 
 
@@ -145,13 +145,13 @@ void usage(const char* prog_name, const char* op) {
    PRINTout("  %2s %-10s %s\n",                                \
            (!strncmp(op, CMD, 10) ? "->" : ""), (CMD), (ARGS))
 
-   USAGE("read",       "erasure_path ( -n |  N E start_file ) [-t timing_flags] [-e] [-r] [-s input_size] [-o output_file]");
-   USAGE("verify",     "erasure_path ( -n |  N E start_file ) [-t timing_flags] [-e] [-r] [-s input_size] [-o output_file]");
-   USAGE("write",      "erasure_path         N E start_file   [-t timing_flags] [-e] [-r] [-s input_size] [-i input_file]");
-   USAGE("rebuild",    "erasure_path ( -n |  N E start_file ) [-t timing_flags] [-e]");
-   USAGE("delete",     "erasure_path stripe_width             [-t timing_flags] [-f]");
-   USAGE("stat",       "erasure_path                          [-t timing_flags]");
-   USAGE("crc-status", "");
+   USAGE("read",       "erasure_path ( -n |  N E start_file ) [-e] [-r] [-s input_size] [-o output_file]");
+   USAGE("verify",     "erasure_path ( -n |  N E start_file ) [-e] [-r] [-s input_size] [-o output_file]");
+   USAGE("write",      "erasure_path         N E start_file   [-e] [-r] [-s input_size] [-i input_file]");
+   USAGE("rebuild",    "erasure_path ( -n |  N E start_file ) [-e]");
+   USAGE("delete",     "erasure_path stripe_width             [-f]");
+   USAGE("stat",       "erasure_path");
+//   USAGE("crc-status", "");
    USAGE("help",       "");
    PRINTout("\n");
 
@@ -175,16 +175,16 @@ void usage(const char* prog_name, const char* op) {
    PRINTout("                          is read/verified and all data/erasure blocks are opened.  Stripe info and/or errors discovered \n");
    PRINTout("                          during this process are then displayed in a manner similar to that of '-e' option output for \n");
    PRINTout("                          for other commands (see NOTES for important output differences).\n");
-   PRINTout("\n");
-   PRINTout("      crc-status         Prints MAXN and MAXE values supported by libne, as well as whether intermediate crcs are active.\n");
+//   PRINTout("\n");
+//   PRINTout("      crc-status         Prints MAXN and MAXE values supported by libne, as well as whether intermediate crcs are active.\n");
    PRINTout("\n");
    PRINTout("      help               Prints this usage information and exits.\n");
    PRINTout("\n");
    PRINTout("  Options:\n");
    PRINTout("      -n                 For read/verfiy/write operations, specifies the use of the NE_NOINFO flag.\n");
    PRINTout("                          This will result in the automatic setting of N/E/start_file values based on stripe metadata.\n");
-   PRINTout("\n");
-   PRINTout("      -t timing_flags    Specifies flags to be passed to the libne internal timer functions.  See 'NOTES' below.\n");
+//   PRINTout("\n");
+//   PRINTout("      -t timing_flags    Specifies flags to be passed to the libne internal timer functions.  See 'NOTES' below.\n");
    PRINTout("\n");
    PRINTout("      -e                 For read/verify/write/rebuild, specifies the use of the NE_ESTATE flag.\n");
    PRINTout("                          This will allow an e_state struct to be retrieved following the operation.  Some content of \n");
@@ -212,19 +212,19 @@ void usage(const char* prog_name, const char* op) {
    PRINTout("      Return codes for all operations are relative to actual file locations (no erasure offset).\n");
    PRINTout("\n");
    PRINTout("     <stripe_width> refers to the total number of data/erasure parts in the target stripe (N+E).\n");
-   PRINTout("\n");
-   PRINTout("     <timing_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
-   PRINTout("                   OPEN    =  0x0001\n");
-   PRINTout("                   RW      =  0x0002     /* each individual read/write, in given stream */\n");
-   PRINTout("                   CLOSE   =  0x0004     /* cost of close */\n");
-   PRINTout("                   RENAME  =  0x0008\n");
-   PRINTout("                   STAT    =  0x0010\n");
-   PRINTout("                   XATTR   =  0x0020\n");
-   PRINTout("                   ERASURE =  0x0040\n");
-   PRINTout("                   CRC     =  0x0080\n");
-   PRINTout("                   THREAD  =  0x0100     /* from beginning to end  */\n");
-   PRINTout("                   HANDLE  =  0x0200     /* from start/stop, all threads, in 1 handle */\n");
-   PRINTout("                   SIMPLE  =  0x0400     /* diagnostic output uses terse numeric formats */\n");
+//   PRINTout("\n");
+//   PRINTout("     <timing_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
+//   PRINTout("                   OPEN    =  0x0001\n");
+//   PRINTout("                   RW      =  0x0002     /* each individual read/write, in given stream */\n");
+//   PRINTout("                   CLOSE   =  0x0004     /* cost of close */\n");
+//   PRINTout("                   RENAME  =  0x0008\n");
+//   PRINTout("                   STAT    =  0x0010\n");
+//   PRINTout("                   XATTR   =  0x0020\n");
+//   PRINTout("                   ERASURE =  0x0040\n");
+//   PRINTout("                   CRC     =  0x0080\n");
+//   PRINTout("                   THREAD  =  0x0100     /* from beginning to end  */\n");
+//   PRINTout("                   HANDLE  =  0x0200     /* from start/stop, all threads, in 1 handle */\n");
+//   PRINTout("                   SIMPLE  =  0x0400     /* diagnostic output uses terse numeric formats */\n");
    PRINTout("\n");
    PRINTout("     <erasure_path> is one of the following\n");
    PRINTout("       [RDMA] xx.xx.xx.%%d:pppp/local/blah/block%%d/.../fname\n");
@@ -238,40 +238,40 @@ void usage(const char* prog_name, const char* op) {
 
 
 
-int parse_flags(TimingFlagsValue* flags, const char* str) {
-   if (! str)
-      *flags = 0;
-   else {
-      errno = 0;
-      // strtol() already detects the '0x' prefix for us
-      *flags = (TimingFlagsValue)strtol(str, NULL, 0);
-      if (errno) {
-         PRINTout("couldn't parse flags from '%s'\n", str);
-         return -1;
-      }
-   }
-
-   return 0;
-}
-
-
-uDALType
-select_impl(const char* path) {
-   return (strchr(path, ':')
-           ? UDAL_SOCKETS
-           : UDAL_POSIX);
-}
-
-SnprintfFunc
-select_snprintf(const char* path) {
-#if (SOCKETS != SKT_none)
-   return (strchr(path, ':')
-           ? snprintf_for_vle      // MC over RDMA-sockets
-           : ne_default_snprintf); // MC over NFS
-#else
-   return ne_default_snprintf; // MC over NFS
-#endif
-}
+//int parse_flags(TimingFlagsValue* flags, const char* str) {
+//   if (! str)
+//      *flags = 0;
+//   else {
+//      errno = 0;
+//      // strtol() already detects the '0x' prefix for us
+//      *flags = (TimingFlagsValue)strtol(str, NULL, 0);
+//      if (errno) {
+//         PRINTout("couldn't parse flags from '%s'\n", str);
+//         return -1;
+//      }
+//   }
+//
+//   return 0;
+//}
+//
+//
+//uDALType
+//select_impl(const char* path) {
+//   return (strchr(path, ':')
+//           ? UDAL_SOCKETS
+//           : UDAL_POSIX);
+//}
+//
+//SnprintfFunc
+//select_snprintf(const char* path) {
+//#if (SOCKETS != SKT_none)
+//   return (strchr(path, ':')
+//           ? snprintf_for_vle      // MC over RDMA-sockets
+//           : ne_default_snprintf); // MC over NFS
+//#else
+//   return ne_default_snprintf; // MC over NFS
+//#endif
+//}
 
 
 void print_erasure_state( e_state state, int start_block ) {
@@ -339,7 +339,7 @@ int main( int argc, const char** argv )
    int E = -1;
    int O = -1;
    char* erasure_path = NULL;
-   TimingFlagsValue   timing_flags = 0;
+//   TimingFlagsValue   timing_flags = 0;
    int                parse_err = 0;
    char               size_arg = 0;
    char               rand_size = 0;
@@ -361,12 +361,12 @@ int main( int argc, const char** argv )
    while ( (c = getopt( argc, (char* const*)argv, "t:i:o:s:rnefh" )) != -1 ) {
       switch (c) {
          char* endptr;
-         case 't':
-            if ( parse_flags(&timing_flags, optarg) ) {
-               PRINTout( "failed to parse timing flags value: \"%s\"\n", optarg );
-               pr_usage = 1;
-            }
-            break;
+//         case 't':
+//            if ( parse_flags(&timing_flags, optarg) ) {
+//               PRINTout( "failed to parse timing flags value: \"%s\"\n", optarg );
+//               pr_usage = 1;
+//            }
+//            break;
          case 'i':
             input_file = optarg;
             break;
@@ -423,11 +423,11 @@ int main( int argc, const char** argv )
             wr = 4;
          else if ( strcmp( argv[c], "stat"    ) == 0 )
             wr = 5;
-         else if ( strcmp( argv[c], "crc-status" ) == 0 ) {
-            PRINTout( "MAXN: %d     MAXE: %d\n", MAXN, MAXE );
-            crc_status();
-            return 0;
-         }
+//         else if ( strcmp( argv[c], "crc-status" ) == 0 ) {
+//            PRINTout( "MAXN: %d     MAXE: %d\n", MAXN, MAXE );
+//            crc_status();
+//            return 0;
+//         }
          else if ( strcmp( argv[c], "help" ) == 0 ) {
             usage( argv[0], argv[c] );
             return 0;
