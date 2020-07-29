@@ -65,7 +65,7 @@ LOGFILE=$WORK_DIRECTORY/log_errTests.$$ # Name of the test logfile
 LIBTLOG=$WORK_DIRECTORY/log_libneTests.$$ # Name of the libneTest output logfile
 DATAFILE=$WORK_DIRECTORY/testfile.$$
 OUTFILE=$WORK_DIRECTORY/outfile.$$
-EPAT=$WORK_DIRECTORY/testout.%d.$$
+EPAT=$WORK_DIRECTORY/testout.{b}.$$
 FSZ=20  # Size of the input file in 10s of MBytes (i.e. a value of 20 -> 200M file)
 
 re='^[0-9]+$'
@@ -106,7 +106,7 @@ if [[ $ret -ne 0 ]]; then
    fi
 fi
 
-LIBNETEST="./libneTest"
+LIBNETEST="./neutil"
 if [[ ! -e "$LIBNETEST" ]]; then
    LIBNETEST="$( which libneTest 2>/dev/null )"
    if [[ $? -ne 0 ]]; then
@@ -218,22 +218,26 @@ corrupt_file() {
 }
 
 
-re=".* Active.*"
+#re=".* Active.*"
+#
+#ret=$( $LIBNETEST crc-status | tail -n 2 )
+#crcs=$( echo "$ret" | tail -n 1 )
+#ret=$( echo "$ret" | head -n 1 )
+#maxN=$( echo "$ret" | awk '{print $2}' )
+#maxE=$( echo "$ret" | awk '{print $4}' )
+#echo "   MaxN: $maxN   MaxE: $maxE"
+#echo
+#if [[ $crcs =~ $re ]]; then
+#   ICRC=0
+#   echo "INTERMEDIATE CRCS - ACTIVE"
+#else
+#   ICRC=1
+#   echo "INTERMEDIATE CRCS - INACTIVE"
+#fi
 
-ret=$( $LIBNETEST crc-status | tail -n 2 )
-crcs=$( echo "$ret" | tail -n 1 )
-ret=$( echo "$ret" | head -n 1 )
-maxN=$( echo "$ret" | awk '{print $2}' )
-maxE=$( echo "$ret" | awk '{print $4}' )
-echo "   MaxN: $maxN   MaxE: $maxE"
-echo
-if [[ $crcs =~ $re ]]; then
-   ICRC=0
-   echo "INTERMEDIATE CRCS - ACTIVE"
-else
-   ICRC=1
-   echo "INTERMEDIATE CRCS - INACTIVE"
-fi
+maxN=15
+maxE=5
+ICRC=0
 
 re='^[0-9]+$'
 
@@ -294,7 +298,7 @@ while [[ $cnt -lt $ITER ]]; do
    fi
    echo "   stripe generation complete" >> $LOGFILE
    echo
-   ls $( echo "$EPAT" | sed 's/%d/\*/' )
+   ls $( echo "$EPAT" | sed 's/{b}/\*/' )
 
    incnt=0
    while [[ $incnt -lt $INITER ]]; do
@@ -360,7 +364,7 @@ while [[ $cnt -lt $ITER ]]; do
             met_err_list[$errpos]=1
             stat=$(( stat + 2**errpos ))
             tstat=$(( tstat + 2**errpos ))
-            corrupt_file "$( echo "$EPAT" | sed 's/%d/'"$errpos"'/' | sed 's/$/.meta/' )" 1
+            corrupt_file "$( echo "$EPAT" | sed 's/{b}/'"$errpos"'/' | sed 's/$/.meta/' )" 1
             if [[ $? -eq 2 ]]; then
                (( silent_met_err_cnt++ ))
                silent_met_err_list[$errpos]=1
@@ -414,11 +418,11 @@ while [[ $cnt -lt $ITER ]]; do
             # if there are no previous errors at this postion, note it for rc checking
             if [[ ${met_err_list[$errpos]} -eq 0 ]]; then
                stat=$(( stat + 2**errpos ))
-               corrupt_file "$( echo "$EPAT" | sed 's/%d/'"$errpos"'/' )" 1
+               corrupt_file "$( echo "$EPAT" | sed 's/{b}/'"$errpos"'/' )" 1
                cor_type=$?
             else
                # make sure not to create a backup '.meta' file if we have already corrupted it
-               corrupt_file "$( echo "$EPAT" | sed 's/%d/'"$errpos"'/' )" 0
+               corrupt_file "$( echo "$EPAT" | sed 's/{b}/'"$errpos"'/' )" 0
                cor_type=$?
             fi
             # only note errors which do not align with meta errors and which are removal type or in data blocks
@@ -624,7 +628,7 @@ while [[ $cnt -lt $ITER ]]; do
          echo
 
          if [[ $npat == *"1"* ]]; then
-            ls $( echo "$EPAT*" | sed 's/%d/\*/' ) | while read -r line; do
+            ls $( echo "$EPAT*" | sed 's/{b}/\*/' ) | while read -r line; do
                if [[ -e "$line".backup ]]; then
                   echo -n "Performing comparison against original file = \"""$line"".backup\"..."
                   echo "Performing comparison against original file = \"""$line"".backup\"..." >> $LOGFILE

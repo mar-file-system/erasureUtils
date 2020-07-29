@@ -86,49 +86,51 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 //}
 
 
+#define PRINTout(...) fprintf( stdout, ##__VA_ARGS__)
 
-#if (SOCKETS != SKT_none)
 
-// <dest> is the buffer to receive the snprintf'ed path
-// <size> is the size of that buffer
-// <format> is a path template.  For sockets, on the VLE,
-//           it might look like 192.168.0.%d:/zfs/exports/repo10+2/pod1/block%d/my_file
-// <block> is the current 0-based block-number (from libne)
-// <state> is whatever state was passed into ne_open1()
+//#if (SOCKETS != SKT_none)
 //
+//// <dest> is the buffer to receive the snprintf'ed path
+//// <size> is the size of that buffer
+//// <format> is a path template.  For sockets, on the VLE,
+////           it might look like 192.168.0.%d:/zfs/exports/repo10+2/pod1/block%d/my_file
+//// <block> is the current 0-based block-number (from libne)
+//// <state> is whatever state was passed into ne_open1()
+////
+////
+//// WARNING: When MarFS calls libne on behalf of RMDA-sockets-based repos,
+////     it also passes in an snprintf function, plus an argument that
+////     contains parts of the parsed MarFS configuration, which are used by
+////     that snprintf function to compute the proper values for host-number
+////     and block-number in the partially-rehydrated path-template (i.e. it
+////     already has scatter-dir and cap-unit filled in), using information
+////     from the configuration.
+//// 
+////     Here, we don't have that.  Instead, this is just hardwired to match
+////     the latest config on the pre-prod testbed.  If the testbed changes, and
+////     you change your MARFSCONFIGRC to try to fix things ... things still
+////     won't be fixed, this hardwired thing will be the thing that's
+////     broken.
+////
+////     see marfs/fuse/src/dal.c
+////
+//int snprintf_for_vle(char*       dest,
+//                     size_t      size,
+//                     const char* format,
+//                     uint32_t    block,
+//                     void*       state) {
 //
-// WARNING: When MarFS calls libne on behalf of RMDA-sockets-based repos,
-//     it also passes in an snprintf function, plus an argument that
-//     contains parts of the parsed MarFS configuration, which are used by
-//     that snprintf function to compute the proper values for host-number
-//     and block-number in the partially-rehydrated path-template (i.e. it
-//     already has scatter-dir and cap-unit filled in), using information
-//     from the configuration.
-// 
-//     Here, we don't have that.  Instead, this is just hardwired to match
-//     the latest config on the pre-prod testbed.  If the testbed changes, and
-//     you change your MARFSCONFIGRC to try to fix things ... things still
-//     won't be fixed, this hardwired thing will be the thing that's
-//     broken.
+//  int pod_offset   = 0;
+//  // int host_offset  = 1 + (block / 2);  // VLE
+//  int host_offset  = 7 + block;  // pre-prod
+//  int block_offset = 0;
 //
-//     see marfs/fuse/src/dal.c
-//
-int snprintf_for_vle(char*       dest,
-                     size_t      size,
-                     const char* format,
-                     uint32_t    block,
-                     void*       state) {
-
-  int pod_offset   = 0;
-  // int host_offset  = 1 + (block / 2);  // VLE
-  int host_offset  = 7 + block;  // pre-prod
-  int block_offset = 0;
-
-  return snprintf(dest, size, format,
-                  pod_offset + host_offset, // "192.168.0.%d"
-                  block_offset + block);    // "block%d"
-}
-#endif
+//  return snprintf(dest, size, format,
+//                  pod_offset + host_offset, // "192.168.0.%d"
+//                  block_offset + block);    // "block%d"
+//}
+//#endif
 
 
 
@@ -145,12 +147,12 @@ void usage(const char* prog_name, const char* op) {
    PRINTout("  %2s %-10s %s\n",                                \
            (!strncmp(op, CMD, 10) ? "->" : ""), (CMD), (ARGS))
 
-   USAGE("read",       "erasure_path ( -n |  N E start_file ) [-e] [-r] [-s input_size] [-o output_file]");
-   USAGE("verify",     "erasure_path ( -n |  N E start_file ) [-e] [-r] [-s input_size] [-o output_file]");
-   USAGE("write",      "erasure_path         N E start_file   [-e] [-r] [-s input_size] [-i input_file]");
-   USAGE("rebuild",    "erasure_path ( -n |  N E start_file ) [-e]");
-   USAGE("delete",     "erasure_path stripe_width             [-f]");
-   USAGE("stat",       "erasure_path");
+   USAGE("write",      "erasure_path                N E O   [-e] [-r] [-s input_size] [-i input_file]");
+   USAGE("read",       "erasure_path ( -n swidth |  N E O ) [-e] [-r] [-s input_size] [-o output_file]");
+   USAGE("verify",     "erasure_path ( -n swidth |  N E O ) [-e]");
+   USAGE("rebuild",    "erasure_path ( -n swidth |  N E O ) [-e]");
+   USAGE("delete",     "erasure_path      swidth            [-f]");
+   USAGE("stat",       "erasure_path      swidth");
 //   USAGE("crc-status", "");
    USAGE("help",       "");
    PRINTout("\n");
@@ -181,7 +183,7 @@ void usage(const char* prog_name, const char* op) {
    PRINTout("      help               Prints this usage information and exits.\n");
    PRINTout("\n");
    PRINTout("  Options:\n");
-   PRINTout("      -n                 For read/verfiy/write operations, specifies the use of the NE_NOINFO flag.\n");
+   PRINTout("      -n swidth          For read/verfiy/write operations, specifies the use of the NE_NOINFO flag.\n");
    PRINTout("                          This will result in the automatic setting of N/E/start_file values based on stripe metadata.\n");
 //   PRINTout("\n");
 //   PRINTout("      -t timing_flags    Specifies flags to be passed to the libne internal timer functions.  See 'NOTES' below.\n");
@@ -211,7 +213,7 @@ void usage(const char* prog_name, const char* op) {
    PRINTout("      The struct returned by ne_stat() has no such adjustment, and is thus relative to the actual file locations.\n");
    PRINTout("      Return codes for all operations are relative to actual file locations (no erasure offset).\n");
    PRINTout("\n");
-   PRINTout("     <stripe_width> refers to the total number of data/erasure parts in the target stripe (N+E).\n");
+   PRINTout("     <swidth> refers to the total number of data/erasure parts in the target stripe (N+E).\n");
 //   PRINTout("\n");
 //   PRINTout("     <timing_flags> can be decimal, or can be hex-value starting with \"0x\"\n");
 //   PRINTout("                   OPEN    =  0x0001\n");
@@ -226,11 +228,13 @@ void usage(const char* prog_name, const char* op) {
 //   PRINTout("                   HANDLE  =  0x0200     /* from start/stop, all threads, in 1 handle */\n");
 //   PRINTout("                   SIMPLE  =  0x0400     /* diagnostic output uses terse numeric formats */\n");
    PRINTout("\n");
-   PRINTout("     <erasure_path> is one of the following\n");
-   PRINTout("       [RDMA] xx.xx.xx.%%d:pppp/local/blah/block%%d/.../fname\n");
-   PRINTout("               ('/local/blah' is some local path on all accessed storage nodes)\n");
-   PRINTout("       [MC]   /NFS/blah/block%%d/.../fname\n");
-   PRINTout("               ('/NFS/blah/'  is some NFS path on the client nodes)\n");
+   PRINTout("     <erasure_path> is of the following format\n");
+   PRINTout("                    /NFS/blah/block%%d/.../fname\n");
+   PRINTout("                     ('/NFS/blah/'  is some NFS path on the client nodes)\n");
+//   PRINTout("       [RDMA] xx.xx.xx.%%d:pppp/local/blah/block%%d/.../fname\n");
+//   PRINTout("               ('/local/blah' is some local path on all accessed storage nodes)\n");
+//   PRINTout("       [MC]   /NFS/blah/block%%d/.../fname\n");
+//   PRINTout("               ('/NFS/blah/'  is some NFS path on the client nodes)\n");
    PRINTout("\n");
 
 #undef USAGE
@@ -274,19 +278,23 @@ void usage(const char* prog_name, const char* op) {
 //}
 
 
-void print_erasure_state( e_state state, int start_block ) {
+void print_erasure_state( ne_erasure* epat, ne_state* state ) {
    PRINTout( "====================== Erasure State ======================\n" );
-   PRINTout( "N: %d  E: %d  bsz: %d  Start-Pos: %d  totsz: %llu\n",
-             state->N, state->E, state->bsz, state->O, (unsigned long long)state->totsz );
+   PRINTout( "N: %d  E: %d  O: %d  partsz: %zu  versz: %zu  blocksz: %zu  totsz: %llu\n",
+             epat->N, epat->E, epat->O, epat->partsz, state->versz, state->blocksz, (unsigned long long)state->totsz );
    // this complicated declaration is simply meant to ensure that we have space for 
    //  a null terminator and up to 5 chars per potential array element
-   char output_string[ (MAXPARTS * 5) + 1 ];
+   char* output_string = malloc( ((epat->N+epat->E) * 5) + 1 );
+   if ( output_string == NULL ) {
+      PRINTout( "Failed to allocate space for an internal string!\n" );
+      return;
+   }
    output_string[0] = '\0'; // the initial strncat() call will expect a null terminator
    int tmp;
    // construct a list of physical block numbers based on the provided start_block
-   for( tmp = 0; tmp < ( state->N + state->E ); tmp++ ){
+   for( tmp = 0; tmp < ( epat->N + epat->E ); tmp++ ){
       char append_str[6];
-      snprintf( append_str, 6, "%4d", (tmp + start_block) % (state->N + state->E) );
+      snprintf( append_str, 6, "%4d", (tmp + epat->O) % (epat->N + epat->E) );
       strncat( output_string, append_str, 5 );
    }
 
@@ -295,7 +303,7 @@ void print_erasure_state( e_state state, int start_block ) {
 
    int eerr = 0;
    // construct a list of meta_status array elements for later printing
-   for( tmp = 0; tmp < ( state->N + state->E ); tmp++ ){
+   for( tmp = 0; tmp < ( epat->N + epat->E ); tmp++ ){
       if( state->meta_status[tmp] )
          eerr++;
       char append_str[6];
@@ -308,7 +316,7 @@ void print_erasure_state( e_state state, int start_block ) {
 
    int nerr = 0;
    // construct a list of data_status array elements for later printing
-   for( tmp = 0; tmp < ( state->N + state->E ); tmp++ ){
+   for( tmp = 0; tmp < ( epat->N + epat->E ); tmp++ ){
       if( state->data_status[tmp] )
          nerr++;
       char append_str[6];
@@ -317,8 +325,9 @@ void print_erasure_state( e_state state, int start_block ) {
    }
 
    PRINTout( "%s%s\n", "Data/Erasure Errors:", output_string );
+   free( output_string );
 
-   if( nerr > state->E  ||  eerr > state->E )
+   if( nerr > epat->E  ||  eerr > epat->E )
       PRINTout( "WARNING: excessive errors were found, and the data may be unrecoverable!\n" );
    else if ( nerr > 0  ||  eerr > 0 )
       PRINTout( "WARNING: errors were found, be sure to rebuild this object before data loss occurs!\n" );
@@ -338,6 +347,7 @@ int main( int argc, const char** argv )
    int N = -1;
    int E = -1;
    int O = -1;
+   size_t partsz = 0;
    char* erasure_path = NULL;
 //   TimingFlagsValue   timing_flags = 0;
    int                parse_err = 0;
@@ -349,16 +359,12 @@ int main( int argc, const char** argv )
    char* output_file = NULL;
    char* input_file  = NULL;
 
-   unsigned long long buff_size = ( BLKSZ + 1 ) * MAXN; //choose a buffer size that can potentially read/write beyond a stripe boundary
-                                                        //this is meant to hit more edge cases, not performance considerations
-   size_t totbytes = buff_size;
-
-   LOG_INIT();
+   size_t totbytes = 0;
 
    char pr_usage = 0;
    int c;
    // parse all position-independent arguments
-   while ( (c = getopt( argc, (char* const*)argv, "t:i:o:s:rnefh" )) != -1 ) {
+   while ( (c = getopt( argc, (char* const*)argv, "t:i:o:s:n:refh" )) != -1 ) {
       switch (c) {
          char* endptr;
 //         case 't':
@@ -388,6 +394,14 @@ int main( int argc, const char** argv )
             break;
          case 'n':
             no_info = 1;
+            N = strtoll(optarg, &endptr, 10);
+            // afterwards, check for a parse error
+            if ( *endptr != '\0' ) {
+               PRINTout( "%s: failed to parse argument for '-n' option: \"%s\"\n", argv[0], optarg );
+               usage( argv[0], "help" );
+               return -1;
+            }
+            E = 0; // so N+E is still stripe width
             break;
          case 'e':
             show_state = 1;
@@ -472,6 +486,7 @@ int main( int argc, const char** argv )
             usage( argv[0], operation );
             return -1;
          }
+         E = 0;
       }
       else {
          PRINTout( "%s: encountered unrecognized argument: \"%s\"\n", argv[0], argv[c] );
@@ -538,73 +553,28 @@ int main( int argc, const char** argv )
       return -1;
    }
    
-   PRINTdbg("libneTest: command = '%s'\n", operation);
+   PRINTout("libneTest: command = '%s'\n", operation);
 
-#  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, \
-                                                 timing_flags, NULL,    \
-                                                 (PATH), (MODE), ##__VA_ARGS__ )
+//#  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, \
+//                                                 timing_flags, NULL,    \
+//                                                 (PATH), (MODE), ##__VA_ARGS__ )
+//
+//#  define NE_DELETE(PATH, WIDTH)      ne_delete1(select_snprintf(PATH), NULL, select_impl(PATH), auth, \
+//                                                 timing_flags, NULL,    \
+//                                                 (PATH), (WIDTH))
+//
+//# define NE_STAT_CALL(PATH, E_STRUCT)      ne_stat1(select_snprintf(PATH), NULL, select_impl(PATH), auth, \
+//                                                 timing_flags, NULL,    \
+//                                                 (PATH), (E_STRUCT) )
+//
 
-#  define NE_DELETE(PATH, WIDTH)      ne_delete1(select_snprintf(PATH), NULL, select_impl(PATH), auth, \
-                                                 timing_flags, NULL,    \
-                                                 (PATH), (WIDTH))
-
-# define NE_STAT_CALL(PATH, E_STRUCT)      ne_stat1(select_snprintf(PATH), NULL, select_impl(PATH), auth, \
-                                                 timing_flags, NULL,    \
-                                                 (PATH), (E_STRUCT) )
-
-   ne_handle handle;
-
-   SktAuth  auth;
-   if (DEFAULT_AUTH_INIT(auth)) {
-      PRINTout("%s: failed to initialize default socket-authentication credentials\n", argv[0] );
+   // first, establish an ne_context
+   ne_location maxloc = { .pod = 0, .cap = 0, .scatter = 0 };
+   ne_ctxt ctxt = ne_path_init( erasure_path, maxloc, N+E );
+   if ( !ctxt ) {
+      PRINTout( "Failed to establish an ne_ctxt!\n" );
       return -1;
    }
-   int tmp;
-
-   // -----------------------------------------------------------------
-   // rebuild
-   // -----------------------------------------------------------------
-
-   if ( wr == 3 ) {
-      PRINTout("libneTest: rebuilding erasure striping (N=%d,E=%d,offset=%d)\n", N, E, O );
-      struct ne_state_struct state_struct;
-      e_state state = &state_struct;
-
-      // how we call ne_rebuild() depends greatly on the arguments provided
-      if ( show_state ) {
-         if ( (no_info) )
-            tmp = ne_rebuild( erasure_path, NE_REBUILD | NE_ESTATE | NE_NOINFO, state );
-         else
-            tmp = ne_rebuild( erasure_path, NE_REBUILD | NE_ESTATE, state, O, N, E );
-      }
-      else {
-         if ( (no_info) )
-            tmp = ne_rebuild( erasure_path, NE_REBUILD | NE_NOINFO );
-         else
-            tmp = ne_rebuild( erasure_path, NE_REBUILD, O, N, E );
-      }
-
-      if ( (show_state) ) {
-         PRINTout( "Stripe state pre-rebuild:\n" ); 
-         // the positions of these meta/data errors DO take stripe offset into account
-         print_erasure_state( state, state->O );
-      }
-
-      if ( (tmp) ) {
-         PRINTout("Rebuild failed to correct all errors: errno=%d (%s)\n", errno, strerror(errno));
-         if ( tmp < 0 )
-            PRINTout("libneTest: rebuild failed!\n" );
-         else
-            PRINTout("libneTest: rebuild indicates only partial success: rc = %d\n", tmp );
-      }
-      else
-         PRINTout("libneTest: rebuild complete\n" );
-
-      PRINTout("rebuild rc: %d\n",tmp);
-
-      return 0;
-   }
-
 
 
    // -----------------------------------------------------------------
@@ -644,14 +614,49 @@ int main( int argc, const char** argv )
             return -1;
          }
       }
-      if ( NE_DELETE( erasure_path, N ) ) {
+      if ( ne_delete( ctxt, "", maxloc ) ) {
          PRINTout("libneTest: deletion attempt indicates a failure for path \"%s\": errno=%d (%s)\n",
                   (char*)argv[2], errno, strerror(errno));
          return -1;
       }
       PRINTout("libneTest: deletion successful\n" );
+      if ( ne_term( ctxt ) ) {
+         PRINTout("Failed to properly free ne_ctxt!\n" );
+         return -1;
+      }
       return 0;
    }
+
+
+   ne_handle handle = NULL;
+   ne_erasure epat = { .N = N, .E = E, .O = O, .partsz = 1024 }; // TODO partsz arg?
+   ne_state   state;
+   state.meta_status = NULL;
+   state.data_status = NULL;
+   state.csum = NULL;
+
+   // check if we need to use stat to get stripe structure
+   if ( no_info  ||  wr == 5 ) {
+      handle = ne_stat( ctxt, "", maxloc );
+      if ( !handle ) {
+         PRINTout( "Failed to open a handle reference with ne_stat()!\n" );
+         return -1;
+      }
+      if ( ne_get_info( handle, &epat, NULL ) < 0 ) {
+         PRINTout( "Failed to retrieve info from stat handle!\n" );
+         return -1;
+      }
+      // set stripe values based on the modified epat struct
+      N = epat.N;
+      E = epat.E;
+      O = epat.O;
+   }
+   state.meta_status = calloc( sizeof( char ), (N + E) * 2 );
+   if ( state.meta_status == NULL ) {
+      PRINTout( "Failed to allocate space for a meta_status array!\n" );
+      return -1;
+   }
+   state.data_status = state.meta_status + (N + E);
 
 
    // -----------------------------------------------------------------
@@ -659,28 +664,95 @@ int main( int argc, const char** argv )
    // -----------------------------------------------------------------
 
    if ( wr == 5 ) {
-      PRINTout("libneTest: retrieving status of erasure striping with path \"%s\"\n", (char *)argv[2] );
-      struct ne_state_struct state_struct;
-      e_state state = &state_struct;
+      PRINTout("libneTest: retrieving status of erasure striping with path \"%s\"\n", erasure_path );
 
       int ret;
-      if ( ( ret = NE_STAT_CALL( erasure_path, state ) ) < 0 ) {
+      if ( ( ret = ne_get_info( handle, &epat, &state ) ) < 0 ) {
          PRINTout( "libneTest: ne_stat failed: errno=%d (%s)\n", errno, strerror(errno) );
          return -1;
       }
 
       // the positions of these meta/data errors DO NOT take stripe offset into account
-      print_erasure_state( state, 0 );
+      print_erasure_state( &epat, &state );
       // display the ne_stat return value
       PRINTout("stat rc: %d\n", ret);
 
+      if ( ne_term( ctxt ) ) {
+         PRINTout("Failed to properly free ne_ctxt!\n" );
+         return -1;
+      }
+      free( state.meta_status );
       return 0;
    }
+
+
+//   SktAuth  auth;
+//   if (DEFAULT_AUTH_INIT(auth)) {
+//      PRINTout("%s: failed to initialize default socket-authentication credentials\n", argv[0] );
+//      return -1;
+//   }
+   int tmp;
+
+   // -----------------------------------------------------------------
+   // rebuild
+   // -----------------------------------------------------------------
+
+   if ( wr == 3 ) {
+      if ( handle == NULL ) {
+         handle = ne_open( ctxt, "", maxloc, epat, NE_REBUILD );
+         if ( handle == NULL ) {
+            PRINTout( "Failed to open handle for REBUILD!\n" );
+            return -1;
+         }
+      }
+      else {
+         if ( (handle = ne_convert_handle( handle, NE_REBUILD ) ) == NULL ) {
+            PRINTout( "Failed to convert stat handle to REBUILD handle!\n" );
+            return -1;
+         }
+      }
+
+      PRINTout("libneTest: rebuilding erasure striping (N=%d,E=%d,O=%d)\n", N, E, O );
+
+      tmp = ne_rebuild( handle, &epat, &state );
+
+      if ( (show_state) ) {
+         PRINTout( "Stripe state pre-rebuild:\n" ); 
+         // the positions of these meta/data errors DO take stripe offset into account
+         print_erasure_state( &epat, &state );
+      }
+
+      if ( (tmp) ) {
+         PRINTout("Rebuild failed to correct all errors: errno=%d (%s)\n", errno, strerror(errno));
+         if ( tmp < 0 )
+            PRINTout("libneTest: rebuild failed!\n" );
+         else
+            PRINTout("libneTest: rebuild indicates only partial success: rc = %d\n", tmp );
+      }
+      else
+         PRINTout("libneTest: rebuild complete\n" );
+
+      PRINTout("rebuild rc: %d\n",tmp);
+
+      if ( ne_term( ctxt ) ) {
+         PRINTout("Failed to properly free ne_ctxt!\n" );
+         return -1;
+      }
+      free( state.meta_status );
+      return 0;
+   }
+
 
 
    // -----------------------------------------------------------------
    // read / write / verify
    // -----------------------------------------------------------------
+
+   unsigned long long buff_size = ( epat.partsz + 1 ) * N; //choose a buffer size that can potentially read/write beyond a stripe boundary
+                                                           //this is meant to hit more edge cases, not performance considerations
+   if ( totbytes == 0 ) {
+      totbytes = buff_size;
+   }
 
    srand(time(NULL));
 
@@ -710,43 +782,47 @@ int main( int argc, const char** argv )
                    input_file, errno, strerror(errno) );
       if ( buff )
          free( buff );
+      if ( ne_term( ctxt ) ) {
+         PRINTout("Failed to properly free ne_ctxt!\n" );
+      }
+      free( state.meta_status );
       return -1;
    }
 
    
-   struct ne_state_struct state_struct;
-   e_state state = &state_struct;
-
-   ne_mode base_mode = NE_RDALL; //verify
+   ne_mode mode = NE_RDALL; //verify
    if ( wr == 0 ) { // read
-      base_mode = NE_RDONLY;
+      mode = NE_RDONLY;
    }
    else if ( wr == 1 ) { // write
-      base_mode = NE_WRONLY;
+      mode = NE_WRONLY;
    }
 
-   // how we issue this open depends greatly on our arguments
-   if ( (show_state) ) {
-      if ( (no_info) )
-         handle = NE_OPEN( erasure_path, base_mode | NE_ESTATE | NE_NOINFO, state );
-      else
-         handle = NE_OPEN( erasure_path, base_mode | NE_ESTATE, state, O, N, E );
-   }
-   else {
-      if ( (no_info) )
-         handle = NE_OPEN( erasure_path, base_mode | NE_NOINFO );
-      else
-         handle = NE_OPEN( erasure_path, base_mode, O, N, E );
-   }
-
-   // check for a successful open of the handle
+   // open our handle
    if ( handle == NULL ) {
-      PRINTout( "libneTest: failed to open the requested erasure path for a %s operation: errno=%d (%s)\n",
-                operation, errno, strerror(errno) );
-      if ( buff )
-         free( buff );
-      return -1;
+      handle = ne_open( ctxt, "", maxloc, epat, mode );
+      // check for a successful open of the handle
+      if ( handle == NULL ) {
+         PRINTout( "libneTest: failed to open the requested erasure path for a %s operation: errno=%d (%s)\n",
+                   operation, errno, strerror(errno) );
+         if ( buff )
+            free( buff );
+         return -1;
+      }
    }
+   // otherwise, convert the existing handle
+   else {
+      if ( ne_convert_handle( handle, mode ) == NULL ) {
+         PRINTout( "Failed to convert stat handle to new mode!\n" );
+         if ( buff ) { free( buff ); }
+         if ( ne_term( ctxt ) ) {
+            PRINTout("Failed to properly free ne_ctxt!\n" );
+         }
+         free( state.meta_status );
+         return -1;
+      }
+   }
+
 
    unsigned long long toread;
 
@@ -762,12 +838,12 @@ int main( int argc, const char** argv )
       // READ DATA
       ssize_t nread = toread; // assume success if no read takes place
       if ( (wr == 1)  &&  (std_fd) ) { // if input_file was defined, writes get data from it 
-         PRINTdbg("libneTest: reading %llu bytes from \"%s\"\n", toread, input_file );
+         PRINTout("libneTest: reading %llu bytes from \"%s\"\n", toread, input_file );
          nread = read( std_fd, buff, toread );
       }
       else if ( wr != 1 ) { // read/verify get data from the erasure stripe
-         PRINTdbg("libneTest: reading %llu bytes from erasure stripe\n", toread );
-         nread = ne_read( handle, buff, toread, bytes_moved );
+         PRINTout("libneTest: reading %llu bytes from erasure stripe\n", toread );
+         nread = ne_read( handle, buff, toread );
          // Note: if buff is NULL here, retrieved data will simply be thrown out
       }
 
@@ -777,7 +853,7 @@ int main( int argc, const char** argv )
                    toread, nread, errno, strerror(errno) );
          if ( buff )
             free( buff );
-         ne_close( handle );
+         ne_close( handle, NULL, NULL );
          if ( std_fd )
             close( std_fd );
          return -1;
@@ -786,11 +862,11 @@ int main( int argc, const char** argv )
       // WRITE DATA
       size_t written = nread; // no write performed -> success
       if ( wr == 1 ) { // for write, just output to the stripe
-         PRINTdbg( "libneTest: writing %zd bytes to erasure stripe\n", nread );
+         PRINTout( "libneTest: writing %zd bytes to erasure stripe\n", nread );
          written = ne_write( handle, buff, nread );
       }
       else if ( std_fd ) { // for read/verify, only write out if given the -o flag
-         PRINTdbg( "libneTest: writing %zd bytes to \"%s\"\n", nread, output_file );
+         PRINTout( "libneTest: writing %zd bytes to \"%s\"\n", nread, output_file );
          written = write( std_fd, buff, nread );
       }
  
@@ -800,7 +876,7 @@ int main( int argc, const char** argv )
                    nread, written, errno, strerror(errno) );
          if ( buff )
             free( buff );
-         ne_close( handle );
+         ne_close( handle, NULL, NULL );
          if ( std_fd )
             close( std_fd );
          return -1;
@@ -840,15 +916,20 @@ int main( int argc, const char** argv )
       free( buff );
 
    // close the handle and indicate it's close condition
-   tmp = ne_close( handle );
+   tmp = ne_close( handle, &epat, &state );
 
    if( (show_state) ) {
       // the positions of these meta/data errors DO take stripe offset into account
-      print_erasure_state( state, state->O );
+      print_erasure_state( &epat, &state );
    }
 
    PRINTout("close rc: %d\n",tmp);
 
+   if ( ne_term( ctxt ) ) {
+      PRINTout("Failed to properly free ne_ctxt!\n" );
+      return -1;
+   }
+   free( state.meta_status );
    return 0;
 }
 

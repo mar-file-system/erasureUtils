@@ -2086,6 +2086,8 @@ ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes ) {
    ssize_t partsz = handle->epat.partsz;
    size_t  stripesz = partsz * N;
 
+   LOG( LOG_INFO, "Stripe: ( N = %d, E = %d, partsz = %zu )\n", N, E, partsz );
+
 // ---------------------- BEGIN MAIN READ LOOP ----------------------
 
    // time to start actually filling this read request
@@ -2093,21 +2095,21 @@ ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes ) {
    while( bytes_read < bytes ) { // while data still remains to be read, loop over each stripe
       // first, check if we need to populate additional data
       if ( handle->sub_offset >= ( handle->iob_datasz * N ) ) {
-         LOG( LOG_INFO, "Reading in additional stripes (datasz=%zu)\n", handle->iob_datasz );
+         LOG( LOG_INFO, "Reading in additional stripes (datasz=%zu/sub_offset=%zu)\n", handle->iob_datasz, handle->sub_offset );
          if ( read_stripes( handle ) < 0 ) {
             LOG( LOG_ERR, "Failed to populate stripes beyond offset %zu!\n", offset );
             return -1;
          }
       }
 
-      int     iob_stripe = (int)( handle->iob_offset / stripesz );
-      int    cur_stripe = (int)(handle->sub_offset / stripesz);
+      int    iob_stripe = (int)( handle->iob_offset / stripesz );
+      int    cur_stripe = (int)( handle->sub_offset / stripesz );
       off_t  off_in_stripe = handle->sub_offset % stripesz; 
-      size_t to_read_in_stripe = (bytes - bytes_read) % stripesz;
+      size_t to_read_in_stripe = bytes - bytes_read;
       if ( to_read_in_stripe > ( stripesz - off_in_stripe ) ) {
          to_read_in_stripe = stripesz - off_in_stripe;
       }
-      LOG( LOG_INFO, "Reading %zu bytes from stripe %d\n", to_read_in_stripe, cur_stripe + iob_stripe );
+      LOG( LOG_INFO, "Reading %zu bytes from offset %zd of stripe %d (%zu read)\n", to_read_in_stripe, off_in_stripe, cur_stripe + iob_stripe, bytes_read );
 
       // copy buffers from each block
       int cur_block = off_in_stripe / partsz;

@@ -71,16 +71,21 @@ libne_a_SOURCES = ../logging/logging.c ne.c
 libne_a_CFLAGS  = $(XML_CFLAGS)
 NE_LIBS = libne.a ../dal/libdal.a ../io/libioqueue.a ../io/libiothreads.a ../io/libmetainfo.a ../thread_queue/libTQ.a
 
+bin_PROGRAMS = neutil
+neutil_SOURCES = neutil.c
+neutil_LDADD   = $(NE_LIBS)
+neutil_CFLAGS  = $(XML_CFLAGS)
+
 
 # ---
 
-check_PROGRAMS = test_libne_io data_shredder
+check_PROGRAMS = test_libne_io #data_shredder
 
 test_libne_io_SOURCES = testing/test_libne_io.c
 test_libne_io_LDADD   = $(NE_LIBS)
 test_libne_io_CFLAGS  = $(XML_CFLAGS)
 
-data_shredder_SOURCES = testing/data_shredder.c
+#data_shredder_SOURCES = testing/data_shredder.c
 
 TESTS = test_libne_io
 
