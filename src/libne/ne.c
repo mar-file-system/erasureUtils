@@ -1446,14 +1446,14 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
    }
 
    int numerrs = 0; // for checking write safety
-   if ( handle->mode == NE_WRONLY  ||  handle->mode == NE_WRALL  ||  handle->mode == NE_REBUILD ) {
-      // check the status of all blocks
-      for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
-         if ( handle->thread_states[i].meta_error  ||  handle->thread_states[i].data_error ) { 
-            numerrs++;
-         }
+   // check the status of all blocks
+   for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
+      if ( handle->thread_states[i].meta_error  ||  handle->thread_states[i].data_error ) { 
+         LOG( LOG_ERR, "Detected an error for block %d!\n", i );
+         numerrs++;
       }
-
+   }
+   if ( handle->mode == NE_WRONLY  ||  handle->mode == NE_WRALL ) {
       // verify that our data meets safetly thresholds
       if ( numerrs > 0  &&  numerrs > ( handle->epat.E - MIN_PROTECTION ) ) {
          LOG( LOG_ERR, "Errors exceed safety threshold!\n" );
@@ -2130,8 +2130,14 @@ ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes ) {
          off_t  block_off  = ( off_in_stripe % partsz );
          size_t block_read = ( to_read_in_stripe > (partsz - block_off) ) ? (partsz - block_off) : to_read_in_stripe;
          if ( block_read == 0 ) { break; } // if we've completed our reads, stop here
-         LOG( LOG_INFO, "   Reading %zu bytes from block %d\n", block_read, cur_block );
-         memcpy( buffer + bytes_read, cur_iob->buff + ( cur_stripe * partsz ) + block_off, block_read );
+         // check for NULL target buffer
+         if ( buffer ) {
+            LOG( LOG_INFO, "   Reading %zu bytes from block %d\n", block_read, cur_block );
+            memcpy( buffer + bytes_read, cur_iob->buff + ( cur_stripe * partsz ) + block_off, block_read );
+         }
+         else {
+            LOG( LOG_INFO, "   Dropping %zu bytes from block %d\n", block_read, cur_block );
+         }
          // update all values
          bytes_read += block_read;
          handle->sub_offset += block_read;

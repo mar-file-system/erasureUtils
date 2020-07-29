@@ -379,7 +379,7 @@ int read_produce( void** state, void** work_tofill ) {
          uint32_t scrc = *((uint32_t*) (store_tgt + to_read));
          tstate->crcsumchk += scrc; // track our global crc, for reference
          if ( crc != scrc ) {
-            LOG( LOG_ERR, "Calculated CRC of data (%zu) does not match stored CRC: %zu\n", crc, scrc );
+            LOG( LOG_ERR, "Calculated CRC of data (%u) does not match stored CRC: %u\n", crc, scrc );
             gstate->data_error = 1;
             data_err = 1;
          }
