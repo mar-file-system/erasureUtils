@@ -142,24 +142,12 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
       LOG( LOG_ERR, "IO Size of %zu is too small for CRC size of %d!\n", iosz, CRC_BYTES );
       return NULL;
    }
-   size_t supersz = iosz; // try to issue IO at the appropriate size
-   size_t subsz = partsz;
-   size_t overlap = ( iosz - CRC_BYTES ) % partsz; // check for IO overlap
+   size_t subsz = (mode == DAL_READ) ? (iosz - CRC_BYTES) : partsz;
    int    partcnt = (int) ( (iosz - CRC_BYTES) / partsz); // number of complete parts per IO
    if ( partsz > iosz ) {
-      // swap our values around so that subsz is the lesser
-      subsz = iosz - CRC_BYTES;
-      supersz = partsz + CRC_BYTES + subsz;
-      overlap = partsz % ( iosz - CRC_BYTES ); // check for IO overlap
       partcnt = 1;
    }
-   if ( overlap != 0 ) {
-      // NOTE: I am deliberately allowing misalignment between erasure parts and IO size.
-      //       This could be simplified by shrinking sizes to fit, but seems more flexible this way.
-      //       Definitely increases complexity by a fair bit though.
-      LOG( LOG_WARNING, "IO size (%zu) does not cleanly align with erasure part size (%zu)\n", iosz, partsz );
-      supersz += (subsz * 2); // need space for leading and trailing subsz fragments
-   }
+   LOG( LOG_INFO, "Subsz = %zu  and  Partcnt = %d\n", subsz, partcnt );
    // create an ioqueue struct
    ioqueue* ioq = malloc( sizeof( struct ioqueue_struct ) );
    if ( ioq == NULL ) {
@@ -183,18 +171,37 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
    ioq->fill_threshold = ( (iosz - CRC_BYTES) > partsz ) ? (iosz - CRC_BYTES) : partsz;
    // NOTE -- if we're writing, we need to get both a complete part and a complete IO
    ioq->split_threshold = ( mode == DAL_READ ) ? (partcnt * partsz) : (iosz - CRC_BYTES);
-   LOG( LOG_INFO, "Using fill_threshold=%zu & split_treshold=%zu\n", ioq->fill_threshold, ioq->split_threshold );
+   LOG( LOG_INFO, "Using fill_threshold=%zu, split_treshold=%zu\n", ioq->fill_threshold, ioq->split_threshold );
    // NOTE -- if we're writing, we need to split blocks on IO alignment to make room for CRCs
    ioq->partsz = partsz;
    ioq->iosz = iosz;
    ioq->partcnt = partcnt;
-   ioq->blocksz = supersz;
    ioq->head = 0;
    ioq->depth = SUPER_BLOCK_CNT;
+   // calculate the blocksz we must allocate to allways fit written data
+   // NOTE -- assuming perfect IOSZ and PARTSZ alignment, we will need space for a full buffer plus
+   //         any spillage from a previous block plus room for trailing CRC bytes.
+   size_t spillage = ioq->fill_threshold - ioq->split_threshold;
+   ioq->blocksz = ioq->fill_threshold + spillage + CRC_BYTES;
+   // check for misalignment of IOSZ and PARTSZ values
+   char overflow = 0;
+   if ( ioq->fill_threshold % subsz ) {
+      LOG( LOG_INFO, "Fill threshold of %zu does not cleanly align with subsz of %zu\n", ioq->fill_threshold, subsz );
+      overflow = 1;
+   }
+   if ( (ioq->fill_threshold - spillage) % subsz ) {
+      LOG( LOG_INFO, "Post spillage fill %zu does not cleanly align with subsz of %zu\n", ioq->fill_threshold - spillage, subsz );
+      overflow = 1;
+   }
+   if ( overflow ) {
+      // NOTE -- misalignment means we need space for potentially another subsz worth of overlap
+      ioq->blocksz += subsz;
+   }
+   LOG( LOG_INFO, "Using ioblock size of %zu\n", ioq->blocksz );
    int i;
    for ( i = 0; i < SUPER_BLOCK_CNT; i++ ) {
       // initialize state and struct for each ioblock
-      ioq->block_list[i].buff = malloc( sizeof( char ) * supersz );
+      ioq->block_list[i].buff = malloc( sizeof( char ) * ioq->blocksz );
       if ( ioq->block_list[i].buff == NULL ) {
          // we've messed up, time to try to clean everything up
          LOG( LOG_ERR, "failed to allocate space for ioblock %d!\n", i );

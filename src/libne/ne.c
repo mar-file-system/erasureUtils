@@ -1421,22 +1421,26 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
          }
          handle->iob[i] = NULL;
       }
-      // signal the thread to finish
-      LOG( LOG_INFO, "Setting FINISHED state for block %d\n", i );
-      if ( tq_set_flags( handle->thread_queues[i], TQ_FINISHED ) ) {
-         LOG( LOG_ERR, "Failed to set a FINISHED state for thread %d!\n", i );
-         ret_val = -1;
-         // attempt to abort, ignoring errors
-         tq_set_flags( handle->thread_queues[i], TQ_ABORT );
+      if ( handle->mode != NE_STAT ) {
+         // signal the thread to finish
+         LOG( LOG_INFO, "Setting FINISHED state for block %d\n", i );
+         if ( tq_set_flags( handle->thread_queues[i], TQ_FINISHED ) ) {
+            LOG( LOG_ERR, "Failed to set a FINISHED state for thread %d!\n", i );
+            ret_val = -1;
+            // attempt to abort, ignoring errors
+            tq_set_flags( handle->thread_queues[i], TQ_ABORT );
+         }
       }
    }
 
-   // verify thread termination and close all queues
-   for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
-      LOG( LOG_INFO, "Terminating queue %d\n", i );
-      tq_next_thread_status( handle->thread_queues[i], NULL );
-      tq_close( handle->thread_queues[i] );
-      destroy_ioqueue( handle->thread_states[i].ioq );
+   if ( handle->mode != NE_STAT ) {
+      // verify thread termination and close all queues
+      for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
+         LOG( LOG_INFO, "Terminating queue %d\n", i );
+         tq_next_thread_status( handle->thread_queues[i], NULL );
+         tq_close( handle->thread_queues[i] );
+         destroy_ioqueue( handle->thread_states[i].ioq );
+      }
    }
 
    // populate any info structs

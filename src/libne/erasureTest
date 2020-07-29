@@ -362,14 +362,14 @@ while [[ $cnt -lt $ITER ]]; do
             # only corrupt the file if we are hitting a new postion
             errcnt=$(( errcnt + 1 ))
             met_err_list[$errpos]=1
-            stat=$(( stat + 2**errpos ))
-            tstat=$(( tstat + 2**errpos ))
+            stat=$(( stat + 1 ))
+            tstat=$(( tstat + 1 ))
             corrupt_file "$( echo "$EPAT" | sed 's/{b}/'"$errpos"'/' | sed 's/$/.meta/' )" 1
             if [[ $? -eq 2 ]]; then
                (( silent_met_err_cnt++ ))
                silent_met_err_list[$errpos]=1
             else
-               dstat=$(( dstat + 2**errpos ))
+               dstat=$(( dstat + 1 ))
             fi
          fi
       done
@@ -417,7 +417,7 @@ while [[ $cnt -lt $ITER ]]; do
             cor_type=0
             # if there are no previous errors at this postion, note it for rc checking
             if [[ ${met_err_list[$errpos]} -eq 0 ]]; then
-               stat=$(( stat + 2**errpos ))
+               stat=$(( stat + 1 ))
                corrupt_file "$( echo "$EPAT" | sed 's/{b}/'"$errpos"'/' )" 1
                cor_type=$?
             else
@@ -428,10 +428,10 @@ while [[ $cnt -lt $ITER ]]; do
             # only note errors which do not align with meta errors and which are removal type or in data blocks
             if [[ $cor_type -eq 0  ||  $truepos -lt $n ]]; then
                if [[ ${met_err_list[$errpos]} -eq 0  ]]; then
-                  tstat=$(( tstat + 2**errpos ))
-                  dstat=$(( dstat + 2**errpos ))
+                  tstat=$(( tstat + 1 ))
+                  dstat=$(( dstat + 1 ))
                elif [[ ${silent_met_err_list[$errpos]} -ne 0 ]]; then
-                  dstat=$(( dstat + 2**errpos ))
+                  dstat=$(( dstat + 1 ))
                fi
             fi
          fi
@@ -506,7 +506,7 @@ while [[ $cnt -lt $ITER ]]; do
          if [[ $noinfo -eq 1 ]]; then
             echo -n "ignoring stripe state for this read..."
             echo "   Using '-n' option to perform read while ignoring stripe state..." >> $LOGFILE
-            CMD="$LIBNETEST read $EPAT -n -s $FSZ -o $OUTFILE"
+            CMD="$LIBNETEST read $EPAT -n $(( n + e )) -s $FSZ -o $OUTFILE"
          fi
 
          { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.read
@@ -573,7 +573,7 @@ while [[ $cnt -lt $ITER ]]; do
          if [[ $noinfo -eq 1 ]]; then
             echo -n "ignoring stripe state for this read..."
             echo "   Using '-n' option to perform read while ignoring stripe state..." >> $LOGFILE
-            CMD="$LIBNETEST read $EPAT -n -s $FSZ"
+            CMD="$LIBNETEST read $EPAT -n $(( n + e )) -s $FSZ"
          fi
 
          { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.no_read
@@ -609,7 +609,7 @@ while [[ $cnt -lt $ITER ]]; do
          if [[ $noinfo -eq 1 ]]; then
             echo -n "ignoring stripe state for this rebuild..."
             echo "   Using '-n' option to perform rebuild while ignoring stripe state..." >> $LOGFILE
-            CMD="$LIBNETEST rebuild $EPAT -n"
+            CMD="$LIBNETEST rebuild $EPAT -n $(( n + e ))"
          fi
 
          { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.recovery

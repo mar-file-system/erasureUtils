@@ -147,8 +147,8 @@ void usage(const char* prog_name, const char* op) {
    PRINTout("  %2s %-10s %s\n",                                \
            (!strncmp(op, CMD, 10) ? "->" : ""), (CMD), (ARGS))
 
-   USAGE("write",      "erasure_path                N E O   [-e] [-r] [-s input_size] [-i input_file]");
-   USAGE("read",       "erasure_path ( -n swidth |  N E O ) [-e] [-r] [-s input_size] [-o output_file]");
+   USAGE("write",      "erasure_path                N E O   [-e] [-r] ( -s input_size | -i input_file )");
+   USAGE("read",       "erasure_path ( -n swidth |  N E O ) [-e] [-r]  [-s input_size] [-o output_file]");
    USAGE("verify",     "erasure_path ( -n swidth |  N E O ) [-e]");
    USAGE("rebuild",    "erasure_path ( -n swidth |  N E O ) [-e]");
    USAGE("delete",     "erasure_path      swidth            [-f]");
@@ -478,7 +478,7 @@ int main( int argc, const char** argv )
             return -1;
          }
       }
-      else if ( (wr == 4)  &&  (N == -1) ) { // for delete, store the stripe width to 'N'
+      else if ( (wr >= 4)  &&  (N == -1) ) { // for delete/stat, store the stripe width to 'N'
          char* endptr;
          N = strtol( argv[c], &endptr, 10 );
          if ( *endptr != '\0' ) {
@@ -501,7 +501,7 @@ int main( int argc, const char** argv )
       usage( argv[0], "help" );
       return -1;
    }
-   if ( erasure_path == NULL  ||  ( (wr == 4) && (N == -1) )  ||  ( (wr < 4)  &&  !(no_info)  && (O == -1) ) ) {
+   if ( erasure_path == NULL  ||  ( (wr >= 4) && (N == -1) )  ||  ( (wr < 4)  &&  !(no_info)  && (O == -1) ) ) {
       PRINTout( "%s: missing required arguments for operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
@@ -667,8 +667,8 @@ int main( int argc, const char** argv )
       PRINTout("libneTest: retrieving status of erasure striping with path \"%s\"\n", erasure_path );
 
       int ret;
-      if ( ( ret = ne_get_info( handle, &epat, &state ) ) < 0 ) {
-         PRINTout( "libneTest: ne_stat failed: errno=%d (%s)\n", errno, strerror(errno) );
+      if ( ( ret = ne_close( handle, &epat, &state ) ) < 0 ) {
+         PRINTout( "libneTest: ne_close failed: errno=%d (%s)\n", errno, strerror(errno) );
          return -1;
       }
 
@@ -827,7 +827,7 @@ int main( int argc, const char** argv )
    unsigned long long toread;
 
    if (rand_size)
-      toread = rand() % (buff_size+1);
+      toread = ( rand() % buff_size) + 1;
    else
       toread = buff_size;
    if ( toread > totbytes )
@@ -892,7 +892,7 @@ int main( int argc, const char** argv )
       else {
          // determine how much to read next time
          if (rand_size)
-            toread = rand() % (buff_size+1);
+            toread = (rand() % buff_size) + 1;
          else
             toread = buff_size;
          // if we are going beyond the specified size, limit our reads
