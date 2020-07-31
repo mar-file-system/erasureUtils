@@ -734,6 +734,11 @@ int main( int argc, const char** argv )
 
       PRINTout("rebuild rc: %d\n",tmp);
 
+      if ( ne_close( handle, NULL, NULL ) < 0 ) {
+         PRINTout("Failed to close ne_handle!\n" );
+         return -1;
+      }
+
       if ( ne_term( ctxt ) ) {
          PRINTout("Failed to properly free ne_ctxt!\n" );
          return -1;

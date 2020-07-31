@@ -236,9 +236,12 @@ int read_init( unsigned int tID, void* global_state, void** state ) {
       gstate->data_error=1;
    }
 
-   // populate our minfo struct with obj meta values
-   if ( dal_get_minfo( dal, tstate->handle, &gstate->minfo ) != 0 ) {
-      gstate->meta_error = 1;
+   // skip setting minfo values if they already appear to be set
+   if ( gstate->minfo.totsz == 0 ) {
+      // populate our minfo struct with obj meta values
+      if ( dal_get_minfo( dal, tstate->handle, &gstate->minfo ) != 0 ) {
+         gstate->meta_error = 1;
+      }
    }
 
    return 0;
@@ -265,13 +268,15 @@ int write_consume( void** state, void** work_todo ) {
    if ( datasrc == NULL ) {
       LOG( LOG_ERR, "Block %d received a NULL read target from ioblock!\n", gstate->location.block );
       gstate->data_error = 1;
+      release_ioblock( gstate->ioq );
       return -1;
    }
 
    // sanity check that our data size makes sense
    if ( datasz > ( gstate->minfo.versz - CRC_BYTES ) ) {
-      LOG( LOG_ERR, "Block %d received unexpected data size: %zd\n", gstate->location.block, datasz );
+      LOG( LOG_ERR, "Block %d received unexpectedly large data size: %zd\n", gstate->location.block, datasz );
       gstate->data_error = 1;
+      release_ioblock( gstate->ioq );
       return -1;
    }
 
@@ -332,7 +337,7 @@ int read_produce( void** state, void** work_tofill ) {
             return 0;
          }
       }
-      LOG( LOG_INFO, "Thread has reached end of block %d\n", gstate->location.block );
+      LOG( LOG_INFO, "Thread has reached end of block %d (bsz=%zu)\n", gstate->location.block, gstate->minfo.blocksz );
       return 2;
    }
 
@@ -456,16 +461,64 @@ int read_resume( void** state, void** prev_work ) {
       *prev_work = NULL;
    }
    // translate our new data offset to an offest in the block (including CRCs) at which we can actually issue I/O
-   unsigned int io_count = (unsigned int)(gstate->offset / (gstate->minfo.versz - CRC_BYTES)); // integer truncation rounds down
+   size_t noffset = gstate->offset;
+   unsigned int io_count = (unsigned int)(noffset / (gstate->minfo.versz - CRC_BYTES)); // integer truncation rounds down
+   // now, determine if we need to adjust our ioblock alignment to achieve the desired offset
+   size_t trim = noffset % (gstate->minfo.versz - CRC_BYTES);
+   // check the fill-level of our current ioblock
+   size_t curdata = 0;
+   if ( tstate->iob ) { curdata = tstate->iob->data_size; }
    // if this is a seek, we have some bookkeeping to take care of
-   if ( tstate->offset != (io_count * gstate->minfo.versz) ) {
+   // NOTE -- check if the starting offset of our ioblock ( current offset minus stored data ) 
+   //         matches our target offset value to determine if this is a seek
+   if ( (tstate->offset - curdata) != (io_count * gstate->minfo.versz) + trim ) {
+      // zero out our crcsum
       tstate->crcsumchk = 0;
       // a seek to anything besides zero means a non-continous read (can't verify global CRC)
       if ( io_count != 0 ) { tstate->continuous = 0; }
-      LOG( LOG_INFO, "Reseek to %zd (io_count=%u / continuous=%d)\n", gstate->offset, io_count, tstate->continuous );
+
+      LOG( LOG_INFO, "Reseek to %zu (iocnt=%u / trim=%zu / cont=%d)\n", noffset, io_count, trim, tstate->continuous );
       // set our offset to the new value
       tstate->offset = io_count * gstate->minfo.versz;
-      gstate->offset = io_count * (gstate->minfo.versz - CRC_BYTES); // indicate to the master what our actual offset is
+      // need to cleanup any data lurking in our ioblock reference
+      if ( curdata != 0 ) {
+         LOG( LOG_INFO, "Releasing current ioblock as it is non-empty\n" );
+         if ( release_ioblock( gstate->ioq ) ) {
+            LOG( LOG_ERR, "Failed to release current ioblock!\n" );
+            return -1;
+         }
+         tstate->iob = NULL;
+      }
+
+      // check if we need to realign our ioblocks
+      if ( trim ) {
+         ioblock* push_block;
+         if ( tstate->iob == NULL ) {
+            // reserve a new ioblock
+            LOG( LOG_INFO, "Reserving a new ioblock\n" );
+            if ( reserve_ioblock( &(tstate->iob), &push_block, gstate->ioq ) ) {
+               LOG( LOG_ERR, "Failed to reserve a new ioblock!\n" );
+               return -1;
+            }
+         }
+         // adjust our ioblock offset to align with the request
+         LOG( LOG_INFO, "Aligning ioblock to trim of %zu\n", trim );
+         if ( align_ioblock( tstate->iob, trim, gstate->ioq ) ) {
+            LOG( LOG_ERR, "Failed to align ioblock to trim of %zu!\n", trim );
+            return -1;
+         }
+         // perform a single IO, which should now fill this ioblock
+         if ( read_produce( (void**)&(tstate), (void**)&(push_block) ) ) {
+            LOG( LOG_ERR, "Failed to produce a junk ioblock!\n" );
+            return -1;
+         }
+         LOG( LOG_INFO, "Releasing junk ioblock\n" );
+         if ( release_ioblock( gstate->ioq ) ) {
+            LOG( LOG_ERR, "Failed to release junk ioblock!\n" );
+            return -1;
+         }
+      }
+
    }
    return 0;
 }

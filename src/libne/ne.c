@@ -567,14 +567,14 @@ int read_stripes( ne_handle handle ) {
    size_t  offset = ( handle->iob_offset * N ) + handle->sub_offset;
    unsigned int start_stripe = (unsigned int) ( offset / stripesz ); // get a stripe num based on offset
 
-   // make sure our sub_offset is stripe aligned
+   // make sure our sub_offset is stripe aligned and at the end of our current ioblocks
    if ( handle->sub_offset % stripesz  ||  handle->sub_offset != (handle->iob_datasz * N) ) {
       LOG( LOG_ERR, "Called on handle with an inappropriate sub_offset (%zd)!\n", handle->sub_offset );
       return -1;
    }
 
    // update handle offset values
-   handle->iob_offset += ( handle->sub_offset / stripesz ) * partsz; // sub_offset should be at the end of 
+   handle->iob_offset += handle->iob_datasz;
    handle->sub_offset = 0;
 
    // if we have previous block references, we'll need to release them
@@ -606,13 +606,22 @@ int read_stripes( ne_handle handle ) {
                         &&  cur_block < (N + E); cur_block++ ) {
       // check if we can even handle however many errors we've hit so far
       if ( nstripe_errors > E ) {
-         LOG( LOG_ERR, "Stripe %d has too many data errors (%d) to be recovered\n", start_stripe, nstripe_errors );
+         LOG( LOG_ERR, "Data beyond stripe %d has too many errors (%d) to be recovered\n", start_stripe, nstripe_errors );
          errno=ENODATA;
          return -1;
       }
       // if this thread isn't running, we need to start it
       if ( cur_block >= N + handle->ethreads_running ) {
-         LOG( LOG_INFO, "Starting up erasure thread %d to cope with data errors in ioblocks for stripe %d\n", cur_block, start_stripe );
+         LOG( LOG_INFO, "Starting up thread %d to cope with errors beyond stripe %d\n", cur_block, start_stripe );
+         // first, make sure to empty any ioblocks still on the queue
+         while( tq_dequeue( handle->thread_queues[cur_block], TQ_HALT, (void**)&(handle->iob[cur_block]) ) > 0 ) {
+            LOG( LOG_INFO, "Releasing ioblock from queue %d, prior to reseek\n", cur_block );
+            if ( release_ioblock( handle->thread_states[cur_block].ioq ) ) {
+               LOG( LOG_ERR, "Failed to release ioblock from queue %d\n", cur_block );
+               errno=EBADF;
+               return -1;
+            }
+         }
          handle->thread_states[cur_block].offset = handle->iob_offset; // set offset for this read thread
          if( tq_unset_flags( handle->thread_queues[cur_block], TQ_HALT ) ) {
             LOG( LOG_ERR, "Failed to clear PAUSE state for block %d!\n", cur_block );
@@ -1051,15 +1060,15 @@ ne_handle ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc ) {
    }
 
    // perform sanity checks on the values we've gotten
-   int retval = 1;
-   if ( consensus.N <= 0 ) { retval = 0; }
-   if ( consensus.E < 0 )  { retval = 0; }
+   int modeval = NE_STAT;
+   if ( consensus.N <= 0 ) { modeval = NE_ERR; }
+   if ( consensus.E < 0 )  { modeval = NE_ERR; }
    if ( consensus.O < 0  ||  consensus.O >= (consensus.N + consensus.E) ) {
-      consensus.O = -1; retval = 0;
+      consensus.O = -1; modeval = NE_ERR;
    }
    // at this point, if we have all valid N/E/O values, we need to rearange our errors based on offset
    int i;
-   if ( retval ) {
+   if ( modeval == NE_STAT ) {
       for ( i = 0; i < curblock; i++ ) {
          if ( tmp_meta_errs[ (i+consensus.O) % (consensus.N+consensus.E) ] ) {
             handle->thread_states[i].meta_error = 1;
@@ -1071,12 +1080,12 @@ ne_handle ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc ) {
       }
    }
    free( tmp_meta_errs );
-   if ( consensus.partsz <= 0 ) { retval = 0; }
-   if ( consensus.versz < 0 )   { retval = 0; }
-   if ( consensus.blocksz < 0 ) { retval = 0; }
-   if ( consensus.totsz < 0 )   { retval = 0; }
+   if ( consensus.partsz <= 0 ) { modeval = NE_ERR; }
+   if ( consensus.versz < 0 )   { modeval = NE_ERR; }
+   if ( consensus.blocksz < 0 ) { modeval = NE_ERR; }
+   if ( consensus.totsz < 0 )   { modeval = NE_ERR; }
    // if we have successfully identified all meta values, try to set crcs appropriately
-   if ( retval ) {
+   if ( modeval ) {
       for ( i = 0; i < curblock; i++ ) {
          if ( handle->thread_states[i].meta_error == 0 ) { 
             handle->thread_states[i].minfo.crcsum = minfo_list[ (i+consensus.O) % (consensus.N+consensus.E) ].crcsum;
@@ -1085,7 +1094,7 @@ ne_handle ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc ) {
    }
 
    // indicate whether the handle appears usable or not
-   handle->mode = retval;
+   handle->mode = modeval;
    free( minfo_list );
 
    return handle;
@@ -1234,7 +1243,7 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
       // confirm and correct meta info values
       for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
          if ( cmp_minfo( &(handle->thread_states[i].minfo), &(consensus) ) ) {
-            LOG( LOG_WARNING, "Meta values of thread %d do not match consensus!\n" );
+            LOG( LOG_WARNING, "Meta values of thread %d do not match consensus!\n", i );
             handle->thread_states[i].meta_error = 1;
             cpy_minfo( &(handle->thread_states[i].minfo), &(consensus) );
          } 
@@ -1604,6 +1613,7 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
       errno = EPERM;
       return -1;
    }
+   LOG( LOG_INFO, "Attempting rebuild of erasure stripe\n" );
    // make sure our handle is set to a zero offset
    size_t offset = ( handle->iob_offset * handle->epat.N ) + handle->sub_offset;
    if ( handle->iob_offset != 0  ||  handle->sub_offset != 0 ) {
@@ -1644,6 +1654,7 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
       return -1;
    }
 
+   LOG( LOG_INFO, "Initializing output thread states\n" );
    // assign values to thread states
    int i;
    for ( i = 0; i < N+E; i++ ) {
@@ -1689,9 +1700,10 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
    // finally, startup the output threads for each in-error block
    for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
       outstates[i].dmode = DAL_REBUILD;
-      tqopts.global_state = &(handle->thread_states[i]);
+      tqopts.global_state = &(outstates[i]);
       // only initialize threads for blocks with errors
       if ( handle->thread_states[i].data_error  ||  handle->thread_states[i].meta_error ) {
+         LOG( LOG_INFO, "Starting up output thread %d\n", i );
          // set a log_prefix value for this queue
          sprintf( lprefstr, "RWQ%d", i );
          OutTQs[i] = tq_init( &tqopts );
@@ -1718,6 +1730,7 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
    for ( i = 0; i < N + E; i++ ) {
       // only bother with thread queues we've initialized
       if ( OutTQs[i] != NULL ) {
+         LOG( LOG_INFO, "Prepping block %d for output\n", i );
          // initialize ioqueues
          outstates[i].ioq = create_ioqueue( handle->versz, handle->epat.partsz, DAL_REBUILD );
          if ( outstates[i].ioq == NULL ) {
@@ -1751,17 +1764,21 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
    // actually perform the rebuild
    size_t rebuilt = 0;
    while ( rebuilt < handle->totsz ) {
-      // read in new ioblocks
-      if ( read_stripes( handle ) ) {
-         LOG( LOG_ERR, "Failed to read in additional stripes!\n" );
-         for ( i = 0; i < N + E; i++ ) {
-            if ( OutTQs[i] != NULL ) {
-               tq_set_flags( OutTQs[i], TQ_ABORT );
-               tq_next_thread_status( OutTQs[i], NULL );
-               tq_close( OutTQs[i] );
-            }
-         }        
-         return -1;
+      LOG( LOG_INFO, "Performing rebuild of stripes %d - %d\n", (int)(rebuilt/stripesz), (int)((rebuilt + handle->iob_datasz)/stripesz) );
+      // read in new ioblocks, if necessary
+      if ( handle->sub_offset >= (handle->iob_datasz * N) ) {
+         LOG( LOG_INFO, "Reading in additional stripes (rebuilt=%zu)\n", rebuilt );
+         if ( read_stripes( handle ) ) {
+            LOG( LOG_ERR, "Failed to read in additional stripes!\n" );
+            for ( i = 0; i < N + E; i++ ) {
+               if ( OutTQs[i] != NULL ) {
+                  tq_set_flags( OutTQs[i], TQ_ABORT );
+                  tq_next_thread_status( OutTQs[i], NULL );
+                  tq_close( OutTQs[i] );
+               }
+            }        
+            return -1;
+         }
       }
 
       // copy ioblock data off to our writer threads
@@ -1777,11 +1794,13 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
                if ( (reserved = reserve_ioblock( &(outblocks[i]), &(push_block), outstates[i].ioq )) == 0 ) {
                   void* tgt = ioblock_write_target( outblocks[i] );
                   // copy caller data into our ioblock
-                  memcpy( tgt, handle->iob[i]->buff, partsz ); // no error check, SEGFAULT or nothing
-                  block_cpy+=partsz;
+                  LOG( LOG_INFO, "Copying %zu bytes out to block %d\n", partsz, i );
+                  memcpy( tgt, handle->iob[i]->buff + block_cpy, partsz ); // no error check, SEGFAULT or nothing
+                  block_cpy += partsz;
                   ioblock_update_fill( outblocks[i], partsz, 0 );
                }
                else if ( reserved > 0 ) {
+                  LOG( LOG_INFO, "Pushing full ioblock to block %d\n", i );
                   // the block is full and must be pushed to our iothread
                   if ( tq_enqueue( OutTQs[i], TQ_NONE, (void*) push_block ) ) {
                      LOG( LOG_ERR, "Failed to push ioblock to thread_queue %d\n", i );
@@ -1811,7 +1830,8 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
             }
          }
       } // end of per-block for-loop
-      rebuilt += stripesz;
+      rebuilt += (handle->iob_datasz * N);
+      handle->sub_offset += (handle->iob_datasz * N);
    }
 
    // finally, terminate the output threads
@@ -1828,17 +1848,17 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
       if ( outblocks[i] ) {
          ioblock* push_block = NULL;
          // perform a final reserve call to split any excess data
-         if ( reserve_ioblock( &(handle->iob[i]), &(push_block), handle->thread_states[i].ioq ) > 0 ) {
+         if ( reserve_ioblock( &(outblocks[i]), &(push_block), outstates[i].ioq ) > 0 ) {
             LOG( LOG_INFO, "Final ioblock is full, enqueueing it and reserving another\n" );
-            if ( tq_enqueue( handle->thread_queues[i], TQ_NONE, (void*)(push_block) ) ) {
+            if ( tq_enqueue( OutTQs[i], TQ_NONE, (void*)(push_block) ) ) {
                LOG( LOG_ERR, "Failed to enqueue semi-final ioblock to thread_queue %d!\n", i );
                ret_val = -1;
             }
          }
-         if ( handle->iob[i]->data_size ) {
+         if ( outblocks[i]->data_size ) {
             LOG( LOG_INFO, "Enqueueing final ioblock at position %d\n", i );
             // if data remains, push it now
-            if ( tq_enqueue( handle->thread_queues[i], TQ_NONE, (void*)(handle->iob[i]) ) ) {
+            if ( tq_enqueue( OutTQs[i], TQ_NONE, (void*)(outblocks[i]) ) ) {
                LOG( LOG_ERR, "Failed to enqueue final ioblock to thread_queue %d!\n", i );
                ret_val = -1;
             }
@@ -1847,25 +1867,31 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
             LOG( LOG_INFO, "Releasing empty final ioblock!\n" );
             release_ioblock( outstates[i].ioq );
          }
-         handle->iob[i] = NULL;
+         outblocks[i] = NULL;
       }
       // signal the thread to finish
-      LOG( LOG_INFO, "Setting FINISHED state for block %d\n", i );
-      if ( ret_val != 0  ||  tq_set_flags( OutTQs[i], TQ_FINISHED ) ) {
-         LOG( LOG_ERR, "Failed to set a FINISHED state for thread %d!\n", i );
-         ret_val = -1;
-         // attempt to abort, ignoring errors
-         tq_set_flags( OutTQs[i], TQ_ABORT );
+      if ( OutTQs[i] ) {
+         LOG( LOG_INFO, "Setting FINISHED state for block %d\n", i );
+         if ( ret_val != 0  ||  tq_set_flags( OutTQs[i], TQ_FINISHED ) ) {
+            LOG( LOG_ERR, "Failed to set a FINISHED state for thread %d!\n", i );
+            ret_val = -1;
+            // attempt to abort, ignoring errors
+            tq_set_flags( OutTQs[i], TQ_ABORT );
+         }
       }
    }
 
    // verify thread termination and close all queues
    for ( i = 0; i < N + E; i++ ) {
-      LOG( LOG_INFO, "Terminating queue %d\n", i );
-      tq_next_thread_status( OutTQs[i], NULL );
-      tq_close( OutTQs[i] );
-      destroy_ioqueue( outstates[i].ioq );
+      if ( OutTQs[i] ) {
+         LOG( LOG_INFO, "Terminating queue %d\n", i );
+         tq_next_thread_status( OutTQs[i], NULL );
+         tq_close( OutTQs[i] );
+         destroy_ioqueue( outstates[i].ioq );
+      }
    }
+   free( outblocks );
+   free( OutTQs );
 
    int numerrs = 0; // for checking write safety
    // check the status of all blocks
@@ -1875,11 +1901,15 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
          numerrs++;
       }
    }
+   free( outstates );
 
    // any error is a failure
    if ( numerrs > 0 ) {
+      LOG( LOG_ERR, "Rebuild failure occurred!\n" );
       return -1;
    }
+
+   LOG( LOG_INFO, "Rebuild completed\n" );
 
    return 0;
 }
@@ -2237,6 +2267,7 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
             }
             void* tgt = ioblock_write_target( handle->iob[outblock] );
             // copy caller data into our ioblock
+            LOG( LOG_INFO, "   Writing %zu bytes to block %d\n", to_write, outblock );
             memcpy( tgt, buffer + written, to_write ); // no error check, SEGFAULT or nothing
             // update any data tracking values
             ioblock_update_fill( handle->iob[outblock], to_write, 0 );
@@ -2269,6 +2300,7 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
          }
       }
       else if ( reserved > 0 ) {
+         LOG( LOG_INFO, "Pushing full ioblock to thread %d\n", outblock );
          // the block is full and must be pushed to our iothread
          if ( tq_enqueue( handle->thread_queues[outblock], TQ_NONE, (void*) push_block ) ) {
             LOG( LOG_ERR, "Failed to push ioblock to thread_queue %d\n", outblock );
@@ -2276,7 +2308,7 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
             free( tgt_refs );
             return -1;
          }
-         outblock++;
+         //NOOOOOOOOO!!!!! outblock++;
       }
       else {
          LOG( LOG_ERR, "Failed to reserve ioblock for position %d!\n", outblock );

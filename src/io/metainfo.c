@@ -287,8 +287,13 @@ int dal_set_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
       return -1;
    }
 
+   LOG( LOG_INFO, "partsz %zu\n", minfo->partsz );
+   LOG( LOG_INFO, "versz %zu\n", minfo->versz );
+   LOG( LOG_INFO, "blocksz %zu\n", minfo->blocksz );
+   LOG( LOG_INFO, "crcsum %zuu\n", minfo->crcsum );
+
 	// fill the string allocation with meta_info values
-   if ( snprintf(str,strmax,"v%d %d %d %d %zu %zu %zu %llu %zu\n",
+   if ( snprintf(str,strmax, "v%d %d %d %d %zu %zu %zu %llu %zu\n",
                   MINFO_VER, minfo->N, minfo->E, minfo->O,
                   minfo->partsz, minfo->versz,
                   minfo->blocksz, minfo->crcsum,

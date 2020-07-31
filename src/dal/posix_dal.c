@@ -409,19 +409,23 @@ BLOCK_CTXT posix_open ( DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, con
    
    int oflags = O_WRONLY | O_CREAT | O_TRUNC;
    if ( mode == DAL_READ ) {
+      LOG( LOG_INFO, "Open for READ\n" );
       oflags = O_RDONLY;
    }
    else if ( mode == DAL_METAREAD ) {
       // we don't need to open a file descriptor, as we won't be touching data
+      LOG( LOG_INFO, "Open for METAREAD\n" );
       bctxt->fd = -1;
    }
    else {
       char* res = NULL;
       // append the proper suffix
       if ( mode == DAL_WRITE ) {
+         LOG( LOG_INFO, "Open for WRITE\n" );
          res = strncat( bctxt->filepath + bctxt->filelen, WRITE_SFX, SFX_PADDING );
       }
       else if ( mode == DAL_REBUILD ) {
+         LOG( LOG_INFO, "Open for REBUILD\n" );
          res = strncat( bctxt->filepath + bctxt->filelen, REBUILD_SFX, SFX_PADDING );
       } // NOTE -- invalid mode will leave res == NULL
       // check for success appending the suffix
@@ -456,8 +460,8 @@ int posix_set_meta ( BLOCK_CTXT ctxt, const char* meta_buf, size_t size ) {
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT) ctxt; // should have been passed a posix context
 
    // abort, unless we're writing
-   if ( bctxt->mode != DAL_WRITE ) {
-      LOG( LOG_ERR, "Can only perform set_meta ops on a DAL_WRITE block handle!\n" );
+   if ( bctxt->mode != DAL_WRITE  &&  bctxt->mode != DAL_REBUILD  &&  bctxt->mode != DAL_METAREAD ) {
+      LOG( LOG_ERR, "Can only perform set_meta ops on a DAL_WRITE/REBUILD/METAREAD block handle!\n" );
       return -1;
    }
 

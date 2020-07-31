@@ -290,9 +290,9 @@ while [[ $cnt -lt $ITER ]]; do
 
 
    if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
-      echo -e "\033[0;31mFAIL - write operation returned an unexpected status"
+      echo -e "\033[0;31mFAIL - write operation returned a non-zero status"
       echo -e "CMD = $LIBNETEST write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE\033[0m"
-      echo "   FAILURE: wite operation returned a non-sero status" >> $LOGFILE
+      echo "   FAILURE: wite operation returned a non-zero status" >> $LOGFILE
       echo "CMD = $LIBNETEST write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE" >> $LOGFILE
       exit -1
    fi

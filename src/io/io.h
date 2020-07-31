@@ -190,6 +190,15 @@ int destroy_ioqueue( ioqueue* ioq );
 ssize_t ioqueue_maxdata( ioqueue* ioq );
 
 /**
+ * Sets ioblock fill level such that a specific data split will occur (used to align ioblock to a specific offset)
+ * @param ioblock* iob : Current ioblock
+ * @param size_t trim : Amount of data to be 'trimmed' from the final IO to achive the desired offset
+ * @param ioqueue* ioq : Reference to the ioqueue struct from which the ioblock was gathered
+ * @return int : Zero on success and a negative value if an error occurred
+ */
+int align_ioblock( ioblock* cur_block, size_t trim, ioqueue* ioq );
+
+/**
  * Determines if a new ioblock is necessary to store additional data and, if so, reserves it.  Also, as ioblocks are filled, 
  * populates the 'push_block' reference with the ioblock that should be passed for read/write use.
  * @param ioblock** cur_block : Reference to be popluated with an updated ioblock (usable if return value == 0)
