@@ -594,9 +594,10 @@ ssize_t posix_get ( BLOCK_CTXT ctxt, void* buf, size_t size, off_t offset ) {
 
    // check if we need to seek
    if ( offset != bctxt->offset ) {
-      offset = lseek( bctxt->fd, offset, SEEK_SET );
+      LOG( LOG_INFO, "Performing seek to new offset of %zd\n", offset );
+      bctxt->offset = lseek( bctxt->fd, offset, SEEK_SET );
       // make sure our new offset makes sense
-      if ( offset < 0 ) {
+      if ( bctxt->offset != offset ) {
          LOG( LOG_ERR, "failed to seek to offset %zd of file \"%s\" (%s)\n", offset, bctxt->filepath, strerror(errno) );
          return -1;
       }

@@ -369,7 +369,7 @@ int read_produce( void** state, void** work_tofill ) {
       }
       void* store_tgt = ioblock_write_target( tstate->iob );
       char data_err = 0;
-      LOG( LOG_INFO, "Reading %zd bytes from block %d\n", to_read, gstate->location.block );
+      LOG( LOG_INFO, "Reading %zd bytes from offset %zu of block %d\n", to_read, tstate->offset, gstate->location.block );
       if ( (read_data = gstate->dal->get( tstate->handle, store_tgt, to_read, tstate->offset )) <
             to_read ) {
          LOG( LOG_ERR, "Expected read return value of %zd for block %d, but recieved: %zd\n", 
@@ -492,7 +492,7 @@ int read_resume( void** state, void** prev_work ) {
 
       // check if we need to realign our ioblocks
       if ( trim ) {
-         ioblock* push_block;
+         ioblock* push_block = NULL;
          if ( tstate->iob == NULL ) {
             // reserve a new ioblock
             LOG( LOG_INFO, "Reserving a new ioblock\n" );
@@ -512,6 +512,7 @@ int read_resume( void** state, void** prev_work ) {
             LOG( LOG_ERR, "Failed to produce a junk ioblock!\n" );
             return -1;
          }
+         // now, just make the current ioblock available again
          LOG( LOG_INFO, "Releasing junk ioblock\n" );
          if ( release_ioblock( gstate->ioq ) ) {
             LOG( LOG_ERR, "Failed to release junk ioblock!\n" );

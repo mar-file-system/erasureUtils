@@ -639,7 +639,10 @@ int read_stripes( ne_handle handle ) {
       LOG( LOG_INFO, "Dequeued ioblock at position %d\n", cur_block );
       // check if this new ioblock will require a rebuild
       ioblock* cur_iob = handle->iob[cur_block];
-      if ( cur_iob->error_end > 0 ) { nstripe_errors++; }
+      if ( cur_iob->error_end > 0 ) {
+         LOG( LOG_ERR, "Detected an error at offset %zu of ioblock %d\n", cur_iob->error_end, cur_block );
+         nstripe_errors++;
+      }
       // make sure our stripecnt is logical
       if ( stripecnt ) {
          if ( (cur_iob->data_size / partsz) != stripecnt ) {
@@ -1881,6 +1884,8 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
       }
    }
 
+   int newerrs = 0; // for checking uncorrected errors
+   int numerrs = 0; // for checking write safety
    // verify thread termination and close all queues
    for ( i = 0; i < N + E; i++ ) {
       if ( OutTQs[i] ) {
@@ -1888,30 +1893,37 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
          tq_next_thread_status( OutTQs[i], NULL );
          tq_close( OutTQs[i] );
          destroy_ioqueue( outstates[i].ioq );
+         // check for any output errors
+         if ( outstates[i].meta_error  ||  outstates[i].data_error ) { 
+            LOG( LOG_ERR, "Detected error in regenerated block %d!\n" );
+            numerrs++;
+         }
+         else {
+            // if we successfully reconstructed these, clear any errors
+            handle->thread_states[i].meta_error = 0;
+            handle->thread_states[i].data_error = 0;
+         }
+      }
+      else if ( handle->thread_states[i].meta_error  ||  handle->thread_states[i].data_error ) {
+         // if errors exist for which we never started output threads, record them
+         LOG( LOG_INFO, "Detected errors in block %d during rebuild\n", i );
+         newerrs++;
       }
    }
    free( outblocks );
    free( OutTQs );
-
-   int numerrs = 0; // for checking write safety
-   // check the status of all blocks
-   for ( i = 0; i < N + E; i++ ) {
-      if ( outstates[i].meta_error  ||  outstates[i].data_error ) { 
-         LOG( LOG_ERR, "Detected error in regenerated block %d!\n" );
-         numerrs++;
-      }
-   }
    free( outstates );
 
-   // any error is a failure
+   // any output error is a failure
    if ( numerrs > 0 ) {
       LOG( LOG_ERR, "Rebuild failure occurred!\n" );
       return -1;
    }
 
-   LOG( LOG_INFO, "Rebuild completed\n" );
+   LOG( LOG_INFO, "Rebuild completed with %d errors remaining\n", newerrs );
 
-   return 0;
+   // indicate if uncorrected errors remain
+   return newerrs;
 }
 
 
@@ -1957,7 +1969,7 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
    if ( (cur_stripe > tgt_stripe)  ||  
          ((handle->iob_offset + max_data) < ( tgt_stripe * partsz )) ) {
       LOG( LOG_INFO, "New offset of %zd will require threads to reseek\n", offset );
-      off_t new_iob_off = -1;
+//      off_t new_iob_off = -1;
       int i;
       for ( i = 0; i < (N + handle->ethreads_running); i++ ) {
          // first, pause this thread
@@ -2000,32 +2012,32 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
             LOG( LOG_ERR, "Failed to unset HALT state for block %d!\n", i );
             break;
          }
-         // retrieve a new ioblock
-         if ( tq_dequeue( handle->thread_queues[i], TQ_HALT, (void**)&(handle->iob[i]) ) < 0 ) {
-            LOG( LOG_ERR, "Failed to retrieve ioblock for block %d after seek!\n", i );
-            break;
-         }
-         // by now, the thread must have updated our offset
-         off_t real_iob_off = handle->thread_states[i].offset;
-         // sanity check this value
-         if ( real_iob_off < 0  ||  real_iob_off > (tgt_stripe * partsz) ) {
-            LOG( LOG_ERR, "Real offset of block %d (%zd) is not in expected range!\n", i, real_iob_off );
-            break;
-         }
-         // if this is our first block, remember this value and set ioblock data size
-         if( new_iob_off < 0 ) {
-            new_iob_off = real_iob_off;
-            handle->iob_datasz = handle->iob[i]->data_size;
-         }
-         else if ( new_iob_off != real_iob_off ) { //otherwise, further sanity check
-            LOG( LOG_ERR, "Real offset of block %d (%zd) does not match previous value of %zd!\n", i, real_iob_off, new_iob_off );
-            break;
-         }
-         else if ( handle->iob[i]->data_size != handle->iob_datasz ) {
-            LOG( LOG_ERR, "Data size of ioblock for position %d (%zd) does not match that of previous ioblocks (%zd)!\n", 
-                           handle->iob[i]->data_size, handle->iob_datasz );
-            break;
-         }
+//         // retrieve a new ioblock
+//         if ( tq_dequeue( handle->thread_queues[i], TQ_HALT, (void**)&(handle->iob[i]) ) < 0 ) {
+//            LOG( LOG_ERR, "Failed to retrieve ioblock for block %d after seek!\n", i );
+//            break;
+//         }
+//         // by now, the thread must have updated our offset
+//         off_t real_iob_off = handle->thread_states[i].offset;
+//         // sanity check this value
+//         if ( real_iob_off < 0  ||  real_iob_off > (tgt_stripe * partsz) ) {
+//            LOG( LOG_ERR, "Real offset of block %d (%zd) is not in expected range!\n", i, real_iob_off );
+//            break;
+//         }
+//         // if this is our first block, remember this value and set ioblock data size
+//         if( new_iob_off < 0 ) {
+//            new_iob_off = real_iob_off;
+//            handle->iob_datasz = handle->iob[i]->data_size;
+//         }
+//         else if ( new_iob_off != real_iob_off ) { //otherwise, further sanity check
+//            LOG( LOG_ERR, "Real offset of block %d (%zd) does not match previous value of %zd!\n", i, real_iob_off, new_iob_off );
+//            break;
+//         }
+//         else if ( handle->iob[i]->data_size != handle->iob_datasz ) {
+//            LOG( LOG_ERR, "Data size of ioblock for position %d (%zd) does not match that of previous ioblocks (%zd)!\n", 
+//                           handle->iob[i]->data_size, handle->iob_datasz );
+//            break;
+//         }
       }
       // catch any error conditions by checking our index
       if ( i != (N + handle->ethreads_running) ) {
@@ -2034,9 +2046,10 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
          return -1;
       }
 
-      handle->iob_offset = new_iob_off;
-      int iob_stripe = (int)( new_iob_off / partsz );
-      handle->sub_offset = offset - ( iob_stripe * stripesz );
+      handle->iob_datasz = 0; // indicate we have to repopulate all ioblocks
+      handle->iob_offset = (tgt_stripe * partsz); //new_iob_off;
+//      int iob_stripe = (int)( new_iob_off / partsz );
+      handle->sub_offset = offset - handle->iob_offset; //( iob_stripe * stripesz );
    }
    else {
       // reset out sub_offset to the start of the ioblock data
@@ -2256,7 +2269,8 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
       ioblock* push_block = NULL;
       int reserved;
       // check that the current ioblock has room for our data
-      if ( (reserved = reserve_ioblock( &(handle->iob[outblock]), &(push_block), handle->thread_states[outblock].ioq )) == 0 ) {
+      if ( (to_write < partsz)  ||  
+            (reserved = reserve_ioblock( &(handle->iob[outblock]), &(push_block), handle->thread_states[outblock].ioq )) == 0 ) {
          // if this is a data part, we need to fill it now
          if ( outblock < N ) {
             // make sure we don't try to store more data than we were given

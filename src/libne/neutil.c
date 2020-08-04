@@ -714,10 +714,19 @@ int main( int argc, const char** argv )
 
       PRINTout("libneTest: rebuilding erasure striping (N=%d,E=%d,O=%d)\n", N, E, O );
 
-      tmp = ne_rebuild( handle, &epat, &state );
+      int attempts = 1;
+      while ( (attempts < 4)  &&  (tmp = ne_rebuild( handle, &epat, &state )) > 0 ) {
+         PRINTout( "%d errors remain after rebuild %d\n", tmp, attempts );
+         if ( (show_state) ) {
+            PRINTout( "Stripe state pre-rebuild %d:\n", attempts ); 
+            // the positions of these meta/data errors DO take stripe offset into account
+            print_erasure_state( &epat, &state );
+         }
+         attempts++;
+      }
 
       if ( (show_state) ) {
-         PRINTout( "Stripe state pre-rebuild:\n" ); 
+         PRINTout( "Stripe state pre-rebuild %d:\n", attempts ); 
          // the positions of these meta/data errors DO take stripe offset into account
          print_erasure_state( &epat, &state );
       }
