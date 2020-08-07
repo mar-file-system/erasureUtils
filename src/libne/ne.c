@@ -106,8 +106,8 @@ underlying skt_etc() functions.
 
 #include "libne_auto_config.h"   /* HAVE_LIBISAL */
 
-#define DEBUG 1
-#define USE_STDOUT 1
+//#define DEBUG 1
+//#define USE_STDOUT 1
 #define LOG_PREFIX "ne_core"
 #include "logging/logging.h"
 #include "libne/ne.h"
@@ -203,6 +203,74 @@ void zero_state( ne_state* state, int num_blocks ) {
       if ( state->data_status ) { state->data_status[block] = 0; }
       if ( state->csum ) { state->csum[block] = 0; }
    }
+}
+
+
+/**
+ * Cleanup thread ioblock reference and set a finished state
+ * @param ioblock** iobref : Reference to the ioblock pointer for the thread
+ * @param ThreadQueue tq : ThreadQueue of the thread to terminate
+ * @param gthread_state* state : Reference to the global state struct of the thread
+ * @param ne_mode mode : Mode value of the current ne_handle
+ * @return int : Zero on success and -1 on failure
+ */
+int terminate_thread( ioblock** iobref, ThreadQueue tq, gthread_state* state, ne_mode mode ) {
+   ioblock* iob = *(iobref);
+   int ret_val = 0;
+   // make sure to release any remaining ioblocks
+   if ( iob ) {
+      if ( mode == NE_WRONLY  ||  mode == NE_WRALL ) {
+         ioblock* push_block = NULL;
+         // perform a final reserve call to split any excess data
+         // NOTE -- it's ok to reference our local 'iob' pointer here, as we will be NULLing 
+         //         out the passed reference later on regardless
+         int resret;
+         if ( (resret = reserve_ioblock( &(iob), &(push_block), state->ioq )) > 0 ) {
+            LOG( LOG_INFO, "Final ioblock is full, enqueueing it and reserving another\n" );
+            if ( tq_enqueue( tq, TQ_NONE, (void*)(push_block) ) ) {
+               LOG( LOG_ERR, "Failed to enqueue semi-final ioblock to thread_queue!\n" );
+               ret_val = -1;
+            }
+         }
+         else if ( resret < 0 ) { // make sure we didn't hit some error during the reservation process
+            LOG( LOG_ERR, "Failed to perform final ioblock reservation!\n" );
+            ret_val = -1;
+         }
+         if ( iob->data_size ) {
+            LOG( LOG_INFO, "Enqueueing final ioblock\n" );
+            // if data remains, push it now
+            if ( tq_enqueue( tq, TQ_NONE, (void*)(iob) ) ) {
+               LOG( LOG_ERR, "Failed to enqueue final ioblock to thread_queue!\n" );
+               ret_val = -1;
+            }
+         }
+         else {
+            LOG( LOG_INFO, "Releasing empty final ioblock!\n" );
+            release_ioblock( state->ioq );
+         }
+      }
+      else {
+         LOG( LOG_INFO, "Releasing handle ioblock\n" );
+         release_ioblock( state->ioq );
+      }
+      *(iobref) = NULL;
+   }
+   // signal the thread to finish
+   LOG( LOG_INFO, "Setting FINISHED state\n" );
+   if ( tq_set_flags( tq, TQ_FINISHED ) ) {
+      LOG( LOG_ERR, "Failed to set a FINISHED state!\n" );
+      ret_val = -1;
+      // attempt to abort, ignoring errors
+      tq_set_flags( tq, TQ_ABORT );
+   }
+   if ( mode == NE_RDONLY  ||  mode == NE_RDALL ) {
+      // we need to empyt any remaining elements from the queue
+      while ( tq_dequeue( tq, TQ_NONE, NULL ) > 0 ) {
+         LOG( LOG_INFO, "Releasing unused queue element\n" );
+         release_ioblock( state->ioq );
+      }
+   }
+   return ret_val;
 }
 
 
@@ -1027,6 +1095,7 @@ ne_handle ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc ) {
       else {
          // attempt to retrive meta info
          if ( dal_get_minfo( ctxt->dal, dblock, &(minfo_list[curblock]) ) ) {
+            LOG( LOG_WARNING, "Detected a meta error for block %d\n", curblock );
             tmp_meta_errs[curblock] = 1;
          }
          else {
@@ -1073,13 +1142,16 @@ ne_handle ne_stat( ne_ctxt ctxt, const char* objID, ne_location loc ) {
    int i;
    if ( modeval == NE_STAT ) {
       for ( i = 0; i < curblock; i++ ) {
-         if ( tmp_meta_errs[ (i+consensus.O) % (consensus.N+consensus.E) ] ) {
+         int translation = (i+consensus.O) % (consensus.N+consensus.E);
+         if ( tmp_meta_errs[ translation ] ) {
+            LOG( LOG_INFO, "Translating meta error on %d to block %d\n", translation, i );
             handle->thread_states[i].meta_error = 1;
          }
-         else if ( cmp_minfo( &(minfo_list[ (i+consensus.O) % (consensus.N+consensus.E) ]), &(consensus) ) ) {
+         else if ( cmp_minfo( &(minfo_list[ translation ]), &(consensus) ) ) {
+            LOG( LOG_WARNING, "Detected meta value mismatch on block %d\n", i );
             handle->thread_states[i].meta_error = 1;
          }
-         if ( tmp_data_errs[ (i+consensus.O) % (consensus.N+consensus.E) ] ) { handle->thread_states[i].data_error = 1; }
+         if ( tmp_data_errs[ translation ] ) { handle->thread_states[i].data_error = 1; }
       }
    }
    free( tmp_meta_errs );
@@ -1254,7 +1326,7 @@ ne_handle ne_convert_handle( ne_handle handle, ne_mode mode ) {
 
    }
 
-   // start with zero erasure threads running
+   // start with zero erasure threads running only for NE_RDONLY
    handle->ethreads_running = 0;
    if ( mode != NE_RDONLY ) {  handle->ethreads_running = handle->epat.E; }
 
@@ -1393,59 +1465,63 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
             free( zerobuff );
             return -1;
          }
-         // correct our totsz value
+         // correct our totsz value (may not be necessary!)
          handle->totsz -= (stripesz - partstripe);
          free( zerobuff );
       }
    }
 
-   // set a FINISHED state for all threads
    int ret_val = 0;
-   for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
-      // make sure to release any remaining ioblocks
-      if ( handle->iob[i] ) {
-         if ( handle->mode == NE_WRONLY  ||  handle->mode == NE_WRALL ) {
-            ioblock* push_block = NULL;
-            // perform a final reserve call to split any excess data
-            if ( reserve_ioblock( &(handle->iob[i]), &(push_block), handle->thread_states[i].ioq ) > 0 ) {
-               LOG( LOG_INFO, "Final ioblock is full, enqueueing it and reserving another\n" );
-               if ( tq_enqueue( handle->thread_queues[i], TQ_NONE, (void*)(push_block) ) ) {
-                  LOG( LOG_ERR, "Failed to enqueue semi-final ioblock to thread_queue %d!\n", i );
-                  ret_val = -1;
-               }
-            }
-            if ( handle->iob[i]->data_size ) {
-               LOG( LOG_INFO, "Enqueueing final ioblock at position %d\n", i );
-               // if data remains, push it now
-               if ( tq_enqueue( handle->thread_queues[i], TQ_NONE, (void*)(handle->iob[i]) ) ) {
-                  LOG( LOG_ERR, "Failed to enqueue final ioblock to thread_queue %d!\n", i );
-                  ret_val = -1;
-               }
-            }
-            else {
-               LOG( LOG_INFO, "Releasing empty final ioblock!\n" );
-               release_ioblock( handle->thread_states[i].ioq );
-            }
-         }
-         else {
-            LOG( LOG_INFO, "Releasing final ioblock at position %d\n", i );
-            release_ioblock( handle->thread_states[i].ioq );
-         }
-         handle->iob[i] = NULL;
-      }
-      if ( handle->mode != NE_STAT ) {
-         // signal the thread to finish
-         LOG( LOG_INFO, "Setting FINISHED state for block %d\n", i );
-         if ( tq_set_flags( handle->thread_queues[i], TQ_FINISHED ) ) {
-            LOG( LOG_ERR, "Failed to set a FINISHED state for thread %d!\n", i );
-            ret_val = -1;
-            // attempt to abort, ignoring errors
-            tq_set_flags( handle->thread_queues[i], TQ_ABORT );
-         }
-      }
-   }
+//      // make sure to release any remaining ioblocks
+//      if ( handle->iob[i] ) {
+//         if ( handle->mode == NE_WRONLY  ||  handle->mode == NE_WRALL ) {
+//            ioblock* push_block = NULL;
+//            // perform a final reserve call to split any excess data
+//            if ( reserve_ioblock( &(handle->iob[i]), &(push_block), handle->thread_states[i].ioq ) > 0 ) {
+//               LOG( LOG_INFO, "Final ioblock is full, enqueueing it and reserving another\n" );
+//               if ( tq_enqueue( handle->thread_queues[i], TQ_NONE, (void*)(push_block) ) ) {
+//                  LOG( LOG_ERR, "Failed to enqueue semi-final ioblock to thread_queue %d!\n", i );
+//                  ret_val = -1;
+//               }
+//            }
+//            if ( handle->iob[i]->data_size ) {
+//               LOG( LOG_INFO, "Enqueueing final ioblock at position %d\n", i );
+//               // if data remains, push it now
+//               if ( tq_enqueue( handle->thread_queues[i], TQ_NONE, (void*)(handle->iob[i]) ) ) {
+//                  LOG( LOG_ERR, "Failed to enqueue final ioblock to thread_queue %d!\n", i );
+//                  ret_val = -1;
+//               }
+//            }
+//            else {
+//               LOG( LOG_INFO, "Releasing empty final ioblock!\n" );
+//               release_ioblock( handle->thread_states[i].ioq );
+//            }
+//         }
+//         else {
+//            LOG( LOG_INFO, "Releasing final ioblock at position %d\n", i );
+//            release_ioblock( handle->thread_states[i].ioq );
+//         }
+//         handle->iob[i] = NULL;
+//      }
+//      if ( handle->mode != NE_STAT ) {
+//         // signal the thread to finish
+//         LOG( LOG_INFO, "Setting FINISHED state for block %d\n", i );
+//         if ( tq_set_flags( handle->thread_queues[i], TQ_FINISHED ) ) {
+//            LOG( LOG_ERR, "Failed to set a FINISHED state for thread %d!\n", i );
+//            ret_val = -1;
+//            // attempt to abort, ignoring errors
+//            tq_set_flags( handle->thread_queues[i], TQ_ABORT );
+//         }
+//      }
 
    if ( handle->mode != NE_STAT ) {
+      // set a FINISHED state for all threads
+      for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
+         LOG( LOG_INFO, "Terminating thread %d\n", i );
+         if ( terminate_thread( &(handle->iob[i]), handle->thread_queues[i], &(handle->thread_states[i]), handle->mode ) ) {
+            ret_val = -1;
+         }
+      }
       // verify thread termination and close all queues
       for ( i = 0; i < handle->epat.N + handle->epat.E; i++ ) {
          LOG( LOG_INFO, "Terminating queue %d\n", i );
@@ -1453,12 +1529,6 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
          tq_close( handle->thread_queues[i] );
          destroy_ioqueue( handle->thread_states[i].ioq );
       }
-   }
-
-   // populate any info structs
-   if ( ne_get_info( handle, epat, sref ) < 0 ) {
-      LOG( LOG_ERR, "Failed to populate info structs!\n" );
-      ret_val = -1;
    }
 
    int numerrs = 0; // for checking write safety
@@ -1475,6 +1545,12 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
          LOG( LOG_ERR, "Errors exceed safety threshold!\n" );
          ret_val = -1;
       }
+   }
+
+   // populate any info structs
+   if ( ne_get_info( handle, epat, sref ) < 0 ) {
+      LOG( LOG_ERR, "Failed to populate info structs!\n" );
+      ret_val = -1;
    }
 
    free_handle( handle );
@@ -1847,41 +1923,46 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
    // set a FINISHED state for all threads
    int ret_val = 0;
    for ( i = 0; i < N + E; i++ ) {
-      // make sure to release any remaining ioblocks
-      if ( outblocks[i] ) {
-         ioblock* push_block = NULL;
-         // perform a final reserve call to split any excess data
-         if ( reserve_ioblock( &(outblocks[i]), &(push_block), outstates[i].ioq ) > 0 ) {
-            LOG( LOG_INFO, "Final ioblock is full, enqueueing it and reserving another\n" );
-            if ( tq_enqueue( OutTQs[i], TQ_NONE, (void*)(push_block) ) ) {
-               LOG( LOG_ERR, "Failed to enqueue semi-final ioblock to thread_queue %d!\n", i );
-               ret_val = -1;
-            }
-         }
-         if ( outblocks[i]->data_size ) {
-            LOG( LOG_INFO, "Enqueueing final ioblock at position %d\n", i );
-            // if data remains, push it now
-            if ( tq_enqueue( OutTQs[i], TQ_NONE, (void*)(outblocks[i]) ) ) {
-               LOG( LOG_ERR, "Failed to enqueue final ioblock to thread_queue %d!\n", i );
-               ret_val = -1;
-            }
-         }
-         else {
-            LOG( LOG_INFO, "Releasing empty final ioblock!\n" );
-            release_ioblock( outstates[i].ioq );
-         }
-         outblocks[i] = NULL;
+      LOG( LOG_INFO, "Terminating output thread %d\n", i );
+      if ( OutTQs[i]  &&  terminate_thread( &(outblocks[i]), OutTQs[i], &(outstates[i]), NE_WRALL ) ) {
+         LOG( LOG_ERR, "Failed to properly terminate output thread %d!\n", i );
+         ret_val = -1;
       }
-      // signal the thread to finish
-      if ( OutTQs[i] ) {
-         LOG( LOG_INFO, "Setting FINISHED state for block %d\n", i );
-         if ( ret_val != 0  ||  tq_set_flags( OutTQs[i], TQ_FINISHED ) ) {
-            LOG( LOG_ERR, "Failed to set a FINISHED state for thread %d!\n", i );
-            ret_val = -1;
-            // attempt to abort, ignoring errors
-            tq_set_flags( OutTQs[i], TQ_ABORT );
-         }
-      }
+//      // make sure to release any remaining ioblocks
+//      if ( outblocks[i] ) {
+//         ioblock* push_block = NULL;
+//         // perform a final reserve call to split any excess data
+//         if ( reserve_ioblock( &(outblocks[i]), &(push_block), outstates[i].ioq ) > 0 ) {
+//            LOG( LOG_INFO, "Final ioblock is full, enqueueing it and reserving another\n" );
+//            if ( tq_enqueue( OutTQs[i], TQ_NONE, (void*)(push_block) ) ) {
+//               LOG( LOG_ERR, "Failed to enqueue semi-final ioblock to thread_queue %d!\n", i );
+//               ret_val = -1;
+//            }
+//         }
+//         if ( outblocks[i]->data_size ) {
+//            LOG( LOG_INFO, "Enqueueing final ioblock at position %d\n", i );
+//            // if data remains, push it now
+//            if ( tq_enqueue( OutTQs[i], TQ_NONE, (void*)(outblocks[i]) ) ) {
+//               LOG( LOG_ERR, "Failed to enqueue final ioblock to thread_queue %d!\n", i );
+//               ret_val = -1;
+//            }
+//         }
+//         else {
+//            LOG( LOG_INFO, "Releasing empty final ioblock!\n" );
+//            release_ioblock( outstates[i].ioq );
+//         }
+//         outblocks[i] = NULL;
+//      }
+//      // signal the thread to finish
+//      if ( OutTQs[i] ) {
+//         LOG( LOG_INFO, "Setting FINISHED state for block %d\n", i );
+//         if ( ret_val != 0  ||  tq_set_flags( OutTQs[i], TQ_FINISHED ) ) {
+//            LOG( LOG_ERR, "Failed to set a FINISHED state for output thread %d!\n", i );
+//            ret_val = -1;
+//            // attempt to abort, ignoring errors
+//            tq_set_flags( OutTQs[i], TQ_ABORT );
+//         }
+//      }
    }
 
    int newerrs = 0; // for checking uncorrected errors
@@ -1899,9 +1980,49 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
             numerrs++;
          }
          else {
-            // if we successfully reconstructed these, clear any errors
+            // if we successfully reconstructed these, we need to clear any errors
+            // stop the thread for any repaired block
+            LOG( LOG_INFO, "Terminating input thread %d, pre-restart\n" );
+            if ( terminate_thread( &(handle->iob[i]), handle->thread_queues[i], &(handle->thread_states[i]), NE_REBUILD ) ) {
+               LOG( LOG_ERR, "Failed to terminate input thread %d\n", i );
+               numerrs++;
+               handle->mode = NE_ERR;
+            }
+            else {
+               tq_next_thread_status( handle->thread_queues[i], NULL );
+            }
+            // use the meta_info of the output thread (will at least need a new crcsum)
+            cpy_minfo( &(handle->thread_states[i].minfo), &(outstates[i].minfo) );
+            handle->thread_states[i].offset = outstates[i].minfo.blocksz; // set to end of block
+            // clean the thread error states
             handle->thread_states[i].meta_error = 0;
             handle->thread_states[i].data_error = 0;
+            // populate a tqopts
+            TQ_Init_Opts opts;
+            opts.log_prefix = malloc( sizeof(char) * ( 6 + i/10 ) );
+            if ( opts.log_prefix == NULL ) {
+               LOG( LOG_ERR, "Failed to allocate space for a log_prefix string!\n" );
+               numerrs++;
+               handle->mode = NE_ERR;
+            }
+            else if ( tq_get_opts( handle->thread_queues[i], &(opts), ( 6 + i/10 ) ) ) {
+               LOG( LOG_ERR, "Failed to populate opts struct for restart of thread %d\n", i );
+               numerrs++;
+               handle->mode = NE_ERR;
+            }
+            tq_close( handle->thread_queues[i] );
+            opts.global_state = (void*)( &(handle->thread_states[i]) );
+            // if we've been successful so far, restart this thread
+            if ( handle->mode != NE_ERR ) {
+               LOG( LOG_INFO, "Restarting thread %d\n", i );
+               handle->thread_queues[i] = tq_init( &opts );
+               if ( handle->thread_queues[i] == NULL ) {
+                  LOG( LOG_ERR, "Failed to initialize new thread queue at position %d!\n", i );
+                  numerrs++;
+                  handle->mode = NE_ERR;
+               }
+            }
+            free( opts.log_prefix );
          }
       }
       else if ( handle->thread_states[i].meta_error  ||  handle->thread_states[i].data_error ) {
@@ -1984,6 +2105,13 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
                break;
             }
             handle->iob[i] = NULL;
+         }
+         // make sure that the thread isn't stuck waiting for ioqueue elements
+         if ( tq_dequeue( handle->thread_queues[i], TQ_HALT, (void**)&(handle->iob[i]) ) > 0  ) {
+            if ( handle->iob[i] != NULL ) {
+               release_ioblock( handle->thread_states[i].ioq );
+               handle->iob[i] = NULL;
+            }
          }
          // wait for the thread to pause
          if ( tq_wait_for_pause( handle->thread_queues[i] ) ) {
@@ -2079,7 +2207,7 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
             handle->sub_offset += stripesz;
 
          }
-         LOG( LOG_INFO, "Finished buffer 'cunching'\n" );
+         LOG( LOG_INFO, "Finished buffer 'munching'\n" );
       }
       // add any sub-stripe offset which remains
       handle->sub_offset += offset - ( tgt_stripe * stripesz );

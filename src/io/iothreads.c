@@ -106,8 +106,8 @@ underlying skt_etc() functions.
 
 #include "libne_auto_config.h"
 
-#define DEBUG 1
-#define USE_STDOUT 1
+//#define DEBUG 1
+//#define USE_STDOUT 1
 
 #define LOG_PREFIX "iothreads"
 #include "logging/logging.h"
@@ -217,29 +217,36 @@ int read_init( unsigned int tID, void* global_state, void** state ) {
    }
 
    // set some gstate values
-   gstate->offset = 0;
-   gstate->data_error = 0;
-   gstate->meta_error = 0;
+   //gstate->offset = 0;
+   //gstate->data_error = 0;
+   //gstate->meta_error = 0;
 
    // set state fields
    DAL dal = gstate->dal; // shorthand reference
    tstate->gstate = gstate;
-   tstate->offset = 0;
+   tstate->offset = gstate->offset;
    tstate->iob    = NULL;
    tstate->crcsumchk = 0;
    tstate->continuous = 1;
+   if ( tstate->offset ) { tstate->continuous = 0; }
 
    // open a handle for this block
    tstate->handle = dal->open( dal->ctxt, gstate->dmode, gstate->location, gstate->objID );
    if( tstate->handle == NULL ) {
-      LOG( LOG_WARNING, "failed to open handle for block %d!\n", gstate->location.block );
+      LOG( LOG_WARNING, "failed to open handle for block %d, attempting meta only access\n", gstate->location.block );
       gstate->data_error=1;
+      tstate->handle = dal->open( dal->ctxt, DAL_METAREAD, gstate->location, gstate->objID );
+      if ( tstate->handle == NULL ) {
+         LOG( LOG_ERR, "failed to open meta handle for block %d!\n" );
+         gstate->meta_error = 1;
+      }
    }
 
    // skip setting minfo values if they already appear to be set
    if ( gstate->minfo.totsz == 0 ) {
       // populate our minfo struct with obj meta values
       if ( dal_get_minfo( dal, tstate->handle, &gstate->minfo ) != 0 ) {
+         LOG( LOG_ERR, "Failed to populate all expected meta_info values!\n" );
          gstate->meta_error = 1;
       }
    }
@@ -507,7 +514,7 @@ int read_resume( void** state, void** prev_work ) {
             LOG( LOG_ERR, "Failed to align ioblock to trim of %zu!\n", trim );
             return -1;
          }
-         // perform a single IO, which should now fill this ioblock
+         // now fill this ioblock
          if ( read_produce( (void**)&(tstate), (void**)&(push_block) ) ) {
             LOG( LOG_ERR, "Failed to produce a junk ioblock!\n" );
             return -1;

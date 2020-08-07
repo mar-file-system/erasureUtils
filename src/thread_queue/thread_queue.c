@@ -69,8 +69,8 @@ IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
 OF SUCH DAMAGE.
 */
 
-#define DEBUG 1
-#define USE_STDOUT 1
+//#define DEBUG 1
+//#define USE_STDOUT 1
 
 #define def_queue_pref "ThreadQueue"
 #define LOG_PREFIX "thread_queue"
@@ -753,6 +753,59 @@ ThreadQueue tq_init( TQ_Init_Opts* opts ) {
 
 
 /**
+ * Populate a given TQ_Init_Opts struct with the current parameters of a ThreadQueue
+ * NOTE -- this will NOT populate the init_flags and global_state values!
+ * @param ThreadQueue tq : ThreadQueue from which to gather info
+ * @param TQ_Init_Opts* opts : Reference to the TQ_Init_Opts struct to be populated
+ * @param int log_strlen : Length of the log_prefix string in the opts struct
+ * @return int : Zero on success, -1 on failure
+ */
+int tq_get_opts( ThreadQueue tq, TQ_Init_Opts* opts, int log_strlen ) {
+   if ( opts == NULL ) {
+      LOG( LOG_ERR, "Received a NULL opts reference!\n" );
+      return -1;
+   }
+   if ( tq == NULL ) {
+      LOG( LOG_ERR, "Received a NULL ThreadQueue reference!\n" );
+      return -1;
+   }
+
+   // get some values prepped
+   int num_threads = 0;
+   int num_prods = 0;
+   if ( tq->prod_pool ) { num_threads += tq->prod_pool->num_thrds; num_prods = num_threads; }
+   if ( tq->cons_pool ) { num_threads += tq->cons_pool->num_thrds; }
+
+   // populate all struct fields
+   opts->init_flags = TQ_NONE; // just don't bother
+   opts->max_qdepth = tq->max_qdepth;
+   opts->global_state = NULL; // just don't bother
+   opts->num_threads = num_threads;
+   opts->num_prod_threads = num_prods;
+   opts->thread_consumer_func = NULL; // init to NULL, just in case
+   opts->thread_producer_func = NULL; // init to NULL, just in case
+   if ( tq->prod_pool ) {
+      opts->thread_init_func = tq->prod_pool->thread_init_func; // should be safe from either pool
+      opts->thread_producer_func = tq->prod_pool->thread_work_func;
+      opts->thread_pause_func = tq->prod_pool->thread_pause_func;
+      opts->thread_resume_func = tq->prod_pool->thread_resume_func;
+      opts->thread_term_func = tq->prod_pool->thread_term_func;
+   }
+   else {
+      opts->thread_init_func = tq->cons_pool->thread_init_func; // should be safe from either pool
+      opts->thread_consumer_func = tq->cons_pool->thread_work_func;
+      opts->thread_pause_func = tq->cons_pool->thread_pause_func;
+      opts->thread_resume_func = tq->cons_pool->thread_resume_func;
+      opts->thread_term_func = tq->cons_pool->thread_term_func;
+   }
+   if ( opts->log_prefix != NULL  &&  log_strlen )
+      strncpy( opts->log_prefix, tq->log_prefix, log_strlen );
+   return 0;
+}
+
+
+
+/**
  * Insert a new element of work into the ThreadQueue
  * @param ThreadQueue tq : ThreadQueue in which to insert work
  * @param TQ_Control_Flags ignore_flags : Indicates which queue states should be bypassed during this operation
@@ -840,7 +893,8 @@ int tq_dequeue( ThreadQueue tq, TQ_Control_Flags ignore_flags, void** workbuff )
    if ( tq->qdepth == 0 ) {
       LOG( LOG_INFO, "%s master proc can't dequeue while queue is empty and has flags: %d\n", tq->log_prefix, tq->con_flags );
       pthread_mutex_unlock( &tq->qlock );
-      *workbuff = NULL;
+      if ( workbuff )
+         *workbuff = NULL;
       return 0;
    }
 
@@ -848,7 +902,8 @@ int tq_dequeue( ThreadQueue tq, TQ_Control_Flags ignore_flags, void** workbuff )
    int depth = tq->qdepth;
 
    // remove a work pkg from the head of the queue
-   *workbuff = tq->workpkg[ tq->head ];
+   if ( workbuff )
+      *workbuff = tq->workpkg[ tq->head ];
    tq->head = (tq->head + 1) % tq->max_qdepth;
    tq->qdepth--;
    LOG( LOG_INFO, "%s master proc has successfully dequeued work\n", tq->log_prefix );

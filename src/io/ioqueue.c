@@ -106,8 +106,8 @@ underlying skt_etc() functions.
 
 // #include "libne_auto_config.h"   /* HAVE_LIBISAL */
 
-#define DEBUG 1
-#define USE_STDOUT 1
+//#define DEBUG 1
+//#define USE_STDOUT 1
 #define LOG_PREFIX "ioqueue"
 #include "logging/logging.h"
 

@@ -62,8 +62,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <fcntl.h>
 #include <errno.h>
 
-#define DEBUG 1
-#define USE_STDOUT 1
+//#define DEBUG 1
+//#define USE_STDOUT 1
 #define LOG_PREFIX "posix_dal"
 #include "logging/logging.h"
 #include "dal.h"

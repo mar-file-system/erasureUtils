@@ -1,6 +1,6 @@
 
-#define DEBUG 1
-#define USE_STDOUT 1
+//#define DEBUG 1
+//#define USE_STDOUT 1
 #define LOG_PREFIX "dal"
 #include "logging/logging.h"
 #include "dal.h"

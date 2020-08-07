@@ -282,7 +282,7 @@ while [[ $cnt -lt $ITER ]]; do
    err_free=0
 
    echo
-   echo -e "\e[34mGenerating $n+$e striping starting at file $start...\e[0m"
+   echo -e "\e[7;96mGenerating $n+$e striping starting at file $start...\e[0m"
    echo >> $LOGFILE
    echo >> $LIBTLOG
    echo "Generating $n+$e striping starting at file $start""..." >> $LOGFILE
@@ -305,7 +305,7 @@ while [[ $cnt -lt $ITER ]]; do
 
       if [[ $incnt -ne 0 ]]; then
          echo
-         echo -e "\e[34mContinuing with the same $n+$e start position $start stripe...\e[0m"
+         echo -e "\e[7;96mContinuing with the same $n+$e start position $start stripe...\e[0m"
          echo >> $LOGFILE
          echo "Continuring to use $n+$e striping with start $start..." >> $LOGFILE
       fi
@@ -482,7 +482,7 @@ while [[ $cnt -lt $ITER ]]; do
          echo -n "Verifying corruption pattern (expecting pattern $stat)..."
          echo "Verifying corruption pattern (expecting pattern $stat)..." >> $LOGFILE
 
-         { ret=$( time -p $LIBNETEST verify $EPAT $n $e $start 2>&1 | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
+         { ret=$( time -p $LIBNETEST verify $EPAT $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
 
          if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
             echo

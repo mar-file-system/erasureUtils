@@ -106,8 +106,8 @@ underlying skt_etc() functions.
 
 // #include "libne_auto_config.h"   /* HAVE_LIBISAL */
 
-#define DEBUG 1
-#define USE_STDOUT 1
+//#define DEBUG 1
+//#define USE_STDOUT 1
 #define LOG_PREFIX "metainfo"
 #include "logging/logging.h"
 
@@ -171,11 +171,18 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
    minfo->crcsum  = -1;
    minfo->totsz   = -1;
    // get the meta info for the given object
-   if ( dal->get_meta( handle, str, strmax ) <= 0 ) {
+   ssize_t dstrbytes;
+   if ( (dstrbytes = dal->get_meta( handle, str, strmax )) <= 0 ) {
       LOG( LOG_ERR, "failed to retrieve meta value!\n" );
       free( str );
       return -1;
    }
+   // make sure we have a trailing newline
+   char valid_suffix = 0;
+   if ( dstrbytes >= 2  &&  str[dstrbytes-2] == '\n' ) { valid_suffix = 1; }
+   else { LOG( LOG_ERR, "meta string lacks trailing newline!\n" ); }
+   // make SURE this string is null-terminated
+   str[dstrbytes-1] = '\0';
 
    int status = 8; // initialize to the number of values we expect to parse
    // Parse the string into appropriate meta_info fields
@@ -199,11 +206,12 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
       vertag = MINFO_VER;
       // read in the version tag value, if possible
       if ( sscanf( parse, "v%d ", &vertag ) ) {
-         parse++;
-         while( *parse != ' ' ) {
+         // skip ahead to the next gap, while avoiding overruning the end of the string
+         while( *parse != ' '  &&  *parse != '\0' ) {
             parse++;
          }
-         parse++; // string ref should now be beyond the ver tag and whitespace
+         if ( *parse == ' ' )
+            parse++; // string ref should now be beyond the ver tag and whitespace
       }
    }
    
@@ -233,15 +241,16 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
       strncpy( metaversz, metapartsz, 20 );
    }
 
-   free( str );
    if ( ret < 1 ) {
       LOG( LOG_ERR, "sscanf failed to parse any values from meta info!\n" );
+      free( str );
       return -1;
    }
    if (ret != 8) {
       LOG( LOG_WARNING, "sscanf parsed only %d values from meta info: \"%s\"\n", ret, str);
       status = ret;
    }  
+   free( str );
    
    char* endptr;
    // simple macro to save some repeated lines of code
@@ -267,7 +276,7 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
    PARSE_VALUE(  minfo->crcsum,  metacrcsum, 6, strtoll, long long )
    PARSE_VALUE(   minfo->totsz, metatotsize, 7, strtoll, ssize_t )
 
-   return ( status == 8 ) ? 0 : status;
+   return ( valid_suffix  &&  status == 8 ) ? 0 : status;
 }
 
 
@@ -287,13 +296,13 @@ int dal_set_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
       return -1;
    }
 
-   LOG( LOG_INFO, "partsz %zu\n", minfo->partsz );
-   LOG( LOG_INFO, "versz %zu\n", minfo->versz );
-   LOG( LOG_INFO, "blocksz %zu\n", minfo->blocksz );
-   LOG( LOG_INFO, "crcsum %zuu\n", minfo->crcsum );
+   LOG( LOG_INFO, "partsz %zd\n", minfo->partsz );
+   LOG( LOG_INFO, "versz %zd\n", minfo->versz );
+   LOG( LOG_INFO, "blocksz %zd\n", minfo->blocksz );
+   LOG( LOG_INFO, "crcsum %zd\n", minfo->crcsum );
 
 	// fill the string allocation with meta_info values
-   if ( snprintf(str,strmax, "v%d %d %d %d %zu %zu %zu %llu %zu\n",
+   if ( snprintf(str,strmax, "v%d %d %d %d %zd %zd %zd %llu %zd\n",
                   MINFO_VER, minfo->N, minfo->E, minfo->O,
                   minfo->partsz, minfo->versz,
                   minfo->blocksz, minfo->crcsum,

@@ -86,7 +86,7 @@ typedef enum {
 
 typedef struct queue_init_struct {
    // Queue Info
-   const char*       log_prefix;  /* string prefix for all log messages produced by this queue */
+   char*       log_prefix;  /* string prefix for all log messages produced by this queue */
    TQ_Control_Flags  init_flags;  /* state flags to set at the moment of queue creation, before threads initialize */
    unsigned int      max_qdepth;  /* maximum depth of the work queue */
 
@@ -193,6 +193,17 @@ typedef struct thread_queue_struct* ThreadQueue; // forward decl.
  * @return ThreadQueue : pointer to the created ThreadQueue, or NULL if an error was encountered
  */
 ThreadQueue tq_init( TQ_Init_Opts* opts );
+
+
+/**
+ * Populate a given TQ_Init_Opts struct with the current parameters of a ThreadQueue
+ * NOTE -- this will NOT populate the init_flags and global_state values!
+ * @param ThreadQueue tq : ThreadQueue from which to gather info
+ * @param TQ_Init_Opts* opts : Reference to the TQ_Init_Opts struct to be populated
+ * @param int log_strlen : Length of the log_prefix string in the opts struct
+ * @return int : Zero on success, -1 on failure
+ */
+int tq_get_opts( ThreadQueue tq, TQ_Init_Opts* opts, int log_strlen );
 
 
 /**

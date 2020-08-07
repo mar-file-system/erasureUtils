@@ -148,7 +148,7 @@ typedef struct DAL_struct {
    ssize_t (*get_meta) ( BLOCK_CTXT ctxt, char* meta_buf, size_t size);
       // Description:
       // Return Values:
-      //  Zero on success, Non-zero if the operation could not be completed
+      //  Meta byte count on success, negative if the operation could not be completed
    int (*put) ( BLOCK_CTXT ctxt, const void* buf, size_t size );
       // Description:
       // Return Values:

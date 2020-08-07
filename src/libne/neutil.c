@@ -85,9 +85,15 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 //#endif
 //}
 
+//#define DEBUG
+#define preFMT "%s: "
 
-#define PRINTout(...) fprintf( stdout, ##__VA_ARGS__)
-
+#define PRINTout(FMT,...) fprintf( stdout, preFMT FMT, "neutil", ##__VA_ARGS__)
+#ifdef DEBUG
+#define PRINTdbg(FMT,...) fprintf( stdout, preFMT FMT, "neutil", ##__VA_ARGS__)
+#else
+#define PRINTdbg(...)
+#endif
 
 //#if (SOCKETS != SKT_none)
 //
@@ -553,7 +559,7 @@ int main( int argc, const char** argv )
       return -1;
    }
    
-   PRINTout("libneTest: command = '%s'\n", operation);
+   PRINTout("performing a '%s' command\n", operation);
 
 //#  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, \
 //                                                 timing_flags, NULL,    \
@@ -586,12 +592,12 @@ int main( int argc, const char** argv )
       while ( !(force_delete) ) {
          char response[20] = { 0 };
          *(response) = '\n';
-         PRINTout("libneTest: deleting striping corresponding to path \"%s\" with width %d...\n"
+         PRINTout("deleting striping corresponding to path \"%s\" with width %d...\n"
                   "Are you sure you wish to continue? (y/n): ", (char*)argv[2], N );
          fflush( stdout );
          while( *(response) == '\n' ) {
             if ( response != fgets( response, 20, stdin ) ) {
-               PRINTout( "libneTest: failed to read input\n" );
+               PRINTout( "failed to read input\n" );
                return -1;
             }
          }
@@ -600,26 +606,26 @@ int main( int argc, const char** argv )
             return -1;
          if ( *(response) == 'y'  ||  *(response) == 'Y' )
             break;
-         PRINTout( "libneTest: input unrecognized\n" );
+         PRINTout( "input unrecognized\n" );
          // clear excess chars from stdin, one at a time
          while ( *(response) != '\n'  &&  *(response) != EOF )
             *(response) = getchar();
          if ( *(response) == EOF ) {
-            PRINTout( "libneTest: terminating due to lack of user input\n" );
+            PRINTout( "terminating due to lack of user input\n" );
             return -1;
          }
          iter++; // see if this has happened a lot
          if ( iter > 4 ) {
-            PRINTout( "libneTest: terminating due to excessive unrecognized user input\n" );
+            PRINTout( "terminating due to excessive unrecognized user input\n" );
             return -1;
          }
       }
       if ( ne_delete( ctxt, "", maxloc ) ) {
-         PRINTout("libneTest: deletion attempt indicates a failure for path \"%s\": errno=%d (%s)\n",
+         PRINTout("deletion attempt indicates a failure for path \"%s\": errno=%d (%s)\n",
                   (char*)argv[2], errno, strerror(errno));
          return -1;
       }
-      PRINTout("libneTest: deletion successful\n" );
+      PRINTout("deletion successful\n" );
       if ( ne_term( ctxt ) ) {
          PRINTout("Failed to properly free ne_ctxt!\n" );
          return -1;
@@ -664,11 +670,11 @@ int main( int argc, const char** argv )
    // -----------------------------------------------------------------
 
    if ( wr == 5 ) {
-      PRINTout("libneTest: retrieving status of erasure striping with path \"%s\"\n", erasure_path );
+      PRINTout("retrieving status of erasure striping with path \"%s\"\n", erasure_path );
 
       int ret;
       if ( ( ret = ne_close( handle, &epat, &state ) ) < 0 ) {
-         PRINTout( "libneTest: ne_close failed: errno=%d (%s)\n", errno, strerror(errno) );
+         PRINTout( "ne_close failed: errno=%d (%s)\n", errno, strerror(errno) );
          return -1;
       }
 
@@ -712,7 +718,7 @@ int main( int argc, const char** argv )
          }
       }
 
-      PRINTout("libneTest: rebuilding erasure striping (N=%d,E=%d,O=%d)\n", N, E, O );
+      PRINTout("rebuilding erasure striping (N=%d,E=%d,O=%d)\n", N, E, O );
 
       int attempts = 1;
       while ( (attempts < 4)  &&  (tmp = ne_rebuild( handle, &epat, &state )) > 0 ) {
@@ -734,12 +740,12 @@ int main( int argc, const char** argv )
       if ( (tmp) ) {
          PRINTout("Rebuild failed to correct all errors: errno=%d (%s)\n", errno, strerror(errno));
          if ( tmp < 0 )
-            PRINTout("libneTest: rebuild failed!\n" );
+            PRINTout("rebuild failed!\n" );
          else
-            PRINTout("libneTest: rebuild indicates only partial success: rc = %d\n", tmp );
+            PRINTout("rebuild indicates only partial success: rc = %d\n", tmp );
       }
       else
-         PRINTout("libneTest: rebuild complete\n" );
+         PRINTout("rebuild complete\n" );
 
       PRINTout("rebuild rc: %d\n",tmp);
 
@@ -775,7 +781,7 @@ int main( int argc, const char** argv )
    if ( output_file != NULL  ||  wr == 1 ) { // only allocate this buffer if we are writing to something
       buff = memset( malloc( sizeof(char) * buff_size ), 0, buff_size );
       if ( buff == NULL ) {
-         PRINTout( "libneTest: failed to allocate space for a data buffer\n" );
+         PRINTout( "failed to allocate space for a data buffer\n" );
          return -1;
       }
    }
@@ -789,10 +795,10 @@ int main( int argc, const char** argv )
    // verify a proper open of our standard file
    if ( std_fd < 0 ) {
       if ( output_file != NULL )
-         PRINTout( "libneTest: failed to open output file \"%s\": errno=%d (%s)\n",
+         PRINTout( "failed to open output file \"%s\": errno=%d (%s)\n",
                    output_file, errno, strerror(errno) );
       else
-         PRINTout( "libneTest: failed to open input file \"%s\": errno=%d (%s)\n",
+         PRINTout( "failed to open input file \"%s\": errno=%d (%s)\n",
                    input_file, errno, strerror(errno) );
       if ( buff )
          free( buff );
@@ -817,7 +823,7 @@ int main( int argc, const char** argv )
       handle = ne_open( ctxt, "", maxloc, epat, mode );
       // check for a successful open of the handle
       if ( handle == NULL ) {
-         PRINTout( "libneTest: failed to open the requested erasure path for a %s operation: errno=%d (%s)\n",
+         PRINTout( "failed to open the requested erasure path for a %s operation: errno=%d (%s)\n",
                    operation, errno, strerror(errno) );
          if ( buff )
             free( buff );
@@ -852,18 +858,18 @@ int main( int argc, const char** argv )
       // READ DATA
       ssize_t nread = toread; // assume success if no read takes place
       if ( (wr == 1)  &&  (std_fd) ) { // if input_file was defined, writes get data from it 
-         PRINTout("libneTest: reading %llu bytes from \"%s\"\n", toread, input_file );
+         PRINTdbg("reading %llu bytes from \"%s\"\n", toread, input_file );
          nread = read( std_fd, buff, toread );
       }
       else if ( wr != 1 ) { // read/verify get data from the erasure stripe
-         PRINTout("libneTest: reading %llu bytes from erasure stripe\n", toread );
+         PRINTdbg("reading %llu bytes from erasure stripe\n", toread );
          nread = ne_read( handle, buff, toread );
          // Note: if buff is NULL here, retrieved data will simply be thrown out
       }
 
       // check for a read error
       if ( (nread < 0)  ||  ( (size_arg) && (nread < toread) ) ) {
-         PRINTout( "libneTest: expected to read %llu bytes from source, but instead received %zd: errno=%d (%s)\n",
+         PRINTout( "expected to read %llu bytes from source, but instead received %zd: errno=%d (%s)\n",
                    toread, nread, errno, strerror(errno) );
          if ( buff )
             free( buff );
@@ -876,17 +882,17 @@ int main( int argc, const char** argv )
       // WRITE DATA
       size_t written = nread; // no write performed -> success
       if ( wr == 1 ) { // for write, just output to the stripe
-         PRINTout( "libneTest: writing %zd bytes to erasure stripe\n", nread );
+         PRINTdbg( "writing %zd bytes to erasure stripe\n", nread );
          written = ne_write( handle, buff, nread );
       }
       else if ( std_fd ) { // for read/verify, only write out if given the -o flag
-         PRINTout( "libneTest: writing %zd bytes to \"%s\"\n", nread, output_file );
+         PRINTdbg( "writing %zd bytes to \"%s\"\n", nread, output_file );
          written = write( std_fd, buff, nread );
       }
  
       // check for a write error
       if ( nread != written ) {
-         PRINTout( "libneTest: expected to write %llu bytes to destination, but instead wrote %zd: errno=%d (%s)\n",
+         PRINTout( "expected to write %llu bytes to destination, but instead wrote %zd: errno=%d (%s)\n",
                    nread, written, errno, strerror(errno) );
          if ( buff )
             free( buff );
@@ -916,13 +922,13 @@ int main( int argc, const char** argv )
 
    }
 
-   PRINTout( "libneTest: all data movement completed (%llu bytes)\n", bytes_moved );
+   PRINTout( "all data movement completed (%llu bytes)\n", bytes_moved );
 
    if ( std_fd  &&  close( std_fd ) ) {
       if ( wr == 1 )
-         PRINTout( "libneTest: encountered an error when trying to close input file\n" );
+         PRINTout( "encountered an error when trying to close input file\n" );
       else
-         PRINTout( "libneTest: encountered an error when trying to close output file\n" );
+         PRINTout( "encountered an error when trying to close output file\n" );
    }
       
    // free our work buffer, if we allocated one
@@ -937,7 +943,7 @@ int main( int argc, const char** argv )
       print_erasure_state( &epat, &state );
    }
 
-   PRINTout("close rc: %d\n",tmp);
+   PRINTout("close rc = %d\n",tmp);
 
    if ( ne_term( ctxt ) ) {
       PRINTout("Failed to properly free ne_ctxt!\n" );
