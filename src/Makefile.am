@@ -54,5 +54,5 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-SUBDIRS = thread_queue dal io libne
+SUBDIRS = thread_queue dal io ne
 

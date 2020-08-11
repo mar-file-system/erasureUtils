@@ -104,11 +104,11 @@ underlying skt_etc() functions.
 
 --------------------------------------------------------------------------- */
 
-#include "libne_auto_config.h"
-
-//#define DEBUG 1
-//#define USE_STDOUT 1
-
+#include "erasureUtils_auto_config.h"
+#if defined(DEBUG_ALL)  ||  defined(DEBUG_IO)
+   #define DEBUG 1
+   #define USE_STDOUT 1
+#endif
 #define LOG_PREFIX "iothreads"
 #include "logging/logging.h"
 
@@ -329,7 +329,7 @@ int read_produce( void** state, void** work_tofill ) {
    // check if our offset is beyond the end of the block
    if ( tstate->offset >= gstate->minfo.blocksz ) {
       // if we haven't hit any data errors AND we haven't reseeked, verify our global CRC
-      if ( gstate->data_error == 0  &&  tstate->continuous ) {
+      if ( gstate->data_error == 0  &&  tstate->continuous  &&  !(gstate->meta_error) ) {
          if ( tstate->crcsumchk != gstate->minfo.crcsum ) {
             LOG( LOG_ERR, "Block %d data CRC sum (%llu) does not match meta CRC sum!\n", 
                  gstate->location.block, tstate->crcsumchk, gstate->minfo.crcsum );

@@ -68,9 +68,9 @@ for n in {1..15}; do
 
       parts=$((n+e))
       echo "Striping as $n+$e..."
-      libneTest write "$STRIPE%d" $n $e 0 -i "$INFILE" >/dev/null 2>&1
+      neutil write "$STRIPE{b}" $n $e 0 -i "$INFILE" >/dev/null 2>&1
       if [ $? -ne 0 ]; then echo "   failed to write new stripe!"; exit -1; fi
-      if ! libneTest verify "$STRIPE%d" -n  >/dev/null 2>&1; then
+      if ! neutil verify "$STRIPE{b}" -n $((n+e))  >/dev/null 2>&1; then
          echo "   failed to read the unerrored stripe!"
 #      elif ! diff "$INFILE" "$OUTFILE" 2>/dev/null; then
 #         echo "   comparison failed for the unerrored stripe!"
@@ -92,7 +92,7 @@ for n in {1..15}; do
                mv "$STRIPE$err" "$STRIPE$err".backup
             done
             # check for an incomplete read
-            if ! libneTest verify "$STRIPE%d" -n >/dev/null 2>&1; then
+            if ! neutil verify "$STRIPE%d" -n $((n+e)) >/dev/null 2>&1; then
                echo "   read failed for epat: ${errors[@]}"
 #            elif ! diff "$INFILE" "$OUTFILE" 2>/dev/null; then
 #               echo "   comparison failed for epat: ${errors[@]}"

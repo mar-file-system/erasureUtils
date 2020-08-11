@@ -73,7 +73,7 @@
 AC_PREREQ([2.69])
 AC_INIT([erasureUtils], [1.0], [gransom@lanl.gov])
 AC_CONFIG_SRCDIR([COPYRIGHT.h])
-AC_CONFIG_HEADERS([libne_auto_config.h])
+AC_CONFIG_HEADERS([src/erasureUtils_auto_config.h])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
 AM_PROG_CC_C_O
@@ -117,6 +117,7 @@ AC_CHECK_LIB([isal],    [crc32_ieee],
         echo], 
        [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!  Please verify that the proper version of the library (v2.16.0 or higher) is installed."])])])
 
+AC_DEFINE( [GTESTNEVAR], [], [Testing variable] )
 
 # check for presence of zlib
 warnlibs=""
@@ -133,44 +134,58 @@ AM_COND_IF([BENCH], [],
     echo "         The 'isal_benchmark' subdir will not be built!"
     echo ])
 
-# 
-# 
-# # Allow turning on debugging flags
-# # NOTE: There are currently no fast-timer (i.e. 'ft') diagnostics.
-# #       If there were, we would probably only want to see them for specialized debugging.
-# # NOTE: The only point of 'gdb' is to allow sockets timeouts to be made long, in the
-# #       case where a developer wants to be able to take their time stepping through
-# #       protocol steps, without worrying about timeouts.  In all other ways, it is the
-# #       same as 'yes' (which is the default if you just configure with '--enable-debug')
-# AC_ARG_ENABLE([debug],
-#                AS_HELP_STRING([--enable-debug],
-#                               [Turn on internal debugging.  One of {yes,no,ne,sockets,ft,gdb}]),
-#                [case "${enableval}" in
-#                   yes)       enable_debug=all ;;
-#                   no)        enable_debug=no ;;
-#                   ne)        enable_debug=ne ;;
-#                   sockets)   enable_debug=sockets ;;
-#                   ft)        enable_debug=ft ;;
-#                   gdb)       enable_debug=all; debug_mode=gdb ;;
-#                   *)    AC_MSG_FAILURE([enable-debug={yes,no,ne,sockets,ft,gdb}.]) ;;
-#                 esac],
-#                [enable_debug=no])
-# 
-# AM_CONDITIONAL([DEBUG_NE],          [test "$enable_debug" = ne      || test "$enable_debug" = all ])
-# AM_CONDITIONAL([DEBUG_SOCKETS],     [test "$enable_debug" = sockets || test "$enable_debug" = all ])
-# AM_CONDITIONAL([DEBUG_SOCKETS_GDB], [test "x$debug_mode" = "xgdb" ])
-# AM_CONDITIONAL([DEBUG_FT],          [test "$enable_debug" = ft ])
-# 
-# 
-# 
-# # debugging-output should go to syslog, instead of stdout/stderr?
-# AC_ARG_ENABLE([syslog],
-#                AS_HELP_STRING([--enable-syslog],
-#                               [Send debugging output to syslog, instead of stdout/stderr]),
-#               [enable_syslog=$enableval],
-#               [enable_syslog=no])
-# 
-# AM_CONDITIONAL([USE_SYSLOG], [test x"$enable_syslog" != xno])
+ 
+ 
+# Allow turning on debugging flags
+# NOTE: There are currently no fast-timer (i.e. 'ft') diagnostics.
+#       If there were, we would probably only want to see them for specialized debugging.
+# NOTE: The only point of 'gdb' is to allow sockets timeouts to be made long, in the
+#       case where a developer wants to be able to take their time stepping through
+#       protocol steps, without worrying about timeouts.  In all other ways, it is the
+#       same as 'yes' (which is the default if you just configure with '--enable-debug')
+#AC_ARG_ENABLE([debug],
+#             AS_HELP_STRING([--enable-debug],
+#                            [Turn on internal debugging.  One of {yes,no,ne,sockets,ft,gdb}]),
+#             [ AS_IF( [ x"${enableval}" =~ ^x\(.*,\)?all\(,.*\)?$ ], [AC_DEFINE( [DEBUG_ALL] )], [] ) ],
+#             [debug_all=no; debug_ne=no; debug_io=no; debug_dal=no; debug_tq=no])
+
+AC_ARG_ENABLE( [debugALL],
+               AS_HELP_STRING( [--enable-debugALL], [Enable all debug output] ),
+               AC_DEFINE( [DEBUG_ALL], [], [Enable all debug output] ), [] )
+
+AC_ARG_ENABLE( [debugNE],
+               AS_HELP_STRING( [--enable-debugNE], [Enable 'ne'-subdir debug output] ),
+               AC_DEFINE( [DEBUG_NE], [], [Enable 'ne'-subdir debug output] ), [] )
+
+AC_ARG_ENABLE( [debugIO],
+               AS_HELP_STRING( [--enable-debugIO], [Enable 'io'-subdir debug output] ),
+               AC_DEFINE( [DEBUG_IO], [], [Enable 'io'-subdir debug output] ), [] )
+
+AC_ARG_ENABLE( [debugDAL],
+               AS_HELP_STRING( [--enable-debugDAL], [Enable 'dal'-subdir debug output] ),
+               AC_DEFINE( [DEBUG_DAL], [], [Enable 'dal'-subdir debug output] ), [] )
+
+AC_ARG_ENABLE( [debugTQ],
+               AS_HELP_STRING( [--enable-debugTQ], [Enable 'thread_queue'-subdir debug output] ),
+               AC_DEFINE( [DEBUG_TQ], [], [Enable 'thread_queue'-subdir debug output] ), [] )
+
+#AM_COND_IF( [DEBUG_ALL], [test "$debug_all" = yes], [AC_DEFINE( [DEBUG_ALL] )], [])
+
+
+#AM_CONDITIONAL([DEBUG_SOCKETS],     [test "$enable_debug" = sockets || test "$enable_debug" = all ])
+#AM_CONDITIONAL([DEBUG_SOCKETS_GDB], [test "x$debug_mode" = "xgdb" ])
+#AM_CONDITIONAL([DEBUG_FT],          [test "$enable_debug" = ft ])
+
+
+
+# debugging-output should go to syslog, instead of stdout/stderr?
+AC_ARG_ENABLE([syslog],
+             AS_HELP_STRING([--enable-syslog],
+                            [Send debugging output to syslog, instead of stdout/stderr]),
+            [enable_syslog=$enableval],
+            [enable_syslog=no])
+
+AM_CONDITIONAL([USE_SYSLOG], [test x"$enable_syslog" != xno])
 
 AC_CONFIG_FILES([Makefile
                  src/Makefile
@@ -178,7 +193,7 @@ AC_CONFIG_FILES([Makefile
                  src/thread_queue/Makefile
                  src/dal/Makefile
                  src/io/Makefile
-                 src/libne/Makefile
+                 src/ne/Makefile
                  config/erasure_config.h:config/erasure_config.h.in
                  config/udal_config.h:config/udal_config.h.in
                  config/Makefile

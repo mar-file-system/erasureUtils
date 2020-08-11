@@ -63,18 +63,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #endif
 
-
-
-#include <stdio.h>
-#include <string.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <unistd.h>
-#include <time.h>
-
-#include "ne.h"
-
-
 //int crc_status() {
 //#ifdef INT_CRC
 //   printf("Intermediate-CRCs: Active\n");
@@ -85,8 +73,20 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 //#endif
 //}
 
-//#define DEBUG
+#include "erasureUtils_auto_config.h"
+#if defined(DEBUG_ALL)  ||  defined(DEBUG_NE)
+   #define DEBUG
+#endif
 #define preFMT "%s: "
+
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
+#include <time.h>
+
+#include "ne.h"
 
 #define PRINTout(FMT,...) fprintf( stdout, preFMT FMT, "neutil", ##__VA_ARGS__)
 #ifdef DEBUG

@@ -106,8 +106,11 @@ underlying skt_etc() functions.
 
 // #include "libne_auto_config.h"   /* HAVE_LIBISAL */
 
-//#define DEBUG 1
-//#define USE_STDOUT 1
+#include "erasureUtils_auto_config.h"
+#if defined(DEBUG_ALL)  ||  defined(DEBUG_IO)
+   #define DEBUG 1
+   #define USE_STDOUT 1
+#endif
 #define LOG_PREFIX "metainfo"
 #include "logging/logging.h"
 
@@ -201,11 +204,12 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
    // check the version number
    int vertag = 0; // assume no version tag
    char* parse = str;
-   if ( *parse = 'v' ) {
+   if ( *parse == 'v' ) {
       // now that we know this is tagged, assume it's our current structure until proven otherwise
       vertag = MINFO_VER;
       // read in the version tag value, if possible
       if ( sscanf( parse, "v%d ", &vertag ) ) {
+         LOG( LOG_INFO, "Got minfo version tag = %d\n", vertag );
          // skip ahead to the next gap, while avoiding overruning the end of the string
          while( *parse != ' '  &&  *parse != '\0' ) {
             parse++;
@@ -275,6 +279,9 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
    PARSE_VALUE( minfo->blocksz, metablocksz, 5,  strtol, ssize_t )
    PARSE_VALUE(  minfo->crcsum,  metacrcsum, 6, strtoll, long long )
    PARSE_VALUE(   minfo->totsz, metatotsize, 7, strtoll, ssize_t )
+
+   LOG( LOG_INFO, "Got values (N=%d,E=%d,O=%d,partsz=%zd,versz=%zd,blocksz=%zd,totsz=%zd)\n",
+                  minfo->N, minfo->E, minfo->O, minfo->partsz, minfo->versz, minfo->blocksz, minfo->totsz );
 
    return ( valid_suffix  &&  status == 8 ) ? 0 : status;
 }

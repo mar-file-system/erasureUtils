@@ -56,7 +56,7 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-ITER=2 # Number of N+E file arrays to generate
+ITER=1 # Number of N+E file arrays to generate
 INITER=2 # Number of error patterns to test for each file array
 POSTSLEEP=0 # Number of seconds the program should sleep after a test
 WORK_DIRECTORY=wrkdir_errasureTest
@@ -66,7 +66,7 @@ LIBTLOG=$WORK_DIRECTORY/log_libneTests.$$ # Name of the libneTest output logfile
 DATAFILE=$WORK_DIRECTORY/testfile.$$
 OUTFILE=$WORK_DIRECTORY/outfile.$$
 EPAT=$WORK_DIRECTORY/testout.{b}.$$
-FSZ=20  # Size of the input file in 10s of MBytes (i.e. a value of 20 -> 200M file)
+FSZ=5  # Size of the input file in 10s of MBytes (i.e. a value of 20 -> 200M file)
 
 re='^[0-9]+$'
 
@@ -486,9 +486,9 @@ while [[ $cnt -lt $ITER ]]; do
 
          if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
             echo
-            echo -e "\033[0;31mFAIL - status check returned an unexpected error pattern"
+            echo -e "\033[0;31mFAIL - status check returned an unexpected error pattern ($ret)"
             echo -e "CMD = $LIBNETEST verify $EPAT $n $e $start\033[0m"
-            echo "FAIL - status check returned an unexpected error pattern" >> $LOGFILE
+            echo "FAIL - status check returned an unexpected error pattern ($ret)" >> $LOGFILE
             echo "CMD = $LIBNETEST verify $EPAT $n $e $start" >> $LOGFILE
             exit -1
          fi

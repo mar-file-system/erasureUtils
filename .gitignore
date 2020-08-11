@@ -6,8 +6,15 @@ aclocal.m4
 autom4te.cache/
 compile
 configure
+config.status
 depcomp
 install-sh
 missing
 test-driver
+src/stamp-h1
+.deps/
+*.log
+*.trs
+*.o
+*.a
 

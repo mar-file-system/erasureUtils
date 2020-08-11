@@ -104,13 +104,15 @@ underlying skt_etc() functions.
 
 --------------------------------------------------------------------------- */
 
-#include "libne_auto_config.h"   /* HAVE_LIBISAL */
-
-//#define DEBUG 1
-//#define USE_STDOUT 1
+#include "erasureUtils_auto_config.h"
+#if defined(DEBUG_ALL)  ||  defined(DEBUG_NE)
+   #define DEBUG 1
+   #define USE_STDOUT 1
+#endif
 #define LOG_PREFIX "ne_core"
 #include "logging/logging.h"
-#include "libne/ne.h"
+
+#include "ne/ne.h"
 #include "io/io.h"
 #include "dal/dal.h"
 #include "thread_queue/thread_queue.h"

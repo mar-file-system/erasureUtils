@@ -79,29 +79,16 @@ neutil_CFLAGS  = $(XML_CFLAGS)
 
 # ---
 
-check_PROGRAMS = test_libne_io #data_shredder
+check_PROGRAMS = testing/test_libne_io #data_shredder
 
-test_libne_io_SOURCES = testing/test_libne_io.c
-test_libne_io_LDADD   = $(NE_LIBS)
-test_libne_io_CFLAGS  = $(XML_CFLAGS)
+testing_test_libne_io_SOURCES = testing/test_libne_io.c
+testing_test_libne_io_LDADD   = $(NE_LIBS)
+testing_test_libne_io_CFLAGS  = $(XML_CFLAGS)
+
+check_SCRIPTS = testing/erasureTest
 
 #data_shredder_SOURCES = testing/data_shredder.c
 
-TESTS = test_libne_io
+TESTS = testing/test_libne_io testing/erasureTest
 
-#check_PROGRAMS = test_ioqueue test_metainfo test_iothreads
-#
-#test_ioqueue_SOURCES = testing/test_ioqueue.c
-#test_ioqueue_LDADD   = $(IOQ_LIBS) ../dal/libdal.a
-#test_ioqueue_CFLAGS  = $(XML_CFLAGS)
-#
-#test_metainfo_SOURCES = testing/test_metainfo.c
-#test_metainfo_LDADD   = $(MIN_LIBS) ../dal/libdal.a
-#test_metainfo_CFLAGS  = $(XML_CFLAGS)
-#
-#test_iothreads_SOURCES = testing/test_iothreads.c
-#test_iothreads_LDADD   = $(IOT_LIBS) $(MIN_LIBS) $(IOQ_LIBS) ../dal/libdal.a
-#test_iothreads_CFLAGS  = $(XML_CFLAGS)
-#
-#TESTS = test_ioqueue test_metainfo test_iothreads
 
