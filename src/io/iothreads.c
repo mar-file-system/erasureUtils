@@ -107,7 +107,6 @@ underlying skt_etc() functions.
 #include "erasureUtils_auto_config.h"
 #if defined(DEBUG_ALL)  ||  defined(DEBUG_IO)
    #define DEBUG 1
-   #define USE_STDOUT 1
 #endif
 #define LOG_PREFIX "iothreads"
 #include "logging/logging.h"
@@ -510,20 +509,24 @@ int read_resume( void** state, void** prev_work ) {
          }
          // adjust our ioblock offset to align with the request
          LOG( LOG_INFO, "Aligning ioblock to trim of %zu\n", trim );
-         if ( align_ioblock( tstate->iob, trim, gstate->ioq ) ) {
+         int junk_blocks;
+         if ( (junk_blocks = align_ioblock( tstate->iob, trim, gstate->ioq )) < 0 ) {
             LOG( LOG_ERR, "Failed to align ioblock to trim of %zu!\n", trim );
             return -1;
          }
-         // now fill this ioblock
-         if ( read_produce( (void**)&(tstate), (void**)&(push_block) ) ) {
-            LOG( LOG_ERR, "Failed to produce a junk ioblock!\n" );
-            return -1;
-         }
-         // now, just make the current ioblock available again
-         LOG( LOG_INFO, "Releasing junk ioblock\n" );
-         if ( release_ioblock( gstate->ioq ) ) {
-            LOG( LOG_ERR, "Failed to release junk ioblock!\n" );
-            return -1;
+         while ( junk_blocks > 0 ) {
+            // now fill this ioblock
+            if ( read_produce( (void**)&(tstate), (void**)&(push_block) ) ) {
+               LOG( LOG_ERR, "Failed to produce a junk ioblock!\n" );
+               return -1;
+            }
+            // now, just make the current ioblock available again
+            LOG( LOG_INFO, "Releasing junk ioblock\n" );
+            if ( release_ioblock( gstate->ioq ) ) {
+               LOG( LOG_ERR, "Failed to release junk ioblock!\n" );
+               return -1;
+            }
+            junk_blocks--;
          }
       }
 

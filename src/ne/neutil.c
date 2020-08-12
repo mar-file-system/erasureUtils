@@ -153,11 +153,11 @@ void usage(const char* prog_name, const char* op) {
    PRINTout("  %2s %-10s %s\n",                                \
            (!strncmp(op, CMD, 10) ? "->" : ""), (CMD), (ARGS))
 
-   USAGE("write",      "erasure_path                N E O   [-e] [-r] ( -s input_size | -i input_file )");
-   USAGE("read",       "erasure_path ( -n swidth |  N E O ) [-e] [-r]  [-s input_size] [-o output_file]");
-   USAGE("verify",     "erasure_path ( -n swidth |  N E O ) [-e]");
-   USAGE("rebuild",    "erasure_path ( -n swidth |  N E O ) [-e]");
-   USAGE("delete",     "erasure_path      swidth            [-f]");
+   USAGE("write",      "erasure_path               N E O partsz   [-e] [-r] ( -s input_size | -i input_file )");
+   USAGE("read",       "erasure_path ( -n swidth | N E O partsz ) [-e] [-r]  [-s input_size] [-o output_file]");
+   USAGE("verify",     "erasure_path ( -n swidth | N E O partsz ) [-e]");
+   USAGE("rebuild",    "erasure_path ( -n swidth | N E O partsz ) [-e]");
+   USAGE("delete",     "erasure_path      swidth           [-f]");
    USAGE("stat",       "erasure_path      swidth");
 //   USAGE("crc-status", "");
    USAGE("help",       "");
@@ -462,24 +462,29 @@ int main( int argc, const char** argv )
       else if ( erasure_path == NULL ) { // all operations require this as the next argument
          erasure_path = (char *)argv[c];
       }
-      else if ( (wr < 4)  &&  !(no_info)  &&  (O == -1) ) { // loop through here until N/E/O are populated, if this operation needs them
-         char val = '\0';
-         char* endptr = &val;
+      else if ( (wr < 4)  &&  !(no_info)  &&  (partsz == 0) ) { // loop through here until N/E/O/partsz are populated, if this operation needs them
+         char* arg = "";
+         char initval = '\0';
+         char* endptr = &initval;
          if ( N == -1 ) {
-            val = 'N';
+            arg = "N";
             N = strtol( argv[c], &endptr, 10 );
          }
          else if ( E == -1 ) {
-            val = 'E';
+            arg = "E";
             E = strtol( argv[c], &endptr, 10 );
          }
-         else {
-            val = 'O';
+         else if ( O == -1 ) {
+            arg = "O";
             O = strtol( argv[c], &endptr, 10 );
+         }
+         else {
+            arg = "partsz";
+            partsz = strtol( argv[c], &endptr, 10 );
          }
          // afterwards, check for a parse error
          if ( *endptr != '\0' ) {
-            PRINTout( "%s: failed to parse value for %c: \"%s\"\n", argv[0], val, argv[c] );
+            PRINTout( "%s: failed to parse value for %c: \"%s\"\n", argv[0], arg, argv[c] );
             usage( argv[0], operation );
             return -1;
          }
@@ -507,7 +512,7 @@ int main( int argc, const char** argv )
       usage( argv[0], "help" );
       return -1;
    }
-   if ( erasure_path == NULL  ||  ( (wr >= 4) && (N == -1) )  ||  ( (wr < 4)  &&  !(no_info)  && (O == -1) ) ) {
+   if ( erasure_path == NULL  ||  ( (wr >= 4) && (N == -1) )  ||  ( (wr < 4)  &&  !(no_info)  && (partsz == 0) ) ) {
       PRINTout( "%s: missing required arguments for operation: \"%s\"\n", argv[0], operation );
       usage( argv[0], operation );
       return -1;
@@ -635,7 +640,7 @@ int main( int argc, const char** argv )
 
 
    ne_handle handle = NULL;
-   ne_erasure epat = { .N = N, .E = E, .O = O, .partsz = 1024 }; // TODO partsz arg?
+   ne_erasure epat = { .N = N, .E = E, .O = O, .partsz = partsz };
    ne_state   state;
    state.meta_status = NULL;
    state.data_status = NULL;
@@ -656,6 +661,7 @@ int main( int argc, const char** argv )
       N = epat.N;
       E = epat.E;
       O = epat.O;
+      partsz = epat.partsz;
    }
    state.meta_status = calloc( sizeof( char ), (N + E) * 2 );
    if ( state.meta_status == NULL ) {

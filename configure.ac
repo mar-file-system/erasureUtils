@@ -169,6 +169,11 @@ AC_ARG_ENABLE( [debugTQ],
                AS_HELP_STRING( [--enable-debugTQ], [Enable 'thread_queue'-subdir debug output] ),
                AC_DEFINE( [DEBUG_TQ], [], [Enable 'thread_queue'-subdir debug output] ), [] )
 
+# debugging-output should go to syslog, instead of stdout/stderr?
+AC_ARG_ENABLE([syslog],
+               AS_HELP_STRING( [--enable-syslog], [Send debugging output to syslog, instead of stdout/stderr] ),
+               AC_DEFINE( [USE_SYSLOG], [], [Send debugging output to syslog, instead of stdout/stderr] ), [] )
+
 #AM_COND_IF( [DEBUG_ALL], [test "$debug_all" = yes], [AC_DEFINE( [DEBUG_ALL] )], [])
 
 
@@ -178,12 +183,6 @@ AC_ARG_ENABLE( [debugTQ],
 
 
 
-# debugging-output should go to syslog, instead of stdout/stderr?
-AC_ARG_ENABLE([syslog],
-             AS_HELP_STRING([--enable-syslog],
-                            [Send debugging output to syslog, instead of stdout/stderr]),
-            [enable_syslog=$enableval],
-            [enable_syslog=no])
 
 AM_CONDITIONAL([USE_SYSLOG], [test x"$enable_syslog" != xno])
 

@@ -59,8 +59,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
 
-#define DEBUG 1
-#define USE_STDOUT 1
 #include "io/io.h"
 #include "dal/dal.h"
 #include "io/testing/bufferfuncs.c"

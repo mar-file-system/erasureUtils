@@ -1,8 +1,5 @@
 
 
-#define DEBUG
-#define USE_STDOUT
-
 #include "libne/ne.c"
 
 typedef enum {

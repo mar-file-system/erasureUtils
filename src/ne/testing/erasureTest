@@ -66,7 +66,7 @@ LIBTLOG=$WORK_DIRECTORY/log_libneTests.$$ # Name of the libneTest output logfile
 DATAFILE=$WORK_DIRECTORY/testfile.$$
 OUTFILE=$WORK_DIRECTORY/outfile.$$
 EPAT=$WORK_DIRECTORY/testout.{b}.$$
-FSZ=5  # Size of the input file in 10s of MBytes (i.e. a value of 20 -> 200M file)
+FSZ=1  # Size of the input file in 10s of MBytes (i.e. a value of 20 -> 200M file)
 
 re='^[0-9]+$'
 
@@ -84,6 +84,13 @@ if [[ $# -gt 1 ]]; then
       INITER=$2
    else
       echo "erasureTest: warning: ignoring unrecognized arumgent \"$2\", expected an integer number of error patterns per stripe to be tested"
+   fi
+fi
+if [[ $# -gt 2 ]]; then
+   if [[ $3 =~ $re ]]; then
+      FSZ=$3
+   else
+      echo "erasureTest: warning: ignoring unrecognized arumgent \"$3\", expected an integer filesize value (in 10s of MiBs)"
    fi
 fi
 
@@ -108,10 +115,10 @@ fi
 
 LIBNETEST="./neutil"
 if [[ ! -e "$LIBNETEST" ]]; then
-   LIBNETEST="$( which libneTest 2>/dev/null )"
+   LIBNETEST="$( which neutil 2>/dev/null )"
    if [[ $? -ne 0 ]]; then
-      echo "erasureTest: error: could not locate executable \"libneTest\""
-      echo "erasureTest: please run this script from within the \"erasureLib\" directory or install the libneTest program to a default location!"
+      echo "erasureTest: error: could not locate executable \"neutil\""
+      echo "erasureTest: please run this script from within the \"erasureLib\" directory or install the neutil program to a default location!"
       exit 1
    fi
 fi
@@ -237,6 +244,7 @@ corrupt_file() {
 
 maxN=15
 maxE=5
+maxPartsz=2097152
 ICRC=0
 
 re='^[0-9]+$'
@@ -278,22 +286,25 @@ while [[ $cnt -lt $ITER ]]; do
    e=$(( e + 1 ))
    start=$RANDOM
    let "start %= $(( n + e ))"
+   partsz=$( dd if=/dev/urandom bs=1 count=4 2>/dev/null | od -t u4 | head -n 1 | awk '{print $NF}' ) #need something larger than RANDOM
+   let "partsz %= maxPartsz"
+   partsz=$(( partsz + 1 ))
 
    err_free=0
 
    echo
-   echo -e "\e[7;96mGenerating $n+$e striping starting at file $start...\e[0m"
+   echo -e "\e[7;96mGenerating $n+$e stripe with partsz $partsz and starting file $start...\e[0m"
    echo >> $LOGFILE
    echo >> $LIBTLOG
-   echo "Generating $n+$e striping starting at file $start""..." >> $LOGFILE
-   { ret=$( time -p $LIBNETEST write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.write
+   echo "Generating $n+$e stripe with partsz $partsz and starting file $start""..." >> $LOGFILE
+   { ret=$( time -p $LIBNETEST write -r $EPAT $n $e $start $partsz -s $FSZ -i $DATAFILE 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>> $TLOGPREF$$.write
 
 
    if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
       echo -e "\033[0;31mFAIL - write operation returned a non-zero status"
-      echo -e "CMD = $LIBNETEST write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE\033[0m"
+      echo -e "CMD = $LIBNETEST write -r $EPAT $n $e $start $partsz -s $FSZ -i $DATAFILE\033[0m"
       echo "   FAILURE: wite operation returned a non-zero status" >> $LOGFILE
-      echo "CMD = $LIBNETEST write -r $EPAT $n $e $start -s $FSZ -i $DATAFILE" >> $LOGFILE
+      echo "CMD = $LIBNETEST write -r $EPAT $n $e $start $partsz -s $FSZ -i $DATAFILE" >> $LOGFILE
       exit -1
    fi
    echo "   stripe generation complete" >> $LOGFILE
@@ -305,9 +316,9 @@ while [[ $cnt -lt $ITER ]]; do
 
       if [[ $incnt -ne 0 ]]; then
          echo
-         echo -e "\e[7;96mContinuing with the same $n+$e start position $start stripe...\e[0m"
+         echo -e "\e[7;96mContinuing with the same $n+$e stripe with partsz $partsz and start position $start...\e[0m"
          echo >> $LOGFILE
-         echo "Continuring to use $n+$e striping with start $start..." >> $LOGFILE
+         echo "Continuring to use $n+$e striping with partsz $partsz and start $start..." >> $LOGFILE
       fi
 
       met_err_list=( 0 )
@@ -482,14 +493,25 @@ while [[ $cnt -lt $ITER ]]; do
          echo -n "Verifying corruption pattern (expecting pattern $stat)..."
          echo "Verifying corruption pattern (expecting pattern $stat)..." >> $LOGFILE
 
-         { ret=$( time -p $LIBNETEST verify $EPAT $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
+         noinfo=$RANDOM
+         let "noinfo %= 2"
+
+         CMD="$LIBNETEST verify $EPAT $n $e $start $partsz"
+
+         if [[ $noinfo -eq 1 ]]; then
+            echo -n "ignoring stripe state for this verification..."
+            echo "   Using '-n' option to perform verification while ignoring stripe state..." >> $LOGFILE
+            CMD="$LIBNETEST verify $EPAT -n $(( n + e ))"
+         fi
+
+         { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
 
          if [[ ! $ret =~ $re  ||  $ret -ne $stat ]]; then
             echo
             echo -e "\033[0;31mFAIL - status check returned an unexpected error pattern ($ret)"
-            echo -e "CMD = $LIBNETEST verify $EPAT $n $e $start\033[0m"
+            echo -e "CMD = $CMD\033[0m"
             echo "FAIL - status check returned an unexpected error pattern ($ret)" >> $LOGFILE
-            echo "CMD = $LIBNETEST verify $EPAT $n $e $start" >> $LOGFILE
+            echo "CMD = $CMD" >> $LOGFILE
             exit -1
          fi
          echo "corruption pattern matches"
@@ -501,7 +523,7 @@ while [[ $cnt -lt $ITER ]]; do
          noinfo=$RANDOM
          let "noinfo %= 2"
 
-         CMD="$LIBNETEST read $EPAT $n $e $start -s $FSZ -o $OUTFILE"
+         CMD="$LIBNETEST read $EPAT $n $e $start $partsz -s $FSZ -o $OUTFILE"
 
          if [[ $noinfo -eq 1 ]]; then
             echo -n "ignoring stripe state for this read..."
@@ -568,7 +590,7 @@ while [[ $cnt -lt $ITER ]]; do
          noinfo=$RANDOM
          let "noinfo %= 2"
          
-         CMD="$LIBNETEST read $EPAT $n $e $start -s $FSZ"
+         CMD="$LIBNETEST read $EPAT $n $e $start $partsz -s $FSZ"
 
          if [[ $noinfo -eq 1 ]]; then
             echo -n "ignoring stripe state for this read..."
@@ -604,7 +626,7 @@ while [[ $cnt -lt $ITER ]]; do
          noinfo=$RANDOM
          let "noinfo %= 2"
 
-         CMD="$LIBNETEST rebuild $EPAT $n $e $start"
+         CMD="$LIBNETEST rebuild $EPAT $n $e $start $partsz"
          
          if [[ $noinfo -eq 1 ]]; then
             echo -n "ignoring stripe state for this rebuild..."
@@ -682,14 +704,25 @@ while [[ $cnt -lt $ITER ]]; do
          echo -n "Checking the striping for corruption..."
          echo "Checking the striping for corruption..." >> $LOGFILE
 
-         { ret=$( time -p $LIBNETEST verify $EPAT $n $e $start 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
+         noinfo=$RANDOM
+         let "noinfo %= 2"
+
+         CMD="$LIBNETEST verify $EPAT $n $e $start $partsz"
+
+         if [[ $noinfo -eq 1 ]]; then
+            echo -n "ignoring stripe state for this verification..."
+            echo "   Using '-n' option to perform verification while ignoring stripe state..." >> $LOGFILE
+            CMD="$LIBNETEST verify $EPAT -n $(( n + e ))"
+         fi
+
+         { ret=$( time -p $CMD 2>&1 | tee -a $LIBTLOG | tail -n 1 | awk '{print $NF}' ); } 2>>$TLOGPREF$$.status
 
          if [[ ! $ret =~ $re  ||  $ret -ne 0 ]]; then
             echo
             echo -e "\033[0;31mFAIL - status check indicates corruption present in erasure striping ( code : $ret )"
-            echo -e "CMD = $LIBNETEST verify $EPAT $n $e $start\033[0m"
+            echo -e "CMD = $CMD\033[0m"
             echo "FAIL - status check indicates corruption present in erasure striping ( code : $ret )" >> $LOGFILE
-            echo "CMD = $LIBNETEST verify $EPAT $n $e $start" >> $LOGFILE
+            echo "CMD = $CMD" >> $LOGFILE
             exit $ret
          fi
          echo "done"
@@ -698,15 +731,15 @@ while [[ $cnt -lt $ITER ]]; do
 
          #All tests passed for this iteration
          if [[ $incnt -gt 0 ]]; then
-            echo -e "\033[0;32mPASS - $n+$e with start position $start (reused)"
+            echo -e "\033[0;32mPASS - $n+$e with partsz $partsz, start position $start, (reused)"
          else
-            echo -e "\033[0;32mPASS - $n+$e with start position $start"
+            echo -e "\033[0;32mPASS - $n+$e with partsz $partsz, start position $start,"
          fi
          echo -e "       and error pattern   $npat"
          echo -e "       ( Test $(( (cnt*INITER) + incnt + 1 )) )\033[0m"
          echo
 
-         echo "PASS - $n+$e with start position $start" >> $LOGFILE 
+         echo "PASS - $n+$e with partsz $partsz, start position $start," >> $LOGFILE 
          echo "       and error pattern   $npat" >> $LOGFILE
          echo "       ( Test $(( (cnt + 1) * (incnt + 1) )) )" >> $LOGFILE
       }

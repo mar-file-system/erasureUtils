@@ -59,8 +59,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
 
-#define DEBUG 1
-#define USE_STDOUT 1
 #include "io/io.h"
 #include "dal/dal.h"
 #include <unistd.h>
@@ -241,7 +239,7 @@ int test_values( size_t iosz, size_t partsz, DAL_MODE mode ) {
       return -1;
    }
 
-   printf( "IOQueue created with fsize=%zu, ssize=%zu, bsize=%zu\n", ioq->fill_threshold, ioq->split_threshold, ioq->blocksz );
+   printf( "IOQueue created with ssize=%zu, bsize=%zu\n", ioq->split_threshold, ioq->blocksz );
 
    // reserver our first block
    ioblock* cur_block = NULL;

@@ -107,7 +107,6 @@ underlying skt_etc() functions.
 #include "erasureUtils_auto_config.h"
 #if defined(DEBUG_ALL)  ||  defined(DEBUG_NE)
    #define DEBUG 1
-   #define USE_STDOUT 1
 #endif
 #define LOG_PREFIX "ne_core"
 #include "logging/logging.h"
@@ -223,18 +222,18 @@ int terminate_thread( ioblock** iobref, ThreadQueue tq, gthread_state* state, ne
    if ( iob ) {
       if ( mode == NE_WRONLY  ||  mode == NE_WRALL ) {
          ioblock* push_block = NULL;
-         // perform a final reserve call to split any excess data
+         // perform final reserve calls to split any excess data
          // NOTE -- it's ok to reference our local 'iob' pointer here, as we will be NULLing 
          //         out the passed reference later on regardless
          int resret;
-         if ( (resret = reserve_ioblock( &(iob), &(push_block), state->ioq )) > 0 ) {
-            LOG( LOG_INFO, "Final ioblock is full, enqueueing it and reserving another\n" );
+         while ( (resret = reserve_ioblock( &(iob), &(push_block), state->ioq )) > 0 ) {
+            LOG( LOG_INFO, "Final ioblock is full, enqueueing it\n" );
             if ( tq_enqueue( tq, TQ_NONE, (void*)(push_block) ) ) {
                LOG( LOG_ERR, "Failed to enqueue semi-final ioblock to thread_queue!\n" );
                ret_val = -1;
             }
          }
-         else if ( resret < 0 ) { // make sure we didn't hit some error during the reservation process
+         if ( resret < 0 ) { // make sure we didn't hit some error during the reservation process
             LOG( LOG_ERR, "Failed to perform final ioblock reservation!\n" );
             ret_val = -1;
          }

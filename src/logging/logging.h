@@ -58,7 +58,7 @@ extern "C" {
           __FUNCTION__,                                                 \
           (((PRIO)<=LOG_ERR) ? "#ERR " : ""), ## __VA_ARGS__)
 
-#elif (DEBUG) && (defined USE_STDOUT)
+#elif (DEBUG)
 // must start fuse with '-f' in order to allow stdout/stderr to work
 // NOTE: print_log call merges LOG_PREFIX w/ user format at compile-time
 #  define INIT_LOG()
@@ -75,7 +75,7 @@ extern "C" {
    ssize_t printf_log(size_t prio, const char* format, ...);
 
 #else
-// Without USE_STDOUT or USE_SYSLOG, these become no-ops
+// Without DEBUG, these become no-ops
 #  define INIT_LOG()
 #  define LOG(PRIO, FMT, ...)
 

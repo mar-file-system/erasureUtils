@@ -17,4 +17,5 @@ src/stamp-h1
 *.trs
 *.o
 *.a
+*~
 

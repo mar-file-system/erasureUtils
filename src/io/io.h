@@ -156,7 +156,7 @@ typedef struct ioqueue_struct {
    int             depth;        // current depth of the queue
    ioblock         block_list[SUPER_BLOCK_CNT]; // list of ioblocks
 
-   size_t          fill_threshold;
+   //size_t          fill_threshold;
    size_t          split_threshold;
 
    size_t          partsz;       // size of each erasure part
@@ -194,7 +194,7 @@ ssize_t ioqueue_maxdata( ioqueue* ioq );
  * @param ioblock* iob : Current ioblock
  * @param size_t trim : Amount of data to be 'trimmed' from the final IO to achive the desired offset
  * @param ioqueue* ioq : Reference to the ioqueue struct from which the ioblock was gathered
- * @return int : Zero on success and a negative value if an error occurred
+ * @return int : A positive number of ioblocks to be thrown out or a negative value if an error occurred
  */
 int align_ioblock( ioblock* cur_block, size_t trim, ioqueue* ioq );
 

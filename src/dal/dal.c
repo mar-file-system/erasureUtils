@@ -61,7 +61,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "erasureUtils_auto_config.h"
 #if defined(DEBUG_ALL)  ||  defined(DEBUG_DAL)
    #define DEBUG 1
-   #define USE_STDOUT 1
 #endif
 #define LOG_PREFIX "dal"
 

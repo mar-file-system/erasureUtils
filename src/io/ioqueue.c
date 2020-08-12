@@ -109,7 +109,6 @@ underlying skt_etc() functions.
 #include "erasureUtils_auto_config.h"
 #if defined(DEBUG_ALL)  ||  defined(DEBUG_IO)
    #define DEBUG 1
-   #define USE_STDOUT 1
 #endif
 #define LOG_PREFIX "ioqueue"
 #include "logging/logging.h"
@@ -147,10 +146,10 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
    }
    size_t subsz = (mode == DAL_READ) ? (iosz - CRC_BYTES) : partsz;
    int    partcnt = (int) ( (iosz - CRC_BYTES) / partsz); // number of complete parts per IO
-   if ( partsz > iosz ) {
+   if ( partsz > (iosz - CRC_BYTES) ) {
       partcnt = 1;
    }
-   LOG( LOG_INFO, "Subsz = %zu  and  Partcnt = %d\n", subsz, partcnt );
+   LOG( LOG_INFO, "Subsz = %zu,  and  Partcnt = %d\n", subsz, partcnt );
    // create an ioqueue struct
    ioqueue* ioq = malloc( sizeof( struct ioqueue_struct ) );
    if ( ioq == NULL ) {
@@ -171,10 +170,10 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
       return NULL;
    }
    // determine fill and split thresholds for these blocks
-   ioq->fill_threshold = ( (iosz - CRC_BYTES) > partsz ) ? (iosz - CRC_BYTES) : partsz;
+   //ioq->fill_threshold = ( (iosz - CRC_BYTES) > partsz ) ? (iosz - CRC_BYTES) : partsz;
    // NOTE -- if we're writing, we need to get both a complete part and a complete IO
    ioq->split_threshold = ( mode == DAL_READ ) ? (partcnt * partsz) : (iosz - CRC_BYTES);
-   LOG( LOG_INFO, "Using fill_threshold=%zu, split_treshold=%zu\n", ioq->fill_threshold, ioq->split_threshold );
+   LOG( LOG_INFO, "Using split_treshold=%zu\n", ioq->split_threshold );
    // NOTE -- if we're writing, we need to split blocks on IO alignment to make room for CRCs
    ioq->partsz = partsz;
    ioq->iosz = iosz;
@@ -183,23 +182,21 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
    ioq->depth = SUPER_BLOCK_CNT;
    // calculate the blocksz we must allocate to allways fit written data
    // NOTE -- assuming perfect IOSZ and PARTSZ alignment, we will need space for a full buffer plus
-   //         any spillage from a previous block plus room for trailing CRC bytes.
-   size_t spillage = ioq->fill_threshold - ioq->split_threshold;
-   ioq->blocksz = ioq->fill_threshold + spillage + CRC_BYTES;
+   //         room for trailing CRC bytes.
+   //size_t spillage = ioq->fill_threshold - ioq->split_threshold;
+   ioq->blocksz = ioq->split_threshold + CRC_BYTES;
    // check for misalignment of IOSZ and PARTSZ values
-   char overflow = 0;
-   if ( ioq->fill_threshold % subsz ) {
-      LOG( LOG_INFO, "Fill threshold of %zu does not cleanly align with subsz of %zu\n", ioq->fill_threshold, subsz );
-      overflow = 1;
-   }
-   if ( (ioq->fill_threshold - spillage) % subsz ) {
-      LOG( LOG_INFO, "Post spillage fill %zu does not cleanly align with subsz of %zu\n", ioq->fill_threshold - spillage, subsz );
-      overflow = 1;
-   }
-   if ( overflow ) {
+   size_t overflow = 0;
+   if ( (overflow = ioq->split_threshold % subsz) ) {
+      LOG( LOG_INFO, "Split threshold of %zu does not cleanly align with subsz of %zu\n", ioq->split_threshold, subsz );
+      //overflow = 1;
       // NOTE -- misalignment means we need space for potentially another subsz worth of overlap
       ioq->blocksz += subsz;
    }
+   //if ( (ioq->fill_threshold - spillage) % subsz ) {
+   //   LOG( LOG_INFO, "Post spillage fill %zu does not cleanly align with subsz of %zu\n", ioq->fill_threshold - spillage, subsz );
+   //   overflow = 1;
+   //}
    LOG( LOG_INFO, "Using ioblock size of %zu\n", ioq->blocksz );
    int i;
    for ( i = 0; i < SUPER_BLOCK_CNT; i++ ) {
@@ -264,7 +261,7 @@ ssize_t ioqueue_maxdata( ioqueue* ioq ) {
  * @param ioblock* iob : Current ioblock
  * @param size_t trim : Amount of data to be 'trimmed' from the final IO to achive the desired offset
  * @param ioqueue* ioq : Reference to the ioqueue struct from which the ioblock was gathered
- * @return int : Zero on success and a negative value if an error occurred
+ * @return int : A positive number of ioblocks to be thrown out or a negative value if an error occurred
  */
 int align_ioblock( ioblock* cur_block, size_t trim, ioqueue* ioq ) {
 	if ( ioq == NULL ) {
@@ -275,17 +272,21 @@ int align_ioblock( ioblock* cur_block, size_t trim, ioqueue* ioq ) {
 		LOG( LOG_ERR, "Received NULL ioblock reference!\n" );
 		return -1;
 	}
+   // note how many ioblocks will need to be junked to hit this alignment
+   int junk_blocks = (int)( trim / ioq->split_threshold) + 1;
+   // adjust our trim value, if it exceeds the split_threshold
+   trim -= ((junk_blocks - 1) * ioq->split_threshold);
    // calculate how much fake data we need to populate for the desired alignment
    size_t falsefill = ioq->split_threshold - trim;
    // sanity checks
-   if ( falsefill > ioq->fill_threshold ) {
-      LOG( LOG_ERR, "Falsefill value (%zu) exceeds fill_threshold (%zu)\n", falsefill, ioq->fill_threshold );
-      return -1;
-   }
+//   if ( falsefill > ioq->fill_threshold ) {
+//      LOG( LOG_ERR, "Falsefill value (%zu) exceeds fill_threshold (%zu)\n", falsefill, ioq->fill_threshold );
+//      return -1;
+//   }
    LOG( LOG_INFO, "Filling %zu fake bytes to achieve alignment\n", falsefill );
    cur_block->data_size = falsefill;
    cur_block->error_end = falsefill;
-   return 0;
+   return junk_blocks;
 }
 
 
@@ -319,14 +320,19 @@ int reserve_ioblock( ioblock** cur_block, ioblock** push_block, ioqueue* ioq ) {
    // if we have a previous IO block...
    if ( prev_block != NULL ) {
       // check if that block has room remaining
-      if ( prev_block->data_size < ioq->fill_threshold ) {
-         LOG( LOG_INFO, "Continuing to use current block, as %zu is below fill_threshold\n", prev_block->data_size );
+      if ( prev_block->data_size < ioq->split_threshold ) {
+         LOG( LOG_INFO, "Continuing to use current block, as %zu is below split_threshold\n", prev_block->data_size );
          return 0;
       }
       // otherwise, we may need to copy data over to the new ioblock
       if ( prev_block->data_size > ioq->split_threshold ) {
          datacpy = prev_block->buff + ioq->split_threshold;
          cpysz = prev_block->data_size - ioq->split_threshold;
+         // sanity check
+         if ( prev_block->data_size > ioq->blocksz ) {
+            LOG( LOG_ERR, "Detected buffer overrun!  %zu data > %zu blocksz!\n", prev_block->data_size, ioq->blocksz );
+            return -1;
+         }
       }
       // we will definitely be pushing the previous block
       (*push_block) = prev_block;

@@ -109,7 +109,6 @@ underlying skt_etc() functions.
 #include "erasureUtils_auto_config.h"
 #if defined(DEBUG_ALL)  ||  defined(DEBUG_IO)
    #define DEBUG 1
-   #define USE_STDOUT 1
 #endif
 #define LOG_PREFIX "metainfo"
 #include "logging/logging.h"
