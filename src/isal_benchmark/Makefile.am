@@ -61,19 +61,19 @@ AM_CFLAGS   =
 AM_LDFLAGS  =
 
 
-if DEBUG_NE
-  AM_CFLAGS   += -g -O0
-  DEFS        += -DDEBUG_NE=1  -fstack-protector-all -fstack-check
-else
-  AM_CFLAGS   += -g -O3
-  DEFS        += -DDEBUG_NE=0
-endif
+#if debugALL
+#  AM_CFLAGS   += -g -O0
+#  DEFS        += -DDEBUG_NE=1  -fstack-protector-all -fstack-check
+#else
+#  AM_CFLAGS   += -g -O3
+#  DEFS        += -DDEBUG_NE=0
+#endif
 
 
-if GPROF
-  AM_CFLAGS  += -pg
-  AM_LDFLAGS += -pg
-endif
+#if GPROF
+#  AM_CFLAGS  += -pg
+#  AM_LDFLAGS += -pg
+#endif
 
 
 

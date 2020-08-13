@@ -54,5 +54,9 @@
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
 
-SUBDIRS = thread_queue dal io ne
+if BENCH
+  MAYBE_BENCHMARK = isal_benchmark
+endif
+
+SUBDIRS = thread_queue dal io ne $(MAYBE_BENCHMARK)
 
