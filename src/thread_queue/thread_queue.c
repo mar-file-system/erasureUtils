@@ -1211,6 +1211,7 @@ int tq_close( ThreadQueue tq ) {
    // free everything and terminate
    tq_free_all(tq);
    //pthread_exit(NULL);
+   return 0;
 }
 
 

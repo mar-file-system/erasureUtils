@@ -261,7 +261,7 @@ int test_values( ne_erasure* epat, size_t iosz, size_t partsz ) {
       // read our into our data buffer
       ssize_t readsz = 0;
       if ( (readsz = ne_read( read_handle, iobuff, iosz )) != iosz ) {
-         printf( "ERROR: Unexpected return value from ne_read: %zd\n" );
+         printf( "ERROR: Unexpected return value from ne_read: %zd\n", readsz );
          return -1;
       }
       // populate our data buffer
@@ -281,7 +281,7 @@ int test_values( ne_erasure* epat, size_t iosz, size_t partsz ) {
       // read our into our data buffer
       ssize_t readsz = 0;
       if ( (readsz = ne_read( read_handle, iobuff, iosz )) != iosz ) {
-         printf( "ERROR: Unexpected return value from ne_read: %zd\n" );
+         printf( "ERROR: Unexpected return value from ne_read: %zd\n", readsz );
          return -1;
       }
       // populate our data buffer

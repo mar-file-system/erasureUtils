@@ -428,4 +428,5 @@ int main(int argc, char **argv)
         free(tids);
         _print_bandwidth(num_client, bws);
         free(bws);
+        return 0;
 }

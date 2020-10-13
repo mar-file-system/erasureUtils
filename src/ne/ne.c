@@ -116,6 +116,8 @@ underlying skt_etc() functions.
 #include "dal/dal.h"
 #include "thread_queue/thread_queue.h"
 
+#include <isa-l.h>
+
 #include <stdio.h>
 #include <string.h>
 #include <fcntl.h>
@@ -633,8 +635,10 @@ int read_stripes( ne_handle handle ) {
    int     E = handle->epat.E;
    ssize_t partsz = handle->epat.partsz;
    size_t  stripesz = partsz * N;
+#ifdef DEBUG
    size_t  offset = ( handle->iob_offset * N ) + handle->sub_offset;
    unsigned int start_stripe = (unsigned int) ( offset / stripesz ); // get a stripe num based on offset
+#endif
 
    // make sure our sub_offset is stripe aligned and at the end of our current ioblocks
    if ( handle->sub_offset % stripesz  ||  handle->sub_offset != (handle->iob_datasz * N) ) {
@@ -765,9 +769,7 @@ int read_stripes( ne_handle handle ) {
 
          // loop over the blocks of the stripe, establishing error counts/positions
          off_t stripe_start = cur_stripe * partsz;
-         off_t stripe_end   = (cur_stripe+1) * partsz;
          nstripe_errors = 0;
-         int nsrcerr = 0;
          for ( cur_block = 0; cur_block < block_cnt; cur_block++ ) {
             // reset our error state
             stripe_err_list[cur_block] = 0; // as cur_block MUST be <= nstripe_errors at this point
@@ -787,10 +789,6 @@ int read_stripes( ne_handle handle ) {
                handle->e_ready = 0;
                handle->prev_in_err[ cur_block ] = stripe_in_err[ cur_block ];
             }
-
-            // make sure to note the number of data errors for later erasure use
-            if ( cur_block == (N - 1) )
-               nsrcerr = nstripe_errors;
 
          }
 
@@ -828,7 +826,7 @@ int read_stripes( ne_handle handle ) {
             }
 
 
-            LOG( LOG_INFO, "Initializing erasure tables ( nsrcerr = %d )\n", nsrcerr );
+            LOG( LOG_INFO, "Initializing erasure tables ( nstripe_errors = %d )\n", nstripe_errors );
             ec_init_tables(N, nstripe_errors, handle->decode_matrix, handle->g_tbls);
 
             handle->e_ready = 1; //indicate that rebuild structures are initialized
@@ -1441,10 +1439,8 @@ int ne_close( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
       return -1;
    }
 
-   int N = handle->epat.N;
-   int E = handle->epat.E;
    ssize_t partsz = handle->epat.partsz;
-   size_t stripesz = partsz * N;
+   size_t stripesz = partsz * handle->epat.N;
 
    int i;
    if ( handle->mode == NE_WRONLY  ||  handle->mode == NE_WRALL ) {
@@ -1695,7 +1691,6 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
    }
    LOG( LOG_INFO, "Attempting rebuild of erasure stripe\n" );
    // make sure our handle is set to a zero offset
-   size_t offset = ( handle->iob_offset * handle->epat.N ) + handle->sub_offset;
    if ( handle->iob_offset != 0  ||  handle->sub_offset != 0 ) {
       LOG( LOG_INFO, "Reseeking to zero prior to rebuild op\n" );
       if ( ne_seek( handle, 0 ) ) {
@@ -1709,7 +1704,9 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
    int     E = handle->epat.E;
    int     O = handle->epat.O;
    ssize_t partsz = handle->epat.partsz;
+#ifdef DEBUG
    size_t  stripesz = partsz * N;
+#endif
 
    // NOTE -- a REBUILD handle is 'effectively' a READ handle
    //         However, we now need to spin up write threads to output any repaired data
@@ -1922,12 +1919,12 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
    }
 
    // set a FINISHED state for all threads
-   int ret_val = 0;
+   int numerrs = 0; // for checking write safety
    for ( i = 0; i < N + E; i++ ) {
       LOG( LOG_INFO, "Terminating output thread %d\n", i );
       if ( OutTQs[i]  &&  terminate_thread( &(outblocks[i]), OutTQs[i], &(outstates[i]), NE_WRALL ) ) {
          LOG( LOG_ERR, "Failed to properly terminate output thread %d!\n", i );
-         ret_val = -1;
+         numerrs++;
       }
 //      // make sure to release any remaining ioblocks
 //      if ( outblocks[i] ) {
@@ -1967,7 +1964,6 @@ int ne_rebuild( ne_handle handle, ne_erasure* epat, ne_state* sref ) {
    }
 
    int newerrs = 0; // for checking uncorrected errors
-   int numerrs = 0; // for checking write safety
    // verify thread termination and close all queues
    for ( i = 0; i < N + E; i++ ) {
       if ( OutTQs[i] ) {
@@ -2075,7 +2071,6 @@ off_t ne_seek( ne_handle handle, off_t offset ) {
    }
 
    int N = handle->epat.N;
-   int E = handle->epat.E;
    ssize_t partsz = handle->epat.partsz;
    size_t stripesz = partsz * N;
 
@@ -2258,11 +2253,10 @@ ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes ) {
 
    // get some useful reference values
    int     N = handle->epat.N;
-   int     E = handle->epat.E;
    ssize_t partsz = handle->epat.partsz;
    size_t  stripesz = partsz * N;
 
-   LOG( LOG_INFO, "Stripe: ( N = %d, E = %d, partsz = %zu )\n", N, E, partsz );
+   LOG( LOG_INFO, "Stripe: ( N = %d, E = %d, partsz = %zu )\n", N, handle->epat.E, partsz );
 
 // ---------------------- BEGIN MAIN READ LOOP ----------------------
 
@@ -2278,7 +2272,9 @@ ssize_t ne_read( ne_handle handle, void* buffer, size_t bytes ) {
          }
       }
 
+#ifdef DEBUG
       int    iob_stripe = (int)( handle->iob_offset / stripesz );
+#endif
       int    cur_stripe = (int)( handle->sub_offset / stripesz );
       off_t  off_in_stripe = handle->sub_offset % stripesz; 
       size_t to_read_in_stripe = bytes - bytes_read;
@@ -2362,7 +2358,9 @@ ssize_t ne_write( ne_handle handle, const void* buffer, size_t bytes ) {
    size_t partsz = handle->epat.partsz;
    size_t stripesz = ( N * partsz );
    off_t offset = ( handle->iob_offset * N ) + handle->sub_offset;
+#ifdef DEBUG
    unsigned int stripenum = offset / stripesz;
+#endif
 
 
    // initialize erasure structs (these never change for writes, so we can just check here)

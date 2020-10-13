@@ -68,6 +68,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #include "dal.h"
 
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
 

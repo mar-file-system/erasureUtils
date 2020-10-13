@@ -84,6 +84,15 @@ AM_PROG_CC_C_O
 
 AC_PROG_RANLIB
 
+# check for '-Wall' support and use it if we can
+AC_MSG_CHECKING(whether compiler understands -Wall)
+old_CFLAGS="$CFLAGS"
+CFLAGS="$CFLAGS -Wall"
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([],[])],
+  AC_MSG_RESULT(yes),
+  AC_MSG_RESULT(no)
+  CFLAGS="$old_CFLAGS")
+
 # Checks for header files.
 AC_CHECK_HEADERS([fcntl.h stdint.h stdlib.h string.h unistd.h])
 AXATTR_CHECK

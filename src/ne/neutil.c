@@ -346,17 +346,14 @@ int main( int argc, const char** argv )
 {
    errno = 0;  // init to zero (apparently not guaranteed)
    void* buff;
-   unsigned long long totdone = 0;
 
    char wr = -1;  // defines the operation being performed ( 0 = read, 1 = write, 2 = rebuild, 3 = verify, 4 = stat, 5 = delete )
-   int filefd;
    int N = -1;
    int E = -1;
    int O = -1;
    size_t partsz = 0;
    char* erasure_path = NULL;
 //   TimingFlagsValue   timing_flags = 0;
-   int                parse_err = 0;
    char               size_arg = 0;
    char               rand_size = 0;
    char               no_info = 0;
@@ -484,7 +481,7 @@ int main( int argc, const char** argv )
          }
          // afterwards, check for a parse error
          if ( *endptr != '\0' ) {
-            PRINTout( "%s: failed to parse value for %c: \"%s\"\n", argv[0], arg, argv[c] );
+            PRINTout( "%s: failed to parse value for %c: \"%s\"\n", argv[0], *arg, argv[c] );
             usage( argv[0], operation );
             return -1;
          }
@@ -565,19 +562,6 @@ int main( int argc, const char** argv )
    }
    
    PRINTout("performing a '%s' command\n", operation);
-
-//#  define NE_OPEN(PATH, MODE, ...)    ne_open1  (select_snprintf(PATH), NULL, select_impl(PATH), auth, \
-//                                                 timing_flags, NULL,    \
-//                                                 (PATH), (MODE), ##__VA_ARGS__ )
-//
-//#  define NE_DELETE(PATH, WIDTH)      ne_delete1(select_snprintf(PATH), NULL, select_impl(PATH), auth, \
-//                                                 timing_flags, NULL,    \
-//                                                 (PATH), (WIDTH))
-//
-//# define NE_STAT_CALL(PATH, E_STRUCT)      ne_stat1(select_snprintf(PATH), NULL, select_impl(PATH), auth, \
-//                                                 timing_flags, NULL,    \
-//                                                 (PATH), (E_STRUCT) )
-//
 
    // first, establish an ne_context
    ne_location maxloc = { .pod = 0, .cap = 0, .scatter = 0 };
@@ -898,7 +882,7 @@ int main( int argc, const char** argv )
  
       // check for a write error
       if ( nread != written ) {
-         PRINTout( "expected to write %llu bytes to destination, but instead wrote %zd: errno=%d (%s)\n",
+         PRINTout( "expected to write %zd bytes to destination, but instead wrote %zd: errno=%d (%s)\n",
                    nread, written, errno, strerror(errno) );
          if ( buff )
             free( buff );
@@ -928,7 +912,7 @@ int main( int argc, const char** argv )
 
    }
 
-   PRINTout( "all data movement completed (%llu bytes)\n", bytes_moved );
+   PRINTout( "all data movement completed (%lld bytes)\n", (long long int)bytes_moved );
 
    if ( std_fd  &&  close( std_fd ) ) {
       if ( wr == 1 )

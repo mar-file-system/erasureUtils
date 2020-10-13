@@ -43,6 +43,7 @@
 #include <sys/stat.h>
 #include <rdma/rdma_cma.h>
 #include <rdma/rsocket.h>
+#include <arpa/inet.h>
 #include <limits.h>
 #include "zlib.h"
 #include "isa-l.h"
