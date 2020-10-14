@@ -299,9 +299,9 @@ void print_erasure_state( ne_erasure* epat, ne_state* state ) {
    int tmp;
    // construct a list of physical block numbers based on the provided start_block
    for( tmp = 0; tmp < ( epat->N + epat->E ); tmp++ ){
-      char append_str[6];
-      snprintf( append_str, 6, "%4d", (tmp + epat->O) % (epat->N + epat->E) );
-      strncat( output_string, append_str, 5 );
+      char append_str[12] = { '\0' };
+      snprintf( append_str, 12, "%4d", (tmp + epat->O) % (epat->N + epat->E) );
+      strcat( output_string, append_str );
    }
 
    PRINTout( "%s%s\n", "Physical Block:     ", output_string );
@@ -312,9 +312,9 @@ void print_erasure_state( ne_erasure* epat, ne_state* state ) {
    for( tmp = 0; tmp < ( epat->N + epat->E ); tmp++ ){
       if( state->meta_status[tmp] )
          eerr++;
-      char append_str[6];
+      char append_str[6] = { '\0' };
       snprintf( append_str, 6, "%4d", state->meta_status[tmp] );
-      strncat( output_string, append_str, 5 );
+      strcat( output_string, append_str );
    }
 
    PRINTout( "%s%s\n", "Metadata Errors:    ", output_string );
@@ -325,9 +325,9 @@ void print_erasure_state( ne_erasure* epat, ne_state* state ) {
    for( tmp = 0; tmp < ( epat->N + epat->E ); tmp++ ){
       if( state->data_status[tmp] )
          nerr++;
-      char append_str[6];
+      char append_str[6] = { '\0' };
       snprintf( append_str, 6, "%4d", state->data_status[tmp] );
-      strncat( output_string, append_str, 5 );
+      strcat( output_string, append_str );
    }
 
    PRINTout( "%s%s\n", "Data/Erasure Errors:", output_string );

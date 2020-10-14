@@ -75,7 +75,7 @@ AC_INIT([erasureUtils], [1.0], [gransom@lanl.gov])
 AC_CONFIG_SRCDIR([COPYRIGHT.h])
 AC_CONFIG_HEADERS([src/erasureUtils_auto_config.h])
 AC_CONFIG_MACRO_DIR([m4])
-AM_INIT_AUTOMAKE
+AM_INIT_AUTOMAKE([subdir-objects])
 AM_PROG_CC_C_O
 
 # default to empty flags, instead of "-g -O2"

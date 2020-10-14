@@ -11,10 +11,23 @@ depcomp
 install-sh
 missing
 test-driver
+src/erasureUtils_auto_config.h
 src/stamp-h1
+config/erasure_config.h
+config/udal_config.h
 .deps/
+*.dirstamp
 *.log
 *.trs
+
+# Build/Vim artifacts
+src/dal/test_dal
+src/io/test_ioqueue
+src/io/test_iothreads
+src/io/test_metainfo
+src/ne/neutil
+src/ne/testing/test_libne_io
+src/thread_queue/test_threadqueue
 *.o
 *.a
 *~

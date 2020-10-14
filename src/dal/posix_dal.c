@@ -76,7 +76,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 //   -------------    POSIX DEFINITIONS    -------------
 
 // NOTE -- make sure to adjust SFX_PADDING if changing any SFX strings!
-#define SFX_PADDING 13  // number of extra chars required to fit any suffix combo
+#define SFX_PADDING 14  // number of extra chars required to fit any suffix combo
 #define WRITE_SFX ".partial"   // 8 characters
 #define REBUILD_SFX ".rebuild" // 8 characters
 #define META_SFX ".meta"       // 5 characters (in ADDITION to other suffixes!)
