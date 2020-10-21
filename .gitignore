@@ -35,6 +35,7 @@ src/ne/neutil
 src/ne/testing/test_libne_io
 src/thread_queue/test_threadqueue
 src/*/.libs
+src/*/testing/.libs
 *.lo
 *.o
 *.la
