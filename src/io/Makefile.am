@@ -61,37 +61,37 @@ AM_CFLAGS   =
 AM_LDFLAGS  =
 
 
-include_HEADERS = io.h
-
 
 # define sources used by many programs as noinst libraries, to avoid multiple compilations
-noinst_LIBRARIES = libioqueue.a libmetainfo.a libiothreads.a
+noinst_LTLIBRARIES = libioqueue.la libmetainfo.la libiothreads.la
 
-libioqueue_a_SOURCES = ../logging/logging.c ioqueue.c
-libioqueue_a_CFLAGS  = $(XML_CFLAGS)
-IOQ_LIBS = libioqueue.a
+SIDE_LIBS= ../dal/libdal.la ../logging/liblog.la
 
-libmetainfo_a_SOURCES = ../logging/logging.c metainfo.c
-libmetainfo_a_CFLAGS  = $(XML_CFLAGS)
-MIN_LIBS = libmetainfo.a
+libioqueue_la_SOURCES = ioqueue.c
+libioqueue_la_CFLAGS  = $(XML_CFLAGS)
+IOQ_LIB = libioqueue.la
 
-libiothreads_a_SOURCES = ../logging/logging.c iothreads.c
-libiothreads_a_CFLAGS = $(XML_CFLAGS)
-IOT_LIBS = libiothreads.a
+libmetainfo_la_SOURCES = metainfo.c
+libmetainfo_la_CFLAGS  = $(XML_CFLAGS)
+MIN_LIB = libmetainfo.la
+
+libiothreads_la_SOURCES = iothreads.c
+libiothreads_la_CFLAGS  = $(XML_CFLAGS)
+IOT_LIB = libiothreads.la
 
 # ---
 check_PROGRAMS = test_ioqueue test_metainfo test_iothreads
 
 test_ioqueue_SOURCES = testing/test_ioqueue.c
-test_ioqueue_LDADD   = $(IOQ_LIBS) ../dal/libdal.a
+test_ioqueue_LDADD   = $(IOQ_LIB) $(SIDE_LIBS)
 test_ioqueue_CFLAGS  = $(XML_CFLAGS)
 
 test_metainfo_SOURCES = testing/test_metainfo.c
-test_metainfo_LDADD   = $(MIN_LIBS) ../dal/libdal.a
+test_metainfo_LDADD   = $(MIN_LIB) $(SIDE_LIBS)
 test_metainfo_CFLAGS  = $(XML_CFLAGS)
 
 test_iothreads_SOURCES = testing/test_iothreads.c
-test_iothreads_LDADD   = $(IOT_LIBS) $(MIN_LIBS) $(IOQ_LIBS) ../dal/libdal.a
+test_iothreads_LDADD   = $(IOT_LIB) $(MIN_LIB) $(IOQ_LIB) $(SIDE_LIBS)
 test_iothreads_CFLAGS  = $(XML_CFLAGS)
 
 TESTS = test_ioqueue test_metainfo test_iothreads

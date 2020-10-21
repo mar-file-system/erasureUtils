@@ -65,5 +65,5 @@ if BENCH
   MAYBE_BENCHMARK = isal_benchmark
 endif
 
-SUBDIRS = config src
+SUBDIRS = src
 

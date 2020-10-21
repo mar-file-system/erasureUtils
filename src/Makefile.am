@@ -58,5 +58,5 @@ if BENCH
   MAYBE_BENCHMARK = isal_benchmark
 endif
 
-SUBDIRS = thread_queue dal io ne $(MAYBE_BENCHMARK)
+SUBDIRS = logging thread_queue dal io ne $(MAYBE_BENCHMARK)
 

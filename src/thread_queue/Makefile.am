@@ -64,16 +64,18 @@ AM_LDFLAGS  =
 include_HEADERS = thread_queue.h
 
 # define sources used by many programs as noinst libraries, to avoid multiple compilations
-noinst_LIBRARIES = libTQ.a
+noinst_LTLIBRARIES = libTQ.la
 
-libTQ_a_SOURCES = ../logging/logging.c thread_queue.c
-TQ_LIBS = libTQ.a
+SIDE_LIBS = ../logging/liblog.la
+
+libTQ_la_SOURCES = thread_queue.c
+TQ_LIB = libTQ.la
 
 # ---
 check_PROGRAMS = test_threadqueue
 
 test_threadqueue_SOURCES = testing/test_threadqueue.c
-test_threadqueue_LDADD = $(TQ_LIBS)
+test_threadqueue_LDADD = $(TQ_LIB) $(SIDE_LIBS)
 
 TESTS = test_threadqueue
 

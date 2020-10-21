@@ -77,12 +77,13 @@ AC_CONFIG_HEADERS([src/erasureUtils_auto_config.h])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE([subdir-objects])
 AM_PROG_CC_C_O
+AC_PROG_LIBTOOL
 
 # default to empty flags, instead of "-g -O2"
 : ${CFLAGS=""}
 # AC_PROG_CC
 
-AC_PROG_RANLIB
+# AC_PROG_RANLIB
 
 # check for '-Wall' support and use it if we can
 AC_MSG_CHECKING(whether compiler understands -Wall)

@@ -65,11 +65,12 @@ include_HEADERS = ne.h
 
 
 # define sources used by many programs as noinst libraries, to avoid multiple compilations
-lib_LIBRARIES = libne.a
+lib_LTLIBRARIES = libne.la
 
-libne_a_SOURCES = ../logging/logging.c ne.c
-libne_a_CFLAGS  = $(XML_CFLAGS)
-NE_LIBS = libne.a ../dal/libdal.a ../io/libioqueue.a ../io/libiothreads.a ../io/libmetainfo.a ../thread_queue/libTQ.a
+libne_la_SOURCES = ne.c
+libne_la_LIBADD  = ../logging/liblog.la ../dal/libdal.la ../io/libioqueue.la ../io/libiothreads.la ../io/libmetainfo.la ../thread_queue/libTQ.la
+libne_la_CFLAGS  = $(XML_CFLAGS)
+NE_LIBS = libne.la
 
 bin_PROGRAMS = neutil
 neutil_SOURCES = neutil.c
