@@ -87,10 +87,10 @@ typedef struct DAL_location_struct {
 
 // open mode
 typedef enum DAL_MODE_enum {
-   DAL_READ = 0,
-   DAL_WRITE = 1,
-   DAL_REBUILD = 2,
-   DAL_METAREAD = 4
+   DAL_READ = 0,      // retrieve the data and/or meta info of an object
+   DAL_WRITE = 1,     // store data and/or meta info to an object
+   DAL_REBUILD = 2,   // same as WRITE, but with a distinct temporary location (if applicable)
+   DAL_METAREAD = 4   // retrieve the meta info of an object
 } DAL_MODE;
 
 
@@ -126,43 +126,56 @@ typedef struct DAL_struct {
       //  Zero on success, Non-zero if the operation could not be completed
    int (*del) ( DAL_CTXT ctxt, DAL_location location, const char* objID );
       // Description:
+      //  Delete the DAL object identified by the given ID, at the given location.
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
    int (*stat) ( DAL_CTXT ctxt, DAL_location location, const char* objID );
       // Description:
-      //  Simply check for object existance
+      //  Verify the existence of the given object.
       // Retrun Values:
-      //  Zero on success, Non-zero if the object was not found
+      //  Zero on success (object exists), Non-zero if the object was not found
    int (*cleanup) ( struct DAL_struct* dal );
       // Description:
+      //  Destroy and clean up all resources associated with the given DAL reference.
+      //  Note - this will NOT clean up any associated BLOCK_CTXT references.  Those must be handled 
+      //  individually.
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
    BLOCK_CTXT (*open) ( DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char* objID );
       // Description:
+      //  Open a READ/WRITE/REBUILD/META_READ handle for accessing the specified object.
       // Return Values:
       //  Non-NULL on success, NULL if the operation could not be completed
    int (*set_meta) ( BLOCK_CTXT ctxt, const char* meta_buf, size_t size);
       // Description:
+      //  Attach the provided meta information to the object associated with the given WRITE/REBUILD BLOCK_CTXT.
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
    ssize_t (*get_meta) ( BLOCK_CTXT ctxt, char* meta_buf, size_t size);
       // Description:
+      //  Retrieve the meta information of the object associated with the given READ/META_READ BLOCK_CTXT.
       // Return Values:
       //  Meta byte count on success, negative if the operation could not be completed
    int (*put) ( BLOCK_CTXT ctxt, const void* buf, size_t size );
       // Description:
+      //  Store data to the object associated with the given WRITE/REBUILD BLOCK_CTXT.
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
    ssize_t (*get) ( BLOCK_CTXT ctxt, void* buf, size_t size, off_t offset );
       // Description:
+      //  Retrieve data from the object associated with the given READ BLOCK_CTXT.
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
    int (*abort) ( BLOCK_CTXT ctxt );
       // Description:
+      //  Abandon a given WRITE/REBUILD BLOCK_CTXT.  This is roughly equivalent to calling close() on the 
+      //  BLOCK_CTXT; however, NO data changes should be applied to the underlying object (same state as before 
+      //  the BLOCK_CTXT was opened).
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
    int (*close) ( BLOCK_CTXT ctxt );
       // Description:
+      //  Close a given BLOCK_CTXT reference, freeing any associated resources and finalizing any data changes.
       // Return Values:
       //  Zero on success, Non-zero if the operation could not be completed
 } *DAL;

@@ -104,8 +104,14 @@ typedef struct posix_dal_context_struct {
 
 //   -------------    POSIX INTERNAL FUNCTIONS    -------------
 
+/** (INTERNAL HELPER FUNCTION)
+ * Simple check of limits to ensure we don't overrun allocated strings
+ * @param DAL_location loc : Location to be checked
+ * @param DAL_location* max_loc : Reference to the maximum acceptable location value
+ * @return int : Zero if the location is acceptable, -1 otherwise
+ */
 int check_loc_limits( DAL_location loc, const DAL_location* max_loc ) {
-   // simple check of limits to ensure we don't overrun allocated strings
+   // 
    if ( loc.pod > max_loc->pod ) {
       LOG( LOG_ERR, "pod value of %d exceeds limit of %d\n", loc.pod, max_loc->pod );
       return -1;
@@ -126,7 +132,11 @@ int check_loc_limits( DAL_location loc, const DAL_location* max_loc ) {
 }
 
 
-
+/** (INTERNAL HELPER FUNCTION)
+ * Calculate the number of decimal digits required to represent a given value
+ * @param int value : Integer value to be represented in decimal
+ * @return int : Number of decimal digits required, or -1 on a bounds error
+ */
 int num_digits( int value ) {
    if ( value < 0 ) { return -1; } // negative values not permitted
    if ( value < 10 ) { return 1; }
@@ -139,7 +149,14 @@ int num_digits( int value ) {
 }
 
 
-
+/** (INTERNAL HELPER FUNCTION)
+ * Perform necessary string substitutions/calculations to populate all values in a new POSIX_BLOCK_CTXT
+ * @param POSIX_DAL_CTXT dctxt : Context reference of the current POSIX DAL
+ * @param POSIX_BLOCK_CTXT bctxt : Block context to be populated
+ * @param DAL_location loc : Location of the object to be referenced by bctxt
+ * @param const char* objID : Object ID to be referenced by bctxt
+ * @return int : Zero on success, -1 on failure
+ */
 int expand_dir_template( POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_location loc, const char* objID ) {
    // check that our DAL_location is within bounds
    if ( check_loc_limits( loc, &(dctxt->max_loc) ) != 0 ) {
@@ -250,14 +267,25 @@ int expand_dir_template( POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locat
    }
    // ensure we null terminate the string
    *fill = '\0';
-   // user pointer arithmetic to determine length of path
+   // use pointer arithmetic to determine length of path
    bctxt->filelen = fill - bctxt->filepath;
    return 0;
 }
 
 
-
-int block_delete( POSIX_BLOCK_CTXT bctxt, char plus_meta ) {
+/** (INTERNAL HELPER FUNCTION)
+ * Delete various components of a given object, identified by it's block context.
+ * @param POSIX_BLOCK_CTXT bctxt : Context of the object to be deleted
+ * @param char components : Identifies which components of the object to delete
+ *                          0 - working data/meta files only
+ *                          1 - ALL data/meta files 
+ * @return int : Zero on success, -1 on failure
+ */
+int block_delete( POSIX_BLOCK_CTXT bctxt, char components ) {
+   char* working_suffix = WRITE_SFX;
+   if ( bctxt->mode == DAL_REBUILD ) {
+      working_suffix = REBUILD_SFX;
+   }
    // append the meta suffix and check for success
    char* res = strncat( bctxt->filepath + bctxt->filelen, META_SFX, SFX_PADDING );
    if ( res != ( bctxt->filepath + bctxt->filelen ) ) {
@@ -268,10 +296,10 @@ int block_delete( POSIX_BLOCK_CTXT bctxt, char plus_meta ) {
 
    int metalen = strlen( META_SFX );
 
-   // append the write suffix and check for success
-   res = strncat( bctxt->filepath + bctxt->filelen + metalen, WRITE_SFX, SFX_PADDING - metalen );
+   // append the working suffix and check for success
+   res = strncat( bctxt->filepath + bctxt->filelen + metalen, working_suffix, SFX_PADDING - metalen );
    if ( res != ( bctxt->filepath + bctxt->filelen + metalen ) ) {
-      LOG( LOG_ERR, "failed to append write suffix \"%s\" to file path \"%s\"!\n", WRITE_SFX, bctxt->filepath );
+      LOG( LOG_ERR, "failed to append working suffix \"%s\" to file path \"%s\"!\n", working_suffix, bctxt->filepath );
       errno = EBADF;
       *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
       return -1;
@@ -284,10 +312,10 @@ int block_delete( POSIX_BLOCK_CTXT bctxt, char plus_meta ) {
       return -1;
    }
 
-   // trim the write suffix off
+   // trim the working suffix off
    *(bctxt->filepath + bctxt->filelen + metalen) = '\0';
 
-   if ( plus_meta ) {
+   if ( components ) {
       // unlink any meta file (only failure with ENOENT is acceptable)
       if ( unlink( bctxt->filepath ) != 0  &&  errno != ENOENT ) {
          LOG( LOG_ERR, "failed to unlink \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
@@ -296,11 +324,11 @@ int block_delete( POSIX_BLOCK_CTXT bctxt, char plus_meta ) {
       }
    }
 
-   // trim the meta suffix off and attach a write suffix in its place
+   // trim the meta suffix off and attach a working suffix in its place
    *(bctxt->filepath + bctxt->filelen) = '\0';
-   res = strncat( bctxt->filepath + bctxt->filelen, WRITE_SFX, SFX_PADDING - metalen );
+   res = strncat( bctxt->filepath + bctxt->filelen, working_suffix, SFX_PADDING - metalen );
    if ( res != ( bctxt->filepath + bctxt->filelen ) ) {
-      LOG( LOG_ERR, "failed to append write suffix \"%s\" to file path \"%s\"!\n", WRITE_SFX, bctxt->filepath );
+      LOG( LOG_ERR, "failed to append working suffix \"%s\" to file path \"%s\"!\n", working_suffix, bctxt->filepath );
       errno = EBADF;
       *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
       return -1;
@@ -315,11 +343,13 @@ int block_delete( POSIX_BLOCK_CTXT bctxt, char plus_meta ) {
 
    *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
 
-   // unlink any data file (only failure with ENOENT is acceptable)
-   if ( unlink( bctxt->filepath ) != 0  &&  errno != ENOENT ) {
-      LOG( LOG_ERR, "failed to unlink \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
-      *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
-      return -1;
+   if ( components ) {
+      // unlink any data file (only failure with ENOENT is acceptable, as this implies a non-existent file)
+      if ( unlink( bctxt->filepath ) != 0  &&  errno != ENOENT ) {
+         LOG( LOG_ERR, "failed to unlink \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
+         *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
+         return -1;
+      }
    }
 
    return 0;
