@@ -71,11 +71,15 @@ libdal_la_CFLAGS = $(XML_CFLAGS)
 DAL_LIB = libdal.la
 
 # ---
-check_PROGRAMS = test_dal
+check_PROGRAMS = test_dal test_dal_abort
 
 test_dal_SOURCES = testing/test_dal.c
 test_dal_LDADD = $(DAL_LIB) $(SIDE_LIBS)
 test_dal_CFLAGS= $(XML_CFLAGS)
 
-TESTS = test_dal
+test_dal_abort_SOURCES = testing/test_dal_abort.c
+test_dal_abort_LDADD = $(DAL_LIB) $(SIDE_LIBS)
+test_dal_abort_CFLAGS= $(XML_CFLAGS)
+
+TESTS = test_dal test_dal_abort
 

@@ -549,17 +549,7 @@ int posix_set_meta ( BLOCK_CTXT ctxt, const char* meta_buf, size_t size ) {
       free( meta_path );
       return -1;
    }
-
-   // strip only the write suffix from the name
-   *(bctxt->filepath + bctxt->filelen + metalen) = '\0';
-
-   // rename the file
-   if ( rename( meta_path, bctxt->filepath ) != 0 ) {
-      LOG( LOG_ERR, "failed to rename meta file \"%s\" to \"%s\" (%s)\n", meta_path, bctxt->filepath, strerror(errno) );
-      free(meta_path);
-      return -1;
-   }
-
+   
    *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
    free( meta_path );
    return 0;
@@ -582,12 +572,38 @@ ssize_t posix_get_meta ( BLOCK_CTXT ctxt, char* meta_buf, size_t size ) {
       return -1;
    }
 
+   int metalen = 0;
+   if ( bctxt->mode == DAL_WRITE  ||  bctxt->mode == DAL_REBUILD  || bctxt->mode == DAL_METAREAD ) {
+      metalen = strlen( META_SFX );
+
+      // append the write suffix and check for success
+      res = strncat( bctxt->filepath + bctxt->filelen + metalen, WRITE_SFX, SFX_PADDING - metalen );
+      if ( res != ( bctxt->filepath + bctxt->filelen + metalen ) ) {
+         LOG( LOG_ERR, "failed to append write suffix \"%s\" to file path!\n", WRITE_SFX );
+         errno = EBADF;
+         *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
+         return -1;
+      }
+   }
+
    // open the meta sidecar file and check for success
    int mfd = open( bctxt->filepath, O_RDONLY );
    if ( mfd < 0 ) {
-      LOG( LOG_ERR, "failed to open meta file \"%s\" for read (%s)\n", bctxt->filepath, strerror(errno) );
-      *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
-      return -1;  
+      if( metalen ) {
+         LOG( LOG_WARNING, "failed to open partial meta file \"%s\" for read (%s)\n", bctxt->filepath, strerror(errno) );
+         *(bctxt->filepath + bctxt->filelen + metalen) = '\0'; // strip partial suffix
+	 mfd = open( bctxt->filepath, O_RDONLY );
+         if ( mfd < 0 ) {
+      	    LOG( LOG_ERR, "failed to open meta file \"%s\" for read (%s)\n", bctxt->filepath, strerror(errno) );
+            *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
+            return -1;  
+         }
+      }
+      else{
+         LOG( LOG_ERR, "failed to open meta file \"%s\" for read (%s)\n", bctxt->filepath, strerror(errno) );
+         *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
+         return -1;
+      }  
    }
 
    ssize_t result = read( mfd, meta_buf, size );
@@ -714,6 +730,38 @@ int posix_close ( BLOCK_CTXT ctxt ) {
          return -1;
       }
       free(write_path);
+
+      // append the meta suffix and check for success
+      res = strncat( bctxt->filepath + bctxt->filelen, META_SFX, SFX_PADDING );
+      if ( res != ( bctxt->filepath + bctxt->filelen ) ) {
+         LOG( LOG_ERR, "failed to append meta suffix \"%s\" to file path!\n", META_SFX );
+         errno = EBADF;
+         return -1;
+      }
+
+      int metalen = strlen( META_SFX );
+
+      // append the write suffix and check for success
+      res = strncat( bctxt->filepath + bctxt->filelen + metalen, WRITE_SFX, SFX_PADDING - metalen );
+      if ( res != ( bctxt->filepath + bctxt->filelen + metalen ) ) {
+         LOG( LOG_ERR, "failed to append write suffix \"%s\" to file path!\n", WRITE_SFX );
+         errno = EBADF;
+         *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
+         return -1;
+      }
+
+      // duplicate the path and check for success
+      char* meta_path = strdup( bctxt->filepath );
+      *(bctxt->filepath + bctxt->filelen + metalen) = '\0'; // make sure no suffix remains
+
+      // attempt to rename and check for success
+      if ( rename( meta_path, bctxt->filepath ) != 0 ) {
+         LOG( LOG_ERR, "failed to rename file \"%s\" to \"%s\" (%s)\n", meta_path, bctxt->filepath, strerror(errno) );
+         free(meta_path);
+         return -1;
+      }
+      free(meta_path);
+
    }
 
    // free state
