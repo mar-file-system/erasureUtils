@@ -157,16 +157,16 @@ int main( int argc, char** argv ) {
    // Open, write random data to, and set meta info for a specific block
    block = dal->open( dal->ctxt, DAL_WRITE, maxloc, "" );
    if ( block == NULL ) { printf( "error: failed to open block context for random data write: %s\n", strerror(errno) ); return -1; }
-   int gmres = dal->get_meta( block, readbuffer, (10*1024) ); 
-   if ( gmres != 22 ) {
-      printf( "error: get_meta returned an unexpected value: %d, %s\n", gmres, (char*) readbuffer ); return -1; ;
-   }
    if ( dal->put( block, randbuffer, (10*1024) ) ) {
       printf( "warning: put did not return expected value\n" );
    }
    char* meta_val_2 = "this is another meta value!\n";
    if ( dal->set_meta( block, meta_val_2, 28 ) ) {
       printf( "warning: set_meta did not return expected value\n" );
+   }
+   int gmres = dal->get_meta( block, readbuffer, (10*1024) ); 
+   if ( gmres != 22 ) {
+      printf( "error: get_meta returned an unexpected value: %d, %s\n", gmres, (char*) readbuffer ); return -1; ;
    }
    if ( dal->abort( block ) ) { 
       printf( "error: failed to abort block write context: %s\n", strerror(errno) ); return -1; 
