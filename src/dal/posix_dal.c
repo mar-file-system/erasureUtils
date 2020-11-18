@@ -1,4 +1,3 @@
-
 /*
 Copyright (c) 2015, Los Alamos National Security, LLC
 All rights reserved.
@@ -81,7 +80,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define REBUILD_SFX ".rebuild" // 8 characters
 #define META_SFX ".meta"       // 5 characters (in ADDITION to other suffixes!)
 
-
+#define IO_SIZE 1048576 // Preferred I/O Size
 
 //   -------------    POSIX CONTEXT    -------------
 
@@ -355,7 +354,117 @@ int block_delete( POSIX_BLOCK_CTXT bctxt, char components ) {
    return 0;
 }
 
+// forward-declarations to allow these functions to be used in manual_migrate
+int posix_del (  DAL_CTXT ctxt, DAL_location location, const char* objID );
 
+BLOCK_CTXT posix_open ( DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char* objID );
+
+int posix_set_meta ( BLOCK_CTXT ctxt, const char* meta_buf, size_t size );
+
+ssize_t posix_get_meta ( BLOCK_CTXT ctxt, char* meta_buf, size_t size );
+
+int posix_put ( BLOCK_CTXT ctxt, const void* buf, size_t size );
+
+ssize_t posix_get ( BLOCK_CTXT ctxt, void* buf, size_t size, off_t offset );
+
+int posix_abort ( BLOCK_CTXT ctxt );
+
+int posix_close ( BLOCK_CTXT ctxt );
+
+/** (INTERNAL HELPER FUNCTION)
+ * Attempt to manually migrate an object from one location to another using put/get/set_meta/get_meta dal functions..
+ * @param POSIX_DAL_CTXT dctxt : Context reference of the current POSIX DAL
+ * @param const char* objID : Object ID reference of object to be migraded
+ * @param DAL_location src : Source location of the object to be migrated
+ * @param DAL_location dest : Destination location of the object to be migrated
+ * @param const char* objID : Object ID to be referenced by bctxt
+ * @return int : Zero on success, -1 on failure
+ */
+int manual_migrate( POSIX_DAL_CTXT dctxt, const char* objID, DAL_location src, DAL_location dest ) {
+   // allocate buffers to transfer between locations
+   void* data_buf = malloc( IO_SIZE );
+   if( data_buf == NULL ) {
+      return -1;
+   }
+   char* meta_buf = malloc( IO_SIZE );
+   if( meta_buf == NULL ) {
+      free( data_buf );
+      return -1;
+   }
+
+   // open both locations
+   POSIX_BLOCK_CTXT src_ctxt = (POSIX_BLOCK_CTXT) posix_open( (DAL_CTXT) dctxt, DAL_READ, src, objID );
+   if( src_ctxt == NULL ) {
+      free( data_buf );
+      free( meta_buf );
+      return -1;
+   } 
+   POSIX_BLOCK_CTXT dest_ctxt = (POSIX_BLOCK_CTXT) posix_open( (DAL_CTXT) dctxt, DAL_WRITE, dest, objID );
+   if( dest_ctxt == NULL ) {
+      posix_abort( (BLOCK_CTXT) src_ctxt );
+      free( data_buf );
+      free( meta_buf );
+      return -1;
+   }
+
+   // move data file from source location to destination location
+   ssize_t res;
+   int off = 0;
+   do {
+      res = posix_get( (BLOCK_CTXT) src_ctxt, data_buf, IO_SIZE, off );
+      if ( res < 0 ) {
+         posix_abort( (BLOCK_CTXT) src_ctxt );
+         posix_abort( (BLOCK_CTXT) dest_ctxt );
+         free( data_buf );
+         free( meta_buf );
+         return -1;
+      }
+      off = src_ctxt->offset; 
+      if ( posix_put( (BLOCK_CTXT) dest_ctxt, data_buf, res ) ) {
+         posix_abort( (BLOCK_CTXT) src_ctxt );
+         posix_abort( (BLOCK_CTXT) dest_ctxt );
+         free( data_buf );
+         free( meta_buf );
+         return -1;
+      }		     
+   } while ( res > 0 );
+
+   // move meta file from source location to destination location
+   res = posix_get_meta( (BLOCK_CTXT) src_ctxt, meta_buf, IO_SIZE );
+   if ( res < 0 ) {
+      posix_abort( (BLOCK_CTXT) src_ctxt );
+      posix_abort( (BLOCK_CTXT) dest_ctxt );
+      free( data_buf );
+      free( meta_buf );
+      return -1;
+   }
+   if ( posix_set_meta( (BLOCK_CTXT) dest_ctxt, meta_buf, res ) ) {
+      posix_abort( (BLOCK_CTXT) src_ctxt );
+      posix_abort( (BLOCK_CTXT) dest_ctxt );
+      free( data_buf );
+      free( meta_buf );
+      return -1;
+   }		     
+
+   free( data_buf );
+   free( meta_buf );
+   
+   // close both locations
+   if ( posix_close( (BLOCK_CTXT) src_ctxt ) ) {
+      posix_abort( (BLOCK_CTXT) dest_ctxt );
+      return -1;
+   }
+   if ( posix_close( (BLOCK_CTXT) dest_ctxt ) ) {
+      return -1;
+   }
+
+   // delete old file
+   if ( posix_del (  (DAL_CTXT) dctxt, src, objID ) ) {
+      return 1;
+   }
+
+   return 0;
+}
 
 //   -------------    POSIX IMPLEMENTATION    -------------
 
@@ -365,10 +474,170 @@ int posix_verify ( DAL_CTXT ctxt, char fix ) {
 }
 
 
-
 int posix_migrate ( DAL_CTXT ctxt, const char* objID, DAL_location src, DAL_location dest, char offline ) {
-   errno = ENOSYS;
-   return -1; // TODO -- actually write this
+   POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT) ctxt; // should have been passed a posix context
+
+   POSIX_BLOCK_CTXT srcctxt = malloc( sizeof( struct posix_block_context_struct ) );
+   if ( srcctxt == NULL ) { 
+      return -1; // malloc will set errno
+   }
+   POSIX_BLOCK_CTXT destctxt = malloc( sizeof( struct posix_block_context_struct ) );
+   if ( destctxt == NULL ) {
+      free( srcctxt ); 
+      return -1; // malloc will set errno
+   }
+
+   
+   // popultate the full file path for this object
+   if ( expand_dir_template( dctxt, srcctxt, src, objID ) ) { 
+      free( srcctxt ); 
+      free( destctxt ); 
+      return -1; 
+   }
+   if ( expand_dir_template( dctxt, destctxt, dest, objID ) ) { 
+      free( srcctxt ); 
+      free( destctxt ); 
+      return -1; 
+   }
+   
+   // permanently move object from old location to new location (link to dest loc and unlink src loc)
+   if ( offline ) {
+      // append the meta suffix to the source and check for success
+      char* res = strncat( srcctxt->filepath + srcctxt->filelen, META_SFX, SFX_PADDING );
+      if ( res != ( srcctxt->filepath + srcctxt->filelen ) ) {
+         LOG( LOG_ERR, "failed to append meta suffix \"%s\" to source file path!\n", META_SFX );
+         errno = EBADF;
+	 free( srcctxt );
+	 free( destctxt );
+         return -1;
+      }
+
+      // duplicate the source meta path and check for success
+      char* src_meta_path = strdup( srcctxt->filepath );
+      if ( src_meta_path == NULL ) {
+         LOG( LOG_ERR, "failed to allocate space for a new source meta string! (%s)\n", strerror(errno) );
+         *(srcctxt->filepath + srcctxt->filelen) = '\0'; // make sure no suffix remains
+	 free( srcctxt );
+	 free( destctxt );
+         return -1;
+      }
+      *(srcctxt->filepath + srcctxt->filelen) = '\0'; // make sure no suffix remains
+
+      // append the meta suffix to the destination and check for success
+      res = strncat( destctxt->filepath + destctxt->filelen, META_SFX, SFX_PADDING );
+      if ( res != ( destctxt->filepath + destctxt->filelen ) ) {
+         LOG( LOG_ERR, "failed to append meta suffix \"%s\" to destination file path!\n", META_SFX );
+         errno = EBADF;
+	 free( srcctxt );
+	 free( destctxt );
+	 free( src_meta_path );
+         return -1;
+      }
+
+      // duplicate the destination meta path and check for success
+      char* dest_meta_path = strdup( destctxt->filepath );
+      if ( dest_meta_path == NULL ) {
+         LOG( LOG_ERR, "failed to allocate space for a new destination meta string! (%s)\n", strerror(errno) );
+         *(destctxt->filepath + destctxt->filelen) = '\0'; // make sure no suffix remains
+	 free( srcctxt );
+	 free( destctxt );
+	 free( src_meta_path );
+         return -1;
+      }
+      *(destctxt->filepath + destctxt->filelen) = '\0'; // make sure no suffix remains
+      
+      // attempt to link data and check for success
+      if ( link( srcctxt->filepath, destctxt->filepath ) ) {
+         LOG( LOG_ERR, "failed to link data file \"%s\" to \"%s\" (%s)\n", srcctxt->filepath, destctxt->filepath, strerror(errno) );
+	 free( srcctxt );
+	 free( destctxt );
+	 free( src_meta_path );
+	 free( dest_meta_path );
+	 return manual_migrate( dctxt, objID, src, dest );
+      }
+
+      int ret = 0;
+      // attempt to link meta and check for success
+      if ( link( src_meta_path, dest_meta_path ) ) {
+         LOG( LOG_ERR, "failed to link meta file \"%s\" to \"%s\" (%s)\n", src_meta_path, dest_meta_path, strerror(errno) );
+	 if ( unlink( destctxt->filepath ) ) {
+	    ret = -2;
+	 }
+         else {
+	    ret = manual_migrate( dctxt, objID, src, dest );
+	 }
+	 free( srcctxt );
+	 free( destctxt );
+	 free( src_meta_path );
+	 free( dest_meta_path );
+	 return ret;
+      }
+
+      // attempt to unlink data and check for success
+      if ( unlink( srcctxt->filepath ) ) {
+         LOG( LOG_ERR, "failed to unlink source data file \"%s\" (%s)\n", srcctxt->filepath, strerror(errno) );
+	 ret = 1;
+      }
+
+      // attempt to unlink meta and check for success
+      if ( unlink( src_meta_path ) ) {
+         LOG( LOG_ERR, "failed to unlink source meta file \"%s\" to (%s)\n", src_meta_path, strerror(errno) );
+	 ret = 1;
+      }
+
+      free( src_meta_path );
+      free( dest_meta_path );
+      free( srcctxt );
+      free( destctxt );
+      return ret;
+   }
+   // allow object to be accessed from both locations (symlink dest loc to src loc)
+   else {
+      // attempt to symlink data and check for success
+      if ( symlink( srcctxt->filepath, destctxt->filepath ) ) {
+         LOG( LOG_ERR, "failed to create data symlink\n" );
+	 free( srcctxt );
+	 free( destctxt );
+	 return -1;
+      }
+
+      // append the meta suffix and check for success
+      char* res = strncat( srcctxt->filepath + srcctxt->filelen, META_SFX, SFX_PADDING );
+      if ( res != ( srcctxt->filepath + srcctxt->filelen ) ) {
+         LOG( LOG_ERR, "failed to append meta suffix \"%s\" to source file path!\n", META_SFX );
+         errno = EBADF;
+	 free( srcctxt );
+	 free( destctxt );
+         return -1;
+      }
+      res = strncat( destctxt->filepath + destctxt->filelen, META_SFX, SFX_PADDING );
+      if ( res != ( destctxt->filepath + destctxt->filelen ) ) {
+         LOG( LOG_ERR, "failed to append meta suffix \"%s\" to destination file path!\n", META_SFX );
+         errno = EBADF;
+         *(srcctxt->filepath + srcctxt->filelen) = '\0'; // make sure no suffix remains
+	 free( srcctxt );
+	 free( destctxt );
+         return -1;
+      }
+
+      // attempt to symlink meta and check for success
+      if ( symlink( srcctxt->filepath, destctxt->filepath ) ) {
+         LOG( LOG_ERR, "failed to create meta symlink\n" );
+         *(srcctxt->filepath + srcctxt->filelen) = '\0'; // make sure no suffix remains
+         *(destctxt->filepath + destctxt->filelen) = '\0'; // make sure no suffix remains
+	 free( srcctxt );
+	 free( destctxt );
+	 return -1;
+      }
+
+      *(srcctxt->filepath + srcctxt->filelen) = '\0'; // make sure no suffix remains
+      *(destctxt->filepath + destctxt->filelen) = '\0'; // make sure no suffix remains
+   }
+
+   free( srcctxt );
+   free( destctxt );
+   return 0;
+   
 }
 
 
@@ -834,7 +1103,7 @@ DAL posix_dal_init( xmlNode* root, DAL_location max_loc ) {
          } // malloc will set errno
          pdal->name = "posix";
          pdal->ctxt = (DAL_CTXT) dctxt;
-         pdal->io_size = 1048576;
+         pdal->io_size = IO_SIZE;
          pdal->verify = posix_verify;
          pdal->migrate = posix_migrate;
          pdal->open = posix_open;
