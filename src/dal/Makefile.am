@@ -66,12 +66,12 @@ noinst_LTLIBRARIES = libdal.la
 
 SIDE_LIBS = ../logging/liblog.la
 
-libdal_la_SOURCES = posix_dal.c dal.c
+libdal_la_SOURCES = posix_dal.c dal.c fuzzing_dal.c
 libdal_la_CFLAGS = $(XML_CFLAGS)
 DAL_LIB = libdal.la
 
 # ---
-check_PROGRAMS = test_dal test_dal_abort test_dal_migrate
+check_PROGRAMS = test_dal test_dal_abort test_dal_migrate test_dal_fuzzing
 
 test_dal_SOURCES = testing/test_dal.c
 test_dal_LDADD = $(DAL_LIB) $(SIDE_LIBS)
@@ -85,5 +85,9 @@ test_dal_migrate_SOURCES = testing/test_dal_migrate.c
 test_dal_migrate_LDADD = $(DAL_LIB) $(SIDE_LIBS)
 test_dal_migrate_CFLAGS= $(XML_CFLAGS)
 
-TESTS = test_dal test_dal_abort test_dal_migrate
+test_dal_fuzzing_SOURCES = testing/test_dal_fuzzing.c
+test_dal_fuzzing_LDADD = $(DAL_LIB) $(SIDE_LIBS)
+test_dal_fuzzing_CFLAGS= $(XML_CFLAGS)
+
+TESTS = test_dal test_dal_abort test_dal_migrate test_dal_fuzzing
 
