@@ -67,12 +67,12 @@
 		<migrate>0</migrate>
 		<del>0</del>
 		<stat>0</stat>
-		<cleanup>0</cleanup>
-		<open>0</open>
+		<cleanup>0,0,0,0,4</cleanup>
+		<open>0,0,0,0,0,0,0,0</open>
 		<set_meta>0</set_meta>
-		<get_meta>-1</get_meta>
-		<put>1</put>
-		<get>0</get>
+		<get_meta>0,0,0,0,-1</get_meta>
+		<put>2,3,4,5,7,1</put>
+		<get>2,3,4,5,7</get>
 		<abort>0</abort>
 		<close>0</close>
 	</fuzzing>

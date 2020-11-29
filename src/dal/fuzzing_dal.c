@@ -59,8 +59,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
 #include "erasureUtils_auto_config.h"
-#if defined(DEBUG_ALL)  ||  defined(DEBUG_DAL)
-   #define DEBUG 1
+#if defined(DEBUG_ALL) || defined(DEBUG_DAL)
+#define DEBUG 1
 #endif
 #define LOG_PREFIX "fuzzing_dal"
 #include "logging/logging.h"
@@ -71,308 +71,781 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <fcntl.h>
 #include <errno.h>
 
-typedef struct fuzzing_dal_context_struct {
-	DAL	posix_dal; 	// Underlying posix dal
-	int	verify; 	// fuzzing behavior of each function. -1 means always
-	int	migrate; 	// fails. A positive number means always fails for
-	int 	del; 		// the block that corresponds to the number. 0 means 
-	int	stat; 		// do not fuzz operation.
-	int	cleanup;
-	int	open;
-	int	set_meta;
-	int	get_meta;
-	int	put;
-	int	get;
-	int	abort;
-	int	close;
-} *FUZZING_DAL_CTXT;
+#define FZ_LN 10 // Maximum number of blocks that can be fuzzed
 
-typedef struct fuzzing_block_context_struct {
+typedef struct fuzzing_dal_context_struct
+{
+	DAL posix_dal; // Underlying posix dal
+	int *verify;	 // fuzzing behavior of each function. -1 means always
+	int *migrate;	 // fails. A positive number means always fails for
+	int *del;			 // the block that corresponds to the number. 0 means
+	int *stat;		 // do not fuzz operation.
+	int *cleanup;
+	int *open;
+	int *set_meta;
+	int *get_meta;
+	int *put;
+	int *get;
+	int *abort;
+	int *close;
+} * FUZZING_DAL_CTXT;
+
+typedef struct fuzzing_block_context_struct
+{
 	FUZZING_DAL_CTXT global_ctxt; // Global context
-	DAL_location loc; // Location of block
-	BLOCK_CTXT bctxt; // Block context to be passed to underlying dal 
-} *FUZZING_BLOCK_CTXT;
+	DAL_location loc;							// Location of block
+	BLOCK_CTXT bctxt;							// Block context to be passed to underlying dal
+} * FUZZING_BLOCK_CTXT;
 
-//   -------------    POSIX IMPLEMENTATION    -------------
-
-int fuzzing_verify ( DAL_CTXT ctxt, char fix ) {
-	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT) ctxt;
-
-	if ( dctxt->verify != 0 ) {
-		return -2;
+int check_fuzz(int *fuzz, int block)
+{
+	int i = 0;
+	while (i < FZ_LN)
+	{
+		if (fuzz[i] < 0 || fuzz[i] == block)
+		{
+			return -1;
+		}
+		i++;
 	}
-
-	return dctxt->posix_dal->verify( dctxt->posix_dal->ctxt, fix ); 
-}
-
-
-int fuzzing_migrate ( DAL_CTXT ctxt, const char* objID, DAL_location src, DAL_location dest, char offline ) {
-	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT) ctxt;
-
-	if ( dctxt->migrate < 0 || dctxt->migrate == src.block || dctxt->migrate == dest.block ) {
-		return -1;
-	}
-
-	return dctxt->posix_dal->migrate( dctxt->posix_dal->ctxt, objID, src, dest, offline ); 
-}
-
-
-
-int fuzzing_del (  DAL_CTXT ctxt, DAL_location location, const char* objID ) {
-	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT) ctxt;
-
-	if ( dctxt->del < 0 || dctxt->del == location.block ) {
-		return -2;
-	}
-
-	return dctxt->posix_dal->del( dctxt->posix_dal->ctxt, location, objID ); 
-}
-
-
-
-int fuzzing_stat ( DAL_CTXT ctxt, DAL_location location, const char* objID ) {
-	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT) ctxt;
-
-	if ( dctxt->stat < 0 || dctxt->stat == location.block ) {
-		return -2;
-	}
-
-	return dctxt->posix_dal->stat( dctxt->posix_dal->ctxt, location, objID ); 
-}
-
-
-
-int fuzzing_cleanup ( DAL dal ) {
-	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT) dal->ctxt;
-
-	if ( dctxt->cleanup != 0 ) {
-		return -2;
-	}
-
-	int res = dctxt->posix_dal->cleanup( dctxt->posix_dal ); 
-	if ( res ) {
-		return res;
-	}
-
-	free( dctxt );
-
-	free( dal );
 	return 0;
 }
 
+int parse_fuzz(char *parse, int *fuzz)
+{
+	int blocks[FZ_LN] = {0};
+	int ind = 0;
+	int tot = 0;
+	while (*parse != '\0')
+	{
+		switch (*parse)
+		{
+		case '-':
+			fuzz[0] = -1;
+			return 0;
+			break;
+		case '0' ... '9':
+			tot += (tot * 10) + (*parse - '0');
+			break;
+		case ',':
+			blocks[ind++] = tot;
+			tot = 0;
+			break;
+		default:
+			return -1;
+		}
+		if (ind == FZ_LN)
+		{
+			return -1;
+		}
+		parse++;
+	}
+	blocks[ind] = tot;
 
+	memcpy(fuzz, blocks, sizeof(blocks));
+	return 0;
+}
 
-BLOCK_CTXT fuzzing_open ( DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char* objID ) {
-	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT) ctxt;
+//   -------------    POSIX IMPLEMENTATION    -------------
 
-	if ( dctxt->open < 0 || dctxt->open == location.block ) {
+int fuzzing_verify(DAL_CTXT ctxt, char fix)
+{
+	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
+
+	if (check_fuzz(dctxt->verify, -1))
+	{
+		return -2;
+	}
+
+	return dctxt->posix_dal->verify(dctxt->posix_dal->ctxt, fix);
+}
+
+int fuzzing_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_location dest, char offline)
+{
+	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
+
+	if (check_fuzz(dctxt->migrate, src.block) || check_fuzz(dctxt->migrate, dest.block))
+	{
+		return -1;
+	}
+
+	return dctxt->posix_dal->migrate(dctxt->posix_dal->ctxt, objID, src, dest, offline);
+}
+
+int fuzzing_del(DAL_CTXT ctxt, DAL_location location, const char *objID)
+{
+	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
+
+	if (check_fuzz(dctxt->del, location.block))
+	{
+		return -2;
+	}
+
+	return dctxt->posix_dal->del(dctxt->posix_dal->ctxt, location, objID);
+}
+
+int fuzzing_stat(DAL_CTXT ctxt, DAL_location location, const char *objID)
+{
+	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
+
+	if (check_fuzz(dctxt->stat, location.block))
+	{
+		return -2;
+	}
+
+	return dctxt->posix_dal->stat(dctxt->posix_dal->ctxt, location, objID);
+}
+
+int fuzzing_cleanup(DAL dal)
+{
+	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)dal->ctxt;
+
+	if (check_fuzz(dctxt->cleanup, -1))
+	{
+		return -2;
+	}
+
+	int res = dctxt->posix_dal->cleanup(dctxt->posix_dal);
+	if (res)
+	{
+		return res;
+	}
+	free(dctxt->verify);
+	free(dctxt->migrate);
+	free(dctxt->del);
+	free(dctxt->stat);
+	free(dctxt->cleanup);
+	free(dctxt->open);
+	free(dctxt->set_meta);
+	free(dctxt->get_meta);
+	free(dctxt->put);
+	free(dctxt->get);
+	free(dctxt->abort);
+	free(dctxt->close);
+	free(dctxt);
+
+	free(dal);
+	return 0;
+}
+
+BLOCK_CTXT fuzzing_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char *objID)
+{
+	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
+
+	if (check_fuzz(dctxt->open, location.block))
+	{
 		return NULL;
 	}
 
-	FUZZING_BLOCK_CTXT bctxt = malloc( sizeof( struct fuzzing_block_context_struct ) );
-	if ( bctxt == NULL ) {
+	FUZZING_BLOCK_CTXT bctxt = malloc(sizeof(struct fuzzing_block_context_struct));
+	if (bctxt == NULL)
+	{
 		return NULL;
 	}
 
 	bctxt->global_ctxt = dctxt;
-	if ( memcpy( &(bctxt->loc), &location, sizeof( struct DAL_location_struct ) ) != &(bctxt->loc) ) {
-		free( bctxt );
+	if (memcpy(&(bctxt->loc), &location, sizeof(struct DAL_location_struct)) != &(bctxt->loc))
+	{
+		free(bctxt);
 		return NULL;
 	}
-	bctxt->bctxt = dctxt->posix_dal->open( dctxt->posix_dal->ctxt, mode, location, objID ); 
-	if ( bctxt->bctxt == NULL ) {
-		free( bctxt );
+	bctxt->bctxt = dctxt->posix_dal->open(dctxt->posix_dal->ctxt, mode, location, objID);
+	if (bctxt->bctxt == NULL)
+	{
+		free(bctxt);
 		return NULL;
 	}
 
 	return bctxt;
 }
 
+int fuzzing_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
+{
+	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
-
-int fuzzing_set_meta ( BLOCK_CTXT ctxt, const char* meta_buf, size_t size ) {
-	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT) ctxt;
-
-	if ( bctxt->global_ctxt->set_meta < 0 || bctxt->global_ctxt->set_meta == bctxt->loc.block ) {
+	if (check_fuzz(bctxt->global_ctxt->set_meta, bctxt->loc.block))
+	{
 		return -2;
 	}
 
-	return bctxt->global_ctxt->posix_dal->set_meta( bctxt->bctxt, meta_buf, size ); 
+	return bctxt->global_ctxt->posix_dal->set_meta(bctxt->bctxt, meta_buf, size);
 }
 
+ssize_t fuzzing_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
+{
+	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
-
-ssize_t fuzzing_get_meta ( BLOCK_CTXT ctxt, char* meta_buf, size_t size ) {
-	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT) ctxt;
-
-	if ( bctxt->global_ctxt->get_meta < 0 || bctxt->global_ctxt->get_meta == bctxt->loc.block ) {
+	if (check_fuzz(bctxt->global_ctxt->get_meta, bctxt->loc.block))
+	{
 		return -2;
 	}
 
-	return bctxt->global_ctxt->posix_dal->get_meta( bctxt->bctxt, meta_buf, size ); 
+	return bctxt->global_ctxt->posix_dal->get_meta(bctxt->bctxt, meta_buf, size);
 }
 
+int fuzzing_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
+{
+	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
-
-int fuzzing_put ( BLOCK_CTXT ctxt, const void* buf, size_t size ) {
-	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT) ctxt;
-
-	if ( bctxt->global_ctxt->put < 0 || bctxt->global_ctxt->put == bctxt->loc.block ) {
+	if (check_fuzz(bctxt->global_ctxt->put, bctxt->loc.block))
+	{
 		return -2;
 	}
 
-	return bctxt->global_ctxt->posix_dal->put( bctxt->bctxt, buf, size ); 
+	return bctxt->global_ctxt->posix_dal->put(bctxt->bctxt, buf, size);
 }
 
+ssize_t fuzzing_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
+{
+	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
-
-ssize_t fuzzing_get ( BLOCK_CTXT ctxt, void* buf, size_t size, off_t offset ) {
-	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT) ctxt;
-
-	if ( bctxt->global_ctxt->get < 0 || bctxt->global_ctxt->get == bctxt->loc.block ) {
+	if (check_fuzz(bctxt->global_ctxt->get, bctxt->loc.block))
+	{
 		return -2;
 	}
 
-	return bctxt->global_ctxt->posix_dal->get( bctxt->bctxt, buf, size, offset ); 
+	return bctxt->global_ctxt->posix_dal->get(bctxt->bctxt, buf, size, offset);
 }
 
+int fuzzing_abort(BLOCK_CTXT ctxt)
+{
+	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
-
-int fuzzing_abort ( BLOCK_CTXT ctxt ) {
-	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT) ctxt;
-	
-	if ( bctxt->global_ctxt->abort < 0 || bctxt->global_ctxt->abort == bctxt->loc.block ) {
+	if (check_fuzz(bctxt->global_ctxt->abort, bctxt->loc.block))
+	{
 		return -2;
 	}
 
-	int res = bctxt->global_ctxt->posix_dal->abort( bctxt->bctxt );
-	if ( res ) {
+	int res = bctxt->global_ctxt->posix_dal->abort(bctxt->bctxt);
+	if (res)
+	{
 		return res;
 	}
-	
-	free( bctxt );
+
+	free(bctxt);
 	return 0;
 }
 
+int fuzzing_close(BLOCK_CTXT ctxt)
+{
+	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
-
-int fuzzing_close ( BLOCK_CTXT ctxt ) {
-	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT) ctxt;
-	
-	if ( bctxt->global_ctxt->close < 0 || bctxt->global_ctxt->close == bctxt->loc.block ) {
+	if (check_fuzz(bctxt->global_ctxt->close, bctxt->loc.block))
+	{
 		return -2;
 	}
 
-	int res = bctxt->global_ctxt->posix_dal->close( bctxt->bctxt );
-	if ( res ) {
+	int res = bctxt->global_ctxt->posix_dal->close(bctxt->bctxt);
+	if (res)
+	{
 		return res;
 	}
-	
-	free( bctxt );	
+
+	free(bctxt);
 	return 0;
 }
-
-
 
 //   -------------    POSIX INITIALIZATION    -------------
 
-DAL fuzzing_dal_init( xmlNode* root, DAL_location max_loc ) {
+DAL fuzzing_dal_init(xmlNode *root, DAL_location max_loc)
+{
 	// allocate space for our context struct
-	FUZZING_DAL_CTXT dctxt = malloc( sizeof( struct fuzzing_dal_context_struct ) );
-	if ( dctxt == NULL ) {
+	FUZZING_DAL_CTXT dctxt = malloc(sizeof(struct fuzzing_dal_context_struct));
+	if (dctxt == NULL)
+	{
 		return NULL;
 	}
-	
-	// initialize underlying posix dal
-	dctxt->posix_dal = posix_dal_init( root, max_loc );
-	if( dctxt->posix_dal == NULL ) {
-		free( dctxt );
-		return NULL;
-	}
-	dctxt->verify = 0;
-	dctxt->migrate = 0;
-	dctxt->del = 0;
-	dctxt->stat = 0;
-	dctxt->cleanup = 0;
-	dctxt->open = 0;
-	dctxt->set_meta = 0;
-	dctxt->get_meta = 0;
-	dctxt->put = 0;
-	dctxt->get = 0;
-	dctxt->abort = 0;
-	dctxt->close = 0;
 
-	if ( root->type != XML_ELEMENT_NODE || strncmp( (char*)root->name, "dir_template", 13 ) != 0 ) {
-		free( dctxt );
+	// initialize underlying posix dal
+	dctxt->posix_dal = posix_dal_init(root, max_loc);
+	if (dctxt->posix_dal == NULL)
+	{
+		free(dctxt);
 		return NULL;
 	}
-		
+
+	int tmp_fuzz[FZ_LN] = {0};
+	dctxt->verify = calloc(FZ_LN, sizeof(int));
+	if (dctxt->verify == NULL)
+	{
+		free(dctxt);
+		return NULL;
+	}
+	dctxt->migrate = calloc(FZ_LN, sizeof(int));
+	if (dctxt->migrate == NULL)
+	{
+		free(dctxt);
+		free(dctxt->verify);
+		return NULL;
+	}
+	dctxt->del = calloc(FZ_LN, sizeof(int));
+	if (dctxt->del == NULL)
+	{
+		free(dctxt->verify);
+		free(dctxt->migrate);
+		free(dctxt);
+		return NULL;
+	}
+	dctxt->stat = calloc(FZ_LN, sizeof(int));
+	if (dctxt->stat == NULL)
+	{
+		free(dctxt->verify);
+		free(dctxt->migrate);
+		free(dctxt->del);
+		free(dctxt);
+		return NULL;
+	}
+	dctxt->cleanup = calloc(FZ_LN, sizeof(int));
+	if (dctxt->cleanup == NULL)
+	{
+		free(dctxt->verify);
+		free(dctxt->migrate);
+		free(dctxt->del);
+		free(dctxt->stat);
+		free(dctxt);
+		return NULL;
+	}
+	dctxt->open = calloc(FZ_LN, sizeof(int));
+	if (dctxt->open == NULL)
+	{
+		free(dctxt->verify);
+		free(dctxt->migrate);
+		free(dctxt->del);
+		free(dctxt->stat);
+		free(dctxt->cleanup);
+		free(dctxt);
+		return NULL;
+	}
+	dctxt->set_meta = calloc(FZ_LN, sizeof(int));
+	if (dctxt->set_meta == NULL)
+	{
+		free(dctxt);
+		free(dctxt->verify);
+		free(dctxt->migrate);
+		free(dctxt->del);
+		free(dctxt->stat);
+		free(dctxt->cleanup);
+		free(dctxt->open);
+		return NULL;
+	}
+	dctxt->get_meta = calloc(FZ_LN, sizeof(int));
+	if (dctxt->get_meta == NULL)
+	{
+		free(dctxt);
+		free(dctxt->verify);
+		free(dctxt->migrate);
+		free(dctxt->del);
+		free(dctxt->stat);
+		free(dctxt->cleanup);
+		free(dctxt->open);
+		free(dctxt->set_meta);
+		return NULL;
+	}
+	dctxt->put = calloc(FZ_LN, sizeof(int));
+	if (dctxt->put == NULL)
+	{
+		free(dctxt);
+		free(dctxt->verify);
+		free(dctxt->migrate);
+		free(dctxt->del);
+		free(dctxt->stat);
+		free(dctxt->cleanup);
+		free(dctxt->open);
+		free(dctxt->set_meta);
+		free(dctxt->get_meta);
+		return NULL;
+	}
+	dctxt->get = calloc(FZ_LN, sizeof(int));
+	if (dctxt->get == NULL)
+	{
+		free(dctxt);
+		free(dctxt->verify);
+		free(dctxt->migrate);
+		free(dctxt->del);
+		free(dctxt->stat);
+		free(dctxt->cleanup);
+		free(dctxt->open);
+		free(dctxt->set_meta);
+		free(dctxt->get_meta);
+		free(dctxt->put);
+		return NULL;
+	}
+	dctxt->abort = calloc(FZ_LN, sizeof(int));
+	if (dctxt->abort == NULL)
+	{
+		free(dctxt);
+		free(dctxt->verify);
+		free(dctxt->migrate);
+		free(dctxt->del);
+		free(dctxt->stat);
+		free(dctxt->cleanup);
+		free(dctxt->open);
+		free(dctxt->set_meta);
+		free(dctxt->get_meta);
+		free(dctxt->put);
+		free(dctxt->get);
+		return NULL;
+	}
+	dctxt->close = calloc(FZ_LN, sizeof(int));
+	if (dctxt->close == NULL)
+	{
+		free(dctxt);
+		free(dctxt->verify);
+		free(dctxt->migrate);
+		free(dctxt->del);
+		free(dctxt->stat);
+		free(dctxt->cleanup);
+		free(dctxt->open);
+		free(dctxt->set_meta);
+		free(dctxt->get_meta);
+		free(dctxt->put);
+		free(dctxt->get);
+		free(dctxt->abort);
+		return NULL;
+	}
+	memcpy(dctxt->verify, tmp_fuzz, sizeof(tmp_fuzz));
+	memcpy(dctxt->migrate, tmp_fuzz, sizeof(tmp_fuzz));
+	memcpy(dctxt->del, tmp_fuzz, sizeof(tmp_fuzz));
+	memcpy(dctxt->stat, tmp_fuzz, sizeof(tmp_fuzz));
+	memcpy(dctxt->cleanup, tmp_fuzz, sizeof(tmp_fuzz));
+	memcpy(dctxt->open, tmp_fuzz, sizeof(tmp_fuzz));
+	memcpy(dctxt->set_meta, tmp_fuzz, sizeof(tmp_fuzz));
+	memcpy(dctxt->get_meta, tmp_fuzz, sizeof(tmp_fuzz));
+	memcpy(dctxt->put, tmp_fuzz, sizeof(tmp_fuzz));
+	memcpy(dctxt->get, tmp_fuzz, sizeof(tmp_fuzz));
+	memcpy(dctxt->abort, tmp_fuzz, sizeof(tmp_fuzz));
+	memcpy(dctxt->close, tmp_fuzz, sizeof(tmp_fuzz));
+
+	if (root->type != XML_ELEMENT_NODE || strncmp((char *)root->name, "dir_template", 13) != 0)
+	{
+		free(dctxt);
+		free(dctxt->verify);
+		free(dctxt->migrate);
+		free(dctxt->del);
+		free(dctxt->stat);
+		free(dctxt->cleanup);
+		free(dctxt->open);
+		free(dctxt->set_meta);
+		free(dctxt->get_meta);
+		free(dctxt->put);
+		free(dctxt->get);
+		free(dctxt->abort);
+		free(dctxt->close);
+		return NULL;
+	}
+
 	// find the fuzzing data. Fail if there is none
-	while( root->type != XML_ELEMENT_NODE || strncmp( (char*)root->name, "fuzzing", 8 ) != 0 ) {
+	while (root->type != XML_ELEMENT_NODE || strncmp((char *)root->name, "fuzzing", 8) != 0)
+	{
 		root = root->next;
-		if ( root == NULL ) {
-			free( dctxt );
+		if (root == NULL)
+		{
+			free(dctxt);
+			free(dctxt->verify);
+			free(dctxt->migrate);
+			free(dctxt->del);
+			free(dctxt->stat);
+			free(dctxt->cleanup);
+			free(dctxt->open);
+			free(dctxt->set_meta);
+			free(dctxt->get_meta);
+			free(dctxt->put);
+			free(dctxt->get);
+			free(dctxt->abort);
+			free(dctxt->close);
 			return NULL;
 		}
 	}
-	
+
 	// parse fuzzing data to context struct
-	xmlNode* child = root->children;
-	while ( child != NULL ) {
-		if ( child->children == NULL || child->children->type != XML_TEXT_NODE ) {
-			LOG( LOG_ERR, "the \"%s\" node is expected to contain a fuzzing state\n", (char*)child->name );
+	xmlNode *child = root->children;
+	while (child != NULL)
+	{
+		if (child->children == NULL || child->children->type != XML_TEXT_NODE)
+		{
+			LOG(LOG_ERR, "the \"%s\" node is expected to contain a fuzzing state\n", (char *)child->name);
 		}
-		else if ( strncmp( (char*)child->name, "verify", 7 ) == 0 ) {
-			dctxt->verify = atoi( (char*)child->children->content );
+		else if (strncmp((char *)child->name, "verify", 7) == 0)
+		{
+			if (parse_fuzz((char *)child->children->content, dctxt->verify))
+			{
+				free(dctxt);
+				free(dctxt->verify);
+				free(dctxt->migrate);
+				free(dctxt->del);
+				free(dctxt->stat);
+				free(dctxt->cleanup);
+				free(dctxt->open);
+				free(dctxt->set_meta);
+				free(dctxt->get_meta);
+				free(dctxt->put);
+				free(dctxt->get);
+				free(dctxt->abort);
+				free(dctxt->close);
+				return NULL;
+			}
 		}
-		else if ( strncmp( (char*)child->name, "migrate", 8 ) == 0 ) {
-			dctxt->migrate = atoi( (char*)child->children->content );
+		else if (strncmp((char *)child->name, "migrate", 8) == 0)
+		{
+			if (parse_fuzz((char *)child->children->content, dctxt->migrate))
+			{
+				free(dctxt);
+				free(dctxt->verify);
+				free(dctxt->migrate);
+				free(dctxt->del);
+				free(dctxt->stat);
+				free(dctxt->cleanup);
+				free(dctxt->open);
+				free(dctxt->set_meta);
+				free(dctxt->get_meta);
+				free(dctxt->put);
+				free(dctxt->get);
+				free(dctxt->abort);
+				free(dctxt->close);
+				return NULL;
+			}
 		}
-		else if ( strncmp( (char*)child->name, "del", 4 ) == 0 ) {
-			dctxt->del = atoi( (char*)child->children->content );
+		else if (strncmp((char *)child->name, "del", 4) == 0)
+		{
+			if (parse_fuzz((char *)child->children->content, dctxt->del))
+			{
+				free(dctxt);
+				free(dctxt->verify);
+				free(dctxt->migrate);
+				free(dctxt->del);
+				free(dctxt->stat);
+				free(dctxt->cleanup);
+				free(dctxt->open);
+				free(dctxt->set_meta);
+				free(dctxt->get_meta);
+				free(dctxt->put);
+				free(dctxt->get);
+				free(dctxt->abort);
+				free(dctxt->close);
+				return NULL;
+			}
 		}
-		else if ( strncmp( (char*)child->name, "stat", 5 ) == 0 ) {
-			dctxt->stat = atoi( (char*)child->children->content );
+		else if (strncmp((char *)child->name, "stat", 5) == 0)
+		{
+			if (parse_fuzz((char *)child->children->content, dctxt->stat))
+			{
+				free(dctxt);
+				free(dctxt->verify);
+				free(dctxt->migrate);
+				free(dctxt->del);
+				free(dctxt->stat);
+				free(dctxt->cleanup);
+				free(dctxt->open);
+				free(dctxt->set_meta);
+				free(dctxt->get_meta);
+				free(dctxt->put);
+				free(dctxt->get);
+				free(dctxt->abort);
+				free(dctxt->close);
+				return NULL;
+			}
 		}
-		else if ( strncmp( (char*)child->name, "cleanup", 8 ) == 0 ) {
-			dctxt->cleanup = atoi( (char*)child->children->content );
+		else if (strncmp((char *)child->name, "cleanup", 8) == 0)
+		{
+			if (parse_fuzz((char *)child->children->content, dctxt->cleanup))
+			{
+				free(dctxt);
+				free(dctxt->verify);
+				free(dctxt->migrate);
+				free(dctxt->del);
+				free(dctxt->stat);
+				free(dctxt->cleanup);
+				free(dctxt->open);
+				free(dctxt->set_meta);
+				free(dctxt->get_meta);
+				free(dctxt->put);
+				free(dctxt->get);
+				free(dctxt->abort);
+				free(dctxt->close);
+				return NULL;
+			}
 		}
-		else if ( strncmp( (char*)child->name, "open", 5 ) == 0 ) {
-			dctxt->open = atoi( (char*)child->children->content );
+		else if (strncmp((char *)child->name, "open", 5) == 0)
+		{
+			if (parse_fuzz((char *)child->children->content, dctxt->open))
+			{
+				free(dctxt);
+				free(dctxt->verify);
+				free(dctxt->migrate);
+				free(dctxt->del);
+				free(dctxt->stat);
+				free(dctxt->cleanup);
+				free(dctxt->open);
+				free(dctxt->set_meta);
+				free(dctxt->get_meta);
+				free(dctxt->put);
+				free(dctxt->get);
+				free(dctxt->abort);
+				free(dctxt->close);
+				return NULL;
+			}
 		}
-		else if ( strncmp( (char*)child->name, "set_meta", 9 ) == 0 ) {
-			dctxt->set_meta = atoi( (char*)child->children->content );
+		else if (strncmp((char *)child->name, "set_meta", 9) == 0)
+		{
+			if (parse_fuzz((char *)child->children->content, dctxt->set_meta))
+			{
+				free(dctxt);
+				free(dctxt->verify);
+				free(dctxt->migrate);
+				free(dctxt->del);
+				free(dctxt->stat);
+				free(dctxt->cleanup);
+				free(dctxt->open);
+				free(dctxt->set_meta);
+				free(dctxt->get_meta);
+				free(dctxt->put);
+				free(dctxt->get);
+				free(dctxt->abort);
+				free(dctxt->close);
+				return NULL;
+			}
 		}
-		else if ( strncmp( (char*)child->name, "get_meta", 9 ) == 0 ) {
-			dctxt->get_meta = atoi( (char*)child->children->content );
+		else if (strncmp((char *)child->name, "get_meta", 9) == 0)
+		{
+			if (parse_fuzz((char *)child->children->content, dctxt->get_meta))
+			{
+				free(dctxt);
+				free(dctxt->verify);
+				free(dctxt->migrate);
+				free(dctxt->del);
+				free(dctxt->stat);
+				free(dctxt->cleanup);
+				free(dctxt->open);
+				free(dctxt->set_meta);
+				free(dctxt->get_meta);
+				free(dctxt->put);
+				free(dctxt->get);
+				free(dctxt->abort);
+				free(dctxt->close);
+				return NULL;
+			}
 		}
-		else if ( strncmp( (char*)child->name, "put", 4 ) == 0 ) {
-			dctxt->put = atoi( (char*)child->children->content );
+		else if (strncmp((char *)child->name, "put", 4) == 0)
+		{
+			if (parse_fuzz((char *)child->children->content, dctxt->put))
+			{
+				free(dctxt);
+				free(dctxt->verify);
+				free(dctxt->migrate);
+				free(dctxt->del);
+				free(dctxt->stat);
+				free(dctxt->cleanup);
+				free(dctxt->open);
+				free(dctxt->set_meta);
+				free(dctxt->get_meta);
+				free(dctxt->put);
+				free(dctxt->get);
+				free(dctxt->abort);
+				free(dctxt->close);
+				return NULL;
+			}
 		}
-		else if ( strncmp( (char*)child->name, "get", 4 ) == 0 ) {
-			dctxt->get = atoi( (char*)child->children->content );
+		else if (strncmp((char *)child->name, "get", 4) == 0)
+		{
+			if (parse_fuzz((char *)child->children->content, dctxt->get))
+			{
+				free(dctxt);
+				free(dctxt->verify);
+				free(dctxt->migrate);
+				free(dctxt->del);
+				free(dctxt->stat);
+				free(dctxt->cleanup);
+				free(dctxt->open);
+				free(dctxt->set_meta);
+				free(dctxt->get_meta);
+				free(dctxt->put);
+				free(dctxt->get);
+				free(dctxt->abort);
+				free(dctxt->close);
+				return NULL;
+			}
 		}
-		else if ( strncmp( (char*)child->name, "abort", 6 ) == 0 ) {
-			dctxt->abort = atoi( (char*)child->children->content );
+		else if (strncmp((char *)child->name, "abort", 6) == 0)
+		{
+			if (parse_fuzz((char *)child->children->content, dctxt->abort))
+			{
+				free(dctxt);
+				free(dctxt->verify);
+				free(dctxt->migrate);
+				free(dctxt->del);
+				free(dctxt->stat);
+				free(dctxt->cleanup);
+				free(dctxt->open);
+				free(dctxt->set_meta);
+				free(dctxt->get_meta);
+				free(dctxt->put);
+				free(dctxt->get);
+				free(dctxt->abort);
+				free(dctxt->close);
+				return NULL;
+			}
 		}
-		else if ( strncmp( (char*)child->name, "close", 6 ) == 0 ) {
-			dctxt->close = atoi( (char*)child->children->content );
+		else if (strncmp((char *)child->name, "close", 6) == 0)
+		{
+			if (parse_fuzz((char *)child->children->content, dctxt->close))
+			{
+				free(dctxt);
+				free(dctxt->verify);
+				free(dctxt->migrate);
+				free(dctxt->del);
+				free(dctxt->stat);
+				free(dctxt->cleanup);
+				free(dctxt->open);
+				free(dctxt->set_meta);
+				free(dctxt->get_meta);
+				free(dctxt->put);
+				free(dctxt->get);
+				free(dctxt->abort);
+				free(dctxt->close);
+				return NULL;
+			}
 		}
-		else if ( ( strncmp( (char*)child->name, "init", 5 ) != 0 ) || ( atoi( (char*)child->children->content ) != 0 ) ) {
-			free( dctxt );
+		else if ((strncmp((char *)child->name, "init", 5) != 0) || (atoi((char *)child->children->content) != 0))
+		{
+			free(dctxt);
+			free(dctxt->verify);
+			free(dctxt->migrate);
+			free(dctxt->del);
+			free(dctxt->stat);
+			free(dctxt->cleanup);
+			free(dctxt->open);
+			free(dctxt->set_meta);
+			free(dctxt->get_meta);
+			free(dctxt->put);
+			free(dctxt->get);
+			free(dctxt->abort);
+			free(dctxt->close);
 			return NULL;
 		}
 		child = child->next;
 	}
 	// allocate and populate a new DAL structure
-	DAL fdal = malloc( sizeof( struct DAL_struct ) );
-	if( fdal == NULL ) {
-		LOG( LOG_ERR, "failed to allocate space for a DAL_struct\n" );
-		free( dctxt );
+	DAL fdal = malloc(sizeof(struct DAL_struct));
+	if (fdal == NULL)
+	{
+		LOG(LOG_ERR, "failed to allocate space for a DAL_struct\n");
+		free(dctxt);
+		free(dctxt->verify);
+		free(dctxt->migrate);
+		free(dctxt->del);
+		free(dctxt->stat);
+		free(dctxt->cleanup);
+		free(dctxt->open);
+		free(dctxt->set_meta);
+		free(dctxt->get_meta);
+		free(dctxt->put);
+		free(dctxt->get);
+		free(dctxt->abort);
+		free(dctxt->close);
 		return NULL;
 	}
 	fdal->name = "fuzzing";
-	fdal->ctxt = (DAL_CTXT) dctxt;
+	fdal->ctxt = (DAL_CTXT)dctxt;
 	fdal->io_size = dctxt->posix_dal->io_size;
 	fdal->verify = fuzzing_verify;
 	fdal->migrate = fuzzing_migrate;
@@ -387,8 +860,4 @@ DAL fuzzing_dal_init( xmlNode* root, DAL_location max_loc ) {
 	fdal->stat = fuzzing_stat;
 	fdal->cleanup = fuzzing_cleanup;
 	return fdal;
-  
 }
-
-
-
