@@ -11,7 +11,7 @@
    FOR THE USE OF THIS SOFTWARE.  If software is modified to produce derivative
    works, such modified software should be clearly marked, so as not to confuse it
    with the version available from LANL.
-    
+
    Additionally, redistribution and use in source and binary forms, with or without
    modification, are permitted provided that the following conditions are met:
    1. Redistributions of source code must retain the above copyright notice, this
@@ -62,19 +62,8 @@
 <DAL type="fuzzing">
 	<dir_template>./stripefile.{b}</dir_template>
 	<fuzzing>
-		<init>0</init>
-		<verify>0</verify>
-		<migrate>0</migrate>
-		<del>0</del>
-		<stat>0</stat>
-		<cleanup>0,0,0,0,4</cleanup>
-		<open>0,0,0,0,0,0,0,0</open>
-		<set_meta>0</set_meta>
-		<get_meta>0,0,0,0,-1</get_meta>
-		<put>2,3,4,5,7,1</put>
-		<get>2,3,4,5,7</get>
-		<abort>0</abort>
-		<close>0</close>
+      <put></put>
+      <get_meta></get_meta>
 	</fuzzing>
 </DAL>
 
