@@ -11,7 +11,7 @@ SECURITY, LLC MAKES ANY WARRANTY, EXPRESS OR IMPLIED, OR ASSUMES ANY LIABILITY
 FOR THE USE OF THIS SOFTWARE.  If software is modified to produce derivative
 works, such modified software should be clearly marked, so as not to confuse it
 with the version available from LANL.
- 
+
 Additionally, redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
 1. Redistributions of source code must retain the above copyright notice, this
@@ -71,16 +71,16 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <fcntl.h>
 #include <errno.h>
 
-#define FZ_LN 10 // Maximum number of blocks that can be fuzzed
+#define FZ_LN 20 // Maximum number of blocks that can be fuzzed
 
 typedef struct fuzzing_dal_context_struct
 {
 	DAL posix_dal; // Underlying posix dal
-	int *verify;	 // fuzzing behavior of each function. -1 means always
-	int *migrate;	 // fails. A positive number means always fails for
-	int *del;			 // the block that corresponds to the number. 0 means
-	int *stat;		 // do not fuzz operation.
-	int *cleanup;
+	int *verify;	 // fuzzing behavior of each function. If a list for
+	int *migrate;	 // an operation includes -1, then the operation
+	int *del;			 // always fails. A positive number means always
+	int *stat;		 // fails for the block that corresponds to the number.
+	int *cleanup;	 // A null pointer means do not fuzz operation.
 	int *open;
 	int *set_meta;
 	int *get_meta;
@@ -97,13 +97,19 @@ typedef struct fuzzing_block_context_struct
 	BLOCK_CTXT bctxt;							// Block context to be passed to underlying dal
 } * FUZZING_BLOCK_CTXT;
 
+// TODO: Fix segfault
 int check_fuzz(int *fuzz, int block)
 {
 	int i = 0;
+	if (fuzz == NULL)
+	{
+		return 0;
+	}
 	while (i < FZ_LN)
 	{
 		if (fuzz[i] < 0 || fuzz[i] == block)
 		{
+			errno = -1;
 			return -1;
 		}
 		i++;
@@ -111,39 +117,78 @@ int check_fuzz(int *fuzz, int block)
 	return 0;
 }
 
-int parse_fuzz(char *parse, int *fuzz)
+int parse_fuzz(char *parse, int **fuzz)
 {
-	int blocks[FZ_LN] = {0};
+	int *blocks = malloc(FZ_LN * sizeof(int));
+	if (blocks == NULL)
+	{
+		return -1;
+	}
 	int ind = 0;
 	int tot = 0;
+	int allocate = 0;
 	while (*parse != '\0')
 	{
 		switch (*parse)
 		{
 		case '-':
-			fuzz[0] = -1;
+			blocks[0] = -1;
+			*fuzz = blocks;
 			return 0;
 			break;
 		case '0' ... '9':
 			tot += (tot * 10) + (*parse - '0');
+			allocate++;
 			break;
 		case ',':
 			blocks[ind++] = tot;
 			tot = 0;
 			break;
 		default:
+			free(blocks);
 			return -1;
 		}
 		if (ind == FZ_LN)
 		{
+			free(blocks);
 			return -1;
 		}
 		parse++;
 	}
 	blocks[ind] = tot;
 
-	memcpy(fuzz, blocks, sizeof(blocks));
+	if (allocate)
+	{
+		*fuzz = blocks;
+		return 0;
+	}
+	free(blocks);
 	return 0;
+}
+
+void try_free(int *ptr)
+{
+	if (ptr != NULL)
+	{
+		free(ptr);
+	}
+}
+
+void free_fuzz(FUZZING_DAL_CTXT dctxt)
+{
+	try_free(dctxt->verify);
+	try_free(dctxt->migrate);
+	try_free(dctxt->del);
+	try_free(dctxt->stat);
+	try_free(dctxt->cleanup);
+	try_free(dctxt->open);
+	try_free(dctxt->set_meta);
+	try_free(dctxt->get_meta);
+	try_free(dctxt->put);
+	try_free(dctxt->get);
+	try_free(dctxt->abort);
+	try_free(dctxt->close);
+	free(dctxt);
 }
 
 //   -------------    POSIX IMPLEMENTATION    -------------
@@ -210,19 +255,7 @@ int fuzzing_cleanup(DAL dal)
 	{
 		return res;
 	}
-	free(dctxt->verify);
-	free(dctxt->migrate);
-	free(dctxt->del);
-	free(dctxt->stat);
-	free(dctxt->cleanup);
-	free(dctxt->open);
-	free(dctxt->set_meta);
-	free(dctxt->get_meta);
-	free(dctxt->put);
-	free(dctxt->get);
-	free(dctxt->abort);
-	free(dctxt->close);
-	free(dctxt);
+	free_fuzz(dctxt);
 
 	free(dal);
 	return 0;
@@ -355,6 +388,18 @@ DAL fuzzing_dal_init(xmlNode *root, DAL_location max_loc)
 	{
 		return NULL;
 	}
+	dctxt->verify = NULL;
+	dctxt->migrate = NULL;
+	dctxt->del = NULL;
+	dctxt->stat = NULL;
+	dctxt->cleanup = NULL;
+	dctxt->open = NULL;
+	dctxt->set_meta = NULL;
+	dctxt->get_meta = NULL;
+	dctxt->put = NULL;
+	dctxt->get = NULL;
+	dctxt->abort = NULL;
+	dctxt->close = NULL;
 
 	// initialize underlying posix dal
 	dctxt->posix_dal = posix_dal_init(root, max_loc);
@@ -364,173 +409,10 @@ DAL fuzzing_dal_init(xmlNode *root, DAL_location max_loc)
 		return NULL;
 	}
 
-	int tmp_fuzz[FZ_LN] = {0};
-	dctxt->verify = calloc(FZ_LN, sizeof(int));
-	if (dctxt->verify == NULL)
-	{
-		free(dctxt);
-		return NULL;
-	}
-	dctxt->migrate = calloc(FZ_LN, sizeof(int));
-	if (dctxt->migrate == NULL)
-	{
-		free(dctxt);
-		free(dctxt->verify);
-		return NULL;
-	}
-	dctxt->del = calloc(FZ_LN, sizeof(int));
-	if (dctxt->del == NULL)
-	{
-		free(dctxt->verify);
-		free(dctxt->migrate);
-		free(dctxt);
-		return NULL;
-	}
-	dctxt->stat = calloc(FZ_LN, sizeof(int));
-	if (dctxt->stat == NULL)
-	{
-		free(dctxt->verify);
-		free(dctxt->migrate);
-		free(dctxt->del);
-		free(dctxt);
-		return NULL;
-	}
-	dctxt->cleanup = calloc(FZ_LN, sizeof(int));
-	if (dctxt->cleanup == NULL)
-	{
-		free(dctxt->verify);
-		free(dctxt->migrate);
-		free(dctxt->del);
-		free(dctxt->stat);
-		free(dctxt);
-		return NULL;
-	}
-	dctxt->open = calloc(FZ_LN, sizeof(int));
-	if (dctxt->open == NULL)
-	{
-		free(dctxt->verify);
-		free(dctxt->migrate);
-		free(dctxt->del);
-		free(dctxt->stat);
-		free(dctxt->cleanup);
-		free(dctxt);
-		return NULL;
-	}
-	dctxt->set_meta = calloc(FZ_LN, sizeof(int));
-	if (dctxt->set_meta == NULL)
-	{
-		free(dctxt);
-		free(dctxt->verify);
-		free(dctxt->migrate);
-		free(dctxt->del);
-		free(dctxt->stat);
-		free(dctxt->cleanup);
-		free(dctxt->open);
-		return NULL;
-	}
-	dctxt->get_meta = calloc(FZ_LN, sizeof(int));
-	if (dctxt->get_meta == NULL)
-	{
-		free(dctxt);
-		free(dctxt->verify);
-		free(dctxt->migrate);
-		free(dctxt->del);
-		free(dctxt->stat);
-		free(dctxt->cleanup);
-		free(dctxt->open);
-		free(dctxt->set_meta);
-		return NULL;
-	}
-	dctxt->put = calloc(FZ_LN, sizeof(int));
-	if (dctxt->put == NULL)
-	{
-		free(dctxt);
-		free(dctxt->verify);
-		free(dctxt->migrate);
-		free(dctxt->del);
-		free(dctxt->stat);
-		free(dctxt->cleanup);
-		free(dctxt->open);
-		free(dctxt->set_meta);
-		free(dctxt->get_meta);
-		return NULL;
-	}
-	dctxt->get = calloc(FZ_LN, sizeof(int));
-	if (dctxt->get == NULL)
-	{
-		free(dctxt);
-		free(dctxt->verify);
-		free(dctxt->migrate);
-		free(dctxt->del);
-		free(dctxt->stat);
-		free(dctxt->cleanup);
-		free(dctxt->open);
-		free(dctxt->set_meta);
-		free(dctxt->get_meta);
-		free(dctxt->put);
-		return NULL;
-	}
-	dctxt->abort = calloc(FZ_LN, sizeof(int));
-	if (dctxt->abort == NULL)
-	{
-		free(dctxt);
-		free(dctxt->verify);
-		free(dctxt->migrate);
-		free(dctxt->del);
-		free(dctxt->stat);
-		free(dctxt->cleanup);
-		free(dctxt->open);
-		free(dctxt->set_meta);
-		free(dctxt->get_meta);
-		free(dctxt->put);
-		free(dctxt->get);
-		return NULL;
-	}
-	dctxt->close = calloc(FZ_LN, sizeof(int));
-	if (dctxt->close == NULL)
-	{
-		free(dctxt);
-		free(dctxt->verify);
-		free(dctxt->migrate);
-		free(dctxt->del);
-		free(dctxt->stat);
-		free(dctxt->cleanup);
-		free(dctxt->open);
-		free(dctxt->set_meta);
-		free(dctxt->get_meta);
-		free(dctxt->put);
-		free(dctxt->get);
-		free(dctxt->abort);
-		return NULL;
-	}
-	memcpy(dctxt->verify, tmp_fuzz, sizeof(tmp_fuzz));
-	memcpy(dctxt->migrate, tmp_fuzz, sizeof(tmp_fuzz));
-	memcpy(dctxt->del, tmp_fuzz, sizeof(tmp_fuzz));
-	memcpy(dctxt->stat, tmp_fuzz, sizeof(tmp_fuzz));
-	memcpy(dctxt->cleanup, tmp_fuzz, sizeof(tmp_fuzz));
-	memcpy(dctxt->open, tmp_fuzz, sizeof(tmp_fuzz));
-	memcpy(dctxt->set_meta, tmp_fuzz, sizeof(tmp_fuzz));
-	memcpy(dctxt->get_meta, tmp_fuzz, sizeof(tmp_fuzz));
-	memcpy(dctxt->put, tmp_fuzz, sizeof(tmp_fuzz));
-	memcpy(dctxt->get, tmp_fuzz, sizeof(tmp_fuzz));
-	memcpy(dctxt->abort, tmp_fuzz, sizeof(tmp_fuzz));
-	memcpy(dctxt->close, tmp_fuzz, sizeof(tmp_fuzz));
-
 	if (root->type != XML_ELEMENT_NODE || strncmp((char *)root->name, "dir_template", 13) != 0)
 	{
 		free(dctxt);
-		free(dctxt->verify);
-		free(dctxt->migrate);
-		free(dctxt->del);
-		free(dctxt->stat);
-		free(dctxt->cleanup);
-		free(dctxt->open);
-		free(dctxt->set_meta);
-		free(dctxt->get_meta);
-		free(dctxt->put);
-		free(dctxt->get);
-		free(dctxt->abort);
-		free(dctxt->close);
+		errno = EINVAL;
 		return NULL;
 	}
 
@@ -541,18 +423,7 @@ DAL fuzzing_dal_init(xmlNode *root, DAL_location max_loc)
 		if (root == NULL)
 		{
 			free(dctxt);
-			free(dctxt->verify);
-			free(dctxt->migrate);
-			free(dctxt->del);
-			free(dctxt->stat);
-			free(dctxt->cleanup);
-			free(dctxt->open);
-			free(dctxt->set_meta);
-			free(dctxt->get_meta);
-			free(dctxt->put);
-			free(dctxt->get);
-			free(dctxt->abort);
-			free(dctxt->close);
+			errno = EINVAL;
 			return NULL;
 		}
 	}
@@ -567,259 +438,122 @@ DAL fuzzing_dal_init(xmlNode *root, DAL_location max_loc)
 		}
 		else if (strncmp((char *)child->name, "verify", 7) == 0)
 		{
-			if (parse_fuzz((char *)child->children->content, dctxt->verify))
+			if (parse_fuzz((char *)child->children->content, &dctxt->verify))
 			{
-				free(dctxt);
-				free(dctxt->verify);
-				free(dctxt->migrate);
-				free(dctxt->del);
-				free(dctxt->stat);
-				free(dctxt->cleanup);
-				free(dctxt->open);
-				free(dctxt->set_meta);
-				free(dctxt->get_meta);
-				free(dctxt->put);
-				free(dctxt->get);
-				free(dctxt->abort);
-				free(dctxt->close);
+				free_fuzz(dctxt);
+				errno = EINVAL;
 				return NULL;
 			}
 		}
 		else if (strncmp((char *)child->name, "migrate", 8) == 0)
 		{
-			if (parse_fuzz((char *)child->children->content, dctxt->migrate))
+			if (parse_fuzz((char *)child->children->content, &dctxt->migrate))
 			{
-				free(dctxt);
-				free(dctxt->verify);
-				free(dctxt->migrate);
-				free(dctxt->del);
-				free(dctxt->stat);
-				free(dctxt->cleanup);
-				free(dctxt->open);
-				free(dctxt->set_meta);
-				free(dctxt->get_meta);
-				free(dctxt->put);
-				free(dctxt->get);
-				free(dctxt->abort);
-				free(dctxt->close);
+				free_fuzz(dctxt);
+				errno = EINVAL;
 				return NULL;
 			}
 		}
 		else if (strncmp((char *)child->name, "del", 4) == 0)
 		{
-			if (parse_fuzz((char *)child->children->content, dctxt->del))
+			if (parse_fuzz((char *)child->children->content, &dctxt->del))
 			{
-				free(dctxt);
-				free(dctxt->verify);
-				free(dctxt->migrate);
-				free(dctxt->del);
-				free(dctxt->stat);
-				free(dctxt->cleanup);
-				free(dctxt->open);
-				free(dctxt->set_meta);
-				free(dctxt->get_meta);
-				free(dctxt->put);
-				free(dctxt->get);
-				free(dctxt->abort);
-				free(dctxt->close);
+				free_fuzz(dctxt);
+				errno = EINVAL;
 				return NULL;
 			}
 		}
 		else if (strncmp((char *)child->name, "stat", 5) == 0)
 		{
-			if (parse_fuzz((char *)child->children->content, dctxt->stat))
+			if (parse_fuzz((char *)child->children->content, &dctxt->stat))
 			{
-				free(dctxt);
-				free(dctxt->verify);
-				free(dctxt->migrate);
-				free(dctxt->del);
-				free(dctxt->stat);
-				free(dctxt->cleanup);
-				free(dctxt->open);
-				free(dctxt->set_meta);
-				free(dctxt->get_meta);
-				free(dctxt->put);
-				free(dctxt->get);
-				free(dctxt->abort);
-				free(dctxt->close);
+				free_fuzz(dctxt);
+				errno = EINVAL;
 				return NULL;
 			}
 		}
 		else if (strncmp((char *)child->name, "cleanup", 8) == 0)
 		{
-			if (parse_fuzz((char *)child->children->content, dctxt->cleanup))
+			if (parse_fuzz((char *)child->children->content, &dctxt->cleanup))
 			{
-				free(dctxt);
-				free(dctxt->verify);
-				free(dctxt->migrate);
-				free(dctxt->del);
-				free(dctxt->stat);
-				free(dctxt->cleanup);
-				free(dctxt->open);
-				free(dctxt->set_meta);
-				free(dctxt->get_meta);
-				free(dctxt->put);
-				free(dctxt->get);
-				free(dctxt->abort);
-				free(dctxt->close);
+				free_fuzz(dctxt);
+				errno = EINVAL;
 				return NULL;
 			}
 		}
 		else if (strncmp((char *)child->name, "open", 5) == 0)
 		{
-			if (parse_fuzz((char *)child->children->content, dctxt->open))
+			if (parse_fuzz((char *)child->children->content, &dctxt->open))
 			{
-				free(dctxt);
-				free(dctxt->verify);
-				free(dctxt->migrate);
-				free(dctxt->del);
-				free(dctxt->stat);
-				free(dctxt->cleanup);
-				free(dctxt->open);
-				free(dctxt->set_meta);
-				free(dctxt->get_meta);
-				free(dctxt->put);
-				free(dctxt->get);
-				free(dctxt->abort);
-				free(dctxt->close);
+				free_fuzz(dctxt);
 				return NULL;
 			}
 		}
 		else if (strncmp((char *)child->name, "set_meta", 9) == 0)
 		{
-			if (parse_fuzz((char *)child->children->content, dctxt->set_meta))
+			if (parse_fuzz((char *)child->children->content, &dctxt->set_meta))
 			{
-				free(dctxt);
-				free(dctxt->verify);
-				free(dctxt->migrate);
-				free(dctxt->del);
-				free(dctxt->stat);
-				free(dctxt->cleanup);
-				free(dctxt->open);
-				free(dctxt->set_meta);
-				free(dctxt->get_meta);
-				free(dctxt->put);
-				free(dctxt->get);
-				free(dctxt->abort);
-				free(dctxt->close);
+				free_fuzz(dctxt);
+				errno = EINVAL;
 				return NULL;
 			}
 		}
 		else if (strncmp((char *)child->name, "get_meta", 9) == 0)
 		{
-			if (parse_fuzz((char *)child->children->content, dctxt->get_meta))
+			if (parse_fuzz((char *)child->children->content, &dctxt->get_meta))
 			{
-				free(dctxt);
-				free(dctxt->verify);
-				free(dctxt->migrate);
-				free(dctxt->del);
-				free(dctxt->stat);
-				free(dctxt->cleanup);
-				free(dctxt->open);
-				free(dctxt->set_meta);
-				free(dctxt->get_meta);
-				free(dctxt->put);
-				free(dctxt->get);
-				free(dctxt->abort);
-				free(dctxt->close);
+				free_fuzz(dctxt);
+				errno = EINVAL;
 				return NULL;
 			}
 		}
 		else if (strncmp((char *)child->name, "put", 4) == 0)
 		{
-			if (parse_fuzz((char *)child->children->content, dctxt->put))
+			if (parse_fuzz((char *)child->children->content, &dctxt->put))
 			{
-				free(dctxt);
-				free(dctxt->verify);
-				free(dctxt->migrate);
-				free(dctxt->del);
-				free(dctxt->stat);
-				free(dctxt->cleanup);
-				free(dctxt->open);
-				free(dctxt->set_meta);
-				free(dctxt->get_meta);
-				free(dctxt->put);
-				free(dctxt->get);
-				free(dctxt->abort);
-				free(dctxt->close);
+				free_fuzz(dctxt);
+				errno = EINVAL;
 				return NULL;
 			}
 		}
 		else if (strncmp((char *)child->name, "get", 4) == 0)
 		{
-			if (parse_fuzz((char *)child->children->content, dctxt->get))
+			if (parse_fuzz((char *)child->children->content, &dctxt->get))
 			{
-				free(dctxt);
-				free(dctxt->verify);
-				free(dctxt->migrate);
-				free(dctxt->del);
-				free(dctxt->stat);
-				free(dctxt->cleanup);
-				free(dctxt->open);
-				free(dctxt->set_meta);
-				free(dctxt->get_meta);
-				free(dctxt->put);
-				free(dctxt->get);
-				free(dctxt->abort);
-				free(dctxt->close);
+				free_fuzz(dctxt);
+				errno = EINVAL;
 				return NULL;
 			}
 		}
 		else if (strncmp((char *)child->name, "abort", 6) == 0)
 		{
-			if (parse_fuzz((char *)child->children->content, dctxt->abort))
+			if (parse_fuzz((char *)child->children->content, &dctxt->abort))
 			{
-				free(dctxt);
-				free(dctxt->verify);
-				free(dctxt->migrate);
-				free(dctxt->del);
-				free(dctxt->stat);
-				free(dctxt->cleanup);
-				free(dctxt->open);
-				free(dctxt->set_meta);
-				free(dctxt->get_meta);
-				free(dctxt->put);
-				free(dctxt->get);
-				free(dctxt->abort);
-				free(dctxt->close);
+				free_fuzz(dctxt);
+				errno = EINVAL;
 				return NULL;
 			}
 		}
 		else if (strncmp((char *)child->name, "close", 6) == 0)
 		{
-			if (parse_fuzz((char *)child->children->content, dctxt->close))
+			if (parse_fuzz((char *)child->children->content, &dctxt->close))
 			{
-				free(dctxt);
-				free(dctxt->verify);
-				free(dctxt->migrate);
-				free(dctxt->del);
-				free(dctxt->stat);
-				free(dctxt->cleanup);
-				free(dctxt->open);
-				free(dctxt->set_meta);
-				free(dctxt->get_meta);
-				free(dctxt->put);
-				free(dctxt->get);
-				free(dctxt->abort);
-				free(dctxt->close);
+				free_fuzz(dctxt);
+				errno = EINVAL;
 				return NULL;
 			}
 		}
-		else if ((strncmp((char *)child->name, "init", 5) != 0) || (atoi((char *)child->children->content) != 0))
+		else if (strncmp((char *)child->name, "init", 5) == 0)
 		{
-			free(dctxt);
-			free(dctxt->verify);
-			free(dctxt->migrate);
-			free(dctxt->del);
-			free(dctxt->stat);
-			free(dctxt->cleanup);
-			free(dctxt->open);
-			free(dctxt->set_meta);
-			free(dctxt->get_meta);
-			free(dctxt->put);
-			free(dctxt->get);
-			free(dctxt->abort);
-			free(dctxt->close);
+			free_fuzz(dctxt);
+			errno = -1;
+			return NULL;
+		}
+		else
+		{
+			LOG(LOG_ERR, "the \"%s\" node is expected to be named after a method of the dal interface\n", (char *)child->name);
+			free_fuzz(dctxt);
+			errno = EINVAL;
 			return NULL;
 		}
 		child = child->next;
@@ -829,19 +563,7 @@ DAL fuzzing_dal_init(xmlNode *root, DAL_location max_loc)
 	if (fdal == NULL)
 	{
 		LOG(LOG_ERR, "failed to allocate space for a DAL_struct\n");
-		free(dctxt);
-		free(dctxt->verify);
-		free(dctxt->migrate);
-		free(dctxt->del);
-		free(dctxt->stat);
-		free(dctxt->cleanup);
-		free(dctxt->open);
-		free(dctxt->set_meta);
-		free(dctxt->get_meta);
-		free(dctxt->put);
-		free(dctxt->get);
-		free(dctxt->abort);
-		free(dctxt->close);
+		free_fuzz(dctxt);
 		return NULL;
 	}
 	fdal->name = "fuzzing";
