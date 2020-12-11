@@ -79,9 +79,9 @@ typedef struct fuzzing_dal_context_struct
 	int *verify;	 // fuzzing behavior of each function. If a list for
 	int *migrate;	 // an operation includes -1, then the operation
 	int *del;			 // always fails. A positive number means always
-	int *stat;		 // fails for the block that corresponds to the number.
-	int *cleanup;	 // A null pointer means do not fuzz operation.
-	int *open;
+	int *stat;		 // fails for the block that corresponds to the
+	int *cleanup;	 // number - 1. A null pointer means do not fuzz
+	int *open;		 // operation.
 	int *set_meta;
 	int *get_meta;
 	int *put;
@@ -97,57 +97,100 @@ typedef struct fuzzing_block_context_struct
 	BLOCK_CTXT bctxt;							// Block context to be passed to underlying dal
 } * FUZZING_BLOCK_CTXT;
 
-// TODO: Fix segfault
+/**
+ * Checks if block needs to be fuzzed.
+ * @param int* fuzz : List of block numbers to fuzz (NOTE: Each entry is 1 + the block number to fuzz)
+ * @param int block : Block number to check
+ * @return int : Zero if operation can proceed, and -1 if block should be fuzzed
+ */
 int check_fuzz(int *fuzz, int block)
 {
 	int i = 0;
+	// Empty list means nothing to fuzz
 	if (fuzz == NULL)
 	{
 		return 0;
 	}
+	// Check valid (positive) entries in list
 	while (i < FZ_LN)
 	{
-		if (fuzz[i] < 0 || fuzz[i] == block)
+		// Fuzz this block
+		if (fuzz[i] < 0 || fuzz[i] == block + 1)
 		{
+			printf("fuzzing block %d\n", block);
+			for (i = 0; i < FZ_LN; i++)
+			{
+				printf("%d ", fuzz[i] - 1);
+			}
+			printf("\n");
 			errno = -1;
 			return -1;
+		}
+		// Run out of valid entries
+		else if (fuzz[i] == 0)
+		{
+			return 0;
 		}
 		i++;
 	}
 	return 0;
 }
-
+/**
+ * Form list of block numbers to fuzz from string
+ * @param char* parse : String containing block numbers to fuzz
+ * @param int** fuzz : Destination for list of block numbers
+ * @return int : Zero on success and -1 on failure
+ */
 int parse_fuzz(char *parse, int **fuzz)
 {
-	int *blocks = malloc(FZ_LN * sizeof(int));
+	// Create new list of block numbers and check for success
+	int *blocks = calloc(FZ_LN, sizeof(int));
 	if (blocks == NULL)
 	{
 		return -1;
 	}
+
 	int ind = 0;
 	int tot = 0;
 	int allocate = 0;
+	int valid = 0;
+	// Parse through string, removing whitespace and extra commas
 	while (*parse != '\0')
 	{
 		switch (*parse)
 		{
+		// List will fuzz every block
 		case '-':
 			blocks[0] = -1;
 			*fuzz = blocks;
 			return 0;
 			break;
+
 		case '0' ... '9':
-			tot += (tot * 10) + (*parse - '0');
+			tot = (tot * 10) + (*parse - '0');
 			allocate++;
+			valid++;
 			break;
+
+		// Append new value to list
 		case ',':
-			blocks[ind++] = tot;
-			tot = 0;
+			if (valid)
+			{
+				blocks[ind++] = tot + 1;
+				tot = 0;
+			}
+			valid = 0;
 			break;
+
+		case ' ':
+			break;
+
+		// Invalid character
 		default:
 			free(blocks);
 			return -1;
 		}
+		// String contained too many blocks
 		if (ind == FZ_LN)
 		{
 			free(blocks);
@@ -155,8 +198,13 @@ int parse_fuzz(char *parse, int **fuzz)
 		}
 		parse++;
 	}
-	blocks[ind] = tot;
+	// Append last block number (if not already)
+	if (valid)
+	{
+		blocks[ind] = tot + 1;
+	}
 
+	// Point destination to list
 	if (allocate)
 	{
 		*fuzz = blocks;
@@ -166,6 +214,10 @@ int parse_fuzz(char *parse, int **fuzz)
 	return 0;
 }
 
+/**
+ * Free pointer if allocated
+ * @param int* ptr : Pointer to be freed
+ */
 void try_free(int *ptr)
 {
 	if (ptr != NULL)
@@ -174,6 +226,10 @@ void try_free(int *ptr)
 	}
 }
 
+/**
+ * Free FUZZING_DAL_CTXT and any memory pointed to by its fields
+ * @param FUZZING_DAL_CTXT dctxt : Context to be freed
+ */
 void free_fuzz(FUZZING_DAL_CTXT dctxt)
 {
 	try_free(dctxt->verify);

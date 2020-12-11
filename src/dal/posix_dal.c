@@ -1050,7 +1050,6 @@ int posix_close(BLOCK_CTXT ctxt)
    if (ctxt == NULL)
    {
       LOG(LOG_ERR, "received a NULL block context!\n");
-      printf("received a NULL block context!\n");
       return -1;
    }
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
@@ -1059,7 +1058,6 @@ int posix_close(BLOCK_CTXT ctxt)
    if ((bctxt->mode != DAL_METAREAD) && (close(bctxt->fd) != 0))
    {
       LOG(LOG_ERR, "failed to close data file \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
-      printf("failed to close data file \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
       return -1;
    }
 
@@ -1067,7 +1065,6 @@ int posix_close(BLOCK_CTXT ctxt)
    if ((bctxt->mode != DAL_READ) && (close(bctxt->mfd) != 0))
    {
       LOG(LOG_ERR, "failed to close meta file \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
-      printf("failed to close meta file \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
       return -1;
    }
 
@@ -1088,7 +1085,6 @@ int posix_close(BLOCK_CTXT ctxt)
       if (res != (bctxt->filepath + bctxt->filelen))
       {
          LOG(LOG_ERR, "failed to append write suffix \"%s\" to file path!\n", WRITE_SFX);
-         printf("failed to append write suffix \"%s\" to file path!\n", WRITE_SFX);
          errno = EBADF;
          *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
          return -1;
@@ -1102,7 +1098,6 @@ int posix_close(BLOCK_CTXT ctxt)
       if (rename(write_path, bctxt->filepath) != 0)
       {
          LOG(LOG_ERR, "failed to rename data file \"%s\" to \"%s\" (%s)\n", write_path, bctxt->filepath, strerror(errno));
-         printf("failed to rename data file \"%s\" to \"%s\" (%s)\n", write_path, bctxt->filepath, strerror(errno));
          free(write_path);
          return -1;
       }
@@ -1116,7 +1111,6 @@ int posix_close(BLOCK_CTXT ctxt)
       if (res != (bctxt->filepath + bctxt->filelen))
       {
          LOG(LOG_ERR, "failed to append meta suffix \"%s\" to file path!\n", META_SFX);
-         printf("failed to append meta suffix \"%s\" to file path!\n", META_SFX);
          errno = EBADF;
          return -1;
       }
@@ -1128,7 +1122,6 @@ int posix_close(BLOCK_CTXT ctxt)
       if (res != (bctxt->filepath + bctxt->filelen + metalen))
       {
          LOG(LOG_ERR, "failed to append write suffix \"%s\" to file path!\n", WRITE_SFX);
-         printf("failed to append write suffix \"%s\" to file path!\n", WRITE_SFX);
          errno = EBADF;
          *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
          return -1;
@@ -1142,7 +1135,6 @@ int posix_close(BLOCK_CTXT ctxt)
       if (rename(meta_path, bctxt->filepath) != 0)
       {
          LOG(LOG_ERR, "failed to rename meta file \"%s\" to \"%s\" (%s)\n", meta_path, bctxt->filepath, strerror(errno));
-         printf("failed to rename meta file \"%s\" to \"%s\" (%s)\n", meta_path, bctxt->filepath, strerror(errno));
          free(meta_path);
          return -1;
       }
