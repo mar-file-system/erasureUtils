@@ -117,12 +117,6 @@ int check_fuzz(int *fuzz, int block)
 		// Fuzz this block
 		if (fuzz[i] < 0 || fuzz[i] == block + 1)
 		{
-			printf("fuzzing block %d\n", block);
-			for (i = 0; i < FZ_LN; i++)
-			{
-				printf("%d ", fuzz[i] - 1);
-			}
-			printf("\n");
 			errno = -1;
 			return -1;
 		}

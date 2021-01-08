@@ -228,7 +228,7 @@ int test_values(xmlNode *root_element, ne_erasure *epat, size_t iosz, size_t par
    void *iobuff = malloc(iosz);
    if (iobuff == NULL)
    {
-      printf("ERROR: FFailed to allocate space for an iobuffer!\n");
+      printf("ERROR: Failed to allocate space for an iobuffer!\n");
       return -1;
    }
 
