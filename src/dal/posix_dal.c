@@ -810,80 +810,87 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    bctxt->offset = 0;
    bctxt->mode = mode;
 
+   char *res = NULL;
+
+   // append the meta suffix and check for success
+   res = strncat(bctxt->filepath + bctxt->filelen, META_SFX, SFX_PADDING);
+   if (res != (bctxt->filepath + bctxt->filelen))
+   {
+      LOG(LOG_ERR, "failed to append meta suffix \"%s\" to file path!\n", META_SFX);
+      errno = EBADF;
+      free(bctxt->filepath);
+      free(bctxt);
+      return NULL;
+   }
+
+   int metalen = strlen(META_SFX);
+
    int oflags = O_WRONLY | O_CREAT | O_TRUNC;
    if (mode == DAL_READ)
    {
       LOG(LOG_INFO, "Open for READ\n");
       oflags = O_RDONLY;
    }
+   else if (mode == DAL_METAREAD)
+   {
+      LOG(LOG_INFO, "Open for METAREAD\n");
+      oflags = O_RDONLY;
+      bctxt->fd = -1;
+   }
    else
    {
-      char *res = NULL;
-
-      // append the meta suffix and check for success
-      res = strncat(bctxt->filepath + bctxt->filelen, META_SFX, SFX_PADDING);
-      if (res != (bctxt->filepath + bctxt->filelen))
+      // append the proper suffix and check for success
+      if (mode == DAL_WRITE)
       {
-         LOG(LOG_ERR, "failed to append meta suffix \"%s\" to file path!\n", META_SFX);
-         errno = EBADF;
-         free(bctxt->filepath);
-         free(bctxt);
-         return NULL;
+         res = strncat(bctxt->filepath + bctxt->filelen + metalen, WRITE_SFX, SFX_PADDING - metalen);
       }
-
-      int metalen = strlen(META_SFX);
-
-      // append the write suffix and check for success
-      res = strncat(bctxt->filepath + bctxt->filelen + metalen, WRITE_SFX, SFX_PADDING - metalen);
+      else if (mode == DAL_REBUILD)
+      {
+         res = strncat(bctxt->filepath + bctxt->filelen + metalen, REBUILD_SFX, SFX_PADDING - metalen);
+      }
       if (res != (bctxt->filepath + bctxt->filelen + metalen))
       {
-         LOG(LOG_ERR, "failed to append write suffix \"%s\" to file path!\n", WRITE_SFX);
+         LOG(LOG_ERR, "failed to append suffix to meta path!\n");
          errno = EBADF;
          free(bctxt->filepath);
          free(bctxt);
          return NULL;
       }
+   }
 
-      // open the file and check for success
-      bctxt->mfd = open(bctxt->filepath, O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
-      if (bctxt->mfd < 0)
+   // open the meta file and check for success
+   bctxt->mfd = open(bctxt->filepath, oflags, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
+   if (bctxt->mfd < 0)
+   {
+      LOG(LOG_ERR, "failed to open meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
+      free(bctxt->filepath);
+      free(bctxt);
+      return NULL;
+   }
+   // remove any suffix in the simplest possible manner
+   *(bctxt->filepath + bctxt->filelen) = '\0';
+
+   if (mode == DAL_WRITE || mode == DAL_REBUILD)
+   {
+      // append the proper suffix
+      if (mode == DAL_WRITE)
       {
-         LOG(LOG_ERR, "failed to open file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
+         LOG(LOG_INFO, "Open for WRITE\n");
+         res = strncat(bctxt->filepath + bctxt->filelen, WRITE_SFX, SFX_PADDING);
+      }
+      else if (mode == DAL_REBUILD)
+      {
+         LOG(LOG_INFO, "Open for REBUILD\n");
+         res = strncat(bctxt->filepath + bctxt->filelen, REBUILD_SFX, SFX_PADDING);
+      } // NOTE -- invalid mode will leave res == NULL
+      // check for success appending the suffix
+      if (res != (bctxt->filepath + bctxt->filelen))
+      {
+         LOG(LOG_ERR, "failed to append suffix to file path!\n");
+         errno = EBADF;
          free(bctxt->filepath);
          free(bctxt);
          return NULL;
-      }
-      // remove any suffix in the simplest possible manner
-      *(bctxt->filepath + bctxt->filelen) = '\0';
-
-      if (mode == DAL_METAREAD)
-      {
-         // we don't need to open a file descriptor, as we won't be touching data
-         LOG(LOG_INFO, "Open for METAREAD\n");
-         bctxt->fd = -1;
-      }
-      else
-      {
-         // append the proper suffix
-         if (mode == DAL_WRITE)
-         {
-            LOG(LOG_INFO, "Open for WRITE\n");
-            res = strncat(bctxt->filepath + bctxt->filelen, WRITE_SFX, SFX_PADDING);
-         }
-         else if (mode == DAL_REBUILD)
-         {
-            LOG(LOG_INFO, "Open for REBUILD\n");
-            res = strncat(bctxt->filepath + bctxt->filelen, REBUILD_SFX, SFX_PADDING);
-         } // NOTE -- invalid mode will leave res == NULL
-         // check for success appending the suffix
-         if (res != (bctxt->filepath + bctxt->filelen))
-         {
-            LOG(LOG_ERR, "failed to append suffix to file path!\n");
-            errno = EBADF;
-            free(bctxt->filepath);
-            free(bctxt);
-            return NULL;
-         }
       }
    }
 
@@ -898,28 +905,28 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
          free(bctxt);
          return NULL;
       }
-      // remove any suffix in the simplest possible manner
-      *(bctxt->filepath + bctxt->filelen) = '\0';
    }
+   // remove any suffix in the simplest possible manner
+   *(bctxt->filepath + bctxt->filelen) = '\0';
+
    // finally, return a reference to our BLOCK context
    return bctxt;
 }
 
 int posix_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
 {
-   POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
 
-   // abort, unless we're writing
-   if (bctxt->mode != DAL_WRITE && bctxt->mode != DAL_REBUILD && bctxt->mode != DAL_METAREAD)
+   if (ctxt == NULL)
    {
-      LOG(LOG_ERR, "Can only perform set_meta ops on a DAL_WRITE/REBUILD/METAREAD block handle!\n");
+      LOG(LOG_ERR, "received a NULL block context!\n");
       return -1;
    }
+   POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
 
    // write the provided buffer out to the sidecar file
    if (write(bctxt->mfd, meta_buf, size) != size)
    {
-      LOG(LOG_ERR, "failed to write buffer to meta file: \"%s\" (%s)\n", meta_path, strerror(errno));
+      LOG(LOG_ERR, "failed to write buffer to meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
       return -1;
    }
 
@@ -935,39 +942,18 @@ ssize_t posix_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
    }
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
 
-   // append the meta suffix and check for success
-   char *res = strncat(bctxt->filepath + bctxt->filelen, META_SFX, SFX_PADDING);
-   if (res != (bctxt->filepath + bctxt->filelen))
-   {
-      LOG(LOG_ERR, "failed to append meta suffix \"%s\" to file path!\n", META_SFX);
-      errno = EBADF;
-      return -1;
-   }
-
-   // open the meta sidecar file and check for success
-   int mfd = open(bctxt->filepath, O_RDONLY);
-   if (mfd < 0)
-   {
-      LOG(LOG_ERR, "failed to open meta file \"%s\" for read (%s)\n", bctxt->filepath, strerror(errno));
-      *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
-      return -1;
-   }
-
-   ssize_t result = read(mfd, meta_buf, size);
-
-   // close the meta file and check for success
-   if (close(mfd) != 0)
-   {
-      // failing this isn't actually all that relevant, probably still want to warn though
-      LOG(LOG_WARNING, "failed to close meta file \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
-   }
-   *(bctxt->filepath + bctxt->filelen) = '\0'; // make sure no suffix remains
+   ssize_t result = read(bctxt->mfd, meta_buf, size);
 
    return result;
 }
 
 int posix_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
 {
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
 
    // just a write to our pre-opened FD
@@ -988,6 +974,13 @@ ssize_t posix_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
       return -1;
    }
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
+
+   // abort, unless we're reading
+   if (bctxt->mode != DAL_READ)
+   {
+      LOG(LOG_ERR, "Can only perform get ops on a DAL_READ block handle!\n");
+      return -1;
+   }
 
    // check if we need to seek
    if (offset != bctxt->offset)
@@ -1061,8 +1054,8 @@ int posix_close(BLOCK_CTXT ctxt)
       return -1;
    }
 
-   // if this is not a read-only reference, attempt to close our meta FD and check for success
-   if ((bctxt->mode != DAL_READ) && (close(bctxt->mfd) != 0))
+   // attempt to close our meta FD and check for success
+   if (close(bctxt->mfd))
    {
       LOG(LOG_ERR, "failed to close meta file \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
       return -1;
@@ -1102,10 +1095,7 @@ int posix_close(BLOCK_CTXT ctxt)
          return -1;
       }
       free(write_path);
-   }
 
-   if (bctxt->mode != DAL_READ)
-   {
       // append the meta suffix and check for success
       res = strncat(bctxt->filepath + bctxt->filelen, META_SFX, SFX_PADDING);
       if (res != (bctxt->filepath + bctxt->filelen))
@@ -1117,8 +1107,15 @@ int posix_close(BLOCK_CTXT ctxt)
 
       int metalen = strlen(META_SFX);
 
-      // append the write suffix and check for success
-      res = strncat(bctxt->filepath + bctxt->filelen + metalen, WRITE_SFX, SFX_PADDING - metalen);
+      // append the proper suffix and check for success
+      if (bctxt->mode == DAL_WRITE)
+      {
+         res = strncat(bctxt->filepath + bctxt->filelen + metalen, WRITE_SFX, SFX_PADDING - metalen);
+      }
+      if (bctxt->mode == DAL_REBUILD)
+      {
+         res = strncat(bctxt->filepath + bctxt->filelen + metalen, REBUILD_SFX, SFX_PADDING - metalen);
+      }
       if (res != (bctxt->filepath + bctxt->filelen + metalen))
       {
          LOG(LOG_ERR, "failed to append write suffix \"%s\" to file path!\n", WRITE_SFX);

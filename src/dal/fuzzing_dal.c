@@ -249,6 +249,7 @@ int fuzzing_verify(DAL_CTXT ctxt, char fix)
 
 	if (check_fuzz(dctxt->verify, -1))
 	{
+		LOG(LOG_ERR, "Fuzzing DAL: fuzzing verify\n");
 		return -2;
 	}
 
@@ -259,8 +260,14 @@ int fuzzing_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_loca
 {
 	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
 
-	if (check_fuzz(dctxt->migrate, src.block) || check_fuzz(dctxt->migrate, dest.block))
+	if (check_fuzz(dctxt->migrate, src.block))
 	{
+		LOG(LOG_ERR, "Fuzzing DAL: fuzzing migrate source block %d\n", src.block);
+		return -1;
+	}
+	if (check_fuzz(dctxt->migrate, dest.block))
+	{
+		LOG(LOG_ERR, "Fuzzing DAL: fuzzing migrate destination block %d\n", dest.block);
 		return -1;
 	}
 
@@ -273,6 +280,7 @@ int fuzzing_del(DAL_CTXT ctxt, DAL_location location, const char *objID)
 
 	if (check_fuzz(dctxt->del, location.block))
 	{
+		LOG(LOG_ERR, "Fuzzing DAL: fuzzing del block %d\n", location.block);
 		return -2;
 	}
 
@@ -285,6 +293,7 @@ int fuzzing_stat(DAL_CTXT ctxt, DAL_location location, const char *objID)
 
 	if (check_fuzz(dctxt->stat, location.block))
 	{
+		LOG(LOG_ERR, "Fuzzing DAL: fuzzing stat block %d\n", location.block);
 		return -2;
 	}
 
@@ -297,6 +306,7 @@ int fuzzing_cleanup(DAL dal)
 
 	if (check_fuzz(dctxt->cleanup, -1))
 	{
+		LOG(LOG_ERR, "Fuzzing DAL: fuzzing cleanup\n");
 		return -2;
 	}
 
@@ -317,6 +327,7 @@ BLOCK_CTXT fuzzing_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, con
 
 	if (check_fuzz(dctxt->open, location.block))
 	{
+		LOG(LOG_ERR, "Fuzzing DAL: fuzzing open block %d\n", location.block);
 		return NULL;
 	}
 
@@ -344,10 +355,17 @@ BLOCK_CTXT fuzzing_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, con
 
 int fuzzing_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
 {
+	if (ctxt == NULL)
+	{
+		LOG(LOG_ERR, "received a NULL block context!\n");
+		return -1;
+	}
+
 	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
 	if (check_fuzz(bctxt->global_ctxt->set_meta, bctxt->loc.block))
 	{
+		LOG(LOG_ERR, "Fuzzing DAL: fuzzing set_meta block %d\n", bctxt->loc.block);
 		return -2;
 	}
 
@@ -356,10 +374,17 @@ int fuzzing_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
 
 ssize_t fuzzing_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
 {
+	if (ctxt == NULL)
+	{
+		LOG(LOG_ERR, "received a NULL block context!\n");
+		return -1;
+	}
+
 	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
 	if (check_fuzz(bctxt->global_ctxt->get_meta, bctxt->loc.block))
 	{
+		LOG(LOG_ERR, "Fuzzing DAL: fuzzing get_meta block %d\n", bctxt->loc.block);
 		return -2;
 	}
 
@@ -368,10 +393,17 @@ ssize_t fuzzing_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
 
 int fuzzing_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
 {
+	if (ctxt == NULL)
+	{
+		LOG(LOG_ERR, "received a NULL block context!\n");
+		return -1;
+	}
+
 	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
 	if (check_fuzz(bctxt->global_ctxt->put, bctxt->loc.block))
 	{
+		LOG(LOG_ERR, "Fuzzing DAL: fuzzing put block %d\n", bctxt->loc.block);
 		return -2;
 	}
 
@@ -380,10 +412,17 @@ int fuzzing_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
 
 ssize_t fuzzing_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
 {
+	if (ctxt == NULL)
+	{
+		LOG(LOG_ERR, "received a NULL block context!\n");
+		return -1;
+	}
+
 	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
 	if (check_fuzz(bctxt->global_ctxt->get, bctxt->loc.block))
 	{
+		LOG(LOG_ERR, "Fuzzing DAL: fuzzing get block %d\n", bctxt->loc.block);
 		return -2;
 	}
 
@@ -392,10 +431,17 @@ ssize_t fuzzing_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
 
 int fuzzing_abort(BLOCK_CTXT ctxt)
 {
+	if (ctxt == NULL)
+	{
+		LOG(LOG_ERR, "received a NULL block context!\n");
+		return -1;
+	}
+
 	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
 	if (check_fuzz(bctxt->global_ctxt->abort, bctxt->loc.block))
 	{
+		LOG(LOG_ERR, "Fuzzing DAL: fuzzing abort block %d\n", bctxt->loc.block);
 		return -2;
 	}
 
@@ -411,10 +457,17 @@ int fuzzing_abort(BLOCK_CTXT ctxt)
 
 int fuzzing_close(BLOCK_CTXT ctxt)
 {
+	if (ctxt == NULL)
+	{
+		LOG(LOG_ERR, "received a NULL block context!\n");
+		return -1;
+	}
+
 	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
 	if (check_fuzz(bctxt->global_ctxt->close, bctxt->loc.block))
 	{
+		LOG(LOG_ERR, "Fuzzing DAL: fuzzing close block %d\n", bctxt->loc.block);
 		return -2;
 	}
 

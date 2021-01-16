@@ -62,8 +62,8 @@
 <DAL type="fuzzing">
 	<dir_template>./stripefile.{b}</dir_template>
 	<fuzzing>
-      <put></put>
-      <get_meta></get_meta>
+            <put>1</put>
+            <get_meta></get_meta>
 	</fuzzing>
 </DAL>
 
