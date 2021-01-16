@@ -863,9 +863,12 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    if (bctxt->mfd < 0)
    {
       LOG(LOG_ERR, "failed to open meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
-      free(bctxt->filepath);
-      free(bctxt);
-      return NULL;
+      if (mode == DAL_METAREAD)
+      {
+         free(bctxt->filepath);
+         free(bctxt);
+         return NULL;
+      }
    }
    // remove any suffix in the simplest possible manner
    *(bctxt->filepath + bctxt->filelen) = '\0';
