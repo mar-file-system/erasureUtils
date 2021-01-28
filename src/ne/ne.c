@@ -965,7 +965,7 @@ int read_stripes(ne_handle handle)
 ne_ctxt ne_path_init(const char *path, ne_location max_loc, int max_block)
 {
    // create a stand-in XML config
-   char *configtemplate = "<DAL type=\"posix\"><dir_template>%s</dir_template></DAL>";
+   char *configtemplate = "<DAL type=\"posix\"><dir_template>%s</dir_template><sec_root></sec_root></DAL>";
    int len = strlen(path) + strlen(configtemplate);
    char *xmlconfig = malloc(len);
    if (xmlconfig == NULL)

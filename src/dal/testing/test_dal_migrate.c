@@ -11,7 +11,7 @@ SECURITY, LLC MAKES ANY WARRANTY, EXPRESS OR IMPLIED, OR ASSUMES ANY LIABILITY
 FOR THE USE OF THIS SOFTWARE.  If software is modified to produce derivative
 works, such modified software should be clearly marked, so as not to confuse it
 with the version available from LANL.
- 
+
 Additionally, redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
 1. Redistributions of source code must retain the above copyright notice, this
@@ -58,17 +58,15 @@ LANL contributions is found at https://github.com/jti-lanl/aws4c.
 GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
-
 #include "dal/dal.h"
 #include <unistd.h>
 #include <stdio.h>
 
-int main( int argc, char** argv ) {
-   
+int main(int argc, char **argv)
+{
 
    xmlDoc *doc = NULL;
    xmlNode *root_element = NULL;
-
 
    /*
    * this initialize the library and check potential ABI mismatches
@@ -80,17 +78,18 @@ int main( int argc, char** argv ) {
    /*parse the file and get the DOM */
    doc = xmlReadFile("./testing/config.xml", NULL, XML_PARSE_NOBLANKS);
 
-   if (doc == NULL) {
-     printf("error: could not parse file %s\n", "./dal/testing/config.xml");
-     return -1;
+   if (doc == NULL)
+   {
+      printf("error: could not parse file %s\n", "./dal/testing/config.xml");
+      return -1;
    }
 
    /*Get the root element node */
    root_element = xmlDocGetRootElement(doc);
 
    // Initialize a posix dal instance
-   DAL_location maxloc = { .pod = 3, .block = 3, .cap = 3, .scatter = 3 };
-   DAL dal = init_dal( root_element, maxloc );
+   DAL_location maxloc = {.pod = 3, .block = 3, .cap = 3, .scatter = 3};
+   DAL dal = init_dal(root_element, maxloc);
 
    /* Free the xml Doc */
    xmlFreeDoc(doc);
@@ -101,117 +100,211 @@ int main( int argc, char** argv ) {
    xmlCleanupParser();
 
    // check that initialization succeeded
-   if ( dal == NULL ) {
-      printf( "error: failed to initialize DAL: %s\n", strerror(errno) );
+   if (dal == NULL)
+   {
+      printf("error: failed to initialize DAL: %s\n", strerror(errno));
       return -1;
    }
 
- 
    // Open, write to, and set meta info for a specific block
-   void* writebuffer = calloc( 10, 1024 );
-   if ( writebuffer == NULL ) { printf( "error: failed to allocate write buffer\n" ); return -1; }
-   BLOCK_CTXT block = dal->open( dal->ctxt, DAL_WRITE, maxloc, "" );
-   if ( block == NULL ) { printf( "error: failed to open block context for write: %s\n", strerror(errno) ); return -1; }
-   if ( dal->put( block, writebuffer, (10*1024) ) ) {
-      printf( "warning: put did not return expected value\n" );
+   void *writebuffer = calloc(10, 1024);
+   if (writebuffer == NULL)
+   {
+      printf("error: failed to allocate write buffer\n");
+      return -1;
    }
-   char* meta_val = "this is a meta value!\n";
-   if ( dal->set_meta( block, meta_val, 22 ) ) {
-      printf( "warning: set_meta did not return expected value\n" );
+   BLOCK_CTXT block = dal->open(dal->ctxt, DAL_WRITE, maxloc, "");
+   if (block == NULL)
+   {
+      printf("error: failed to open block context for write: %s\n", strerror(errno));
+      return -1;
    }
-   if ( dal->close( block ) ) { printf( "error: failed to close block write context: %s\n", strerror(errno) ); return -1; }
+   if (dal->put(block, writebuffer, (10 * 1024)))
+   {
+      printf("warning: put did not return expected value\n");
+   }
+   char *meta_val = "this is a meta value!\n";
+   if (dal->set_meta(block, meta_val, 22))
+   {
+      printf("warning: set_meta did not return expected value\n");
+   }
+   if (dal->close(block))
+   {
+      printf("error: failed to close block write context: %s\n", strerror(errno));
+      return -1;
+   }
 
    // Open the same block for read and verify all values
-   void* readbuffer = malloc( sizeof(char) * 10 * 1024 );
-   if ( readbuffer == NULL ) { printf( "error: failed to allocate read buffer\n" ); return -1; }
-   block = dal->open( dal->ctxt, DAL_READ, maxloc, "" );
-   if ( block == NULL ) { printf( "error: failed to open block context for read: %s\n", strerror(errno) ); return -1; }
-   if ( dal->get( block, readbuffer, (10*1024), 0 ) != (10*1024) ) {
-      printf( "warning: get did not return expected value\n" );
+   void *readbuffer = malloc(sizeof(char) * 10 * 1024);
+   if (readbuffer == NULL)
+   {
+      printf("error: failed to allocate read buffer\n");
+      return -1;
    }
-   if ( memcmp( writebuffer, readbuffer, (10*1024) ) ) { printf( "warning: retrieved data does not match written!\n" ); }
-   if ( dal->get_meta( block, readbuffer, (10*1024) ) != 22 ) {
-      printf( "warning: get_meta returned an unexpected value\n" );
+   block = dal->open(dal->ctxt, DAL_READ, maxloc, "");
+   if (block == NULL)
+   {
+      printf("error: failed to open block context for read: %s\n", strerror(errno));
+      return -1;
    }
-   if ( strncmp( meta_val, readbuffer, 22 ) ) { printf( "warning: retrieved meta value does not match written!\n" ); }
-   if ( dal->close( block ) ) { printf( "error: failed to close block read context: %s\n", strerror(errno) ); return -1; }
+   if (dal->get(block, readbuffer, (10 * 1024), 0) != (10 * 1024))
+   {
+      printf("warning: get did not return expected value\n");
+   }
+   if (memcmp(writebuffer, readbuffer, (10 * 1024)))
+   {
+      printf("warning: retrieved data does not match written!\n");
+   }
+   if (dal->get_meta(block, readbuffer, (10 * 1024)) != 22)
+   {
+      printf("warning: get_meta returned an unexpected value\n");
+   }
+   if (strncmp(meta_val, readbuffer, 22))
+   {
+      printf("warning: retrieved meta value does not match written!\n");
+   }
+   if (dal->close(block))
+   {
+      printf("error: failed to close block read context: %s\n", strerror(errno));
+      return -1;
+   }
 
-   printf( "Performing offline migration\n" );
-   DAL_location locA = { .pod = 1, .block = 1, .cap = 1, .scatter = 1 };
-   int res = dal->migrate( dal->ctxt, "", maxloc, locA, 1);
-   if ( res ) {
-      printf( "error: migration failed!(%d)\n", res );
+   printf("Performing offline migration\n");
+   DAL_location locA = {.pod = 1, .block = 1, .cap = 1, .scatter = 1};
+   int res = dal->migrate(dal->ctxt, "", maxloc, locA, 1);
+   if (res)
+   {
+      printf("error: migration failed!(%d)\n", res);
       return -1;
    }
 
    // Ensure the src was invalidated
-   if( dal->stat( dal->ctxt, maxloc, "" ) == 0 ) {
-      printf( "error: old location not invalidated!\n" );
+   if (dal->stat(dal->ctxt, maxloc, "") == 0)
+   {
+      printf("error: old location not invalidated!\n");
       return -1;
    }
 
    // Open the same block at the new location for read and verify all values
-   BLOCK_CTXT blockA = dal->open( dal->ctxt, DAL_READ, locA, "" );
-   if ( blockA == NULL ) { printf( "error: failed to open block context for read: %s\n", strerror(errno) ); return -1; }
-   if ( dal->get( blockA, readbuffer, (10*1024), 0 ) != (10*1024) ) {
-      printf( "warning: get did not return expected value\n" );
+   BLOCK_CTXT blockA = dal->open(dal->ctxt, DAL_READ, locA, "");
+   if (blockA == NULL)
+   {
+      printf("error: failed to open block context for read: %s\n", strerror(errno));
+      return -1;
    }
-   if ( memcmp( writebuffer, readbuffer, (10*1024) ) ) { printf( "warning: retrieved data does not match written!\n" ); }
-   if ( dal->get_meta( blockA, readbuffer, (10*1024) ) != 22 ) {
-      printf( "warning: get_meta returned an unexpected value\n" );
+   if (dal->get(blockA, readbuffer, (10 * 1024), 0) != (10 * 1024))
+   {
+      printf("warning: get did not return expected value\n");
    }
-   if ( strncmp( meta_val, readbuffer, 22 ) ) { printf( "warning: retrieved meta value does not match written!\n" ); }
-   if ( dal->close( blockA ) ) { printf( "error: failed to close block read context: %s\n", strerror(errno) ); return -1; }
+   if (memcmp(writebuffer, readbuffer, (10 * 1024)))
+   {
+      printf("warning: retrieved data does not match written!\n");
+   }
+   if (dal->get_meta(blockA, readbuffer, (10 * 1024)) != 22)
+   {
+      printf("warning: get_meta returned an unexpected value\n");
+   }
+   if (strncmp(meta_val, readbuffer, 22))
+   {
+      printf("warning: retrieved meta value does not match written!\n");
+   }
+   if (dal->close(blockA))
+   {
+      printf("error: failed to close block read context: %s\n", strerror(errno));
+      return -1;
+   }
 
-   printf( "Performing online migration\n" );
-   DAL_location locB = { .pod = 2, .block = 2, .cap = 2, .scatter = 2 };
-   res = dal->migrate( dal->ctxt, "", locA, locB, 0);
-   if ( res ) {
-      printf( "error: migration failed!(%d)\n", res );
+   printf("Performing online migration\n");
+   DAL_location locB = {.pod = 2, .block = 2, .cap = 2, .scatter = 2};
+   res = dal->migrate(dal->ctxt, "", locA, locB, 0);
+   if (res)
+   {
+      printf("error: migration failed: %s\n", strerror(errno));
       return -1;
    }
 
    // Open the block at the old location for read and verify all values
-   blockA = dal->open( dal->ctxt, DAL_READ, locA, "" );
-   if ( blockA == NULL ) { printf( "error: failed to open blockA context for read: %s\n", strerror(errno) ); return -1; }
-   if ( dal->get( blockA, readbuffer, (10*1024), 0 ) != (10*1024) ) {
-      printf( "warning: blockA get did not return expected value\n" );
+   blockA = dal->open(dal->ctxt, DAL_READ, locA, "");
+   if (blockA == NULL)
+   {
+      printf("error: failed to open blockA context for read: %s\n", strerror(errno));
+      return -1;
    }
-   if ( memcmp( writebuffer, readbuffer, (10*1024) ) ) { printf( "warning: blockA retrieved data does not match written!\n" ); }
-   if ( dal->get_meta( blockA, readbuffer, (10*1024) ) != 22 ) {
-      printf( "warning: blockA get_meta returned an unexpected value\n" );
+   if (dal->get(blockA, readbuffer, (10 * 1024), 0) != (10 * 1024))
+   {
+      printf("warning: blockA get did not return expected value\n");
    }
-   if ( strncmp( meta_val, readbuffer, 22 ) ) { printf( "warning: blockA retrieved meta value does not match written!\n" ); }
-   if ( dal->close( blockA ) ) { printf( "error: failed to close blockA read context: %s\n", strerror(errno) ); return -1; }
+   if (memcmp(writebuffer, readbuffer, (10 * 1024)))
+   {
+      printf("warning: blockA retrieved data does not match written!\n");
+   }
+   if (dal->get_meta(blockA, readbuffer, (10 * 1024)) != 22)
+   {
+      printf("warning: blockA get_meta returned an unexpected value\n");
+   }
+   if (strncmp(meta_val, readbuffer, 22))
+   {
+      printf("warning: blockA retrieved meta value does not match written!\n");
+   }
+   if (dal->close(blockA))
+   {
+      printf("error: failed to close blockA read context: %s\n", strerror(errno));
+      return -1;
+   }
 
    // Open the same block at the new location for read and verify all values
-   BLOCK_CTXT blockB = dal->open( dal->ctxt, DAL_READ, locB, "" );
-   if ( blockB == NULL ) { printf( "error: failed to open blockB context for read: %s\n", strerror(errno) ); return -1; }
-   if ( dal->get( blockB, readbuffer, (10*1024), 0 ) != (10*1024) ) {
-      printf( "warning: blockB get did not return expected value\n" );
+   BLOCK_CTXT blockB = dal->open(dal->ctxt, DAL_READ, locB, "");
+   if (blockB == NULL)
+   {
+      printf("error: failed to open blockB context for read: %s\n", strerror(errno));
+      return -1;
    }
-   if ( memcmp( writebuffer, readbuffer, (10*1024) ) ) { printf( "warning: blockB retrieved data does not match written!\n" ); }
-   if ( dal->get_meta( blockB, readbuffer, (10*1024) ) != 22 ) {
-      printf( "warning: blockB get_meta returned an unexpected value\n" );
+   if (dal->get(blockB, readbuffer, (10 * 1024), 0) != (10 * 1024))
+   {
+      printf("warning: blockB get did not return expected value\n");
    }
-   if ( strncmp( meta_val, readbuffer, 22 ) ) { printf( "warning: blockB retrieved meta value does not match written!\n" ); }
-   if ( dal->close( blockB ) ) { printf( "error: failed to close blockB read context: %s\n", strerror(errno) ); return -1; }
+   if (memcmp(writebuffer, readbuffer, (10 * 1024)))
+   {
+      printf("warning: blockB retrieved data does not match written!\n");
+   }
+   if (dal->get_meta(blockB, readbuffer, (10 * 1024)) != 22)
+   {
+      printf("warning: blockB get_meta returned an unexpected value\n");
+   }
+   if (strncmp(meta_val, readbuffer, 22))
+   {
+      printf("warning: blockB retrieved meta value does not match written!\n");
+   }
+   if (dal->close(blockB))
+   {
+      printf("error: failed to close blockB read context: %s\n", strerror(errno));
+      return -1;
+   }
 
-
-   // Delete the block we created
-   if ( dal->del( dal->ctxt, maxloc, "" ) ) { printf( "warning: del failed on maxloc!\n" ); }
-   if ( dal->del( dal->ctxt, locA, "" ) ) { printf( "warning: del failed on locA!\n" ); }
-   if ( dal->del( dal->ctxt, locB, "" ) ) { printf( "warning: del failed on locB!\n" ); }
+   // Delete the blocks we created
+   if (dal->del(dal->ctxt, maxloc, ""))
+   {
+      printf("warning: del failed on maxloc!\n");
+   }
+   if (dal->del(dal->ctxt, locA, ""))
+   {
+      printf("warning: del failed on locA!\n");
+   }
+   if (dal->del(dal->ctxt, locB, ""))
+   {
+      printf("warning: del failed on locB!\n");
+   }
 
    // Free the DAL
-   if ( dal->cleanup( dal ) ) { printf( "error: failed to cleanup DAL\n" ); return -1; }
+   if (dal->cleanup(dal))
+   {
+      printf("error: failed to cleanup DAL\n");
+      return -1;
+   }
 
    /*free the document */
-   free( writebuffer );
-   free( readbuffer );
+   free(writebuffer);
+   free(readbuffer);
 
    return 0;
-
 }
-
-

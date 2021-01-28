@@ -59,5 +59,6 @@
 -->
 
 <DAL type="posix">
-   <dir_template>./stripefile.{b}</dir_template>
+   <dir_template>stripefile.{b}</dir_template>
+   <sec_root>./</sec_root>
 </DAL>

@@ -28,11 +28,16 @@ m4/lt*.m4
 
 # Build/Vim artifacts
 src/dal/test_dal
+src/dal/test_dal_abort
+src/dal/test_dal_migrate
+src/dal/test_dal_fuzzing
+src/dal/test_dal_fuzzing_put
 src/io/test_ioqueue
 src/io/test_iothreads
 src/io/test_metainfo
 src/ne/neutil
 src/ne/testing/test_libne_io
+src/ne/testing/test_libne_fuzzing
 src/thread_queue/test_threadqueue
 src/*/.libs
 src/*/testing/.libs

@@ -130,7 +130,7 @@ int main(int argc, char **argv)
     printf("warning: set_meta did not return expected value\n");
   }
   */
-  if (dal->abort(block))
+  if (dal->close(block))
   {
     printf("error: failed to close block write context: %s\n", strerror(errno));
     return -1;
