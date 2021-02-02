@@ -56,9 +56,15 @@
    LANL contributions is found at https://github.com/jti-lanl/aws4c.
 
    GNU licenses can be found at http://www.gnu.org/licenses/.
+
 -->
 
-<DAL type="posix">
-   <dir_template>stripefile.{b}</dir_template>
+<DAL type="fuzzing">
+	<dir_template>stripefile.{b}</dir_template>
    <sec_root>./</sec_root>
+	<fuzzing>
+            <put>1</put>
+            <get_meta></get_meta>
+	</fuzzing>
 </DAL>
+

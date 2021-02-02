@@ -10,7 +10,7 @@
 #FOR THE USE OF THIS SOFTWARE.  If software is modified to produce derivative
 #works, such modified software should be clearly marked, so as not to confuse it
 #with the version available from LANL.
-# 
+#
 #Additionally, redistribution and use in source and binary forms, with or without
 #modification, are permitted provided that the following conditions are met:
 #1. Redistributions of source code must retain the above copyright notice, this
@@ -66,16 +66,32 @@ noinst_LTLIBRARIES = libdal.la
 
 SIDE_LIBS = ../logging/liblog.la
 
-libdal_la_SOURCES = posix_dal.c dal.c
+libdal_la_SOURCES = posix_dal.c dal.c fuzzing_dal.c
 libdal_la_CFLAGS = $(XML_CFLAGS)
 DAL_LIB = libdal.la
 
 # ---
-check_PROGRAMS = test_dal
+check_PROGRAMS = test_dal test_dal_abort test_dal_migrate test_dal_fuzzing test_dal_fuzzing_put
 
 test_dal_SOURCES = testing/test_dal.c
 test_dal_LDADD = $(DAL_LIB) $(SIDE_LIBS)
 test_dal_CFLAGS= $(XML_CFLAGS)
 
-TESTS = test_dal
+test_dal_abort_SOURCES = testing/test_dal_abort.c
+test_dal_abort_LDADD = $(DAL_LIB) $(SIDE_LIBS)
+test_dal_abort_CFLAGS= $(XML_CFLAGS)
+
+test_dal_migrate_SOURCES = testing/test_dal_migrate.c
+test_dal_migrate_LDADD = $(DAL_LIB) $(SIDE_LIBS)
+test_dal_migrate_CFLAGS= $(XML_CFLAGS)
+
+test_dal_fuzzing_SOURCES = testing/test_dal_fuzzing.c
+test_dal_fuzzing_LDADD = $(DAL_LIB) $(SIDE_LIBS)
+test_dal_fuzzing_CFLAGS= $(XML_CFLAGS)
+
+test_dal_fuzzing_put_SOURCES = testing/test_dal_fuzzing_put.c
+test_dal_fuzzing_put_LDADD = $(DAL_LIB) $(SIDE_LIBS)
+test_dal_fuzzing_put_CFLAGS= $(XML_CFLAGS)
+
+TESTS = test_dal test_dal_abort test_dal_migrate test_dal_fuzzing test_dal_fuzzing_put
 

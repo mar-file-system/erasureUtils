@@ -10,7 +10,7 @@
 #FOR THE USE OF THIS SOFTWARE.  If software is modified to produce derivative
 #works, such modified software should be clearly marked, so as not to confuse it
 #with the version available from LANL.
-# 
+#
 #Additionally, redistribution and use in source and binary forms, with or without
 #modification, are permitted provided that the following conditions are met:
 #1. Redistributions of source code must retain the above copyright notice, this
@@ -80,16 +80,20 @@ neutil_CFLAGS  = $(XML_CFLAGS)
 
 # ---
 
-check_PROGRAMS = testing/test_libne_io #data_shredder
+check_PROGRAMS = testing/test_libne_io testing/test_libne_fuzzing #data_shredder
 
 testing_test_libne_io_SOURCES = testing/test_libne_io.c
 testing_test_libne_io_LDADD   = $(NE_LIBS)
 testing_test_libne_io_CFLAGS  = $(XML_CFLAGS)
 
+testing_test_libne_fuzzing_SOURCES = testing/test_libne_fuzzing.c
+testing_test_libne_fuzzing_LDADD   = $(NE_LIBS)
+testing_test_libne_fuzzing_CFLAGS  = $(XML_CFLAGS)
+
 check_SCRIPTS = testing/erasureTest
 
 #data_shredder_SOURCES = testing/data_shredder.c
 
-TESTS = testing/test_libne_io testing/erasureTest
+TESTS = testing/test_libne_io testing/test_libne_fuzzing testing/erasureTest
 
 

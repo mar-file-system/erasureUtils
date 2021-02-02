@@ -69,7 +69,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #include <ctype.h>
 
-
 // Function to provide specific DAL initialization calls based on name
 DAL init_dal( xmlNode* dal_conf_root, DAL_location max_loc ) {
    // make sure we start on a 'DAL' node
@@ -107,6 +106,10 @@ DAL init_dal( xmlNode* dal_conf_root, DAL_location max_loc ) {
    if (  strncasecmp( (char*)typetxt->content, "posix", 6 ) == 0 ) {
       return posix_dal_init( dal_conf_root->children, max_loc );
    }
+   else if (  strncasecmp( (char*)typetxt->content, "fuzzing", 8 ) == 0 ) {
+      return fuzzing_dal_init( dal_conf_root->children, max_loc );
+   }
+   
 
    // if no DAL found, return NULL
    LOG( LOG_ERR, "failed to identify a DAL of type: \"%s\"\n", typetxt->content );

@@ -791,6 +791,9 @@ int tq_get_opts( ThreadQueue tq, TQ_Init_Opts* opts, int log_strlen ) {
       opts->thread_pause_func = tq->prod_pool->thread_pause_func;
       opts->thread_resume_func = tq->prod_pool->thread_resume_func;
       opts->thread_term_func = tq->prod_pool->thread_term_func;
+      if ( tq->cons_pool ) {
+         opts->thread_consumer_func = tq->cons_pool->thread_work_func;
+      }
    }
    else {
       opts->thread_init_func = tq->cons_pool->thread_init_func; // should be safe from either pool

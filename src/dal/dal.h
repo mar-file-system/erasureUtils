@@ -123,7 +123,9 @@ typedef struct DAL_struct {
       //  Note - this function should always fail if asked to alter only the 'block' value of an object location.
       //  (Intended to avoid overwriting existing object parts)
       // Return Values:
-      //  Zero on success, Non-zero if the operation could not be completed
+      //  Positive on success, negative if the operation could not be completed. 0 if complete success. 1 if the 
+      //  object is relocated, but the 'src' location is not successfully invalidated. -2 if the operation could 
+      //  not be completed but there may be some duplicate (data and/or meta) data at the 'dest' location.
    int (*del) ( DAL_CTXT ctxt, DAL_location location, const char* objID );
       // Description:
       //  Delete the DAL object identified by the given ID, at the given location.
@@ -183,7 +185,7 @@ typedef struct DAL_struct {
 
 // Forward decls of specific DAL initializations
 DAL posix_dal_init( xmlNode* posix_dal_conf_root, DAL_location max_loc );
-
+DAL fuzzing_dal_init( xmlNode* fuzzing_dal_conf_root, DAL_location max_loc );
 
 // Function to provide specific DAL initialization calls based on name
 DAL init_dal( xmlNode* dal_conf_root, DAL_location max_loc );// {
