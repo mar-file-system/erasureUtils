@@ -608,6 +608,13 @@ int posix_verify(DAL_CTXT ctxt, char fix)
 
 int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_location dest, char offline)
 {
+   // fail if only the block is different
+   if (src.pod == dest.pod && src.cap == dest.cap && src.scatter == dest.scatter)
+   {
+      LOG(LOG_ERR, "received identical locations!\n");
+      return -1;
+   }
+
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a posix context
 
    POSIX_BLOCK_CTXT srcctxt = malloc(sizeof(struct posix_block_context_struct));
