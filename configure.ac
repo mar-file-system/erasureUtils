@@ -116,6 +116,8 @@ AC_CHECK_LIB([pthread], [pthread_create], [], [AC_MSG_ERROR(["Could not locate l
 
 AC_CHECK_LIB([xml2], [xmlReadFile], [], [AC_MSG_ERROR(["Could not locate libxml2!"])])
 
+AC_CHECK_LIB([s3], [S3_initialize], [], [AC_MSG_ERROR(["Could not locate libs3!"])])
+
 PKG_CHECK_MODULES( XML, libxml-2.0 )
 
 AC_CHECK_LIB([isal],    [crc32_ieee],

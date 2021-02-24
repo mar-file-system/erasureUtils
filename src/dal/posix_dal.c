@@ -142,7 +142,7 @@ int check_loc_limits(DAL_location loc, const DAL_location *max_loc)
  * @param int value : Integer value to be represented in decimal
  * @return int : Number of decimal digits required, or -1 on a bounds error
  */
-int num_digits(int value)
+static int num_digits(int value)
 {
    if (value < 0)
    {
@@ -1342,36 +1342,39 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
             parse++; // next char
          }
 
-         // find the secure root node. Fail if there is none
-         while (root->type != XML_ELEMENT_NODE || strncmp((char *)root->name, "sec_root", 9) != 0)
-         {
-            root = root->next;
-            if (root == NULL)
-            {
-               LOG(LOG_ERR, "failed to find \"secure root\" node\n");
-               free(dctxt);
-               errno = EINVAL;
-               return NULL;
-            }
-         }
+         size_t io_size = IO_SIZE;
 
-         // make sure that node contains a text element within it and update secure root handle
          dctxt->sec_root = -1;
          errno = EINVAL;
 
-         if (root->children == NULL)
+         // find the secure root node and io size
+         while (root != NULL)
          {
-            dctxt->sec_root = AT_FDCWD;
-         }
-         else if (root->children->type == XML_TEXT_NODE)
-         {
-            dctxt->sec_root = open((char *)root->children->content, O_DIRECTORY);
+            if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "sec_root", 9) == 0)
+            {
+               if (root->children == NULL)
+               {
+                  dctxt->sec_root = AT_FDCWD;
+               }
+               else if (root->children->type == XML_TEXT_NODE)
+               {
+                  dctxt->sec_root = open((char *)root->children->content, O_DIRECTORY);
+               }
+            }
+            else if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "io_size", 8) == 0)
+            {
+               if (atol((char *)root->children->content))
+               {
+                  io_size = atol((char *)root->children->content);
+               }
+            }
+            root = root->next;
          }
 
-         // make sure the secure root handle is valid
+         // make sure the secure root handle was set
          if (dctxt->sec_root == -1)
          {
-            LOG(LOG_ERR, "failed to open secure root handle\n");
+            LOG(LOG_ERR, "failed to find or open secure root handle\n");
             free(dctxt);
             return NULL;
          }
@@ -1386,7 +1389,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
          } // malloc will set errno
          pdal->name = "posix";
          pdal->ctxt = (DAL_CTXT)dctxt;
-         pdal->io_size = IO_SIZE;
+         pdal->io_size = io_size;
          pdal->verify = posix_verify;
          pdal->migrate = posix_migrate;
          pdal->open = posix_open;
