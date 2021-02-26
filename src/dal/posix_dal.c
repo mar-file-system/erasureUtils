@@ -70,6 +70,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <pwd.h>
+#include <unistd.h>
 
 //   -------------    POSIX DEFINITIONS    -------------
 
@@ -172,34 +174,11 @@ static int num_digits(int value)
    return -1;
 }
 
-/** (INTERNAL HELPER FUNCTION)
- * Perform necessary string substitutions/calculations to populate all values in a new POSIX_BLOCK_CTXT
- * @param POSIX_DAL_CTXT dctxt : Context reference of the current POSIX DAL
- * @param POSIX_BLOCK_CTXT bctxt : Block context to be populated
- * @param DAL_location loc : Location of the object to be referenced by bctxt
- * @param const char* objID : Object ID to be referenced by bctxt
- * @return int : Zero on success, -1 on failure
- */
-int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_location loc, const char *objID)
+static char *expand_path(const char *parse, char *fill, DAL_location loc, DAL_location *loc_flags, int dir)
 {
-   // check that our DAL_location is within bounds
-   if (check_loc_limits(loc, &(dctxt->max_loc)) != 0)
-   {
-      errno = EDOM;
-      return -1;
-   }
-
-   //
-   bctxt->sfd = dctxt->sec_root;
-
-   // allocate string to hold the dirpath
-   // NOTE -- allocation size is an estimate, based on the above pod/block/cap/scat limits
-   bctxt->filepath = malloc(sizeof(char) * (dctxt->tmplen + dctxt->dirpad + strlen(objID) + SFX_PADDING + 1));
-
-   // parse through the directory template string, populating filepath as we go
-   const char *parse = dctxt->dirtmp;
-   char *fill = bctxt->filepath;
    char escp = 0;
+   char *end = fill;
+
    while (*parse != '\0')
    {
 
@@ -233,18 +212,34 @@ int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locati
             if (*parse == 'p')
             {
                fillval = loc.pod;
+               if (loc_flags)
+               {
+                  loc_flags->pod = 1;
+               }
             }
             else if (*parse == 'b')
             {
                fillval = loc.block;
+               if (loc_flags)
+               {
+                  loc_flags->block = 1;
+               }
             }
             else if (*parse == 'c')
             {
                fillval = loc.cap;
+               if (loc_flags)
+               {
+                  loc_flags->cap = 1;
+               }
             }
             else if (*parse == 's')
             {
                fillval = loc.scatter;
+               if (loc_flags)
+               {
+                  loc_flags->scatter = 1;
+               }
             }
             else
             {
@@ -267,13 +262,17 @@ int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locati
             {
                // if snprintf failed for some reason, we can't recover
                LOG(LOG_ERR, "snprintf failed when attempting dir_template substitution!\n");
-               free(bctxt->filepath);
-               bctxt->filepath = NULL;
-               return -1;
+               return NULL;
             }
             fill += fillval; // update fill pointer to refernce the new end of the string
             parse++;         // skip over the '}' character that we have already verified
          }
+         break;
+
+      case '/': // check for the end of a directory
+         *fill = *parse;
+         fill++;
+         end = fill;
          break;
 
       default:
@@ -289,6 +288,47 @@ int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locati
 
       parse++;
    }
+   if (dir)
+   {
+      *end = '\0';
+   }
+   return fill;
+}
+
+/** (INTERNAL HELPER FUNCTION)
+ * Perform necessary string substitutions/calculations to populate all values in a new POSIX_BLOCK_CTXT
+ * @param POSIX_DAL_CTXT dctxt : Context reference of the current POSIX DAL
+ * @param POSIX_BLOCK_CTXT bctxt : Block context to be populated
+ * @param DAL_location loc : Location of the object to be referenced by bctxt
+ * @param const char* objID : Object ID to be referenced by bctxt
+ * @return int : Zero on success, -1 on failure
+ */
+static int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_location loc, const char *objID)
+{
+   // check that our DAL_location is within bounds
+   if (check_loc_limits(loc, &(dctxt->max_loc)) != 0)
+   {
+      errno = EDOM;
+      return -1;
+   }
+
+   //
+   bctxt->sfd = dctxt->sec_root;
+
+   // allocate string to hold the dirpath
+   // NOTE -- allocation size is an estimate, based on the above pod/block/cap/scat limits
+   bctxt->filepath = malloc(sizeof(char) * (dctxt->tmplen + dctxt->dirpad + strlen(objID) + SFX_PADDING + 1));
+
+   // parse through the directory template string, populating filepath as we go
+   const char *parse = dctxt->dirtmp;
+   char *fill = bctxt->filepath;
+   if (!(fill = expand_path(parse, fill, loc, NULL, 0)))
+   {
+      free(bctxt->filepath);
+      bctxt->filepath = NULL;
+      return -1;
+   }
+
    // parse through the given objID, populating filepath as we go
    parse = objID;
    while (*parse != '\0')
@@ -326,7 +366,7 @@ int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locati
  *                          1 - ALL data/meta files
  * @return int : Zero on success, -1 on failure
  */
-int block_delete(POSIX_BLOCK_CTXT bctxt, char components)
+static int block_delete(POSIX_BLOCK_CTXT bctxt, char components)
 {
    char *working_suffix = WRITE_SFX;
    if (bctxt->mode == DAL_REBUILD)
@@ -417,7 +457,7 @@ int block_delete(POSIX_BLOCK_CTXT bctxt, char components)
  * @param char* newpath : Path to our destination location (relative to the same source root as oldpath)
  * @return char* : Path to oldpath's location relative to newpath's location. NULL on failure
  */
-char *convert_relative(char *oldpath, char *newpath)
+static char *convert_relative(char *oldpath, char *newpath)
 {
    // check that both paths exist
    if (oldpath == NULL || newpath == NULL)
@@ -471,6 +511,38 @@ char *convert_relative(char *oldpath, char *newpath)
    }
 
    return result - 3 * nBack;
+}
+
+static int r_mkdirat(int dirfd, char *pathname, mode_t mode)
+{
+   char *parse = pathname;
+   int num_err = 0;
+   struct stat info;
+   while (*parse != '\0')
+   {
+      if (*parse == '/')
+      {
+         *parse = '\0';
+         if (fstatat(dirfd, pathname, &info, 0) || !S_ISDIR(info.st_mode))
+         {
+            if (mkdirat(dirfd, pathname, mode))
+            {
+               LOG(LOG_ERR, "failed to create directory \"%s\" (%s)\n", pathname, strerror(errno));
+               num_err++;
+               *parse = '/';
+               return num_err;
+            }
+            else
+            {
+               LOG(LOG_INFO, "successfully created directory \"%s\"\n", pathname);
+            }
+         }
+         *parse = '/';
+      }
+      parse++;
+   }
+   mkdirat(dirfd, pathname, mode);
+   return num_err;
 }
 
 // forward-declarations to allow these functions to be used in manual_migrate
@@ -602,8 +674,116 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
 
 int posix_verify(DAL_CTXT ctxt, char fix)
 {
-   errno = ENOSYS;
-   return -1; // TODO -- actually write this
+   uid_t uid = geteuid();
+   if (uid != 0)
+   {
+      LOG(LOG_ERR, "verify must be run as root (%d)\n", uid);
+      return -1;
+   }
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return -1;
+   }
+   POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a s3 context
+
+   int num_err = 0;
+   struct stat info;
+
+   if (fstat(dctxt->sec_root, &info) || !S_ISDIR(info.st_mode))
+   {
+      LOG(LOG_ERR, "failed to verify secure root exists (%s)\n", strerror(errno));
+      return ++num_err;
+   }
+   struct passwd *pw;
+   if (!(pw = getpwuid(info.st_uid)))
+   {
+      LOG(LOG_ERR, "failed to get secure root owner or group (%s)\n", strerror(errno));
+      return ++num_err;
+   }
+   if (pw->pw_uid || pw->pw_gid)
+   {
+      LOG(LOG_ERR, "secure root does not have root ownership or root group\n");
+      if (fix)
+      {
+         if (fchown(dctxt->sec_root, 0, 0))
+         {
+            LOG(LOG_ERR, "failed to set root as owner and group of secure root (%s)\n", strerror(errno));
+            num_err++;
+         }
+         else
+         {
+            LOG(LOG_INFO, "successfully set root as owner and group of secure root\n");
+         }
+      }
+      else
+      {
+         num_err++;
+      }
+   }
+   if ((info.st_mode & S_IRWXU) ^ S_IRWXU || (info.st_mode & S_IRWXG) ^ S_IRWXG || info.st_mode & S_IRWXO)
+   {
+      LOG(LOG_ERR, "failed to verify secure root permissions\n");
+      if (fix)
+      {
+         if (fchmod(dctxt->sec_root, S_IRWXU | S_IRWXG))
+         {
+            LOG(LOG_ERR, "failed to set secure root permissions (%s)\n", strerror(errno));
+            num_err++;
+         }
+         else
+         {
+            LOG(LOG_INFO, "successfully set secure root permissions\n");
+         }
+      }
+      else
+      {
+         num_err++;
+      }
+   }
+   char *path = malloc(sizeof(char) * (dctxt->tmplen + dctxt->dirpad + SFX_PADDING + 1));
+   DAL_location loc = {.pod = 0, .block = 0, .cap = 0, .scatter = 0};
+   DAL_location loc_flags = {.pod = 0, .block = 0, .cap = 0, .scatter = 0};
+   expand_path(dctxt->dirtmp, path, dctxt->max_loc, &loc_flags, 1);
+   // return if there are not any directories to check
+   if (!strlen(path))
+   {
+      free(path);
+      return num_err;
+   }
+   // check every valid combination of pod/block/cap/scatter
+   for (int p = 0; p <= (loc_flags.pod ? dctxt->max_loc.pod : 0); p++)
+   {
+      loc.pod = p;
+      for (int b = 0; b <= (loc_flags.block ? dctxt->max_loc.block : 0); b++)
+      {
+         loc.block = b;
+         for (int c = 0; c <= (loc_flags.cap ? dctxt->max_loc.cap : 0); c++)
+         {
+            loc.cap = c;
+            for (int s = 0; s <= (loc_flags.scatter ? dctxt->max_loc.scatter : 0); s++)
+            {
+               loc.scatter = s;
+               expand_path(dctxt->dirtmp, path, loc, NULL, 1);
+               LOG(LOG_INFO, "checking path %s\n", path);
+               if (fstatat(dctxt->sec_root, path, &info, 0) || !S_ISDIR(info.st_mode))
+               {
+                  LOG(LOG_ERR, "failed to verify directory \"%s\" exists (%s)\n", path, strerror(errno));
+                  if (fix)
+                  {
+                     num_err += r_mkdirat(dctxt->sec_root, path, S_IRWXU | S_IRWXG | S_IRWXO);
+                  }
+                  else
+                  {
+                     num_err++;
+                  }
+               }
+            }
+         }
+      }
+   }
+   free(path);
+   return num_err;
 }
 
 int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_location dest, char offline)

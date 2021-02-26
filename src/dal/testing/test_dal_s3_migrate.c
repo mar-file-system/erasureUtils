@@ -88,7 +88,7 @@ int main(int argc, char **argv)
   root_element = xmlDocGetRootElement(doc);
 
   // Initialize a posix dal instance
-  DAL_location maxloc = {.pod = 3, .block = 3, .cap = 3, .scatter = 3};
+  DAL_location maxloc = {.pod = 1, .block = 1, .cap = 1, .scatter = 1};
   DAL dal = init_dal(root_element, maxloc);
 
   /* Free the xml Doc */
@@ -172,7 +172,7 @@ int main(int argc, char **argv)
   }
 
   printf("Performing offline migration\n");
-  DAL_location locA = {.pod = 1, .block = 1, .cap = 1, .scatter = 1};
+  DAL_location locA = {.pod = 1, .block = 1, .cap = 1, .scatter = 0};
   if ((res = dal->migrate(dal->ctxt, "", maxloc, locA, 1)))
   {
     printf("error: migration failed!(%d)\n", res);
@@ -216,7 +216,7 @@ int main(int argc, char **argv)
   }
 
   printf("Performing online migration\n");
-  DAL_location locB = {.pod = 2, .block = 2, .cap = 2, .scatter = 2};
+  DAL_location locB = {.pod = 1, .block = 1, .cap = 0, .scatter = 1};
   res = dal->migrate(dal->ctxt, "", locA, locB, 0);
   if (res)
   {

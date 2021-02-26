@@ -112,12 +112,13 @@ typedef struct s3_block_context_struct
 
 typedef struct s3_dal_context_struct
 {
-   char *accessKey; // AWS Access Key ID
-   char *secretKey; // AWS Secret Access Key
-   char *region;    // AWS Region Name
+   DAL_location max_loc; // Maximum pod/cap/block/scatter values
+   char *accessKey;      // AWS Access Key ID
+   char *secretKey;      // AWS Secret Access Key
+   char *region;         // AWS Region Name
 } * S3_DAL_CTXT;
 
-S3Status statusG;
+static S3Status statusG;
 
 //   -------------    S3 INTERNAL FUNCTIONS    -------------
 
@@ -495,29 +496,36 @@ static void responseCompleteCallback(S3Status status, const S3ErrorDetails *erro
 
 //   -------------    S3 HANDLERS    -------------
 
+// Callbacks for verify() operations
+static S3ResponseHandler verifyHandler = {
+    &responsePropertiesCallback,
+    &responseCompleteCallback
+
+};
+
 // Callbacks for migrate() operations
-S3ResponseHandler migrateHandler = {
+static S3ResponseHandler migrateHandler = {
     &responsePropertiesCallback,
     &responseCompleteCallback
 
 };
 
 // Callbacks for delete_object operations
-S3ResponseHandler delHandler = {
+static S3ResponseHandler delHandler = {
     &responsePropertiesCallback,
     &responseCompleteCallback
 
 };
 
 // Callbacks for stat() operations
-S3ResponseHandler statHandler = {
+static S3ResponseHandler statHandler = {
     &responsePropertiesCallback,
     &responseCompleteCallback
 
 };
 
 // Callbacks for multipart initialization operations
-S3MultipartInitialHandler initHandler = {
+static S3MultipartInitialHandler initHandler = {
     {&responsePropertiesCallback,
      &responseCompleteCallback},
     &initialMultipartCallback
@@ -525,21 +533,21 @@ S3MultipartInitialHandler initHandler = {
 };
 
 // Callbacks for set_meta() operations
-S3ResponseHandler setMetaHandler = {
+static S3ResponseHandler setMetaHandler = {
     &responsePropertiesCallback,
     &responseCompleteCallback
 
 };
 
 // Callbacks for get_meta() operations
-S3ResponseHandler getMetaHandler = {
+static S3ResponseHandler getMetaHandler = {
     &getMetaResponsePropertiesCallback,
     &responseCompleteCallback
 
 };
 
 // Callbacks for put_object operations
-S3PutObjectHandler putHandler = {
+static S3PutObjectHandler putHandler = {
     {&putResponseProperiesCallback,
      &responseCompleteCallback},
     &putObjectDataCallback
@@ -547,7 +555,7 @@ S3PutObjectHandler putHandler = {
 };
 
 // Callbacks for get_object operations
-S3GetObjectHandler getHandler = {
+static S3GetObjectHandler getHandler = {
     {&responsePropertiesCallback,
      &responseCompleteCallback},
     &getObjectDataCallback
@@ -555,14 +563,14 @@ S3GetObjectHandler getHandler = {
 };
 
 // Callbacks for multipart abort operations
-S3AbortMultipartUploadHandler abortHandler = {
+static S3AbortMultipartUploadHandler abortHandler = {
     {&responsePropertiesCallback,
      &responseCompleteCallback},
 
 };
 
 // Callbacks for multipart commit operations
-S3MultipartCommitHandler commitHandler = {
+static S3MultipartCommitHandler commitHandler = {
     {&responsePropertiesCallback,
      &responseCompleteCallback},
     &commitObjectCallback,
@@ -579,8 +587,57 @@ int s3_verify(DAL_CTXT ctxt, char fix)
       LOG(LOG_ERR, "received a NULL dal context!\n");
       return -1;
    }
-   errno = ENOSYS;
-   return -1; // TODO -- actually write this
+   S3_DAL_CTXT dctxt = (S3_DAL_CTXT)ctxt; // should have been passed a s3 context
+
+   int size = sizeof(char) * (4 + num_digits(dctxt->max_loc.block) + num_digits(dctxt->max_loc.cap) + num_digits(dctxt->max_loc.scatter));
+   char *bucket = malloc(size);
+   int num_err = 0;
+   for (int b = 0; b <= dctxt->max_loc.block; b++)
+   {
+      for (int c = 0; c <= dctxt->max_loc.cap; c++)
+      {
+         for (int s = 0; s <= dctxt->max_loc.scatter; s++)
+         {
+            sprintf(bucket, "b%d.%d.%d", b, c, s);
+            int i = TRIES;
+            do
+            {
+               S3_test_bucket(S3ProtocolHTTP, S3UriStylePath, dctxt->accessKey, dctxt->secretKey, NULL, NULL, bucket, dctxt->region, 0, NULL, NULL, TIMEOUT, &verifyHandler, NULL);
+               i--;
+            } while (S3_status_is_retryable(statusG) && i >= 0);
+
+            if (statusG != S3StatusOK)
+            {
+               LOG(LOG_ERR, "failed to verify bucket \"%s\" (%s)\n", bucket, S3_get_status_name(statusG));
+               if (fix)
+               {
+                  int i = TRIES;
+                  do
+                  {
+                     S3_create_bucket(S3ProtocolHTTP, dctxt->accessKey, dctxt->secretKey, NULL, NULL, bucket, dctxt->region, S3CannedAclPrivate, NULL, NULL, TIMEOUT, &verifyHandler, NULL);
+                     i--;
+                  } while (S3_status_is_retryable(statusG) && i >= 0);
+
+                  if (statusG != S3StatusOK)
+                  {
+                     LOG(LOG_ERR, "failed to create bucket \"%s\" (%s)\n", bucket, S3_get_status_name(statusG));
+                     num_err++;
+                  }
+                  else
+                  {
+                     LOG(LOG_INFO, "successfully created bucket \"%s\"\n", bucket);
+                  }
+               }
+               else
+               {
+                  num_err++;
+               }
+            }
+         }
+      }
+   }
+   free(bucket);
+   return num_err;
 }
 
 /** NOTE: "online" migrations are not true migrations, they just copy an object from one location
@@ -1234,6 +1291,8 @@ DAL s3_dal_init(xmlNode *root, DAL_location max_loc)
          {
             return NULL;
          } // malloc will set errno
+
+         dctxt->max_loc = max_loc;
 
          size_t io_size = IO_SIZE;
 

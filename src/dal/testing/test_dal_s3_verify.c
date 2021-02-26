@@ -61,130 +61,114 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "dal/dal.h"
 #include <unistd.h>
 #include <stdio.h>
+#include <fcntl.h>
+#include <libs3.h>
+
+#define DATASIZE 50000
+
+// #define DATASIZE 1048580
+
+static S3Status statusG;
+
+static S3Status propertiesCallback(const S3ResponseProperties *properties, void *callbackData)
+{
+  return S3StatusOK;
+}
+
+static void completeCallback(S3Status status, const S3ErrorDetails *error, void *callbackData)
+{
+  statusG = status;
+}
+
+static S3ResponseHandler delHandler = {
+    &propertiesCallback,
+    &completeCallback,
+
+};
 
 int main(int argc, char **argv)
 {
 
-   xmlDoc *doc = NULL;
-   xmlNode *root_element = NULL;
+  xmlDoc *doc = NULL;
+  xmlNode *root_element = NULL;
 
-   /*
+  /*
    * this initialize the library and check potential ABI mismatches
    * between the version it was compiled for and the actual shared
    * library used.
    */
-   LIBXML_TEST_VERSION
+  LIBXML_TEST_VERSION
 
-   /*parse the file and get the DOM */
-   doc = xmlReadFile("./testing/config.xml", NULL, XML_PARSE_NOBLANKS);
+  /*parse the file and get the DOM */
+  doc = xmlReadFile("./testing/s3_config.xml", NULL, XML_PARSE_NOBLANKS);
 
-   if (doc == NULL)
-   {
-      printf("error: could not parse file %s\n", "./dal/testing/config.xml");
-      return -1;
-   }
+  if (doc == NULL)
+  {
+    printf("error: could not parse file %s\n", "./dal/testing/s3_config.xml");
+    return -1;
+  }
 
-   /*Get the root element node */
-   root_element = xmlDocGetRootElement(doc);
+  /*Get the root element node */
+  root_element = xmlDocGetRootElement(doc);
 
-   // Initialize a posix dal instance
-   DAL_location maxloc = {.pod = 1, .block = 1, .cap = 1, .scatter = 1};
-   DAL dal = init_dal(root_element, maxloc);
+  // Initialize a posix dal instance
+  DAL_location maxloc = {.pod = 1, .block = 1, .cap = 1, .scatter = 1};
+  DAL dal = init_dal(root_element, maxloc);
 
-   /* Free the xml Doc */
-   xmlFreeDoc(doc);
-   /*
+  /* Free the xml Doc */
+  xmlFreeDoc(doc);
+  /*
    *Free the global variables that may
    *have been allocated by the parser.
    */
-   xmlCleanupParser();
+  xmlCleanupParser();
 
-   // check that initialization succeeded
-   if (dal == NULL)
-   {
-      printf("error: failed to initialize DAL: %s\n", strerror(errno));
-      return -1;
-   }
+  // check that initialization succeeded
+  if (dal == NULL)
+  {
+    printf("error: failed to initialize DAL: %s\n", strerror(errno));
+    return -1;
+  }
 
-   // Open, write to, and set meta info for a specific block
-   void *writebuffer = calloc(10, 1024);
-   if (writebuffer == NULL)
-   {
-      printf("error: failed to allocate write buffer\n");
-      return -1;
-   }
-   BLOCK_CTXT block = dal->open(dal->ctxt, DAL_WRITE, maxloc, "");
-   if (block == NULL)
-   {
-      printf("error: failed to open block context for write: %s\n", strerror(errno));
-      return -1;
-   }
-   if (dal->put(block, writebuffer, (10 * 1024)))
-   {
-      printf("warning: put did not return expected value\n");
-   }
-   char *meta_val = "this is a meta value!\n";
-   if (dal->set_meta(block, meta_val, 22))
-   {
-      printf("warning: set_meta did not return expected value\n");
-   }
-   if (dal->close(block))
-   {
-      printf("error: failed to close block write context: %s\n", strerror(errno));
-      return -1;
-   }
+  int ret = 0;
+  if ((ret = dal->verify(dal->ctxt, 1)))
+  {
+    printf("error: failed to initially verify DAL: %d issues detected\n", ret);
+    return -1;
+  }
 
-   // Open the same block for read and verify all values
-   void *readbuffer = malloc(sizeof(char) * 10 * 1024);
-   if (readbuffer == NULL)
-   {
-      printf("error: failed to allocate read buffer\n");
-      return -1;
-   }
-   block = dal->open(dal->ctxt, DAL_READ, maxloc, "");
-   if (block == NULL)
-   {
-      printf("error: failed to open block context for read: %s\n", strerror(errno));
-      return -1;
-   }
-   if (dal->get(block, readbuffer, (10 * 1024), 0) != (10 * 1024))
-   {
-      printf("warning: get did not return expected value\n");
-   }
-   if (memcmp(writebuffer, readbuffer, (10 * 1024)))
-   {
-      printf("warning: retrieved data does not match written!\n");
-   }
-   if (dal->get_meta(block, readbuffer, (10 * 1024)) != 22)
-   {
-      printf("warning: get_meta returned an unexpected value\n");
-   }
-   if (strncmp(meta_val, readbuffer, 22))
-   {
-      printf("warning: retrieved meta value does not match written!\n");
-   }
-   if (dal->close(block))
-   {
-      printf("error: failed to close block read context: %s\n", strerror(errno));
-      return -1;
-   }
+  printf("deleting bucket \"b1.1.1\"\n");
+  int i = 5;
+  do
+  {
+    S3_delete_bucket(S3ProtocolHTTP, S3UriStylePath, "test", "test", NULL, NULL, "b1.1.1", "us-east-1", NULL, 0, &delHandler, NULL);
+    i--;
+  } while (S3_status_is_retryable(statusG) && i >= 0);
 
-   // Delete the block we created
-   if (dal->del(dal->ctxt, maxloc, ""))
-   {
-      printf("warning: del failed!\n");
-   }
+  if (statusG != S3StatusOK)
+  {
+    printf("failed to delete bucket \"b1.1.1\" (%s)\n", S3_get_status_name(statusG));
+    return -1;
+  }
 
-   // Free the DAL
-   if (dal->cleanup(dal))
-   {
-      printf("error: failed to cleanup DAL\n");
-      return -1;
-   }
+  if (!(ret = dal->verify(dal->ctxt, 0)))
+  {
+    printf("error: verify failed to detect a missing bucket\n");
+    return -1;
+  }
 
-   /*free the document */
-   free(writebuffer);
-   free(readbuffer);
+  if ((ret = dal->verify(dal->ctxt, 1)))
+  {
+    printf("error: failed to verify and fix DAL: %d issues detected\n", ret);
+    return -1;
+  }
 
-   return 0;
+  // Free the DAL
+  if (dal->cleanup(dal))
+  {
+    printf("error: failed to cleanup DAL\n");
+    return -1;
+  }
+
+  return 0;
 }
