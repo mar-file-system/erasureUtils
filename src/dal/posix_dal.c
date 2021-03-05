@@ -513,6 +513,15 @@ static char *convert_relative(char *oldpath, char *newpath)
    return result - 3 * nBack;
 }
 
+/** (INTERNAL HELPER FUNCTION)
+ * Recursively makes missing directories in file path relative to directory file
+ * descriptor.
+ * @param int dirfd : Directory file descriptor all paths are relative to
+ * @param char *pathname : math of directory to create
+ * @param mode_t mode : permissions to use
+ * @return int : Zero on success, Non-zero if one or more directories could not
+ * be created
+ */
 static int r_mkdirat(int dirfd, char *pathname, mode_t mode)
 {
    char *parse = pathname;
@@ -795,6 +804,11 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       return -1;
    }
 
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return -1;
+   }
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a posix context
 
    POSIX_BLOCK_CTXT srcctxt = malloc(sizeof(struct posix_block_context_struct));
@@ -1003,6 +1017,11 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
 
 int posix_del(DAL_CTXT ctxt, DAL_location location, const char *objID)
 {
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return -1;
+   }
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a posix context
 
    // allocate space for a new BLOCK context
@@ -1028,6 +1047,11 @@ int posix_del(DAL_CTXT ctxt, DAL_location location, const char *objID)
 
 int posix_stat(DAL_CTXT ctxt, DAL_location location, const char *objID)
 {
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return -1;
+   }
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a posix context
 
    // allocate space for a new BLOCK context
@@ -1055,6 +1079,11 @@ int posix_stat(DAL_CTXT ctxt, DAL_location location, const char *objID)
 
 int posix_cleanup(DAL dal)
 {
+   if (dal == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal!\n");
+      return -1;
+   }
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)dal->ctxt; // should have been passed a posix context
 
    // free DAL context state
@@ -1068,6 +1097,11 @@ int posix_cleanup(DAL dal)
 
 BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char *objID)
 {
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return NULL;
+   }
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a posix context
 
    // allocate space for a new BLOCK context
@@ -1137,12 +1171,14 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    }
 
    // open the meta file and check for success
+   mode_t mask = umask(0);
    bctxt->mfd = openat(dctxt->sec_root, bctxt->filepath, oflags, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
    if (bctxt->mfd < 0)
    {
       LOG(LOG_ERR, "failed to open meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
       if (mode == DAL_METAREAD)
       {
+         umask(mask);
          free(bctxt->filepath);
          free(bctxt);
          return NULL;
@@ -1169,6 +1205,7 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
       {
          LOG(LOG_ERR, "failed to append suffix to file path!\n");
          errno = EBADF;
+         umask(mask);
          free(bctxt->filepath);
          free(bctxt);
          return NULL;
@@ -1182,6 +1219,7 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
       if (bctxt->fd < 0)
       {
          LOG(LOG_ERR, "failed to open file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
+         umask(mask);
          free(bctxt->filepath);
          free(bctxt);
          return NULL;
@@ -1189,6 +1227,9 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    }
    // remove any suffix in the simplest possible manner
    *(bctxt->filepath + bctxt->filelen) = '\0';
+
+   // restore the previous umask
+   umask(mask);
 
    // finally, return a reference to our BLOCK context
    return bctxt;
