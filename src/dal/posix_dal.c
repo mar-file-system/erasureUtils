@@ -1244,7 +1244,7 @@ int posix_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
       return -1;
    }
 
-   return 0;
+   return size;
 }
 
 ssize_t posix_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
@@ -1526,6 +1526,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
 
          dctxt->sec_root = -1;
          errno = EINVAL;
+         char *sec_root_path = "not found";
 
          // find the secure root node and io size
          while (root != NULL)
@@ -1538,6 +1539,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
                }
                else if (root->children->type == XML_TEXT_NODE)
                {
+                  sec_root_path = (char *)root->children->content;
                   dctxt->sec_root = open((char *)root->children->content, O_DIRECTORY);
                }
             }
@@ -1554,7 +1556,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
          // make sure the secure root handle was set
          if (dctxt->sec_root == -1)
          {
-            LOG(LOG_ERR, "failed to find or open secure root handle\n");
+            LOG(LOG_ERR, "failed to find or open secure root handle: %s\n", sec_root_path);
             free(dctxt);
             return NULL;
          }

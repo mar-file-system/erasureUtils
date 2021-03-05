@@ -1057,7 +1057,7 @@ int s3_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
    bctxt->seq++;
    growbuffer_destroy(bctxt->data_gb);
    bctxt->data_size = 0;
-   return 0;
+   return size;
 }
 
 ssize_t s3_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)

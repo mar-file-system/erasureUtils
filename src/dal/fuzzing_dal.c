@@ -241,7 +241,7 @@ void free_fuzz(FUZZING_DAL_CTXT dctxt)
 	free(dctxt);
 }
 
-//   -------------    POSIX IMPLEMENTATION    -------------
+//   -------------    FUZZING IMPLEMENTATION    -------------
 
 int fuzzing_verify(DAL_CTXT ctxt, char fix)
 {
@@ -481,7 +481,7 @@ int fuzzing_close(BLOCK_CTXT ctxt)
 	return 0;
 }
 
-//   -------------    POSIX INITIALIZATION    -------------
+//   -------------    FUZZING INITIALIZATION    -------------
 
 DAL fuzzing_dal_init(xmlNode *root, DAL_location max_loc)
 {

@@ -1,3 +1,6 @@
+#ifndef __MARFS_COPYRIGHT_H__
+#define __MARFS_COPYRIGHT_H__
+
 /*
 Copyright (c) 2015, Los Alamos National Security, LLC
 All rights reserved.
@@ -58,38 +61,66 @@ LANL contributions is found at https://github.com/jti-lanl/aws4c.
 GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
-#include "dal/dal.h"
+#endif
+
+#include "../erasureUtils_auto_config.h"
+#if defined(DEBUG_ALL) || defined(DEBUG_NE)
+#define DEBUG
+#endif
+#define preFMT "%s: "
+
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <stdio.h>
-#include <fcntl.h>
 
-#define DATASIZE 50000
+#include "dal.h"
 
-int main(int argc, char **argv)
+#define PRINTout(FMT, ...) fprintf(stdout, preFMT FMT, "dalverify", ##__VA_ARGS__)
+#ifdef DEBUG
+#define PRINTdbg(FMT, ...) fprintf(stdout, preFMT FMT, "dalverify", ##__VA_ARGS__)
+#else
+#define PRINTdbg(...)
+#endif
+
+int main(int argc, const char **argv)
 {
+  // make sure we're root
   if (geteuid() != 0)
   {
     printf("error: must be run as root\n");
-    return 0;
+    return -1;
+  }
+
+  if (argc != 6)
+  {
+    printf("usage: %s config_file pod_size block_size cap_size scatter_size\n", argv[0]);
+    return -1;
+  }
+
+  // set our maximum location from the given arguments
+  DAL_location maxloc = {.pod = atoi(argv[2]) - 1, .block = atoi(argv[3]) - 1, .cap = atoi(argv[4]) - 1, .scatter = atoi(argv[5]) - 1};
+  if (maxloc.pod < 0 || maxloc.block < 0 || maxloc.cap < 0 || maxloc.scatter < 0)
+  {
+    printf("error: invalid maximum location. pod: %d block: %d cap: %d scatter: %d\n", maxloc.pod, maxloc.block, maxloc.cap, maxloc.scatter);
+    return -1;
   }
 
   xmlDoc *doc = NULL;
   xmlNode *root_element = NULL;
 
   /*
-   * this initialize the library and check potential ABI mismatches
+   * this initializes the library and check potential ABI mismatches
    * between the version it was compiled for and the actual shared
    * library used.
    */
   LIBXML_TEST_VERSION
 
   /*parse the file and get the DOM */
-  doc = xmlReadFile("./testing/verify_config.xml", NULL, XML_PARSE_NOBLANKS);
+  doc = xmlReadFile(argv[1], NULL, XML_PARSE_NOBLANKS);
 
   if (doc == NULL)
   {
-    printf("error: could not parse file %s\n", "./dal/testing/verify_config.xml");
+    printf("error: could not parse file %s\n", argv[1]);
     return -1;
   }
 
@@ -97,7 +128,6 @@ int main(int argc, char **argv)
   root_element = xmlDocGetRootElement(doc);
 
   // Initialize a posix dal instance
-  DAL_location maxloc = {.pod = 1, .block = 1, .cap = 1, .scatter = 1};
   DAL dal = init_dal(root_element, maxloc);
 
   /* Free the xml Doc */
@@ -115,38 +145,15 @@ int main(int argc, char **argv)
     return -1;
   }
 
+  // verify the DAL and attempt to fix any issues
   int ret = 0;
+  printf("Preparing to verify dal with maximum location: pod: %d block: %d cap: %d scatter: %d\n", maxloc.pod, maxloc.block, maxloc.cap, maxloc.scatter);
   if ((ret = dal->verify(dal->ctxt, 1)))
   {
-    printf("error: failed to initially verify DAL: %d issues detected\n", ret);
+    printf("error: failed to verify DAL: %d issues detected\n", ret);
     return -1;
   }
 
-  printf("deleting directory \"pod1/block1/cap1/scatter1/\"\n");
-  if (rmdir("./sec_root/pod1/block1/cap1/scatter1/"))
-  {
-    printf("error: failed to delete \"pod1/block1/cap1/scatter1/\" (%s)\n", strerror(errno));
-    return -1;
-  }
-
-  if (!(ret = dal->verify(dal->ctxt, 0)))
-  {
-    printf("error: verify failed to detect a missing bucket\n");
-    return -1;
-  }
-
-  if ((ret = dal->verify(dal->ctxt, 1)))
-  {
-    printf("error: failed to verify and fix DAL: %d issues detected\n", ret);
-    return -1;
-  }
-
-  // Free the DAL
-  if (dal->cleanup(dal))
-  {
-    printf("error: failed to cleanup DAL\n");
-    return -1;
-  }
-
+  printf("successfully verified DAL\n");
   return 0;
 }

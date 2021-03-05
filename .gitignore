@@ -27,18 +27,34 @@ m4/lt*.m4
 *.trs
 
 # Build/Vim artifacts
+src/dal/dalverify
 src/dal/test_dal
 src/dal/test_dal_abort
 src/dal/test_dal_migrate
+src/dal/test_dal_verify
 src/dal/test_dal_fuzzing
 src/dal/test_dal_fuzzing_put
-src/io/test_ioqueue
+src/dal/test_dal_s3
+src/dal/test_dal_s3_abort
+src/dal/test_dal_s3_migrate
+src/dal/test_dal_s3_multipart
+src/dal/test_dal_s3_verify
 src/io/test_iothreads
 src/io/test_metainfo
+src/io/test_ioqueue
 src/ne/neutil
 src/ne/testing/test_libne_io
 src/ne/testing/test_libne_fuzzing
+src/ne/testing/test_libne_s3
+src/ne/wrkdir_errasureTest/
 src/thread_queue/test_threadqueue
+src/thread_queue/test_threadqueue_enqueue
+src/thread_queue/test_threadqueue_getflags
+src/thread_queue/test_threadqueue_getopts
+src/thread_queue/test_threadqueue_mastercons
+src/thread_queue/test_threadqueue_masterprod
+src/thread_queue/test_threadqueue_nocons
+src/thread_queue/test_threadqueue_noprod
 src/*/.libs
 src/*/testing/.libs
 *.lo
