@@ -113,7 +113,7 @@ typedef struct posix_dal_context_struct
  * @param DAL_location* max_loc : Reference to the maximum acceptable location value
  * @return int : Zero if the location is acceptable, -1 otherwise
  */
-int check_loc_limits(DAL_location loc, const DAL_location *max_loc)
+static int check_loc_limits(DAL_location loc, const DAL_location *max_loc)
 {
    //
    if (loc.pod > max_loc->pod)
@@ -1285,7 +1285,7 @@ int posix_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
       return -1;
    }
 
-   return size;
+   return 0;
 }
 
 ssize_t posix_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
@@ -1346,7 +1346,7 @@ int posix_abort(BLOCK_CTXT ctxt)
    }
    if (close(bctxt->mfd) != 0)
    {
-      LOG(LOG_WARNING, "failed to close meta file \"%s\" during abort (%s)\n", bctxt->filepath, strerror(errno));
+      LOG(LOG_WARNING, "failed to close meta file \"%s%s\" during abort (%s)\n", bctxt->filepath, META_SFX, strerror(errno));
    }
    if (block_delete(bctxt, 0))
    {
@@ -1379,7 +1379,7 @@ int posix_close(BLOCK_CTXT ctxt)
    // attempt to close our meta FD and check for success
    if (close(bctxt->mfd))
    {
-      LOG(LOG_ERR, "failed to close meta file \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
+      LOG(LOG_ERR, "failed to close meta file \"%s%s\" (%s)\n", bctxt->filepath, META_SFX, strerror(errno));
       return -1;
    }
 

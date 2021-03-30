@@ -76,11 +76,11 @@ int main(int argc, char **argv)
   LIBXML_TEST_VERSION
 
   /*parse the file and get the DOM */
-  doc = xmlReadFile("./testing/fuzzing_config.xml", NULL, XML_PARSE_NOBLANKS);
+  doc = xmlReadFile("./testing/rec_config.xml", NULL, XML_PARSE_NOBLANKS);
 
   if (doc == NULL)
   {
-    printf("error: could not parse file %s\n", "./dal/testing/fuzzing_config.xml");
+    printf("error: could not parse file %s\n", "./dal/testing/rec_config.xml");
     return -1;
   }
 
@@ -113,18 +113,20 @@ int main(int argc, char **argv)
     printf("error: failed to allocate write buffer\n");
     return -1;
   }
-  BLOCK_CTXT block = dal->open(dal->ctxt, DAL_WRITE, maxloc, "");
+  BLOCK_CTXT block = dal->open(dal->ctxt, DAL_WRITE, maxloc, "obj");
   if (block == NULL)
   {
     printf("error: failed to open block context for write: %s\n", strerror(errno));
     return -1;
   }
-  if (dal->put(block, writebuffer, (10 * 1024)))
+  int res;
+  if ((res = dal->put(block, writebuffer, (10 * 1024))))
   {
-    printf("warning: put did not return expected value\n");
+    printf("warning: put did not return expected value %d\n", res);
+    return -1;
   }
   char *meta_val = "this is a meta value!\n";
-  if (dal->set_meta(block, meta_val, 22))
+  if ((res = dal->set_meta(block, meta_val, 22)))
   {
     printf("warning: set_meta did not return expected value\n");
   }
@@ -141,28 +143,25 @@ int main(int argc, char **argv)
     printf("error: failed to allocate read buffer\n");
     return -1;
   }
-  block = dal->open(dal->ctxt, DAL_READ, maxloc, "");
+  block = dal->open(dal->ctxt, DAL_READ, maxloc, "obj");
   if (block == NULL)
   {
     printf("error: failed to open block context for read: %s\n", strerror(errno));
     return -1;
   }
-  /*
   if (dal->get(block, readbuffer, (10 * 1024), 0) != (10 * 1024))
   {
     printf("warning: get did not return expected value\n");
   }
-  else if (memcmp(writebuffer, readbuffer, (10 * 1024)))
+  if (memcmp(writebuffer, readbuffer, (10 * 1024)))
   {
     printf("warning: retrieved data does not match written!\n");
   }
-  */
-  int ret;
-  if ((ret = dal->get_meta(block, readbuffer, (10 * 1024))) != 22)
+  if (dal->get_meta(block, readbuffer, (10 * 1024)) != 22)
   {
-    printf("warning: get_meta returned an unexpected value %d\n", ret);
+    printf("warning: get_meta returned an unexpected value\n");
   }
-  else if (strncmp(meta_val, readbuffer, 22))
+  if (strncmp(meta_val, readbuffer, 22))
   {
     printf("warning: retrieved meta value does not match written!\n");
   }
@@ -173,7 +172,7 @@ int main(int argc, char **argv)
   }
 
   // Delete the block we created
-  if (dal->del(dal->ctxt, maxloc, ""))
+  if (dal->del(dal->ctxt, maxloc, "obj"))
   {
     printf("warning: del failed!\n");
   }

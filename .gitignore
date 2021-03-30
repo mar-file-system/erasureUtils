@@ -47,6 +47,9 @@ src/ne/testing/test_libne_io
 src/ne/testing/test_libne_fuzzing
 src/ne/testing/test_libne_s3
 src/ne/wrkdir_errasureTest/
+src/recursion/test_dal_rec
+src/recursion/test_dal_rec_abort
+src/recursion/test_libne_rec
 src/thread_queue/test_threadqueue
 src/thread_queue/test_threadqueue_enqueue
 src/thread_queue/test_threadqueue_getflags

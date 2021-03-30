@@ -1,0 +1,6 @@
+{
+  "files.associations": {
+    "libs3.h": "c",
+    "fcntl.h": "c"
+  }
+}

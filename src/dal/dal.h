@@ -186,8 +186,10 @@ typedef struct DAL_struct
 DAL posix_dal_init(xmlNode *posix_dal_conf_root, DAL_location max_loc);
 DAL fuzzing_dal_init(xmlNode *fuzzing_dal_conf_root, DAL_location max_loc);
 DAL s3_dal_init(xmlNode *s3_dal_conf_root, DAL_location max_loc);
-
+#ifdef RECURSION
+DAL rec_dal_init(xmlNode *rec_dal_conf_root, DAL_location max_loc);
+#endif
 // Function to provide specific DAL initialization calls based on name
-DAL init_dal(xmlNode *dal_conf_root, DAL_location max_loc); // {
+DAL init_dal(xmlNode *dal_conf_root, DAL_location max_loc);
 
 #endif

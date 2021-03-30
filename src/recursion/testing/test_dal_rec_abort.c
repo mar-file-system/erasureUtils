@@ -61,6 +61,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "dal/dal.h"
 #include <unistd.h>
 #include <stdio.h>
+#include <fcntl.h>
 
 int main(int argc, char **argv)
 {
@@ -76,11 +77,11 @@ int main(int argc, char **argv)
   LIBXML_TEST_VERSION
 
   /*parse the file and get the DOM */
-  doc = xmlReadFile("./testing/fuzzing_config.xml", NULL, XML_PARSE_NOBLANKS);
+  doc = xmlReadFile("./testing/rec_config.xml", NULL, XML_PARSE_NOBLANKS);
 
   if (doc == NULL)
   {
-    printf("error: could not parse file %s\n", "./dal/testing/fuzzing_config.xml");
+    printf("error: could not parse file %s\n", "./dal/testing/rec_config.xml");
     return -1;
   }
 
@@ -113,7 +114,7 @@ int main(int argc, char **argv)
     printf("error: failed to allocate write buffer\n");
     return -1;
   }
-  BLOCK_CTXT block = dal->open(dal->ctxt, DAL_WRITE, maxloc, "");
+  BLOCK_CTXT block = dal->open(dal->ctxt, DAL_WRITE, maxloc, "obj");
   if (block == NULL)
   {
     printf("error: failed to open block context for write: %s\n", strerror(errno));
@@ -141,28 +142,25 @@ int main(int argc, char **argv)
     printf("error: failed to allocate read buffer\n");
     return -1;
   }
-  block = dal->open(dal->ctxt, DAL_READ, maxloc, "");
+  block = dal->open(dal->ctxt, DAL_READ, maxloc, "obj");
   if (block == NULL)
   {
     printf("error: failed to open block context for read: %s\n", strerror(errno));
     return -1;
   }
-  /*
   if (dal->get(block, readbuffer, (10 * 1024), 0) != (10 * 1024))
   {
     printf("warning: get did not return expected value\n");
   }
-  else if (memcmp(writebuffer, readbuffer, (10 * 1024)))
+  if (memcmp(writebuffer, readbuffer, (10 * 1024)))
   {
     printf("warning: retrieved data does not match written!\n");
   }
-  */
-  int ret;
-  if ((ret = dal->get_meta(block, readbuffer, (10 * 1024))) != 22)
+  if (dal->get_meta(block, readbuffer, (10 * 1024)) != 22)
   {
-    printf("warning: get_meta returned an unexpected value %d\n", ret);
+    printf("warning: get_meta returned an unexpected value\n");
   }
-  else if (strncmp(meta_val, readbuffer, 22))
+  if (strncmp(meta_val, readbuffer, 22))
   {
     printf("warning: retrieved meta value does not match written!\n");
   }
@@ -172,8 +170,94 @@ int main(int argc, char **argv)
     return -1;
   }
 
+  // Obtain random data to write before aborting
+  void *randbuffer = calloc(10, 1024);
+  if (randbuffer == NULL)
+  {
+    printf("error failed to allocate random buffer\n");
+    return -1;
+  }
+  int rfd;
+  if ((rfd = open("/dev/urandom", O_RDONLY)) == -1)
+  {
+    printf("error: failed to open /dev/random: %s\n", strerror(errno));
+    return -1;
+  }
+  int rdres = read(rfd, randbuffer, (10 * 1024));
+  if (rdres != (10 * 1024))
+  {
+    printf("warning: reading from /dev/random did not return expected value: %d\n", rdres);
+  }
+  if (close(rfd))
+  {
+    printf("error: failed to close /dev/random: %s\n", strerror(errno));
+    return -1;
+  }
+
+  // Open, write random data to, and set meta info for a specific block
+  block = dal->open(dal->ctxt, DAL_WRITE, maxloc, "obj");
+  if (block == NULL)
+  {
+    printf("error: failed to open block context for random data write: %s\n", strerror(errno));
+    return -1;
+  }
+  if (dal->put(block, randbuffer, (10 * 1024)))
+  {
+    printf("warning: put did not return expected value\n");
+  }
+  char *meta_val_2 = "this is another meta value!\n";
+  if (dal->set_meta(block, meta_val_2, 28))
+  {
+    printf("warning: set_meta did not return expected value\n");
+  }
+  if (dal->abort(block))
+  {
+    printf("error: failed to abort block write context: %s\n", strerror(errno));
+    return -1;
+  }
+
+  // Open the same block for read and verify all values
+  // We should receive all the same information from the same set of operations as before, since all new data was aborted
+  if (readbuffer == NULL)
+  {
+    printf("error: failed to allocate read buffer\n");
+    return -1;
+  }
+  block = dal->open(dal->ctxt, DAL_READ, maxloc, "obj");
+  if (block == NULL)
+  {
+    printf("error: failed to open block context for read: %s\n", strerror(errno));
+    return -1;
+  }
+  int res;
+  if ((res = dal->get(block, readbuffer, (10 * 1024), 0) != (10 * 1024)))
+  {
+    printf("error: get did not return expected value %d\n", res);
+    return -1;
+  }
+  if (memcmp(writebuffer, readbuffer, (10 * 1024)))
+  {
+    printf("warning: retrieved data does not match written!\n");
+  }
+  int gmres = dal->get_meta(block, readbuffer, (10 * 1024));
+  if (gmres != 22)
+  {
+    printf("error: get_meta returned an unexpected value: %d, %s\n", gmres, (char *)readbuffer);
+    return -1;
+    ;
+  }
+  if (strncmp(meta_val, readbuffer, 22))
+  {
+    printf("warning: retrieved meta value does not match written! \n");
+  }
+  if (dal->close(block))
+  {
+    printf("error: failed to close block read context: %s\n", strerror(errno));
+    return -1;
+  }
+
   // Delete the block we created
-  if (dal->del(dal->ctxt, maxloc, ""))
+  if (dal->del(dal->ctxt, maxloc, "obj"))
   {
     printf("warning: del failed!\n");
   }
@@ -188,6 +272,7 @@ int main(int argc, char **argv)
   /*free the document */
   free(writebuffer);
   free(readbuffer);
+  free(randbuffer);
 
   return 0;
 }

@@ -1057,7 +1057,7 @@ int s3_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
    bctxt->seq++;
    growbuffer_destroy(bctxt->data_gb);
    bctxt->data_size = 0;
-   return size;
+   return 0;
 }
 
 ssize_t s3_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
@@ -1345,6 +1345,9 @@ DAL s3_dal_init(xmlNode *root, DAL_location max_loc)
          if ((status = S3_initialize("s3_dal", S3_INIT_ALL, hostname)) != S3StatusOK)
          {
             LOG(LOG_ERR, "failed to initialize libs3: %s\n", S3_get_status_name(status));
+            free(dctxt->accessKey);
+            free(dctxt->secretKey);
+            free(dctxt->region);
             free(dctxt);
             return NULL;
          }
@@ -1354,6 +1357,9 @@ DAL s3_dal_init(xmlNode *root, DAL_location max_loc)
          if (s3dal == NULL)
          {
             LOG(LOG_ERR, "failed to allocate space for a DAL_struct\n");
+            free(dctxt->accessKey);
+            free(dctxt->secretKey);
+            free(dctxt->region);
             free(dctxt);
             return NULL;
          } // malloc will set errno

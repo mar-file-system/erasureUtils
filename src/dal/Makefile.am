@@ -76,7 +76,10 @@ dalverify_LDADD = $(DAL_LIB) $(SIDE_LIBS)
 dalverify_CFLAGS = $(XML_CFLAGS)
 
 # ---
-check_PROGRAMS = test_dal test_dal_abort test_dal_migrate test_dal_fuzzing test_dal_fuzzing_put test_dal_s3_verify test_dal_s3 test_dal_s3_abort test_dal_s3_multipart test_dal_s3_migrate test_dal_verify
+POSIX_TESTS = test_dal_verify test_dal test_dal_abort test_dal_migrate
+FUZZING_TESTS = test_dal_fuzzing test_dal_fuzzing_put
+S3_TESTS = test_dal_s3_verify test_dal_s3 test_dal_s3_abort test_dal_s3_multipart test_dal_s3_migrate
+check_PROGRAMS = $(POSIX_TESTS) $(FUZZING_TESTS) $(S3_TESTS)
 
 test_dal_SOURCES = testing/test_dal.c
 test_dal_LDADD = $(DAL_LIB) $(SIDE_LIBS)
@@ -122,5 +125,5 @@ test_dal_s3_verify_SOURCES = testing/test_dal_s3_verify.c
 test_dal_s3_verify_LDADD = $(DAL_LIB) $(SIDE_LIBS)
 test_dal_s3_verify_CFLAGS= $(XML_CFLAGS)
 
-TESTS = test_dal test_dal_abort test_dal_migrate test_dal_fuzzing test_dal_fuzzing_put test_dal_s3_verify test_dal_s3 test_dal_s3_abort test_dal_s3_multipart test_dal_s3_migrate test_dal_verify
+TESTS = $(POSIX_TESTS) $(FUZZING_TESTS) $(S3_TESTS)
 

@@ -286,7 +286,7 @@ int terminate_thread(ioblock **iobref, ThreadQueue tq, gthread_state *state, ne_
    }
    if (mode == NE_RDONLY || mode == NE_RDALL)
    {
-      // we need to empyt any remaining elements from the queue
+      // we need to empty any remaining elements from the queue
       while (tq_dequeue(tq, TQ_NONE, NULL) > 0)
       {
          LOG(LOG_INFO, "Releasing unused queue element\n");
@@ -1723,6 +1723,44 @@ int ne_close(ne_handle handle, ne_erasure *epat, ne_state *sref)
    LOG(LOG_INFO, "Close status = %d\n", ret_val);
 
    return ret_val;
+}
+
+/**
+    * Abandon a given open WRITE/REBUILD ne_handle. This is roughly equivalent to calling ne_close
+    * on the handle; however, NO data changes should be applied to the underlying object (same state
+    * as before the handle was opened).
+    * @param ne_handle handle : The ne_handle reference to abort
+    * @return int : 0 on success, and -1 on a failure.
+    */
+int ne_abort(ne_handle handle)
+{
+   LOG(LOG_INFO, "Aborting handle\n");
+   // check error conditions
+   if (!(handle))
+   {
+      LOG(LOG_ERR, "Received a NULL handle!\n");
+      errno = EINVAL;
+      return -1;
+   }
+
+   int i;
+   for (i = 0; i < handle->epat.N + handle->epat.E; i++)
+   {
+      tq_set_flags(handle->thread_queues[i], TQ_ABORT);
+      tq_unset_flags(handle->thread_queues[i], TQ_HALT);
+      // we need to empty any remaining elements from the queue
+      while (tq_dequeue(handle->thread_queues[i], TQ_ABORT, NULL) > 0)
+      {
+         LOG(LOG_INFO, "Releasing unused queue element\n");
+         release_ioblock(handle->thread_states[i].ioq);
+      }
+      tq_next_thread_status(handle->thread_queues[i], NULL);
+      tq_close(handle->thread_queues[i]);
+   }
+
+   free_handle(handle);
+
+   return 0;
 }
 
 // ---------------------- RETRIEVAL/SEEDING OF HANDLE INFO ----------------------

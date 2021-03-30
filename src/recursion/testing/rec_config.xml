@@ -1,5 +1,4 @@
 <!--
-
    Copyright (c) 2015, Los Alamos National Security, LLC
    All rights reserved.
 
@@ -12,7 +11,7 @@
    FOR THE USE OF THIS SOFTWARE.  If software is modified to produce derivative
    works, such modified software should be clearly marked, so as not to confuse it
    with the version available from LANL.
-    
+
    Additionally, redistribution and use in source and binary forms, with or without
    modification, are permitted provided that the following conditions are met:
    1. Redistributions of source code must retain the above copyright notice, this
@@ -57,10 +56,16 @@
    LANL contributions is found at https://github.com/jti-lanl/aws4c.
 
    GNU licenses can be found at http://www.gnu.org/licenses/.
-
 -->
-
-<DAL type="posix">
-	<dir_template>IO_TESTS-stripefile.{b}</dir_template>
-	<sec_root>./</sec_root>
+<DAL type="recursive">
+   <DAL type="posix">
+      <dir_template>p{p}b{b}c{c}s{s}</dir_template>
+      <sec_root>./</sec_root>
+   </DAL>
+   <N>5</N>
+   <E>1</E>
+   <meta_sfx>_meta</meta_sfx>
+   <pod>p</pod>
+   <cap>b</cap>
+   <scatter>s</scatter>
 </DAL>

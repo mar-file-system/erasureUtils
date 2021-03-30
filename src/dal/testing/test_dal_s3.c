@@ -141,9 +141,10 @@ int main(int argc, char **argv)
     printf("error: failed to open block context for write: %s\n", strerror(errno));
     return -1;
   }
-  if (dal->put(block, writebuffer, DATASIZE))
+  int res;
+  if ((res = dal->put(block, writebuffer, DATASIZE)))
   {
-    printf("warning: put did not return expected value\n");
+    printf("warning: put did not return expected value %d\n", res);
   }
   char *meta_val = "this is a meta value!\n";
   if (dal->set_meta(block, meta_val, strlen(meta_val) + 1))
@@ -169,7 +170,6 @@ int main(int argc, char **argv)
     printf("error: failed to open block context for read: %s\n", strerror(errno));
     return -1;
   }
-  int res;
   if ((res = dal->get(block, readbuffer, DATASIZE, 0)) != DATASIZE)
   {
     printf("error: get did not return expected value: %d\n", res);

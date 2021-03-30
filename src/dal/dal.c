@@ -122,6 +122,12 @@ DAL init_dal(xmlNode *dal_conf_root, DAL_location max_loc)
    {
       return s3_dal_init(dal_conf_root->children, max_loc);
    }
+#ifdef RECURSION
+   else if (strncasecmp((char *)typetxt->content, "recursive", 10) == 0)
+   {
+      return rec_dal_init(dal_conf_root->children, max_loc);
+   }
+#endif
 
    // if no DAL found, return NULL
    LOG(LOG_ERR, "failed to identify a DAL of type: \"%s\"\n", typetxt->content);

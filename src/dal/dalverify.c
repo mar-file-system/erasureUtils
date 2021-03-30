@@ -75,13 +75,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #include "dal.h"
 
-#define PRINTout(FMT, ...) fprintf(stdout, preFMT FMT, "dalverify", ##__VA_ARGS__)
-#ifdef DEBUG
-#define PRINTdbg(FMT, ...) fprintf(stdout, preFMT FMT, "dalverify", ##__VA_ARGS__)
-#else
-#define PRINTdbg(...)
-#endif
-
 int main(int argc, const char **argv)
 {
   // make sure we're root
