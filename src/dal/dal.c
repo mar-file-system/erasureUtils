@@ -122,6 +122,10 @@ DAL init_dal(xmlNode *dal_conf_root, DAL_location max_loc)
    {
       return s3_dal_init(dal_conf_root->children, max_loc);
    }
+   else if (strncasecmp((char *)typetxt->content, "timer", 6) == 0)
+   {
+      return timer_dal_init(dal_conf_root->children, max_loc);
+   }
 #ifdef RECURSION
    else if (strncasecmp((char *)typetxt->content, "recursive", 10) == 0)
    {

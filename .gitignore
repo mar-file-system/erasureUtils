@@ -39,6 +39,9 @@ src/dal/test_dal_s3_abort
 src/dal/test_dal_s3_migrate
 src/dal/test_dal_s3_multipart
 src/dal/test_dal_s3_verify
+src/dal/test_dal_timer
+src/dal/test_dal_timer_abort
+src/dal/test_dal_timer_migrate
 src/io/test_iothreads
 src/io/test_metainfo
 src/io/test_ioqueue
@@ -46,6 +49,7 @@ src/ne/neutil
 src/ne/testing/test_libne_io
 src/ne/testing/test_libne_fuzzing
 src/ne/testing/test_libne_s3
+src/ne/testing/test_libne_timer
 src/ne/wrkdir_errasureTest/
 src/recursion/test_dal_rec
 src/recursion/test_dal_rec_abort

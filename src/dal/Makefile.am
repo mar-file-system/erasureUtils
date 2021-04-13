@@ -66,7 +66,7 @@ noinst_LTLIBRARIES = libdal.la
 
 SIDE_LIBS = ../logging/liblog.la
 
-libdal_la_SOURCES = posix_dal.c dal.c fuzzing_dal.c s3_dal.c
+libdal_la_SOURCES = posix_dal.c dal.c fuzzing_dal.c s3_dal.c timer_dal.c
 libdal_la_CFLAGS = $(XML_CFLAGS)
 DAL_LIB = libdal.la
 
@@ -79,7 +79,8 @@ dalverify_CFLAGS = $(XML_CFLAGS)
 POSIX_TESTS = test_dal_verify test_dal test_dal_abort test_dal_migrate
 FUZZING_TESTS = test_dal_fuzzing test_dal_fuzzing_put
 S3_TESTS = test_dal_s3_verify test_dal_s3 test_dal_s3_abort test_dal_s3_multipart test_dal_s3_migrate
-check_PROGRAMS = $(POSIX_TESTS) $(FUZZING_TESTS) $(S3_TESTS)
+TIMER_TESTS = test_dal_timer test_dal_timer_abort test_dal_timer_migrate
+check_PROGRAMS = $(POSIX_TESTS) $(FUZZING_TESTS) $(S3_TESTS) $(TIMER_TESTS)
 
 test_dal_SOURCES = testing/test_dal.c
 test_dal_LDADD = $(DAL_LIB) $(SIDE_LIBS)
@@ -125,5 +126,16 @@ test_dal_s3_verify_SOURCES = testing/test_dal_s3_verify.c
 test_dal_s3_verify_LDADD = $(DAL_LIB) $(SIDE_LIBS)
 test_dal_s3_verify_CFLAGS= $(XML_CFLAGS)
 
-TESTS = $(POSIX_TESTS) $(FUZZING_TESTS) $(S3_TESTS)
+test_dal_timer_SOURCES = testing/test_dal_timer.c
+test_dal_timer_LDADD = $(DAL_LIB) $(SIDE_LIBS)
+test_dal_timer_CFLAGS= $(XML_CFLAGS)
 
+test_dal_timer_abort_SOURCES = testing/test_dal_timer_abort.c
+test_dal_timer_abort_LDADD = $(DAL_LIB) $(SIDE_LIBS)
+test_dal_timer_abort_CFLAGS= $(XML_CFLAGS)
+
+test_dal_timer_migrate_SOURCES = testing/test_dal_timer_migrate.c
+test_dal_timer_migrate_LDADD = $(DAL_LIB) $(SIDE_LIBS)
+test_dal_timer_migrate_CFLAGS= $(XML_CFLAGS)
+
+TESTS = $(POSIX_TESTS) $(FUZZING_TESTS) $(S3_TESTS) $(TIMER_TESTS)

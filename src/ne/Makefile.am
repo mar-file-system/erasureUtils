@@ -80,7 +80,7 @@ neutil_CFLAGS  = $(XML_CFLAGS)
 
 # ---
 
-check_PROGRAMS = testing/test_libne_io testing/test_libne_fuzzing testing/test_libne_s3 #data_shredder
+check_PROGRAMS = testing/test_libne_io testing/test_libne_fuzzing testing/test_libne_s3 testing/test_libne_timer #data_shredder
 
 testing_test_libne_io_SOURCES = testing/test_libne_io.c
 testing_test_libne_io_LDADD   = $(NE_LIBS)
@@ -94,10 +94,14 @@ testing_test_libne_s3_SOURCES = testing/test_libne_s3.c
 testing_test_libne_s3_LDADD   = $(NE_LIBS)
 testing_test_libne_s3_CFLAGS  = $(XML_CFLAGS)
 
+testing_test_libne_timer_SOURCES = testing/test_libne_timer.c
+testing_test_libne_timer_LDADD   = $(NE_LIBS)
+testing_test_libne_timer_CFLAGS  = $(XML_CFLAGS)
+
 check_SCRIPTS = testing/erasureTest
 
 #data_shredder_SOURCES = testing/data_shredder.c
 
-TESTS = testing/test_libne_io testing/test_libne_fuzzing testing/test_libne_s3 testing/erasureTest
+TESTS = testing/test_libne_io testing/test_libne_fuzzing testing/test_libne_s3 testing/erasureTest testing/test_libne_timer
 
 
