@@ -75,7 +75,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 typedef struct fuzzing_dal_context_struct
 {
-	DAL posix_dal; // Underlying posix dal
+	DAL under_dal; // Underlying DAL
 	int *verify;	 // fuzzing behavior of each function. If a list for
 	int *migrate;	 // an operation includes -1, then the operation
 	int *del;			 // always fails. A positive number means always
@@ -253,7 +253,7 @@ int fuzzing_verify(DAL_CTXT ctxt, char fix)
 		return -2;
 	}
 
-	return dctxt->posix_dal->verify(dctxt->posix_dal->ctxt, fix);
+	return dctxt->under_dal->verify(dctxt->under_dal->ctxt, fix);
 }
 
 int fuzzing_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_location dest, char offline)
@@ -271,7 +271,7 @@ int fuzzing_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_loca
 		return -1;
 	}
 
-	return dctxt->posix_dal->migrate(dctxt->posix_dal->ctxt, objID, src, dest, offline);
+	return dctxt->under_dal->migrate(dctxt->under_dal->ctxt, objID, src, dest, offline);
 }
 
 int fuzzing_del(DAL_CTXT ctxt, DAL_location location, const char *objID)
@@ -284,7 +284,7 @@ int fuzzing_del(DAL_CTXT ctxt, DAL_location location, const char *objID)
 		return -2;
 	}
 
-	return dctxt->posix_dal->del(dctxt->posix_dal->ctxt, location, objID);
+	return dctxt->under_dal->del(dctxt->under_dal->ctxt, location, objID);
 }
 
 int fuzzing_stat(DAL_CTXT ctxt, DAL_location location, const char *objID)
@@ -297,7 +297,7 @@ int fuzzing_stat(DAL_CTXT ctxt, DAL_location location, const char *objID)
 		return -2;
 	}
 
-	return dctxt->posix_dal->stat(dctxt->posix_dal->ctxt, location, objID);
+	return dctxt->under_dal->stat(dctxt->under_dal->ctxt, location, objID);
 }
 
 int fuzzing_cleanup(DAL dal)
@@ -310,7 +310,7 @@ int fuzzing_cleanup(DAL dal)
 		return -2;
 	}
 
-	int res = dctxt->posix_dal->cleanup(dctxt->posix_dal);
+	int res = dctxt->under_dal->cleanup(dctxt->under_dal);
 	if (res)
 	{
 		return res;
@@ -343,7 +343,7 @@ BLOCK_CTXT fuzzing_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, con
 		free(bctxt);
 		return NULL;
 	}
-	bctxt->bctxt = dctxt->posix_dal->open(dctxt->posix_dal->ctxt, mode, location, objID);
+	bctxt->bctxt = dctxt->under_dal->open(dctxt->under_dal->ctxt, mode, location, objID);
 	if (bctxt->bctxt == NULL)
 	{
 		free(bctxt);
@@ -369,7 +369,7 @@ int fuzzing_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
 		return -2;
 	}
 
-	return bctxt->global_ctxt->posix_dal->set_meta(bctxt->bctxt, meta_buf, size);
+	return bctxt->global_ctxt->under_dal->set_meta(bctxt->bctxt, meta_buf, size);
 }
 
 ssize_t fuzzing_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
@@ -388,7 +388,7 @@ ssize_t fuzzing_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
 		return -2;
 	}
 
-	return bctxt->global_ctxt->posix_dal->get_meta(bctxt->bctxt, meta_buf, size);
+	return bctxt->global_ctxt->under_dal->get_meta(bctxt->bctxt, meta_buf, size);
 }
 
 int fuzzing_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
@@ -407,7 +407,7 @@ int fuzzing_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
 		return -2;
 	}
 
-	return bctxt->global_ctxt->posix_dal->put(bctxt->bctxt, buf, size);
+	return bctxt->global_ctxt->under_dal->put(bctxt->bctxt, buf, size);
 }
 
 ssize_t fuzzing_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
@@ -426,7 +426,7 @@ ssize_t fuzzing_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
 		return -2;
 	}
 
-	return bctxt->global_ctxt->posix_dal->get(bctxt->bctxt, buf, size, offset);
+	return bctxt->global_ctxt->under_dal->get(bctxt->bctxt, buf, size, offset);
 }
 
 int fuzzing_abort(BLOCK_CTXT ctxt)
@@ -445,7 +445,7 @@ int fuzzing_abort(BLOCK_CTXT ctxt)
 		return -2;
 	}
 
-	int res = bctxt->global_ctxt->posix_dal->abort(bctxt->bctxt);
+	int res = bctxt->global_ctxt->under_dal->abort(bctxt->bctxt);
 	if (res)
 	{
 		return res;
@@ -471,7 +471,7 @@ int fuzzing_close(BLOCK_CTXT ctxt)
 		return -2;
 	}
 
-	int res = bctxt->global_ctxt->posix_dal->close(bctxt->bctxt);
+	int res = bctxt->global_ctxt->under_dal->close(bctxt->bctxt);
 	if (res)
 	{
 		return res;
@@ -504,15 +504,16 @@ DAL fuzzing_dal_init(xmlNode *root, DAL_location max_loc)
 	dctxt->abort = NULL;
 	dctxt->close = NULL;
 
-	// initialize underlying posix dal
-	dctxt->posix_dal = posix_dal_init(root, max_loc);
-	if (dctxt->posix_dal == NULL)
+	if (root->type != XML_ELEMENT_NODE || strncmp((char *)root->name, "DAL", 4) != 0)
 	{
 		free(dctxt);
+		errno = EINVAL;
 		return NULL;
 	}
 
-	if (root->type != XML_ELEMENT_NODE || strncmp((char *)root->name, "dir_template", 13) != 0)
+	// initialize underlying DAL
+	dctxt->under_dal = init_dal(root, max_loc);
+	if (dctxt->under_dal == NULL)
 	{
 		free(dctxt);
 		errno = EINVAL;
@@ -671,7 +672,7 @@ DAL fuzzing_dal_init(xmlNode *root, DAL_location max_loc)
 	}
 	fdal->name = "fuzzing";
 	fdal->ctxt = (DAL_CTXT)dctxt;
-	fdal->io_size = dctxt->posix_dal->io_size;
+	fdal->io_size = dctxt->under_dal->io_size;
 	fdal->verify = fuzzing_verify;
 	fdal->migrate = fuzzing_migrate;
 	fdal->open = fuzzing_open;
