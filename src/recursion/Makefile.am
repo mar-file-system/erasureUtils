@@ -67,7 +67,7 @@ noinst_LTLIBRARIES = librec.la
 SIDE_LIBS = ../logging/liblog.la
 
 THREAD_QUEUE_SRC = thread_queue/thread_queue.c
-DAL_SRC = dal/posix_dal.c dal/dal.c dal/fuzzing_dal.c dal/s3_dal.c dal/rec_dal.c
+DAL_SRC = dal/posix_dal.c dal/dal.c dal/fuzzing_dal.c dal/s3_dal.c dal/rec_dal.c dal/timer_dal.c dal/noop_dal.c
 IO_SRC = io/ioqueue.c io/metainfo.c io/iothreads.c
 NE_SRC = ne/ne.c
 librec_la_SOURCES = $(THREAD_QUEUE_SRC) $(DAL_SRC) $(IO_SRC) $(NE_SRC)

@@ -147,6 +147,8 @@ int main(int argc, const char **argv)
     return -1;
   }
 
+  dal->cleanup(dal);
+
   printf("successfully verified DAL\n");
   return 0;
 }

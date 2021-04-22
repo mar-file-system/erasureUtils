@@ -826,13 +826,16 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
    // popultate the full file path for this object
    if (expand_dir_template(dctxt, srcctxt, src, objID))
    {
+      free(srcctxt->filepath);
       free(srcctxt);
       free(destctxt);
       return -1;
    }
    if (expand_dir_template(dctxt, destctxt, dest, objID))
    {
+      free(srcctxt->filepath);
       free(srcctxt);
+      free(destctxt->filepath);
       free(destctxt);
       return -1;
    }
@@ -846,7 +849,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       {
          LOG(LOG_ERR, "failed to append meta suffix \"%s\" to source file path!\n", META_SFX);
          errno = EBADF;
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          return -1;
       }
@@ -857,7 +862,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       {
          LOG(LOG_ERR, "failed to allocate space for a new source meta string! (%s)\n", strerror(errno));
          *(srcctxt->filepath + srcctxt->filelen) = '\0'; // make sure no suffix remains
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          return -1;
       }
@@ -869,7 +876,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       {
          LOG(LOG_ERR, "failed to append meta suffix \"%s\" to destination file path!\n", META_SFX);
          errno = EBADF;
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(src_meta_path);
          return -1;
@@ -881,7 +890,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       {
          LOG(LOG_ERR, "failed to allocate space for a new destination meta string! (%s)\n", strerror(errno));
          *(destctxt->filepath + destctxt->filelen) = '\0'; // make sure no suffix remains
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(src_meta_path);
          return -1;
@@ -892,7 +903,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       if (linkat(dctxt->sec_root, srcctxt->filepath, dctxt->sec_root, destctxt->filepath, 0))
       {
          LOG(LOG_ERR, "failed to link data file \"%s\" to \"%s\" (%s)\n", srcctxt->filepath, destctxt->filepath, strerror(errno));
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(src_meta_path);
          free(dest_meta_path);
@@ -912,7 +925,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
          {
             ret = manual_migrate(dctxt, objID, src, dest);
          }
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(src_meta_path);
          free(dest_meta_path);
@@ -935,7 +950,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
 
       free(src_meta_path);
       free(dest_meta_path);
+      free(srcctxt->filepath);
       free(srcctxt);
+      free(destctxt->filepath);
       free(destctxt);
       return ret;
    }
@@ -946,7 +963,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       if (oldpath == NULL)
       {
          LOG(LOG_ERR, "failed to create relative data path for symlink\n");
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          return -1;
       }
@@ -955,7 +974,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       if (symlinkat(oldpath, dctxt->sec_root, destctxt->filepath))
       {
          LOG(LOG_ERR, "failed to create data symlink\n");
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(oldpath);
          return -1;
@@ -967,7 +988,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       {
          LOG(LOG_ERR, "failed to append meta suffix \"%s\" to source file path!\n", META_SFX);
          errno = EBADF;
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(oldpath);
          return -1;
@@ -978,17 +1001,22 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
          LOG(LOG_ERR, "failed to append meta suffix \"%s\" to destination file path!\n", META_SFX);
          errno = EBADF;
          *(srcctxt->filepath + srcctxt->filelen) = '\0'; // make sure no suffix remains
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(oldpath);
          return -1;
       }
 
+      free(oldpath);
       oldpath = convert_relative(srcctxt->filepath, destctxt->filepath);
       if (oldpath == NULL)
       {
          LOG(LOG_ERR, "failed to create relative meta path for symlink\n");
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          return -1;
       }
@@ -999,7 +1027,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
          LOG(LOG_ERR, "failed to create meta symlink\n");
          *(srcctxt->filepath + srcctxt->filelen) = '\0';   // make sure no suffix remains
          *(destctxt->filepath + destctxt->filelen) = '\0'; // make sure no suffix remains
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(oldpath);
          return -1;
@@ -1010,7 +1040,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       free(oldpath);
    }
 
+   free(srcctxt->filepath);
    free(srcctxt);
+   free(destctxt->filepath);
    free(destctxt);
    return 0;
 }

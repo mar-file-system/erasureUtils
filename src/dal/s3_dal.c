@@ -95,6 +95,7 @@ typedef struct growbuffer
 
 typedef struct s3_block_context_struct
 {
+   char *bucket;                   // Bucket name
    S3BucketContext *bucketContext; // Context for object's bucket
    char *key;                      // Object key
    DAL_MODE mode;                  // Mode in which this block was opened
@@ -884,12 +885,12 @@ BLOCK_CTXT s3_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const ch
 
    // Form bucket from location
    int size = sizeof(char) * (4 + num_digits(location.block) + num_digits(location.cap) + num_digits(location.scatter));
-   char *bucket = malloc(size);
-   snprintf(bucket, size, "b%d.%d.%d", location.block, location.cap, location.scatter);
+   bctxt->bucket = malloc(size);
+   snprintf(bctxt->bucket, size, "b%d.%d.%d", location.block, location.cap, location.scatter);
 
    bctxt->bucketContext = malloc(sizeof(S3BucketContext));
    bctxt->bucketContext->hostName = NULL;
-   bctxt->bucketContext->bucketName = strdup(bucket);
+   bctxt->bucketContext->bucketName = bctxt->bucket;
    bctxt->bucketContext->protocol = S3ProtocolHTTP;
    bctxt->bucketContext->uriStyle = S3UriStylePath;
    bctxt->bucketContext->accessKeyId = dctxt->accessKey;
@@ -927,7 +928,7 @@ BLOCK_CTXT s3_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const ch
       if (statusG != S3StatusOK)
       {
          LOG(LOG_ERR, "failed to initiate multipart upload for \"%s/%s\" (%s)\n", bctxt->bucketContext->bucketName, bctxt->key, S3_get_status_name(statusG));
-         free(bucket);
+         free(bctxt->bucket);
          free(bctxt->bucketContext);
          free(bctxt->key);
          free(bctxt->upload_id);
@@ -940,7 +941,6 @@ BLOCK_CTXT s3_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const ch
       bctxt->part_size = growbuffer_append(&(bctxt->part_gb), "<CompleteMultipartUpload>", strlen("<CompleteMultipartUpload>"));
    }
 
-   free(bucket);
    return bctxt;
 }
 
@@ -1151,6 +1151,7 @@ int s3_abort(BLOCK_CTXT ctxt)
       growbuffer_destroy(bctxt->part_gb);
    }
    free(bctxt->upload_id);
+   free(bctxt->bucket);
    free(bctxt->bucketContext);
    free(bctxt->key);
    free(bctxt);
@@ -1235,6 +1236,7 @@ int s3_close(BLOCK_CTXT ctxt)
    }
 
    // free state
+   free(bctxt->bucket);
    free(bctxt->bucketContext);
    free(bctxt->key);
    free(bctxt);
