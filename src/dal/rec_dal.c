@@ -344,7 +344,7 @@ int rec_stat(DAL_CTXT ctxt, DAL_location location, const char *objID)
     LOG(LOG_ERR, "stat failed (%s)\n", strerror(errno));
     return -1;
   }
-  free(handle);
+  ne_abort(handle);
   return 0;
 }
 

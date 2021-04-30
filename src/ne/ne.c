@@ -1743,19 +1743,26 @@ int ne_abort(ne_handle handle)
       return -1;
    }
 
-   int i;
-   for (i = 0; i < handle->epat.N + handle->epat.E; i++)
+   if (handle->mode != NE_STAT)
    {
-      tq_set_flags(handle->thread_queues[i], TQ_ABORT);
-      tq_unset_flags(handle->thread_queues[i], TQ_HALT);
-      // we need to empty any remaining elements from the queue
-      while (tq_dequeue(handle->thread_queues[i], TQ_ABORT, NULL) > 0)
+      int i;
+      for (i = 0; i < handle->epat.N + handle->epat.E; i++)
       {
-         LOG(LOG_INFO, "Releasing unused queue element\n");
-         release_ioblock(handle->thread_states[i].ioq);
+         tq_set_flags(handle->thread_queues[i], TQ_ABORT);
+         tq_unset_flags(handle->thread_queues[i], TQ_HALT);
+         // we need to empty any remaining elements from the queue
+         while (tq_dequeue(handle->thread_queues[i], TQ_ABORT, NULL) > 0)
+         {
+            LOG(LOG_INFO, "Releasing unused thread queue element\n");
+         }
+         while (release_ioblock(handle->thread_states[i].ioq) >= 0)
+         {
+            LOG(LOG_INFO, "Releasing unused ioblock\n");
+         }
+         tq_next_thread_status(handle->thread_queues[i], NULL);
+         tq_close(handle->thread_queues[i]);
+         destroy_ioqueue(handle->thread_states[i].ioq);
       }
-      tq_next_thread_status(handle->thread_queues[i], NULL);
-      tq_close(handle->thread_queues[i]);
    }
 
    free_handle(handle);
