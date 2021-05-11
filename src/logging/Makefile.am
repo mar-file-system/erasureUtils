@@ -59,4 +59,6 @@ include_HEADERS = logging.h
 noinst_LTLIBRARIES = liblog.la
 liblog_la_SOURCES = logging.c
 
+lib_LTLIBRARIES = liblogging.la
+liblogging_la_SOURCES = logging.c
 
