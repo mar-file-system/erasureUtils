@@ -70,6 +70,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <pwd.h>
+#include <unistd.h>
 
 //   -------------    POSIX DEFINITIONS    -------------
 
@@ -111,7 +113,7 @@ typedef struct posix_dal_context_struct
  * @param DAL_location* max_loc : Reference to the maximum acceptable location value
  * @return int : Zero if the location is acceptable, -1 otherwise
  */
-int check_loc_limits(DAL_location loc, const DAL_location *max_loc)
+static int check_loc_limits(DAL_location loc, const DAL_location *max_loc)
 {
    //
    if (loc.pod > max_loc->pod)
@@ -142,7 +144,7 @@ int check_loc_limits(DAL_location loc, const DAL_location *max_loc)
  * @param int value : Integer value to be represented in decimal
  * @return int : Number of decimal digits required, or -1 on a bounds error
  */
-int num_digits(int value)
+static int num_digits(int value)
 {
    if (value < 0)
    {
@@ -172,34 +174,11 @@ int num_digits(int value)
    return -1;
 }
 
-/** (INTERNAL HELPER FUNCTION)
- * Perform necessary string substitutions/calculations to populate all values in a new POSIX_BLOCK_CTXT
- * @param POSIX_DAL_CTXT dctxt : Context reference of the current POSIX DAL
- * @param POSIX_BLOCK_CTXT bctxt : Block context to be populated
- * @param DAL_location loc : Location of the object to be referenced by bctxt
- * @param const char* objID : Object ID to be referenced by bctxt
- * @return int : Zero on success, -1 on failure
- */
-int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_location loc, const char *objID)
+static char *expand_path(const char *parse, char *fill, DAL_location loc, DAL_location *loc_flags, int dir)
 {
-   // check that our DAL_location is within bounds
-   if (check_loc_limits(loc, &(dctxt->max_loc)) != 0)
-   {
-      errno = EDOM;
-      return -1;
-   }
-
-   //
-   bctxt->sfd = dctxt->sec_root;
-
-   // allocate string to hold the dirpath
-   // NOTE -- allocation size is an estimate, based on the above pod/block/cap/scat limits
-   bctxt->filepath = malloc(sizeof(char) * (dctxt->tmplen + dctxt->dirpad + strlen(objID) + SFX_PADDING + 1));
-
-   // parse through the directory template string, populating filepath as we go
-   const char *parse = dctxt->dirtmp;
-   char *fill = bctxt->filepath;
    char escp = 0;
+   char *end = fill;
+
    while (*parse != '\0')
    {
 
@@ -233,18 +212,34 @@ int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locati
             if (*parse == 'p')
             {
                fillval = loc.pod;
+               if (loc_flags)
+               {
+                  loc_flags->pod = 1;
+               }
             }
             else if (*parse == 'b')
             {
                fillval = loc.block;
+               if (loc_flags)
+               {
+                  loc_flags->block = 1;
+               }
             }
             else if (*parse == 'c')
             {
                fillval = loc.cap;
+               if (loc_flags)
+               {
+                  loc_flags->cap = 1;
+               }
             }
             else if (*parse == 's')
             {
                fillval = loc.scatter;
+               if (loc_flags)
+               {
+                  loc_flags->scatter = 1;
+               }
             }
             else
             {
@@ -267,13 +262,17 @@ int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locati
             {
                // if snprintf failed for some reason, we can't recover
                LOG(LOG_ERR, "snprintf failed when attempting dir_template substitution!\n");
-               free(bctxt->filepath);
-               bctxt->filepath = NULL;
-               return -1;
+               return NULL;
             }
             fill += fillval; // update fill pointer to refernce the new end of the string
             parse++;         // skip over the '}' character that we have already verified
          }
+         break;
+
+      case '/': // check for the end of a directory
+         *fill = *parse;
+         fill++;
+         end = fill;
          break;
 
       default:
@@ -289,6 +288,47 @@ int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locati
 
       parse++;
    }
+   if (dir)
+   {
+      *end = '\0';
+   }
+   return fill;
+}
+
+/** (INTERNAL HELPER FUNCTION)
+ * Perform necessary string substitutions/calculations to populate all values in a new POSIX_BLOCK_CTXT
+ * @param POSIX_DAL_CTXT dctxt : Context reference of the current POSIX DAL
+ * @param POSIX_BLOCK_CTXT bctxt : Block context to be populated
+ * @param DAL_location loc : Location of the object to be referenced by bctxt
+ * @param const char* objID : Object ID to be referenced by bctxt
+ * @return int : Zero on success, -1 on failure
+ */
+static int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_location loc, const char *objID)
+{
+   // check that our DAL_location is within bounds
+   if (check_loc_limits(loc, &(dctxt->max_loc)) != 0)
+   {
+      errno = EDOM;
+      return -1;
+   }
+
+   //
+   bctxt->sfd = dctxt->sec_root;
+
+   // allocate string to hold the dirpath
+   // NOTE -- allocation size is an estimate, based on the above pod/block/cap/scat limits
+   bctxt->filepath = malloc(sizeof(char) * (dctxt->tmplen + dctxt->dirpad + strlen(objID) + SFX_PADDING + 1));
+
+   // parse through the directory template string, populating filepath as we go
+   const char *parse = dctxt->dirtmp;
+   char *fill = bctxt->filepath;
+   if (!(fill = expand_path(parse, fill, loc, NULL, 0)))
+   {
+      free(bctxt->filepath);
+      bctxt->filepath = NULL;
+      return -1;
+   }
+
    // parse through the given objID, populating filepath as we go
    parse = objID;
    while (*parse != '\0')
@@ -326,7 +366,7 @@ int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL_locati
  *                          1 - ALL data/meta files
  * @return int : Zero on success, -1 on failure
  */
-int block_delete(POSIX_BLOCK_CTXT bctxt, char components)
+static int block_delete(POSIX_BLOCK_CTXT bctxt, char components)
 {
    char *working_suffix = WRITE_SFX;
    if (bctxt->mode == DAL_REBUILD)
@@ -417,7 +457,7 @@ int block_delete(POSIX_BLOCK_CTXT bctxt, char components)
  * @param char* newpath : Path to our destination location (relative to the same source root as oldpath)
  * @return char* : Path to oldpath's location relative to newpath's location. NULL on failure
  */
-char *convert_relative(char *oldpath, char *newpath)
+static char *convert_relative(char *oldpath, char *newpath)
 {
    // check that both paths exist
    if (oldpath == NULL || newpath == NULL)
@@ -471,6 +511,47 @@ char *convert_relative(char *oldpath, char *newpath)
    }
 
    return result - 3 * nBack;
+}
+
+/** (INTERNAL HELPER FUNCTION)
+ * Recursively makes missing directories in file path relative to directory file
+ * descriptor.
+ * @param int dirfd : Directory file descriptor all paths are relative to
+ * @param char *pathname : math of directory to create
+ * @param mode_t mode : permissions to use
+ * @return int : Zero on success, Non-zero if one or more directories could not
+ * be created
+ */
+static int r_mkdirat(int dirfd, char *pathname, mode_t mode)
+{
+   char *parse = pathname;
+   int num_err = 0;
+   struct stat info;
+   while (*parse != '\0')
+   {
+      if (*parse == '/')
+      {
+         *parse = '\0';
+         if (fstatat(dirfd, pathname, &info, 0) || !S_ISDIR(info.st_mode))
+         {
+            if (mkdirat(dirfd, pathname, mode))
+            {
+               LOG(LOG_ERR, "failed to create directory \"%s\" (%s)\n", pathname, strerror(errno));
+               num_err++;
+               *parse = '/';
+               return num_err;
+            }
+            else
+            {
+               LOG(LOG_INFO, "successfully created directory \"%s\"\n", pathname);
+            }
+         }
+         *parse = '/';
+      }
+      parse++;
+   }
+   mkdirat(dirfd, pathname, mode);
+   return num_err;
 }
 
 // forward-declarations to allow these functions to be used in manual_migrate
@@ -602,12 +683,132 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
 
 int posix_verify(DAL_CTXT ctxt, char fix)
 {
-   errno = ENOSYS;
-   return -1; // TODO -- actually write this
+   uid_t uid = geteuid();
+   if (uid != 0)
+   {
+      LOG(LOG_ERR, "verify must be run as root (%d)\n", uid);
+      return -1;
+   }
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return -1;
+   }
+   POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a s3 context
+
+   int num_err = 0;
+   struct stat info;
+
+   if (fstat(dctxt->sec_root, &info) || !S_ISDIR(info.st_mode))
+   {
+      LOG(LOG_ERR, "failed to verify secure root exists (%s)\n", strerror(errno));
+      return ++num_err;
+   }
+   struct passwd *pw;
+   if (!(pw = getpwuid(info.st_uid)))
+   {
+      LOG(LOG_ERR, "failed to get secure root owner or group (%s)\n", strerror(errno));
+      return ++num_err;
+   }
+   if (pw->pw_uid || pw->pw_gid)
+   {
+      LOG(LOG_ERR, "secure root does not have root ownership or root group\n");
+      if (fix)
+      {
+         if (fchown(dctxt->sec_root, 0, 0))
+         {
+            LOG(LOG_ERR, "failed to set root as owner and group of secure root (%s)\n", strerror(errno));
+            num_err++;
+         }
+         else
+         {
+            LOG(LOG_INFO, "successfully set root as owner and group of secure root\n");
+         }
+      }
+      else
+      {
+         num_err++;
+      }
+   }
+   if ((info.st_mode & S_IRWXU) ^ S_IRWXU || (info.st_mode & S_IRWXG) ^ S_IRWXG || info.st_mode & S_IRWXO)
+   {
+      LOG(LOG_ERR, "failed to verify secure root permissions\n");
+      if (fix)
+      {
+         if (fchmod(dctxt->sec_root, S_IRWXU | S_IRWXG))
+         {
+            LOG(LOG_ERR, "failed to set secure root permissions (%s)\n", strerror(errno));
+            num_err++;
+         }
+         else
+         {
+            LOG(LOG_INFO, "successfully set secure root permissions\n");
+         }
+      }
+      else
+      {
+         num_err++;
+      }
+   }
+   char *path = malloc(sizeof(char) * (dctxt->tmplen + dctxt->dirpad + SFX_PADDING + 1));
+   DAL_location loc = {.pod = 0, .block = 0, .cap = 0, .scatter = 0};
+   DAL_location loc_flags = {.pod = 0, .block = 0, .cap = 0, .scatter = 0};
+   expand_path(dctxt->dirtmp, path, dctxt->max_loc, &loc_flags, 1);
+   // return if there are not any directories to check
+   if (!strlen(path))
+   {
+      free(path);
+      return num_err;
+   }
+   // check every valid combination of pod/block/cap/scatter
+   for (int p = 0; p <= (loc_flags.pod ? dctxt->max_loc.pod : 0); p++)
+   {
+      loc.pod = p;
+      for (int b = 0; b <= (loc_flags.block ? dctxt->max_loc.block : 0); b++)
+      {
+         loc.block = b;
+         for (int c = 0; c <= (loc_flags.cap ? dctxt->max_loc.cap : 0); c++)
+         {
+            loc.cap = c;
+            for (int s = 0; s <= (loc_flags.scatter ? dctxt->max_loc.scatter : 0); s++)
+            {
+               loc.scatter = s;
+               expand_path(dctxt->dirtmp, path, loc, NULL, 1);
+               LOG(LOG_INFO, "checking path %s\n", path);
+               if (fstatat(dctxt->sec_root, path, &info, 0) || !S_ISDIR(info.st_mode))
+               {
+                  LOG(LOG_ERR, "failed to verify directory \"%s\" exists (%s)\n", path, strerror(errno));
+                  if (fix)
+                  {
+                     num_err += r_mkdirat(dctxt->sec_root, path, S_IRWXU | S_IRWXG | S_IRWXO);
+                  }
+                  else
+                  {
+                     num_err++;
+                  }
+               }
+            }
+         }
+      }
+   }
+   free(path);
+   return num_err;
 }
 
 int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_location dest, char offline)
 {
+   // fail if only the block is different
+   if (src.pod == dest.pod && src.cap == dest.cap && src.scatter == dest.scatter)
+   {
+      LOG(LOG_ERR, "received identical locations!\n");
+      return -1;
+   }
+
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return -1;
+   }
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a posix context
 
    POSIX_BLOCK_CTXT srcctxt = malloc(sizeof(struct posix_block_context_struct));
@@ -625,13 +826,16 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
    // popultate the full file path for this object
    if (expand_dir_template(dctxt, srcctxt, src, objID))
    {
+      free(srcctxt->filepath);
       free(srcctxt);
       free(destctxt);
       return -1;
    }
    if (expand_dir_template(dctxt, destctxt, dest, objID))
    {
+      free(srcctxt->filepath);
       free(srcctxt);
+      free(destctxt->filepath);
       free(destctxt);
       return -1;
    }
@@ -645,7 +849,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       {
          LOG(LOG_ERR, "failed to append meta suffix \"%s\" to source file path!\n", META_SFX);
          errno = EBADF;
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          return -1;
       }
@@ -656,7 +862,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       {
          LOG(LOG_ERR, "failed to allocate space for a new source meta string! (%s)\n", strerror(errno));
          *(srcctxt->filepath + srcctxt->filelen) = '\0'; // make sure no suffix remains
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          return -1;
       }
@@ -668,7 +876,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       {
          LOG(LOG_ERR, "failed to append meta suffix \"%s\" to destination file path!\n", META_SFX);
          errno = EBADF;
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(src_meta_path);
          return -1;
@@ -680,7 +890,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       {
          LOG(LOG_ERR, "failed to allocate space for a new destination meta string! (%s)\n", strerror(errno));
          *(destctxt->filepath + destctxt->filelen) = '\0'; // make sure no suffix remains
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(src_meta_path);
          return -1;
@@ -691,7 +903,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       if (linkat(dctxt->sec_root, srcctxt->filepath, dctxt->sec_root, destctxt->filepath, 0))
       {
          LOG(LOG_ERR, "failed to link data file \"%s\" to \"%s\" (%s)\n", srcctxt->filepath, destctxt->filepath, strerror(errno));
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(src_meta_path);
          free(dest_meta_path);
@@ -711,7 +925,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
          {
             ret = manual_migrate(dctxt, objID, src, dest);
          }
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(src_meta_path);
          free(dest_meta_path);
@@ -734,7 +950,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
 
       free(src_meta_path);
       free(dest_meta_path);
+      free(srcctxt->filepath);
       free(srcctxt);
+      free(destctxt->filepath);
       free(destctxt);
       return ret;
    }
@@ -745,7 +963,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       if (oldpath == NULL)
       {
          LOG(LOG_ERR, "failed to create relative data path for symlink\n");
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          return -1;
       }
@@ -754,7 +974,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       if (symlinkat(oldpath, dctxt->sec_root, destctxt->filepath))
       {
          LOG(LOG_ERR, "failed to create data symlink\n");
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(oldpath);
          return -1;
@@ -766,7 +988,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       {
          LOG(LOG_ERR, "failed to append meta suffix \"%s\" to source file path!\n", META_SFX);
          errno = EBADF;
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(oldpath);
          return -1;
@@ -777,17 +1001,22 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
          LOG(LOG_ERR, "failed to append meta suffix \"%s\" to destination file path!\n", META_SFX);
          errno = EBADF;
          *(srcctxt->filepath + srcctxt->filelen) = '\0'; // make sure no suffix remains
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(oldpath);
          return -1;
       }
 
+      free(oldpath);
       oldpath = convert_relative(srcctxt->filepath, destctxt->filepath);
       if (oldpath == NULL)
       {
          LOG(LOG_ERR, "failed to create relative meta path for symlink\n");
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          return -1;
       }
@@ -798,7 +1027,9 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
          LOG(LOG_ERR, "failed to create meta symlink\n");
          *(srcctxt->filepath + srcctxt->filelen) = '\0';   // make sure no suffix remains
          *(destctxt->filepath + destctxt->filelen) = '\0'; // make sure no suffix remains
+         free(srcctxt->filepath);
          free(srcctxt);
+         free(destctxt->filepath);
          free(destctxt);
          free(oldpath);
          return -1;
@@ -809,13 +1040,20 @@ int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_locati
       free(oldpath);
    }
 
+   free(srcctxt->filepath);
    free(srcctxt);
+   free(destctxt->filepath);
    free(destctxt);
    return 0;
 }
 
 int posix_del(DAL_CTXT ctxt, DAL_location location, const char *objID)
 {
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return -1;
+   }
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a posix context
 
    // allocate space for a new BLOCK context
@@ -841,6 +1079,11 @@ int posix_del(DAL_CTXT ctxt, DAL_location location, const char *objID)
 
 int posix_stat(DAL_CTXT ctxt, DAL_location location, const char *objID)
 {
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return -1;
+   }
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a posix context
 
    // allocate space for a new BLOCK context
@@ -868,6 +1111,11 @@ int posix_stat(DAL_CTXT ctxt, DAL_location location, const char *objID)
 
 int posix_cleanup(DAL dal)
 {
+   if (dal == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal!\n");
+      return -1;
+   }
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)dal->ctxt; // should have been passed a posix context
 
    // free DAL context state
@@ -881,6 +1129,11 @@ int posix_cleanup(DAL dal)
 
 BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char *objID)
 {
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return NULL;
+   }
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a posix context
 
    // allocate space for a new BLOCK context
@@ -950,12 +1203,14 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    }
 
    // open the meta file and check for success
+   mode_t mask = umask(0);
    bctxt->mfd = openat(dctxt->sec_root, bctxt->filepath, oflags, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
    if (bctxt->mfd < 0)
    {
       LOG(LOG_ERR, "failed to open meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
       if (mode == DAL_METAREAD)
       {
+         umask(mask);
          free(bctxt->filepath);
          free(bctxt);
          return NULL;
@@ -982,6 +1237,7 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
       {
          LOG(LOG_ERR, "failed to append suffix to file path!\n");
          errno = EBADF;
+         umask(mask);
          free(bctxt->filepath);
          free(bctxt);
          return NULL;
@@ -995,6 +1251,7 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
       if (bctxt->fd < 0)
       {
          LOG(LOG_ERR, "failed to open file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
+         umask(mask);
          free(bctxt->filepath);
          free(bctxt);
          return NULL;
@@ -1002,6 +1259,9 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    }
    // remove any suffix in the simplest possible manner
    *(bctxt->filepath + bctxt->filelen) = '\0';
+
+   // restore the previous umask
+   umask(mask);
 
    // finally, return a reference to our BLOCK context
    return bctxt;
@@ -1118,7 +1378,7 @@ int posix_abort(BLOCK_CTXT ctxt)
    }
    if (close(bctxt->mfd) != 0)
    {
-      LOG(LOG_WARNING, "failed to close meta file \"%s\" during abort (%s)\n", bctxt->filepath, strerror(errno));
+      LOG(LOG_WARNING, "failed to close meta file \"%s%s\" during abort (%s)\n", bctxt->filepath, META_SFX, strerror(errno));
    }
    if (block_delete(bctxt, 0))
    {
@@ -1151,7 +1411,7 @@ int posix_close(BLOCK_CTXT ctxt)
    // attempt to close our meta FD and check for success
    if (close(bctxt->mfd))
    {
-      LOG(LOG_ERR, "failed to close meta file \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
+      LOG(LOG_ERR, "failed to close meta file \"%s%s\" (%s)\n", bctxt->filepath, META_SFX, strerror(errno));
       return -1;
    }
 
@@ -1335,36 +1595,41 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
             parse++; // next char
          }
 
-         // find the secure root node. Fail if there is none
-         while (root->type != XML_ELEMENT_NODE || strncmp((char *)root->name, "sec_root", 9) != 0)
-         {
-            root = root->next;
-            if (root == NULL)
-            {
-               LOG(LOG_ERR, "failed to find \"secure root\" node\n");
-               free(dctxt);
-               errno = EINVAL;
-               return NULL;
-            }
-         }
+         size_t io_size = IO_SIZE;
 
-         // make sure that node contains a text element within it and update secure root handle
          dctxt->sec_root = -1;
          errno = EINVAL;
+         char *sec_root_path = "not found";
 
-         if (root->children == NULL)
+         // find the secure root node and io size
+         while (root != NULL)
          {
-            dctxt->sec_root = AT_FDCWD;
-         }
-         else if (root->children->type == XML_TEXT_NODE)
-         {
-            dctxt->sec_root = open((char *)root->children->content, O_DIRECTORY);
+            if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "sec_root", 9) == 0)
+            {
+               if (root->children == NULL)
+               {
+                  dctxt->sec_root = AT_FDCWD;
+               }
+               else if (root->children->type == XML_TEXT_NODE)
+               {
+                  sec_root_path = (char *)root->children->content;
+                  dctxt->sec_root = open((char *)root->children->content, O_DIRECTORY);
+               }
+            }
+            else if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "io_size", 8) == 0)
+            {
+               if (atol((char *)root->children->content))
+               {
+                  io_size = atol((char *)root->children->content);
+               }
+            }
+            root = root->next;
          }
 
-         // make sure the secure root handle is valid
+         // make sure the secure root handle was set
          if (dctxt->sec_root == -1)
          {
-            LOG(LOG_ERR, "failed to open secure root handle\n");
+            LOG(LOG_ERR, "failed to find or open secure root handle: %s\n", sec_root_path);
             free(dctxt);
             return NULL;
          }
@@ -1379,7 +1644,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
          } // malloc will set errno
          pdal->name = "posix";
          pdal->ctxt = (DAL_CTXT)dctxt;
-         pdal->io_size = IO_SIZE;
+         pdal->io_size = io_size;
          pdal->verify = posix_verify;
          pdal->migrate = posix_migrate;
          pdal->open = posix_open;

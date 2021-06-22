@@ -116,6 +116,8 @@ AC_CHECK_LIB([pthread], [pthread_create], [], [AC_MSG_ERROR(["Could not locate l
 
 AC_CHECK_LIB([xml2], [xmlReadFile], [], [AC_MSG_ERROR(["Could not locate libxml2!"])])
 
+AC_CHECK_LIB([s3], [S3_initialize], [], [AC_MSG_ERROR(["Could not locate libs3!"])])
+
 PKG_CHECK_MODULES( XML, libxml-2.0 )
 
 AC_CHECK_LIB([isal],    [crc32_ieee],
@@ -189,7 +191,8 @@ AC_ARG_ENABLE([syslog],
 
 #AM_CONDITIONAL([DEBUG_SOCKETS],     [test "$enable_debug" = sockets || test "$enable_debug" = all ])
 #AM_CONDITIONAL([DEBUG_SOCKETS_GDB], [test "x$debug_mode" = "xgdb" ])
-#AM_CONDITIONAL([DEBUG_FT],          [test "$enable_debug" = ft ])
+AM_CONDITIONAL([DEBUG_FT],          [test "$enable_debug" = ft ])
+AM_CONDITIONAL([GPROF],          [test "$enable_gprof" = yes ])
 
 
 
@@ -203,7 +206,9 @@ AC_CONFIG_FILES([Makefile
                  src/dal/Makefile
                  src/io/Makefile
                  src/ne/Makefile
+		 src/recursion/Makefile
                  src/isal_benchmark/Makefile
+		 src/legacy/fast_timer/Makefile
                  config/erasure_config.h:config/erasure_config.h.in
                  config/udal_config.h:config/udal_config.h.in
                  config/Makefile

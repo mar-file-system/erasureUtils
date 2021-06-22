@@ -124,12 +124,10 @@ int main(int argc, char **argv)
     printf("warning: put did not return expected value\n");
   }
   char *meta_val = "this is a meta value!\n";
-  /*
   if (dal->set_meta(block, meta_val, 22))
   {
     printf("warning: set_meta did not return expected value\n");
   }
-  */
   if (dal->close(block))
   {
     printf("error: failed to close block write context: %s\n", strerror(errno));
@@ -159,9 +157,10 @@ int main(int argc, char **argv)
     printf("warning: retrieved data does not match written!\n");
   }
   */
-  if (dal->get_meta(block, readbuffer, (10 * 1024)) != 22)
+  int ret;
+  if ((ret = dal->get_meta(block, readbuffer, (10 * 1024))) != 22)
   {
-    printf("warning: get_meta returned an unexpected value\n");
+    printf("warning: get_meta returned an unexpected value %d\n", ret);
   }
   else if (strncmp(meta_val, readbuffer, 22))
   {

@@ -60,8 +60,10 @@
 -->
 
 <DAL type="fuzzing">
-	<dir_template>stripefile.{b}</dir_template>
-   <sec_root>./</sec_root>
+   <DAL type="posix">
+	   <dir_template>stripefile.{b}</dir_template>
+	   <sec_root>./</sec_root>
+   </DAL>
 	<fuzzing>
             <put>1</put>
             <get_meta></get_meta>

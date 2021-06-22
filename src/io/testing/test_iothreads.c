@@ -207,7 +207,7 @@ int main( int argc, char** argv ) {
 
    // finally, call our write thread termination function
    printf( "terminating write state..." );
-   write_term( &tstate, (void**) &pblock );
+   write_term( &tstate, (void**) &pblock, 0 );
    printf( "done\n" );
 
    // check for any write errors
@@ -289,7 +289,7 @@ int main( int argc, char** argv ) {
 
    // call our read term func
    printf( "Terminating read thread state..." );
-   read_term( &tstate, (void**) &iob );
+   read_term( &tstate, (void**) &iob, 0 );
    printf( "done\n" );
 
 
