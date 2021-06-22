@@ -62,6 +62,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <unistd.h>
 #include <stdio.h>
 #include <fcntl.h>
+#include <errno.h>
 
 #define DATASIZE (100 << 20)
 #define NUMPARTS 10
@@ -109,6 +110,10 @@ int main(int argc, char **argv)
   if (dal == NULL)
   {
     printf("error: failed to initialize DAL: %s\n", strerror(errno));
+    if (errno = ENONET)
+    {
+      return 0;
+    }
     return -1;
   }
 

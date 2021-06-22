@@ -943,6 +943,7 @@ DAL timer_dal_init(xmlNode *root, DAL_location max_loc)
     }
     else if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "dump_path", 8) == 0)
     {
+      mkdir((char *)root->children->content, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
       dctxt->dump_fd = open((char *)root->children->content, O_DIRECTORY);
     }
     root = root->next;

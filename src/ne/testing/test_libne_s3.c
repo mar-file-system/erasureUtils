@@ -62,6 +62,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 
 // sentinel values to ensure good data transfer
 char tail_sent = 'T';
@@ -238,6 +239,10 @@ int test_values(xmlNode *root_element, ne_erasure *epat, size_t iosz, size_t par
    if (ctxt == NULL)
    {
       printf("ERROR: Failed to initialize ne_ctxt!\n");
+      if (errno = ENONET)
+      {
+         return 0;
+      }
       return -1;
    }
 

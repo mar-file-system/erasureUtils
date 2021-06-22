@@ -454,6 +454,29 @@ static S3Status putResponseProperiesCallback(const S3ResponseProperties *propert
 }
 
 /** (INTERNAL HELPER FUNCTION)
+ * This callback is made for each bucket resulting from a list service
+ * operation.
+ *
+ * @param ownerId is the ID of the owner of the bucket
+ * @param ownerDisplayName is the owner display name of the owner of the bucket
+ * @param bucketName is the name of the bucket
+ * @param creationDateSeconds if < 0 indicates that no creation date was
+ *        supplied for the bucket; if >= 0 indicates the number of seconds
+ *        since UNIX Epoch of the creation date of the bucket
+ * @param callbackData is the callback data as specified when the request
+ *        was issued.
+ * @return S3StatusOK to continue processing the request, anything else to
+ *         immediately abort the request with a status which will be
+ *         passed to the S3ResponseCompleteCallback for this request.
+ *         Typically, this will return either S3StatusOK or
+ *         S3StatusAbortedByCallback.
+ **/
+static S3Status listCallback(const char *ownerId, const char *ownerDisplayName, const char *bucketName, int64_t creationDateSeconds, void *callbackData)
+{
+   return S3StatusOK;
+}
+
+/** (INTERNAL HELPER FUNCTION)
  * This callback is made when the response has been completely received, or an
  * error has occurred which has prematurely aborted the request, or one of the
  * other user-supplied callbacks returned a value intended to abort the
@@ -576,6 +599,14 @@ static S3MultipartCommitHandler commitHandler = {
      &responseCompleteCallback},
     &commitObjectCallback,
     NULL
+
+};
+
+// Callbacks for list service operations
+static S3ListServiceHandler listHandler = {
+    {&responsePropertiesCallback,
+     &responseCompleteCallback},
+    &listCallback
 
 };
 
@@ -1351,6 +1382,25 @@ DAL s3_dal_init(xmlNode *root, DAL_location max_loc)
             free(dctxt->secretKey);
             free(dctxt->region);
             free(dctxt);
+            return NULL;
+         }
+
+         // test for a connection to the S3 server
+         int i = TRIES;
+         do
+         {
+            S3_list_service(S3ProtocolHTTP, dctxt->accessKey, dctxt->secretKey, NULL, hostname, dctxt->region, NULL, TIMEOUT, &listHandler, NULL);
+            i--;
+         } while (S3_status_is_retryable(statusG) && i >= 0);
+
+         if (statusG != S3StatusOK)
+         {
+            LOG(LOG_ERR, "failed to verify connection to S3 server\n");
+            free(dctxt->accessKey);
+            free(dctxt->secretKey);
+            free(dctxt->region);
+            free(dctxt);
+            errno = ENONET;
             return NULL;
          }
 
