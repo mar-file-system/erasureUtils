@@ -349,7 +349,8 @@ ne_handle allocate_handle(ne_ctxt ctxt, const char *objID, ne_location loc, meta
    handle->iob = calloc(num_blocks, sizeof(ioblock *));
    if (handle->iob == NULL)
    {
-      LOG(LOG_ERR, "Failed to allocate space for ioblock references!\n");
+      LOG(LOG_ERR, "Failed to allocate space for ioblock references! (%zubytes)\n",
+                   num_blocks * sizeof(ioblock *));
       free(handle->objID);
       free(handle);
       return NULL;
@@ -677,13 +678,18 @@ int read_stripes(ne_handle handle)
    // make sure our sub_offset is stripe aligned and at the end of our current ioblocks
    if (handle->sub_offset % stripesz || handle->sub_offset != (handle->iob_datasz * N))
    {
-      LOG(LOG_ERR, "Called on handle with an inappropriate sub_offset (%zd)!\n", handle->sub_offset);
-      return -1;
+      if ( handle->iob_datasz ) {
+         LOG(LOG_ERR, "Called on handle with an inappropriate sub_offset (%zd)!\n", handle->sub_offset);
+         return -1;
+      }
+      // we don't current have any ioblocks at all, so allow the read to proceed
    }
-
-   // update handle offset values
-   handle->iob_offset += handle->iob_datasz;
-   handle->sub_offset = 0;
+   else {
+      // normal case, we're retrieving a new set of stripes after exhausing the previous
+      // update handle offset values
+      handle->iob_offset += handle->iob_datasz;
+      handle->sub_offset = 0;
+   }
 
    // if we have previous block references, we'll need to release them
    int i;
@@ -2364,7 +2370,7 @@ off_t ne_seek(ne_handle handle, off_t offset)
 
    if (handle->mode != NE_RDONLY && handle->mode != NE_RDALL && (handle->mode == NE_REBUILD && offset != 0))
    {
-      LOG(LOG_ERR, "Handle is in improper mode for reading!\n");
+      LOG(LOG_ERR, "Handle is in improper mode for seeking!\n");
       errno = EPERM;
       return -1;
    }
@@ -2381,7 +2387,7 @@ off_t ne_seek(ne_handle handle, off_t offset)
 
    // skip to appropriate stripe
 
-   LOG(LOG_INFO, "Current offset = %zu\n", (handle->iob_offset * handle->epat.N) + handle->sub_offset);
+   LOG(LOG_INFO, "Current offset = %zu\n", (handle->iob_offset * N) + handle->sub_offset);
    unsigned int cur_stripe = (unsigned int)(handle->iob_offset / partsz); // I think int truncation actually works out in our favor here
    unsigned int tgt_stripe = (unsigned int)(offset / stripesz);
    ssize_t max_data = ioqueue_maxdata(handle->thread_states[0].ioq);
@@ -2497,7 +2503,7 @@ off_t ne_seek(ne_handle handle, off_t offset)
       handle->iob_datasz = 0;                           // indicate we have to repopulate all ioblocks
       handle->iob_offset = (tgt_stripe * partsz);       //new_iob_off;
                                                         //      int iob_stripe = (int)( new_iob_off / partsz );
-      handle->sub_offset = offset - handle->iob_offset; //( iob_stripe * stripesz );
+      handle->sub_offset = offset - (handle->iob_offset * N); //( iob_stripe * stripesz );
    }
    else
    {

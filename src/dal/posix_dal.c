@@ -1062,6 +1062,7 @@ int posix_del(DAL_CTXT ctxt, DAL_location location, const char *objID)
    {
       return -1;
    } // malloc will set errno
+   bctxt->mode = DAL_WRITE; // assume write mode
 
    // popultate the full file path for this object
    if (expand_dir_template(dctxt, bctxt, location, objID) != 0)
@@ -1599,7 +1600,6 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
 
          dctxt->sec_root = -1;
          errno = EINVAL;
-         char *sec_root_path = "not found";
 
          // find the secure root node and io size
          while (root != NULL)
@@ -1612,7 +1612,6 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
                }
                else if (root->children->type == XML_TEXT_NODE)
                {
-                  sec_root_path = (char *)root->children->content;
                   dctxt->sec_root = open((char *)root->children->content, O_DIRECTORY);
                }
             }
@@ -1622,6 +1621,11 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
                {
                   io_size = atol((char *)root->children->content);
                }
+               else {
+                  LOG( LOG_ERR, "Failed to parse 'io_size' value: \"%s\"\n", (char *)root->children->content );
+                  free( dctxt );
+                  return NULL;
+               }
             }
             root = root->next;
          }
@@ -1629,7 +1633,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
          // make sure the secure root handle was set
          if (dctxt->sec_root == -1)
          {
-            LOG(LOG_ERR, "failed to find or open secure root handle: %s\n", sec_root_path);
+            LOG(LOG_ERR, "failed to find or open secure root handle\n");
             free(dctxt);
             return NULL;
          }
