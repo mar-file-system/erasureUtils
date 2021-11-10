@@ -1623,6 +1623,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
                }
                else {
                   LOG( LOG_ERR, "Failed to parse 'io_size' value: \"%s\"\n", (char *)root->children->content );
+                  free( dctxt->dirtmp );
                   free( dctxt );
                   return NULL;
                }
@@ -1634,6 +1635,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
          if (dctxt->sec_root == -1)
          {
             LOG(LOG_ERR, "failed to find or open secure root handle\n");
+            free( dctxt->dirtmp );
             free(dctxt);
             return NULL;
          }
@@ -1643,6 +1645,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
          if (pdal == NULL)
          {
             LOG(LOG_ERR, "failed to allocate space for a DAL_struct\n");
+            free( dctxt->dirtmp );
             free(dctxt);
             return NULL;
          } // malloc will set errno
