@@ -959,7 +959,7 @@ int read_stripes(ne_handle handle)
    return 0;
 }
 
-// ---------------------- CONTEXT CREATION/DESTRUCTION ----------------------
+// ---------------------- CONTEXT CREATION/DESTRUCTION/VALIDATION ----------------------
 
 /**
  * Initializes an ne_ctxt with a default posix DAL configuration.
@@ -1064,7 +1064,19 @@ ne_ctxt ne_init(xmlNode *dal_root, ne_location max_loc, int max_block)
 }
 
 /**
- * Destroys and existing ne_ctxt
+ * Verify an existing ne_ctxt
+ * @param ne_ctxt ctxt : Reference to the ne_ctxt to be verified
+ * @param char fix : If non-zero, attempt to correct any problems encountered
+ * @return int : Zero on a success, and -1 on a failure
+ */
+int ne_verify(ne_ctxt ctxt, char fix)
+{
+   // Just a wrapper around DAL verification
+   return ctxt->dal->verify( ctxt->dal, fix );
+}
+
+/**
+ * Destroys an existing ne_ctxt
  * @param ne_ctxt ctxt : Reference to the ne_ctxt to be destroyed
  * @return int : Zero on a success, and -1 on a failure
  */
