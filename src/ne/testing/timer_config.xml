@@ -63,5 +63,5 @@
     <dir_template>stripefile.{b}</dir_template>
     <sec_root>./</sec_root>
   </DAL>
-  <dump_path>./timing_data</dump_path>
+  <dump_path>./timing_test_data_TMP</dump_path>
 </DAL>

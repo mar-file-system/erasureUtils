@@ -62,6 +62,57 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
+#include <ftw.h>
+
+
+// WARNING: error-prone and ugly method of deleting files, written for simplicity only
+//          don't replicate this junk into ANY production code paths!
+size_t dirlistpos = 0;
+char** dirlist = NULL;
+int ftwnotedir( const char* fpath, const struct stat* sb, int typeflag ) {
+   if ( typeflag != FTW_D ) {
+      if ( unlink( fpath ) ) {
+         printf( "ERROR: Failed to unlink non-directory path: \"%s\"\n", fpath );
+         return -1;
+      }
+      printf( "Removed non-directory during tree deletion: \"%s\"\n", fpath );
+      return 0;
+   }
+   dirlist[dirlistpos] = strdup( fpath );
+   if ( dirlist[dirlistpos] == NULL ) {
+      printf( "Failed to duplicate dir name: \"%s\"\n", fpath );
+      return -1;
+   }
+   dirlistpos++;
+   if ( dirlistpos >= 1024 ) { printf( "Dirlist has insufficient lenght!\n" ); return -1; }
+   return 0;
+}
+int deletefstree( const char* basepath ) {
+   dirlist = malloc( sizeof(char*) * 1024 );
+   if ( dirlist == NULL ) {
+      printf( "Failed to allocate dirlist\n" );
+      return -1;
+   }
+   if ( ftw( basepath, ftwnotedir, 100 ) ) {
+      printf( "Failed to identify reference dirs of \"%s\"\n", basepath );
+      return -1;
+   }
+   int retval = 0;
+   while ( dirlistpos ) {
+      dirlistpos--;
+      if ( strcmp( dirlist[dirlistpos], basepath ) ) {
+         printf( "Deleting: \"%s\"\n", dirlist[dirlistpos] );
+         if ( rmdir( dirlist[dirlistpos] ) ) {
+            printf( "ERROR -- failed to delete \"%s\"\n", dirlist[dirlistpos] );
+            retval = -1;
+         }
+      }
+      free( dirlist[dirlistpos] );
+   }
+   free( dirlist );
+   return retval;
+}
+
 
 // sentinel values to ensure good data transfer
 char tail_sent = 'T';
@@ -466,6 +517,19 @@ int main(int argc, char **argv)
    *have been allocated by the parser.
    */
   xmlCleanupParser();
+
+
+  // Delete the timing data output
+  if ( deletefstree( "./timing_test_data_TMP" ) ) {
+    printf( "Failed to delete timing output data: \"./timing_test_data_TMP\"\n" );
+    return -1;
+  }
+
+  // Delete timing data root
+  if ( rmdir( "./timing_test_data_TMP" ) ) {
+    printf( "Failed to delete timing output data root dir: \"./timing_test_data_TMP\"\n" );
+    return -1;
+  }
 
   return 0;
 }
