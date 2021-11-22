@@ -1072,7 +1072,7 @@ ne_ctxt ne_init(xmlNode *dal_root, ne_location max_loc, int max_block)
 int ne_verify(ne_ctxt ctxt, char fix)
 {
    // Just a wrapper around DAL verification
-   return ctxt->dal->verify( ctxt->dal, fix );
+   return ctxt->dal->verify( ctxt->dal->ctxt, fix );
 }
 
 /**

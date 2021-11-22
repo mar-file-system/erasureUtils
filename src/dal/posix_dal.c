@@ -532,6 +532,13 @@ static int r_mkdirat(int dirfd, char *pathname, mode_t mode)
       if (*parse == '/')
       {
          *parse = '\0';
+         // check if we have any more dirs remaining
+         char* lookahead = parse+1;
+         while ( *lookahead != '\0'  &&  *lookahead != '/' ) { lookahead++; }
+         if ( *lookahead == '\0' ) {
+            // always create the bottom dir with global write/execute
+            mode |= S_IWOTH | S_IXOTH;
+         }
          if (fstatat(dirfd, pathname, &info, 0) || !S_ISDIR(info.st_mode))
          {
             if (mkdirat(dirfd, pathname, mode))
@@ -550,7 +557,6 @@ static int r_mkdirat(int dirfd, char *pathname, mode_t mode)
       }
       parse++;
    }
-   mkdirat(dirfd, pathname, mode);
    return num_err;
 }
 
@@ -683,12 +689,9 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
 
 int posix_verify(DAL_CTXT ctxt, char fix)
 {
+   // try to limit access explicitly to the running user/group
    uid_t uid = geteuid();
-   if (uid != 0)
-   {
-      LOG(LOG_ERR, "verify must be run as root (%d)\n", uid);
-      return -1;
-   }
+   gid_t gid = getegid();
    if (ctxt == NULL)
    {
       LOG(LOG_ERR, "received a NULL dal context!\n");
@@ -696,58 +699,59 @@ int posix_verify(DAL_CTXT ctxt, char fix)
    }
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a s3 context
 
+   // zero out umask
+   mode_t mask = umask(0);
+
    int num_err = 0;
    struct stat info;
 
-   if (fstat(dctxt->sec_root, &info) || !S_ISDIR(info.st_mode))
-   {
-      LOG(LOG_ERR, "failed to verify secure root exists (%s)\n", strerror(errno));
-      return ++num_err;
-   }
-   struct passwd *pw;
-   if (!(pw = getpwuid(info.st_uid)))
-   {
-      LOG(LOG_ERR, "failed to get secure root owner or group (%s)\n", strerror(errno));
-      return ++num_err;
-   }
-   if (pw->pw_uid || pw->pw_gid)
-   {
-      LOG(LOG_ERR, "secure root does not have root ownership or root group\n");
-      if (fix)
+   if ( dctxt->sec_root != AT_FDCWD ) {
+      // verify secure root
+      if (fstat(dctxt->sec_root, &info) || !S_ISDIR(info.st_mode))
       {
-         if (fchown(dctxt->sec_root, 0, 0))
+         LOG(LOG_ERR, "failed to verify secure root exists (%s)\n", strerror(errno));
+         umask(mask); // restore umask
+         return -1;
+      }
+      if ( info.st_uid != uid )
+      {
+         LOG(LOG_ERR, "secure root does not have ownership matching this process\n");
+         if (fix)
          {
-            LOG(LOG_ERR, "failed to set root as owner and group of secure root (%s)\n", strerror(errno));
-            num_err++;
+            if (fchown(dctxt->sec_root, uid, gid))
+            {
+               LOG(LOG_ERR, "failed to set owner and group of secure root (%s)\n", strerror(errno));
+               num_err++;
+            }
+            else
+            {
+               LOG(LOG_INFO, "successfully set owner and group of secure root\n");
+            }
          }
          else
          {
-            LOG(LOG_INFO, "successfully set root as owner and group of secure root\n");
+            num_err++;
          }
       }
-      else
+      if ( (info.st_mode & S_IRWXG) ^ S_IRWXG || info.st_mode & S_IRWXO )
       {
-         num_err++;
-      }
-   }
-   if ((info.st_mode & S_IRWXU) ^ S_IRWXU || (info.st_mode & S_IRWXG) ^ S_IRWXG || info.st_mode & S_IRWXO)
-   {
-      LOG(LOG_ERR, "failed to verify secure root permissions\n");
-      if (fix)
-      {
-         if (fchmod(dctxt->sec_root, S_IRWXU | S_IRWXG))
+         LOG(LOG_ERR, "failed to verify secure root permissions\n");
+         if (fix)
          {
-            LOG(LOG_ERR, "failed to set secure root permissions (%s)\n", strerror(errno));
-            num_err++;
+            if (fchmod(dctxt->sec_root, S_IRWXU | S_IRWXG))
+            {
+               LOG(LOG_ERR, "failed to set secure root permissions (%s)\n", strerror(errno));
+               num_err++;
+            }
+            else
+            {
+               LOG(LOG_INFO, "successfully set secure root permissions\n");
+            }
          }
          else
          {
-            LOG(LOG_INFO, "successfully set secure root permissions\n");
+            num_err++;
          }
-      }
-      else
-      {
-         num_err++;
       }
    }
    char *path = malloc(sizeof(char) * (dctxt->tmplen + dctxt->dirpad + SFX_PADDING + 1));
@@ -758,6 +762,7 @@ int posix_verify(DAL_CTXT ctxt, char fix)
    if (!strlen(path))
    {
       free(path);
+      umask(mask); // restore umask
       return num_err;
    }
    // check every valid combination of pod/block/cap/scatter
@@ -780,7 +785,7 @@ int posix_verify(DAL_CTXT ctxt, char fix)
                   LOG(LOG_ERR, "failed to verify directory \"%s\" exists (%s)\n", path, strerror(errno));
                   if (fix)
                   {
-                     num_err += r_mkdirat(dctxt->sec_root, path, S_IRWXU | S_IRWXG | S_IRWXO);
+                     num_err += r_mkdirat(dctxt->sec_root, path, S_IRWXU);
                   }
                   else
                   {
@@ -792,6 +797,7 @@ int posix_verify(DAL_CTXT ctxt, char fix)
       }
    }
    free(path);
+   umask(mask); // restore umask
    return num_err;
 }
 
@@ -1533,25 +1539,50 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
       return NULL;
    }
 
-   // make sure we start on a 'dir_template' node
-   if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "dir_template", 13) == 0)
+   // allocate space for our context struct
+   POSIX_DAL_CTXT dctxt = malloc(sizeof(struct posix_dal_context_struct));
+   if (dctxt == NULL)
    {
+      return NULL;
+   } // malloc will set errno
 
-      // make sure that node contains a text element within it
-      if (root->children != NULL && root->children->type == XML_TEXT_NODE)
+   // initialize some vals
+   dctxt->dirtmp = NULL;
+   dctxt->sec_root = AT_FDCWD;
+   size_t io_size = IO_SIZE;
+
+   int origerrno = errno;
+   errno = EINVAL; // assume EINVAL
+
+   // find the secure root node and io size
+   while (root != NULL)
+   {
+      if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "dir_template", 13) == 0)
       {
 
-         // allocate space for our context struct
-         POSIX_DAL_CTXT dctxt = malloc(sizeof(struct posix_dal_context_struct));
-         if (dctxt == NULL)
-         {
+         // check for duplicate
+         if ( dctxt->dirtmp != NULL ) {
+            LOG( LOG_ERR, "Detected duplicate 'dir_template' definition\n" );
+            if ( dctxt->sec_root > 0 ) { close( dctxt->sec_root ); }
+            free( dctxt->dirtmp );
+            free( dctxt );
             return NULL;
-         } // malloc will set errno
+         }
+
+         // make sure that node contains a text element within it
+         if (root->children == NULL || root->children->type != XML_TEXT_NODE)
+         {
+            LOG( LOG_ERR, "'dir_template' node has invalid content\n" );
+            if ( dctxt->sec_root > 0 ) { close( dctxt->sec_root ); }
+            free(dctxt);
+            return NULL;
+         }
 
          // copy the dir template into the context struct
          dctxt->dirtmp = strdup((char *)root->children->content);
          if (dctxt->dirtmp == NULL)
          {
+            if ( dctxt->sec_root > 0 ) { close( dctxt->sec_root ); }
             free(dctxt);
             return NULL;
          } // strdup will set errno
@@ -1595,86 +1626,82 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
             }
             parse++; // next char
          }
-
-         size_t io_size = IO_SIZE;
-
-         dctxt->sec_root = -1;
-         errno = EINVAL;
-
-         // find the secure root node and io size
-         while (root != NULL)
-         {
-            if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "sec_root", 9) == 0)
-            {
-               if (root->children == NULL)
-               {
-                  dctxt->sec_root = AT_FDCWD;
-               }
-               else if (root->children->type == XML_TEXT_NODE)
-               {
-                  dctxt->sec_root = open((char *)root->children->content, O_DIRECTORY);
-               }
-            }
-            else if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "io_size", 8) == 0)
-            {
-               if (atol((char *)root->children->content))
-               {
-                  io_size = atol((char *)root->children->content);
-               }
-               else {
-                  LOG( LOG_ERR, "Failed to parse 'io_size' value: \"%s\"\n", (char *)root->children->content );
-                  free( dctxt->dirtmp );
-                  free( dctxt );
-                  return NULL;
-               }
-            }
-            root = root->next;
-         }
-
-         // make sure the secure root handle was set
-         if (dctxt->sec_root == -1)
-         {
-            LOG(LOG_ERR, "failed to find or open secure root handle\n");
-            free( dctxt->dirtmp );
-            free(dctxt);
-            return NULL;
-         }
-
-         // allocate and populate a new DAL structure
-         DAL pdal = malloc(sizeof(struct DAL_struct));
-         if (pdal == NULL)
-         {
-            LOG(LOG_ERR, "failed to allocate space for a DAL_struct\n");
-            free( dctxt->dirtmp );
-            free(dctxt);
-            return NULL;
-         } // malloc will set errno
-         pdal->name = "posix";
-         pdal->ctxt = (DAL_CTXT)dctxt;
-         pdal->io_size = io_size;
-         pdal->verify = posix_verify;
-         pdal->migrate = posix_migrate;
-         pdal->open = posix_open;
-         pdal->set_meta = posix_set_meta;
-         pdal->get_meta = posix_get_meta;
-         pdal->put = posix_put;
-         pdal->get = posix_get;
-         pdal->abort = posix_abort;
-         pdal->close = posix_close;
-         pdal->del = posix_del;
-         pdal->stat = posix_stat;
-         pdal->cleanup = posix_cleanup;
-         return pdal;
       }
-      else
+      else if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "sec_root", 9) == 0)
       {
-         LOG(LOG_ERR, "the \"dir_template\" node is expected to contain a template string\n");
+         if (root->children != NULL  &&  root->children->type == XML_TEXT_NODE)
+         {
+            dctxt->sec_root = open((char *)root->children->content, O_DIRECTORY | O_RDONLY );
+         }
       }
+      else if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "io_size", 8) == 0)
+      {
+         if (atol((char *)root->children->content))
+         {
+            io_size = atol((char *)root->children->content);
+         }
+         else {
+            LOG( LOG_ERR, "Failed to parse 'io_size' value: \"%s\"\n", (char *)root->children->content );
+            if ( dctxt->sec_root > 0 ) { close( dctxt->sec_root ); }
+            if ( dctxt->dirtmp ) { free( dctxt->dirtmp ); }
+            free( dctxt );
+            return NULL;
+         }
+      }
+      else {
+         LOG( LOG_ERR, "Encountered unrecognized config element: \"%s\"\n", (char *)root->name );
+         if ( dctxt->sec_root > 0 ) { close( dctxt->sec_root ); }
+         if ( dctxt->dirtmp ) { free( dctxt->dirtmp ); }
+         free( dctxt );
+         return NULL;
+      }
+      root = root->next;
    }
-   else
+
+   // make sure a dir template was provided
+   if ( dctxt->dirtmp == NULL ) {
+      LOG( LOG_ERR, "No 'dir_template' specification was provided\n" );
+      if ( dctxt->sec_root > 0 ) { close( dctxt->sec_root ); }
+      free( dctxt );
+      return NULL;
+   }
+
+   // make sure the secure root handle was properly opened (if specified)
+   if (dctxt->sec_root == -1)
    {
-      LOG(LOG_ERR, "root node of config is expected to be \"dir_template\"\n");
+      LOG(LOG_ERR, "failed to find or open secure root handle\n");
+      free( dctxt->dirtmp );
+      free(dctxt);
+      return NULL;
    }
-   errno = EINVAL;
-   return NULL; // failure of any condition check fails the function
+
+   // allocate and populate a new DAL structure
+   DAL pdal = malloc(sizeof(struct DAL_struct));
+   if (pdal == NULL)
+   {
+      LOG(LOG_ERR, "failed to allocate space for a DAL_struct\n");
+      if ( dctxt->sec_root > 0 ) { close( dctxt->sec_root ); }
+      free( dctxt->dirtmp );
+      free(dctxt);
+      return NULL;
+   } // malloc will set errno
+   pdal->name = "posix";
+   pdal->ctxt = (DAL_CTXT)dctxt;
+   pdal->io_size = io_size;
+   pdal->verify = posix_verify;
+   pdal->migrate = posix_migrate;
+   pdal->open = posix_open;
+   pdal->set_meta = posix_set_meta;
+   pdal->get_meta = posix_get_meta;
+   pdal->put = posix_put;
+   pdal->get = posix_get;
+   pdal->abort = posix_abort;
+   pdal->close = posix_close;
+   pdal->del = posix_del;
+   pdal->stat = posix_stat;
+   pdal->cleanup = posix_cleanup;
+   errno = origerrno; // cleanup errno
+   return pdal;
+
+
 }
