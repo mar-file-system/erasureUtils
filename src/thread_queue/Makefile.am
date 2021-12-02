@@ -64,7 +64,7 @@ AM_LDFLAGS  =
 include_HEADERS = thread_queue.h
 
 # define sources used by many programs as noinst libraries, to avoid multiple compilations
-noinst_LTLIBRARIES = libTQ.la
+lib_LTLIBRARIES = libTQ.la
 
 SIDE_LIBS = ../logging/liblog.la
 
