@@ -690,8 +690,9 @@ int main(int argc, const char** argv) {
                   type = type->next;
                }
                if (!type) {
-                  printf("error: could not find attribute %s with value %s in field %s within file %s\n", attr, val, tag, config_path);
-                  return -1;
+                  root = root->next;
+                  /*printf("error: could not find attribute %s with value %s in field %s within file %s\n", attr, val, tag, config_path);
+                  return -1;*/
                }
                if (last) {
                   break;
@@ -821,7 +822,12 @@ int main(int argc, const char** argv) {
    // -----------------------------------------------------------------
 
    if (wr == 5) {
-      PRINTout("retrieving status of erasure striping with path \"%s\"\n", erasure_path);
+      if (erasure_path) {
+         PRINTout("retrieving status of erasure striping with path \"%s%s\"\n", erasure_path, objID);
+      }
+      else {
+         PRINTout("retrieving status of erasure striping with config path \"%s\" and objID \"%s\"\n", config_path, objID);
+      }
 
       int ret;
       if ((ret = ne_close(handle, &epat, &state)) < 0) {
