@@ -1038,7 +1038,7 @@ ne_ctxt ne_path_init(const char *path, ne_location max_loc, int max_block)
 ne_ctxt ne_init(xmlNode *dal_root, ne_location max_loc, int max_block)
 {
    // Initialize a DAL instance
-   DAL_location maxdal = {.pod = max_loc.pod, .block = max_block, .cap = max_loc.cap, .scatter = max_loc.scatter};
+   DAL_location maxdal = {.pod = max_loc.pod, .block = max_block - 1, .cap = max_loc.cap, .scatter = max_loc.scatter};
    DAL dal = init_dal(dal_root, maxdal);
    // Verify that the dal intialized successfully
    if (dal == NULL)
