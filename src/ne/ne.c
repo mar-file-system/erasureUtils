@@ -680,6 +680,7 @@ int read_stripes(ne_handle handle)
    {
       if ( handle->iob_datasz ) {
          LOG(LOG_ERR, "Called on handle with an inappropriate sub_offset (%zd)!\n", handle->sub_offset);
+         errno = EBADF;
          return -1;
       }
       // we don't current have any ioblocks at all, so allow the read to proceed
@@ -888,10 +889,10 @@ int read_stripes(ne_handle handle)
             {
                // this is the only error for which we will at least attempt to continue
                LOG(LOG_ERR, "Failure to generate decode matrix, errors may exceed erasure limits (%d)!\n", nstripe_errors);
-               errno = ENODATA;
                free(stripe_in_err);
                free(stripe_err_list);
                // return the number of stripes we failed to regenerate
+               errno = ENODATA;
                return cur_stripe + 1;
             }
 
@@ -981,7 +982,9 @@ ne_ctxt ne_path_init(const char *path, ne_location max_loc, int max_block)
    }
    if ((len = snprintf(xmlconfig, len, configtemplate, path)) < 0)
    {
+      LOG( LOG_ERR, "Failed to populate interal XML config string\n" );
       free(xmlconfig);
+      errno = EBADF;
       return NULL;
    }
    xmlDoc *config = NULL;
@@ -994,6 +997,7 @@ ne_ctxt ne_path_init(const char *path, ne_location max_loc, int max_block)
    config = xmlReadMemory(xmlconfig, len + 1, "noname.xml", NULL, XML_PARSE_NOBLANKS);
    if (config == NULL)
    {
+      LOG( LOG_ERR, "Failed to parse internal XML config string\n" );
       free(xmlconfig);
       return NULL;
    }
@@ -1001,7 +1005,7 @@ ne_ctxt ne_path_init(const char *path, ne_location max_loc, int max_block)
    free(xmlconfig); // done with the stand-in xml config
 
    // Initialize a posix dal instance
-   DAL_location maxloc = {.pod = 0, .block = max_block, .cap = 0, .scatter = 0};
+   DAL_location maxloc = {.pod = 0, .block = max_block - 1, .cap = 0, .scatter = 0};
    DAL dal = init_dal(root_elem, maxloc);
    // free the xmlDoc and any parser global vars
    xmlFreeDoc(config);
@@ -1009,6 +1013,7 @@ ne_ctxt ne_path_init(const char *path, ne_location max_loc, int max_block)
    // verify that dal initialization was successful
    if (dal == NULL)
    {
+      LOG( LOG_ERR, "DAL initialization failed\n" );
       return NULL;
    }
 
@@ -1016,6 +1021,7 @@ ne_ctxt ne_path_init(const char *path, ne_location max_loc, int max_block)
    ne_ctxt ctxt = malloc(sizeof(struct ne_ctxt_struct));
    if (ctxt == NULL)
    {
+      LOG( LOG_ERR, "Failed to allocate an ne_ctxt struct\n" );
       return NULL;
    }
 
@@ -1107,6 +1113,7 @@ int ne_delete(ne_ctxt ctxt, const char *objID, ne_location loc)
    if (ctxt == NULL)
    {
       LOG(LOG_ERR, "Received NULL context!\n");
+      errno = EINVAL;
       return -1;
    }
    int retval = 0;
@@ -1221,6 +1228,7 @@ ne_handle ne_stat(ne_ctxt ctxt, const char *objID, ne_location loc)
    ne_handle handle = allocate_handle(ctxt, objID, loc, &consensus);
    if (handle == NULL)
    {
+      LOG( LOG_ERR, "Failed to allocate ne_handle struct\n" );
       free(tmp_meta_errs);
       free(minfo_list);
       return NULL;
@@ -1312,6 +1320,7 @@ ne_handle ne_convert_handle(ne_handle handle, ne_mode mode)
    if (handle == NULL)
    {
       LOG(LOG_ERR, "Received NULL ne_handle!\n");
+      errno = EINVAL;
       return NULL;
    }
 
@@ -1319,6 +1328,7 @@ ne_handle ne_convert_handle(ne_handle handle, ne_mode mode)
    if (handle->mode != NE_STAT)
    {
       LOG(LOG_ERR, "Received ne_handle has inappropriate mode value!\n");
+      errno = EINVAL;
       return NULL;
    }
 
@@ -1437,6 +1447,7 @@ ne_handle ne_convert_handle(ne_handle handle, ne_mode mode)
             tq_next_thread_status(handle->thread_queues[i], NULL);
             tq_close(handle->thread_queues[i]);
          }
+         errno = ENODATA;
          return NULL;
       }
       // check that our erasure pattern matches expected values
@@ -1452,6 +1463,7 @@ ne_handle ne_convert_handle(ne_handle handle, ne_mode mode)
             tq_next_thread_status(handle->thread_queues[i], NULL);
             tq_close(handle->thread_queues[i]);
          }
+         errno = EINVAL;
          return NULL;
       }
       // set handle constants based on consensus values
@@ -1545,6 +1557,7 @@ ne_handle ne_open(ne_ctxt ctxt, const char *objID, ne_location loc, ne_erasure e
    if (ctxt == NULL)
    {
       LOG(LOG_ERR, "Received a NULL ne_ctxt argument!\n");
+      errno = EINVAL;
       return NULL;
    }
 
@@ -1552,6 +1565,7 @@ ne_handle ne_open(ne_ctxt ctxt, const char *objID, ne_location loc, ne_erasure e
    if (mode != NE_RDONLY && mode != NE_RDALL && mode != NE_WRONLY && mode != NE_WRALL && mode != NE_REBUILD)
    {
       LOG(LOG_ERR, "Recieved an inappropriate mode argument!\n");
+      errno = EINVAL;
       return NULL;
    }
 
@@ -1803,11 +1817,13 @@ int ne_get_info(ne_handle handle, ne_erasure *epat, ne_state *sref)
    if (handle == NULL)
    {
       LOG(LOG_ERR, "Received a NULL ne_handle!\n");
+      errno = EINVAL;
       return -1;
    }
    if (handle->mode == 0)
    {
       LOG(LOG_ERR, "Received an improperly initilized handle!\n");
+      errno = EINVAL;
       return -1;
    }
 
@@ -1880,16 +1896,19 @@ int ne_seed_status(ne_handle handle, ne_state *sref)
    if (handle == NULL)
    {
       LOG(LOG_ERR, "Received a NULL ne_handle!\n");
+      errno = EINVAL;
       return -1;
    }
    if (handle->mode == 0)
    {
       LOG(LOG_ERR, "Received an improperly initilized handle!\n");
+      errno = EINVAL;
       return -1;
    }
    if (sref == NULL)
    {
       LOG(LOG_ERR, "Received a null ne_state reference!\n");
+      errno = EINVAL;
       return -1;
    }
 
@@ -2355,6 +2374,7 @@ int ne_rebuild(ne_handle handle, ne_erasure *epat, ne_state *sref)
    if (numerrs > 0)
    {
       LOG(LOG_ERR, "Rebuild failure occurred!\n");
+      errno = EIO;
       return -1;
    }
 
@@ -2645,6 +2665,7 @@ ssize_t ne_read(ne_handle handle, void *buffer, size_t bytes)
          if ((cur_iob->data_size - (cur_stripe * partsz)) < partsz)
          {
             LOG(LOG_ERR, "Ioblock at position %d of stripe %d is subsized (%zu)!\n", cur_block, cur_stripe + iob_stripe, cur_iob->data_size);
+            errno = EBADF;
             return -1;
          }
          // make sure the ioblock has no errors in this stripe
@@ -2652,6 +2673,7 @@ ssize_t ne_read(ne_handle handle, void *buffer, size_t bytes)
          {
             LOG(LOG_ERR, "Ioblock at position %d of stripe %d has an error beyond requested stripe (error_end = %zu)!\n",
                 cur_block, cur_stripe + iob_stripe, cur_iob->error_end);
+            errno = ENODATA;
             return -1;
          }
          // otherwise, copy this data off to our caller's buffer
