@@ -508,7 +508,7 @@ int check_matches(meta_info** minfo_structs, int num_blocks, int max_blocks, met
    int* N_match = calloc(7, sizeof(int) * num_blocks);
    if (N_match == NULL) {
       LOG(LOG_ERR, "Failed to allocate space for match count arrays!\n");
-      return -1;
+      return 0;
    }
    int* E_match = (N_match + num_blocks);
    int* O_match = (E_match + num_blocks);
@@ -580,43 +580,67 @@ int check_matches(meta_info** minfo_structs, int num_blocks, int max_blocks, met
    // assign appropriate values to our output struct
    // Note: we have to do a sanity check on the match count, to make sure
    // we don't return an out-of-bounds value.
-   if (N_match[N_index])
+   char anyvalid = 0;
+   if (N_match[N_index]) {
       ret_buf->N = minfo_structs[N_index]->N;
-   else
+      anyvalid = 1;
+   }
+   else {
       ret_buf->N = 0;
+   }
 
-   if (E_match[E_index])
+   if (E_match[E_index]) {
       ret_buf->E = minfo_structs[E_index]->E;
-   else
+      anyvalid = 1;
+   }
+   else {
       ret_buf->E = -1;
+   }
 
-   if (O_match[O_index])
+   if (O_match[O_index]) {
       ret_buf->O = minfo_structs[O_index]->O;
-   else
+      anyvalid = 1;
+   }
+   else {
       ret_buf->O = -1;
+   }
 
-   if (partsz_match[partsz_index])
+   if (partsz_match[partsz_index]) {
       ret_buf->partsz = minfo_structs[partsz_index]->partsz;
-   else
+      anyvalid = 1;
+   }
+   else {
       ret_buf->partsz = 0;
+   }
 
-   if (versz_match[versz_index])
+   if (versz_match[versz_index]) {
       ret_buf->versz = minfo_structs[versz_index]->versz;
-   else
+      anyvalid = 1;
+   }
+   else {
       ret_buf->versz = -1;
+   }
 
-   if (blocksz_match[blocksz_index])
+   if (blocksz_match[blocksz_index]) {
       ret_buf->blocksz = minfo_structs[blocksz_index]->blocksz;
-   else
+      anyvalid = 1;
+   }
+   else {
       ret_buf->blocksz = -1;
+   }
 
-   if (totsz_match[totsz_index])
+   if (totsz_match[totsz_index]) {
       ret_buf->totsz = minfo_structs[totsz_index]->totsz;
-   else
+      anyvalid = 1;
+   }
+   else {
       ret_buf->totsz = -1;
+   }
 
    int retval = (N_match[N_index] > E_match[E_index]) ? E_match[E_index] : N_match[N_index];
    free(N_match);
+   // special case check for no valid meta info values
+   if ( retval == 0  &&  !(anyvalid) ) { return -1; }
    return retval;
 }
 
@@ -1316,6 +1340,8 @@ ne_handle ne_convert_handle(ne_handle handle, ne_mode mode) {
             tq_close(handle->thread_queues[i]);
          }
          errno = ENODATA;
+         // special case - report failure to retrieve any meta_info at all as ENOENT
+         if ( match_count < 0 ) { errno = ENOENT; }
          return NULL;
       }
       // check that our erasure pattern matches expected values
