@@ -640,7 +640,9 @@ int check_matches(meta_info** minfo_structs, int num_blocks, int max_blocks, met
    int retval = (N_match[N_index] > E_match[E_index]) ? E_match[E_index] : N_match[N_index];
    free(N_match);
    // special case check for no valid meta info values
-   if ( retval == 0  &&  !(anyvalid) ) { return -1; }
+   if (retval == 0 && !(anyvalid)) {
+      return -1;
+   }
    return retval;
 }
 
@@ -931,7 +933,7 @@ ne_ctxt ne_path_init(const char* path, ne_location max_loc, int max_block) {
       LOG(LOG_ERR, "failed to allocate memory for the stand-in xml config!\n");
       return NULL;
    }
-   if ((len = snprintf(xmlconfig, len, configtemplate, path)) < 0)    {
+   if ((len = snprintf(xmlconfig, len, configtemplate, path)) < 0) {
       LOG(LOG_ERR, "Failed to populate interal XML config string\n");
       free(xmlconfig);
       errno = EBADF;
@@ -945,7 +947,7 @@ ne_ctxt ne_path_init(const char* path, ne_location max_loc, int max_block) {
 
       /* parse the stand-in XML config */
       config = xmlReadMemory(xmlconfig, len + 1, "noname.xml", NULL, XML_PARSE_NOBLANKS);
-   if (config == NULL)    {
+   if (config == NULL) {
       LOG(LOG_ERR, "Failed to parse internal XML config string\n");
       free(xmlconfig);
       return NULL;
@@ -960,14 +962,14 @@ ne_ctxt ne_path_init(const char* path, ne_location max_loc, int max_block) {
    xmlFreeDoc(config);
    xmlCleanupParser();
    // verify that dal initialization was successful
-   if (dal == NULL)    {
+   if (dal == NULL) {
       LOG(LOG_ERR, "DAL initialization failed\n");
       return NULL;
    }
 
    // allocate a context struct
    ne_ctxt ctxt = malloc(sizeof(struct ne_ctxt_struct));
-   if (ctxt == NULL)    {
+   if (ctxt == NULL) {
       LOG(LOG_ERR, "Failed to allocate an ne_ctxt struct\n");
       return NULL;
    }
@@ -1152,7 +1154,7 @@ ne_handle ne_stat(ne_ctxt ctxt, const char* objID, ne_location loc) {
 
    // create a handle structure
    ne_handle handle = allocate_handle(ctxt, objID, loc, &consensus);
-   if (handle == NULL)    {
+   if (handle == NULL) {
       LOG(LOG_ERR, "Failed to allocate ne_handle struct\n");
       free(tmp_meta_errs);
       free(minfo_list);
@@ -1341,7 +1343,9 @@ ne_handle ne_convert_handle(ne_handle handle, ne_mode mode) {
          }
          errno = ENODATA;
          // special case - report failure to retrieve any meta_info at all as ENOENT
-         if ( match_count < 0 ) { errno = ENOENT; }
+         if (match_count < 0) {
+            errno = ENOENT;
+         }
          return NULL;
       }
       // check that our erasure pattern matches expected values
@@ -1592,7 +1596,7 @@ int ne_close(ne_handle handle, ne_erasure* epat, ne_state* sref) {
       // verify that our data meets safetly thresholds
       if (numerrs > 0 && numerrs > (handle->epat.E - MIN_PROTECTION)) {
          LOG(LOG_ERR, "Errors exceed safety threshold!\n");
-
+         ne_delete(handle->ctxt, handle->objID, handle->loc);
          ret_val = -1;
       }
    }
