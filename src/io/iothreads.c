@@ -126,11 +126,11 @@ underlying skt_etc() functions.
 /* The following are defined here, so as to hide them from users of the library */
 // erasure functions
 #ifdef HAVE_LIBISAL
-extern uint32_t crc32_ieee(uint32_t seed, uint8_t *buf, uint64_t len);
-extern void ec_encode_data(int len, int srcs, int dests, unsigned char *v, unsigned char **src, unsigned char **dest);
+extern uint32_t crc32_ieee(uint32_t seed, uint8_t* buf, uint64_t len);
+extern void ec_encode_data(int len, int srcs, int dests, unsigned char* v, unsigned char** src, unsigned char** dest);
 #else
-extern uint32_t crc32_ieee_base(uint32_t seed, uint8_t *buf, uint64_t len);
-extern void ec_encode_data_base(int len, int srcs, int dests, unsigned char *v, unsigned char **src, unsigned char **dest);
+extern uint32_t crc32_ieee_base(uint32_t seed, uint8_t* buf, uint64_t len);
+extern void ec_encode_data_base(int len, int srcs, int dests, unsigned char* v, unsigned char** src, unsigned char** dest);
 #endif
 
 /* ------------------------------   THREAD BEHAVIOR FUNCTIONS   ------------------------------ */
@@ -142,20 +142,17 @@ extern void ec_encode_data_base(int len, int srcs, int dests, unsigned char *v, 
  * @param void** state : Reference to be populated with this thread's state info
  * @return int : Zero on success and -1 on failure
  */
-int write_init(unsigned int tID, void *global_state, void **state)
-{
-   gthread_state *gstate = (gthread_state *)global_state;
+int write_init(unsigned int tID, void* global_state, void** state) {
+   gthread_state* gstate = (gthread_state*)global_state;
    // sanity check, this code was written to handle only a single thread per-queue
-   if (tID > 0)
-   {
+   if (tID > 0) {
       LOG(LOG_ERR, "Block %d has too many threads in a single queue!\n", gstate->location.block);
       return -1;
    }
    // allocate space for a thread state struct
    (*state) = malloc(sizeof(struct thread_state_struct));
-   thread_state *tstate = (*state);
-   if (tstate == NULL)
-   {
+   thread_state* tstate = (*state);
+   if (tstate == NULL) {
       LOG(LOG_ERR, "Block %d failed to allocate space for a thread state struct!\n", gstate->location.block);
       return -1;
    }
@@ -174,13 +171,12 @@ int write_init(unsigned int tID, void *global_state, void **state)
    tstate->iob = NULL;
    tstate->crcsumchk = 0;
    tstate->continuous = 1;
+
+   // open a handle for this block
    tstate->handle = dal->open(dal->ctxt, gstate->dmode, gstate->location, gstate->objID);
-   if (tstate->handle == NULL)
-   {
+   if (tstate->handle == NULL) {
       LOG(LOG_ERR, "failed to open handle for block %d!\n", gstate->location.block);
       gstate->data_error = 1;
-      free(tstate);
-      return -1;
    }
 
    return 0;
@@ -193,20 +189,17 @@ int write_init(unsigned int tID, void *global_state, void **state)
  * @param void** state : Reference to be populated with this thread's state info
  * @return int : Zero on success and -1 on failure
  */
-int read_init(unsigned int tID, void *global_state, void **state)
-{
-   gthread_state *gstate = (gthread_state *)global_state;
+int read_init(unsigned int tID, void* global_state, void** state) {
+   gthread_state* gstate = (gthread_state*)global_state;
    // sanity check, this code was written to handle only a single thread per-queue
-   if (tID > 0)
-   {
+   if (tID > 0) {
       LOG(LOG_ERR, "Block %d has too many threads in a single queue!\n", gstate->location.block);
       return -1;
    }
    // allocate space for a thread state struct
    (*state) = malloc(sizeof(struct thread_state_struct));
-   thread_state *tstate = (*state);
-   if (tstate == NULL)
-   {
+   thread_state* tstate = (*state);
+   if (tstate == NULL) {
       LOG(LOG_ERR, "Block %d failed to allocate space for a thread state struct!\n", gstate->location.block);
       return -1;
    }
@@ -223,31 +216,26 @@ int read_init(unsigned int tID, void *global_state, void **state)
    tstate->iob = NULL;
    tstate->crcsumchk = 0;
    tstate->continuous = 1;
-   if (tstate->offset)
-   {
+   if (tstate->offset) {
       tstate->continuous = 0;
    }
 
    // open a handle for this block
    tstate->handle = dal->open(dal->ctxt, gstate->dmode, gstate->location, gstate->objID);
-   if (tstate->handle == NULL)
-   {
+   if (tstate->handle == NULL) {
       LOG(LOG_WARNING, "failed to open handle for block %d, attempting meta only access\n", gstate->location.block);
       gstate->data_error = 1;
       tstate->handle = dal->open(dal->ctxt, DAL_METAREAD, gstate->location, gstate->objID);
-      if (tstate->handle == NULL)
-      {
+      if (tstate->handle == NULL) {
          LOG(LOG_ERR, "failed to open meta handle for block %d!\n");
          gstate->meta_error = 1;
       }
    }
 
    // skip setting minfo values if they already appear to be set
-   if (gstate->minfo.totsz == 0)
-   {
+   if (gstate->minfo.totsz == 0) {
       // populate our minfo struct with obj meta values
-      if (dal_get_minfo(dal, tstate->handle, &gstate->minfo) != 0)
-      {
+      if (dal_get_minfo(dal, tstate->handle, &gstate->minfo) != 0) {
          LOG(LOG_ERR, "Failed to populate all expected meta_info values!\n");
          gstate->meta_error = 1;
       }
@@ -262,20 +250,18 @@ int read_init(unsigned int tID, void *global_state, void **state)
  * @param void** work_todo : Reference to the data buffer / work package
  * @return int : Integer return code ( -1 on failure, 0 on success )
  */
-int write_consume(void **state, void **work_todo)
-{
+int write_consume(void** state, void** work_todo) {
    // get a reference to the thread state struct
-   thread_state *tstate = (thread_state *)(*state);
+   thread_state* tstate = (thread_state*)(*state);
    // get a reference to the global state for this block
-   gthread_state *gstate = (gthread_state *)(tstate->gstate);
+   gthread_state* gstate = (gthread_state*)(tstate->gstate);
    // get a reference to the ioblock we've recieved to work on
-   ioblock *iob = (ioblock *)(*work_todo);
+   ioblock* iob = (ioblock*)(*work_todo);
 
    // determine what and how much data we have
    size_t datasz = 0;
-   void *datasrc = ioblock_read_target(iob, &datasz, NULL);
-   if (datasrc == NULL)
-   {
+   void* datasrc = ioblock_read_target(iob, &datasz, NULL);
+   if (datasrc == NULL) {
       LOG(LOG_ERR, "Block %d received a NULL read target from ioblock!\n", gstate->location.block);
       gstate->data_error = 1;
       release_ioblock(gstate->ioq);
@@ -283,26 +269,23 @@ int write_consume(void **state, void **work_todo)
    }
 
    // sanity check that our data size makes sense
-   if (datasz > (gstate->minfo.versz - CRC_BYTES))
-   {
+   if (datasz > (gstate->minfo.versz - CRC_BYTES)) {
       LOG(LOG_ERR, "Block %d received unexpectedly large data size: %zd\n", gstate->location.block, datasz);
       gstate->data_error = 1;
       release_ioblock(gstate->ioq);
       return -1;
    }
 
-   if (datasz > 0)
-   {
+   if (datasz > 0) {
       // calculate a CRC for this data and append it to the buffer
-      *(uint32_t *)(datasrc + datasz) = crc32_ieee(CRC_SEED, datasrc, datasz);
-      gstate->minfo.crcsum += *((uint32_t *)(datasrc + datasz));
+      *(uint32_t*)(datasrc + datasz) = crc32_ieee(CRC_SEED, datasrc, datasz);
+      gstate->minfo.crcsum += *((uint32_t*)(datasrc + datasz));
       datasz += CRC_BYTES;
       // increment our block size
       gstate->minfo.blocksz += datasz;
 
       // write data out via the DAL, but only if we have not yet encoutered a write error
-      if ((gstate->data_error == 0) && gstate->dal->put(tstate->handle, datasrc, datasz))
-      {
+      if ((gstate->data_error == 0) && gstate->dal->put(tstate->handle, datasrc, datasz)) {
          LOG(LOG_ERR, "Failed to write %zu bytes to block %d!\n", datasz, gstate->location.block);
          gstate->data_error = 1;
          // don't bother to abort yet, we'll do that on close
@@ -310,8 +293,7 @@ int write_consume(void **state, void **work_todo)
    }
 
    // regardless of success, we need to free up our ioblock
-   if (release_ioblock(gstate->ioq))
-   {
+   if (release_ioblock(gstate->ioq)) {
       LOG(LOG_ERR, "Block %d failed to release ioblock!\n", gstate->location.block);
       gstate->data_error = 1;
       return -1;
@@ -326,31 +308,25 @@ int write_consume(void **state, void **work_todo)
  * @param void** work_tofill : Reference to be populated with the produced buffer
  * @return int : Integer return code ( -1 on error, 0 on success, and 2 once all buffers have been read )
  */
-int read_produce(void **state, void **work_tofill)
-{
+int read_produce(void** state, void** work_tofill) {
    // get a reference to the thread state struct
-   thread_state *tstate = (thread_state *)(*state);
+   thread_state* tstate = (thread_state*)(*state);
    // get a reference to the global state for this block
-   gthread_state *gstate = (gthread_state *)(tstate->gstate);
+   gthread_state* gstate = (gthread_state*)(tstate->gstate);
 
    // check if our offset is beyond the end of the block
-   if (tstate->offset >= gstate->minfo.blocksz)
-   {
+   if (tstate->offset >= gstate->minfo.blocksz) {
       // if we haven't hit any data errors AND we haven't reseeked, verify our global CRC
-      if (gstate->data_error == 0 && tstate->continuous && !(gstate->meta_error))
-      {
-         if (tstate->crcsumchk != gstate->minfo.crcsum)
-         {
+      if (gstate->data_error == 0 && tstate->continuous && !(gstate->meta_error)) {
+         if (tstate->crcsumchk != gstate->minfo.crcsum) {
             LOG(LOG_ERR, "Block %d data CRC sum (%llu) does not match meta CRC sum!\n",
-                gstate->location.block, tstate->crcsumchk, gstate->minfo.crcsum);
+               gstate->location.block, tstate->crcsumchk, gstate->minfo.crcsum);
             gstate->data_error = 1;
          }
       }
       // we may still have data in our current ioblock
-      if (tstate->iob != NULL)
-      {
-         if (ioblock_get_fill(tstate->iob))
-         {
+      if (tstate->iob != NULL) {
+         if (ioblock_get_fill(tstate->iob)) {
             *work_tofill = tstate->iob;
             tstate->iob = NULL; // NULL this out, so we don't try to release it
             return 0;
@@ -361,20 +337,17 @@ int read_produce(void **state, void **work_tofill)
    }
 
    // loop until we have filled an ioblock
-   ioblock *push_block = NULL;
+   ioblock* push_block = NULL;
    int resres = 0;
-   while (1)
-   {
+   while (1) {
       resres = reserve_ioblock(&(tstate->iob), &push_block, gstate->ioq);
       // check for an error condition
-      if (resres == -1)
-      {
+      if (resres == -1) {
          LOG(LOG_ERR, "Failed to reserve an ioblock!\n");
          return -1;
       }
       // check if our ioblock is full, and ready to be pushed
-      if (resres > 0)
-      {
+      if (resres > 0) {
          LOG(LOG_INFO, "Pushing full ioblock to work queue\n");
          break;
       }
@@ -382,33 +355,29 @@ int read_produce(void **state, void **work_tofill)
       ssize_t read_data = 0;
       ssize_t to_read = (gstate->minfo.versz > (gstate->minfo.blocksz - tstate->offset)) ? (gstate->minfo.blocksz - tstate->offset) : gstate->minfo.versz;
       // if we have read all available data, break
-      if (to_read == 0)
-      {
+      if (to_read == 0) {
          LOG(LOG_INFO, "All data read from block %d, pushing incomplete ioblock\n", gstate->location.block);
          push_block = tstate->iob;
          tstate->iob = NULL;
          break;
       }
-      void *store_tgt = ioblock_write_target(tstate->iob);
+      void* store_tgt = ioblock_write_target(tstate->iob);
       char data_err = 0;
       LOG(LOG_INFO, "Reading %zd bytes from offset %zu of block %d\n", to_read, tstate->offset, gstate->location.block);
       if ((read_data = gstate->dal->get(tstate->handle, store_tgt, to_read, tstate->offset)) <
-          to_read)
-      {
+         to_read) {
          LOG(LOG_ERR, "Expected read return value of %zd for block %d, but recieved: %zd\n",
-             to_read, gstate->location.block, read_data);
+            to_read, gstate->location.block, read_data);
          gstate->data_error = 1;
          data_err = 1;
       }
       to_read -= CRC_BYTES;
       // check the crc
-      if (data_err == 0)
-      {
+      if (data_err == 0) {
          uint32_t crc = crc32_ieee(CRC_SEED, store_tgt, to_read);
-         uint32_t scrc = *((uint32_t *)(store_tgt + to_read));
+         uint32_t scrc = *((uint32_t*)(store_tgt + to_read));
          tstate->crcsumchk += scrc; // track our global crc, for reference
-         if (crc != scrc)
-         {
+         if (crc != scrc) {
             LOG(LOG_ERR, "Calculated CRC of data (%u) does not match stored CRC: %u\n", crc, scrc);
             gstate->data_error = 1;
             data_err = 1;
@@ -428,24 +397,21 @@ int read_produce(void **state, void **work_tofill)
 /**
  * No-op function, just to fill out the TQ struct
  */
-int write_pause(void **state, void **prev_work)
-{
+int write_pause(void** state, void** prev_work) {
    return 0; // noop, probably permanently
 }
 
 /**
  * No-op function, just to fill out the TQ struct
  */
-int read_pause(void **state, void **prev_work)
-{
+int read_pause(void** state, void** prev_work) {
    return 0; // noop, probably permanently
 }
 
 /**
  * No-op function, just to fill out the TQ struct
  */
-int write_resume(void **state, void **prev_work)
-{
+int write_resume(void** state, void** prev_work) {
    return 0; // noop, probably permanently
 }
 
@@ -455,34 +421,29 @@ int write_resume(void **state, void **prev_work)
  * @param void** prev_work : Reference to any previously populated buffer
  * @return int : Integer return code ( -1 on error, 0 on success )
  */
-int read_resume(void **state, void **prev_work)
-{
+int read_resume(void** state, void** prev_work) {
    // get a reference to the thread state struct
-   thread_state *tstate = (thread_state *)(*state);
+   thread_state* tstate = (thread_state*)(*state);
    // get a reference to the global state for this block
-   gthread_state *gstate = (gthread_state *)(tstate->gstate);
+   gthread_state* gstate = (gthread_state*)(tstate->gstate);
    LOG(LOG_INFO, "Reader %d is waking up\n", gstate->location.block);
 
    // check for a NULL ioq and create one if so (TODO: unnecessary?)
-   if (gstate->ioq == NULL)
-   {
+   if (gstate->ioq == NULL) {
       LOG(LOG_INFO, "Creating own ioqueue for block %d\n", gstate->location.block);
       gstate->ioq = create_ioqueue(gstate->minfo.versz, gstate->minfo.partsz, gstate->dmode);
-      if (gstate->ioq == NULL)
-      {
+      if (gstate->ioq == NULL) {
          LOG(LOG_ERR, "Failed to create ioqueue!\n");
          return -1;
       }
    }
    // check for a NON-NULL work package, and release the block if so
-   if (*prev_work != NULL)
-   {
+   if (*prev_work != NULL) {
       // attempt to release our previously filled buffer
       // NOTE -- this only works assuming the master / consumer proc has already
       //         consumed all other IOBlock work packages
       LOG(LOG_INFO, "Block %d is releasing previous ioblock\n", gstate->location.block);
-      if (release_ioblock(gstate->ioq))
-      {
+      if (release_ioblock(gstate->ioq)) {
          LOG(LOG_ERR, "Failed to release previous ioblock!\n");
          return -1;
       }
@@ -496,20 +457,17 @@ int read_resume(void **state, void **prev_work)
    size_t trim = noffset % (gstate->minfo.versz - CRC_BYTES);
    // check the fill-level of our current ioblock
    size_t curdata = 0;
-   if (tstate->iob)
-   {
+   if (tstate->iob) {
       curdata = tstate->iob->data_size;
    }
    // if this is a seek, we have some bookkeeping to take care of
    // NOTE -- check if the starting offset of our ioblock ( current offset minus stored data )
    //         matches our target offset value to determine if this is a seek
-   if ((tstate->offset - curdata) != (io_count * gstate->minfo.versz) + trim)
-   {
+   if ((tstate->offset - curdata) != (io_count * gstate->minfo.versz) + trim) {
       // zero out our crcsum
       tstate->crcsumchk = 0;
       // a seek to anything besides zero means a non-continous read (can't verify global CRC)
-      if (io_count != 0)
-      {
+      if (io_count != 0) {
          tstate->continuous = 0;
       }
 
@@ -517,11 +475,9 @@ int read_resume(void **state, void **prev_work)
       // set our offset to the new value
       tstate->offset = io_count * gstate->minfo.versz;
       // need to cleanup any data lurking in our ioblock reference
-      if (curdata != 0)
-      {
+      if (curdata != 0) {
          LOG(LOG_INFO, "Releasing current ioblock as it is non-empty\n");
-         if (release_ioblock(gstate->ioq))
-         {
+         if (release_ioblock(gstate->ioq)) {
             LOG(LOG_ERR, "Failed to release current ioblock!\n");
             return -1;
          }
@@ -529,15 +485,12 @@ int read_resume(void **state, void **prev_work)
       }
 
       // check if we need to realign our ioblocks
-      if (trim)
-      {
-         ioblock *push_block = NULL;
-         if (tstate->iob == NULL)
-         {
+      if (trim) {
+         ioblock* push_block = NULL;
+         if (tstate->iob == NULL) {
             // reserve a new ioblock
             LOG(LOG_INFO, "Reserving a new ioblock\n");
-            if (reserve_ioblock(&(tstate->iob), &push_block, gstate->ioq))
-            {
+            if (reserve_ioblock(&(tstate->iob), &push_block, gstate->ioq)) {
                LOG(LOG_ERR, "Failed to reserve a new ioblock!\n");
                return -1;
             }
@@ -545,23 +498,19 @@ int read_resume(void **state, void **prev_work)
          // adjust our ioblock offset to align with the request
          LOG(LOG_INFO, "Aligning ioblock to trim of %zu\n", trim);
          int junk_blocks;
-         if ((junk_blocks = align_ioblock(tstate->iob, trim, gstate->ioq)) < 0)
-         {
+         if ((junk_blocks = align_ioblock(tstate->iob, trim, gstate->ioq)) < 0) {
             LOG(LOG_ERR, "Failed to align ioblock to trim of %zu!\n", trim);
             return -1;
          }
-         while (junk_blocks > 0)
-         {
+         while (junk_blocks > 0) {
             // now fill this ioblock
-            if (read_produce((void **)&(tstate), (void **)&(push_block)))
-            {
+            if (read_produce((void**)&(tstate), (void**)&(push_block))) {
                LOG(LOG_ERR, "Failed to produce a junk ioblock!\n");
                return -1;
             }
             // now, just make the current ioblock available again
             LOG(LOG_INFO, "Releasing junk ioblock\n");
-            if (release_ioblock(gstate->ioq))
-            {
+            if (release_ioblock(gstate->ioq)) {
                LOG(LOG_ERR, "Failed to release junk ioblock!\n");
                return -1;
             }
@@ -577,24 +526,21 @@ int read_resume(void **state, void **prev_work)
  * @param void** state : Thread state reference
  * @param void** prev_work : Reference to any unused previous buffer
  */
-void write_term(void **state, void **prev_work, int flg)
-{
+void write_term(void** state, void** prev_work, int flg) {
    // get a reference to the thread state struct
-   thread_state *tstate = (thread_state *)(*state);
+   thread_state* tstate = (thread_state*)(*state);
    // get a reference to the global state for this block
-   gthread_state *gstate = (gthread_state *)(tstate->gstate);
+   gthread_state* gstate = (gthread_state*)(tstate->gstate);
 
    // if we never used an IOBlock reference, we need to release it
-   if (*(prev_work) != NULL && release_ioblock(gstate->ioq))
-   {
+   if (*(prev_work) != NULL && release_ioblock(gstate->ioq)) {
       LOG(LOG_ERR, "Failed to release previous IOBlock!\n");
       gstate->data_error = 1;
       // not much to do besides complain
    }
 
    // attempt to write out meta info
-   if (dal_set_minfo(gstate->dal, tstate->handle, &(gstate->minfo)))
-   {
+   if (dal_set_minfo(gstate->dal, tstate->handle, &(gstate->minfo))) {
       LOG(LOG_ERR, "Failed to set meta value for block %d!\n", gstate->location.block);
       gstate->meta_error = 1;
    }
@@ -603,11 +549,9 @@ void write_term(void **state, void **prev_work, int flg)
    // NOTE -- not really a problem of data being corrupt (crcs can catch that)
    //         Rather, completely skipped writes *could* mean our erasure stripes end up
    //         misaligned, something we can't easily detect.
-   if (gstate->data_error != 0 || (TQ_Control_Flags)flg == TQ_ABORT || gstate->dal->close(tstate->handle))
-   {
+   if (gstate->data_error != 0 || (TQ_Control_Flags)flg == TQ_ABORT || gstate->dal->close(tstate->handle)) {
       LOG(LOG_ERR, "Aborting write of block %d due to previous errors!\n", gstate->location.block);
-      if (gstate->dal->abort(tstate->handle))
-      {
+      if (gstate->dal->abort(tstate->handle)) {
          LOG(LOG_ERR, "Abort of block %d failed!\n", gstate->location.block);
          // not really much to do besides complain
       }
@@ -623,38 +567,32 @@ void write_term(void **state, void **prev_work, int flg)
  * @param void** state : Thread state reference
  * @param void** prev_work : Reference to any unused previous buffer
  */
-void read_term(void **state, void **prev_work, int flg)
-{
+void read_term(void** state, void** prev_work, int flg) {
    // get a reference to the thread state struct
-   thread_state *tstate = (thread_state *)(*state);
+   thread_state* tstate = (thread_state*)(*state);
    // get a reference to the global state for this block
-   gthread_state *gstate = (gthread_state *)(tstate->gstate);
+   gthread_state* gstate = (gthread_state*)(tstate->gstate);
 
    // if we never pushed an IOBlock reference, we need to release it
-   if (*(prev_work) != NULL)
-   {
+   if (*(prev_work) != NULL) {
       LOG(LOG_INFO, "Reader %d releasing unused ioblock\n", gstate->location.block);
-      if (release_ioblock(gstate->ioq))
-      {
+      if (release_ioblock(gstate->ioq)) {
          LOG(LOG_ERR, "Reader %d failed to release unused IOBlock!\n", gstate->location.block);
          // not much to do besides complain
       }
    }
 
    // if we were in the process of populating an ioblock, release that as well
-   if (tstate->iob != NULL)
-   {
+   if (tstate->iob != NULL) {
       LOG(LOG_INFO, "Reader %d releasing in-progress ioblock\n", gstate->location.block);
-      if (release_ioblock(gstate->ioq))
-      {
+      if (release_ioblock(gstate->ioq)) {
          LOG(LOG_ERR, "Reader %d failed to release in-progress IOBlock!\n", gstate->location.block);
          // not much to do besides complain
       }
    }
 
    // close our DAL handle
-   if (gstate->dal->close(tstate->handle))
-   {
+   if (gstate->dal->close(tstate->handle)) {
       LOG(LOG_ERR, "Failed to close read handle for block %d!\n", gstate->location.block);
       // can only really complain, nothing else to be done
    }
