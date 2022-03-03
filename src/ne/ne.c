@@ -118,6 +118,7 @@ underlying skt_etc() functions.
 #include <string.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <strings.h>
 #include <limits.h>
 #include <unistd.h>
 #include <sys/stat.h>

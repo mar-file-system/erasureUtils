@@ -116,7 +116,15 @@ AC_CHECK_LIB([pthread], [pthread_create], [], [AC_MSG_ERROR(["Could not locate l
 
 AC_CHECK_LIB([xml2], [xmlReadFile], [], [AC_MSG_ERROR(["Could not locate libxml2!"])])
 
-AC_CHECK_LIB([s3], [S3_initialize], [], [AC_MSG_ERROR(["Could not locate libs3!"])])
+warnlibs=""
+AC_CHECK_LIB([s3], [S3_initialize], [], [warnlibs="libs3 "])
+AM_CONDITIONAL([S3DAL], [test "$warnlibs" = ""])
+AM_COND_IF([S3DAL], [AC_DEFINE( [S3DAL], [], [Flag indicating activation of S3 DAL] )],
+   [echo
+    echo "WARNING: failed to properly link all necessary functions from $( echo "$warnlibs" | sed 's/ $/\./' | sed 's/ /, /g' )"
+    echo "         These libraries may be missing, or below the required versions."
+    echo "         The 'S3' DAL will be disabled!"
+    echo ])
 
 PKG_CHECK_MODULES( XML, libxml-2.0 )
 

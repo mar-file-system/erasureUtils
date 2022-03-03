@@ -79,6 +79,7 @@ OF SUCH DAMAGE.
 #include "thread_queue.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <strings.h>
 #include <errno.h>
 #include <pthread.h>
 
