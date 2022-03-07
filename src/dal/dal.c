@@ -118,10 +118,12 @@ DAL init_dal(xmlNode *dal_conf_root, DAL_location max_loc)
    {
       return fuzzing_dal_init(dal_conf_root->children, max_loc);
    }
+#ifdef S3DAL
    else if (strncasecmp((char *)typetxt->content, "s3", 3) == 0)
    {
       return s3_dal_init(dal_conf_root->children, max_loc);
    }
+#endif
    else if (strncasecmp((char *)typetxt->content, "timer", 6) == 0)
    {
       return timer_dal_init(dal_conf_root->children, max_loc);

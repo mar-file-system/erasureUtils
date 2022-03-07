@@ -63,6 +63,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
 #include <libxml/tree.h>
+#include <strings.h>
 #include <string.h>
 #include <errno.h>
 
