@@ -63,6 +63,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <unistd.h>
 #include <stdio.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 
 #define DATASIZE 50000
 
@@ -72,6 +73,12 @@ int main(int argc, char **argv)
   {
     printf("error: must be run as root\n");
     return 0;
+  }
+
+  errno = 0;
+  if ( mkdir( "./sec_root", 0700 )  &&  errno != EEXIST ) {
+    printf("failed to create './sec_root' subdir\n" );
+    return -1;
   }
 
   xmlDoc *doc = NULL;
@@ -147,6 +154,30 @@ int main(int argc, char **argv)
     printf("error: failed to cleanup DAL\n");
     return -1;
   }
+
+  // cleanup all created subdirs (ignoring errors)
+  int p = 0;
+  int b = 0;
+  int c = 0;
+  int s = 0;
+  char tgtdir[1024] = {0};
+  for ( ; p < 2; p++ ) {
+    for( b = 0; b < 2; b++ ) {
+      for( c = 0; c < 2; c++ ) {
+        for( s = 0; s < 2; s++ ) {
+          snprintf( tgtdir, 1024, "./sec_root/pod%d/block%d/cap%d/scatter%d", p, b, c, s );
+          rmdir( tgtdir );
+        }
+        snprintf( tgtdir, 1024, "./sec_root/pod%d/block%d/cap%d", p, b, c );
+        rmdir( tgtdir );
+      }
+      snprintf( tgtdir, 1024, "./sec_root/pod%d/block%d", p, b );
+      rmdir( tgtdir );
+    }
+    snprintf( tgtdir, 1024, "./sec_root/pod%d", p );
+    rmdir( tgtdir );
+  }
+  rmdir( "./sec_root" );
 
   return 0;
 }
