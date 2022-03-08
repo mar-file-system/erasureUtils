@@ -1113,6 +1113,7 @@ ne_handle ne_stat(ne_ctxt ctxt, const char* objID, ne_location loc) {
    int curblock = 0;
    int valid_meta = 0;
    int maxblock = ctxt->max_block;
+   int match_count = 0;
    for (; curblock < maxblock; curblock++) {
 
       DAL_location dloc = { .pod = loc.pod, .block = curblock, .cap = loc.cap, .scatter = loc.scatter };
@@ -1134,7 +1135,7 @@ ne_handle ne_stat(ne_ctxt ctxt, const char* objID, ne_location loc) {
             minfo_refs[valid_meta] = &(minfo_list[curblock]);
             valid_meta++;
             // get new consensus values, including this info
-            int match_count = check_matches(minfo_refs, valid_meta, ctxt->max_block, &consensus);
+            match_count = check_matches(minfo_refs, valid_meta, ctxt->max_block, &consensus);
             // if we have sufficient agreement, update our maxblock value and save us some time
             if (match_count > MIN_MD_CONSENSUS) {
                maxblock = consensus.N + consensus.E;
@@ -1152,6 +1153,18 @@ ne_handle ne_stat(ne_ctxt ctxt, const char* objID, ne_location loc) {
 
    // we're done with our minfo_refs
    free(minfo_refs);
+
+   // if we've failed to retrieve good meta info values, abort early
+   if ( valid_meta < 1  ||  match_count < 1  ||  consensus.N < 1  ||  consensus.E < 0  ||
+        match_count < consensus.N ) {
+      errno = ENODATA;
+      free(tmp_meta_errs);
+      free(minfo_list);
+      if ( valid_meta == 0 ) { errno = ENOENT; }
+      LOG( LOG_ERR, "Failed to achieve sufficient meta info consensus across %d blocks (%s)\n", maxblock, strerror(errno) );
+      fprintf( stderr, "Vmeta=%d, Match=%d, Con.N=%d, Con.E=%d\n", valid_meta, match_count, consensus.N, consensus.E );
+      return NULL;
+   }
 
    // create a handle structure
    ne_handle handle = allocate_handle(ctxt, objID, loc, &consensus);
