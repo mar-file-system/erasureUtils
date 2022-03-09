@@ -525,8 +525,9 @@ int read_resume(void** state, void** prev_work) {
  * Write out our meta info and close our target reference
  * @param void** state : Thread state reference
  * @param void** prev_work : Reference to any unused previous buffer
+ * @param TQ_Control_Flags flg : Control flags values at thread term
  */
-void write_term(void** state, void** prev_work, int flg) {
+void write_term(void** state, void** prev_work, TQ_Control_Flags flg) {
    // get a reference to the thread state struct
    thread_state* tstate = (thread_state*)(*state);
    // get a reference to the global state for this block
@@ -566,8 +567,9 @@ void write_term(void** state, void** prev_work, int flg) {
  * Close our target reference
  * @param void** state : Thread state reference
  * @param void** prev_work : Reference to any unused previous buffer
+ * @param TQ_Control_Flags flg : Control flags values at thread term
  */
-void read_term(void** state, void** prev_work, int flg) {
+void read_term(void** state, void** prev_work, TQ_Control_Flags flg) {
    // get a reference to the thread state struct
    thread_state* tstate = (thread_state*)(*state);
    // get a reference to the global state for this block

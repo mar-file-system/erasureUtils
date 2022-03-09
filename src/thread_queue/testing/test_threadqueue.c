@@ -172,7 +172,7 @@ int my_resume(void **state, void **prev_work)
    return 0;
 }
 
-void my_thread_term(void **state, void **prev_work, int flg)
+void my_thread_term(void **state, void **prev_work, TQ_Control_Flags flg)
 {
    WorkPkg wpkg = ((WorkPkg)*prev_work);
    ThreadState tstate = ((ThreadState)*state);

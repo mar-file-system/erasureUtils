@@ -68,6 +68,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 // THIS INTERFACE RELIES ON THE DAL INTERFACE!
 #include "dal/dal.h"
+#include "thread_queue/thread_queue.h"
 #include <pthread.h>
 #include <stdint.h>
 
@@ -336,15 +337,17 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
  * Write out our meta info and close our target reference
  * @param void** state : Thread state reference
  * @param void** prev_work : Reference to any unused previous buffer
+ * @param TQ_Control_Flags flg : Control flags values at thread term
  */
-   void write_term(void **state, void **prev_work, int flg);
+   void write_term(void **state, void **prev_work, TQ_Control_Flags flg);
 
    /**
  * Close our target reference
  * @param void** state : Thread state reference
  * @param void** prev_work : Reference to any unused previous buffer
+ * @param TQ_Control_Flags flg : Control flags values at thread term
  */
-   void read_term(void **state, void **prev_work, int flg);
+   void read_term(void **state, void **prev_work, TQ_Control_Flags flg);
 
 #ifdef __cplusplus
 }
