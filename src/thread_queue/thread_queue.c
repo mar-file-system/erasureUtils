@@ -110,7 +110,7 @@ typedef struct thread_queue_worker_pool_struct
    /* function pointer defining the behavior of a thread just before entering a HALTED state */
    int (*thread_resume_func)(void **state, void **prev_work);
    /* function pointer defining the behavior of a thread just after exiting a HALTED state */
-   void (*thread_term_func)(void **state, void **prev_work, int flg);
+   void (*thread_term_func)(void **state, void **prev_work, TQ_Control_Flags flg);
    /* function pointer defining the termination behavior of threads */
 } * TQWorkerPool;
 
@@ -522,8 +522,8 @@ void *producer_thread(void *arg)
 
       } // end of holding pattern -- this thread has some action to take
 
-      // First, check if we should be quitting
-      if ((tq->con_flags & TQ_ABORT) || (tq->con_flags & TQ_FINISHED))
+      // First, check if we should be aborting
+      if (tq->con_flags & TQ_ABORT)
       {
          break;
       }
@@ -554,6 +554,12 @@ void *producer_thread(void *arg)
          }
 
          cur_work = NULL; // clear this value to avoid confusion if we exit
+      }
+
+      // Now that we've enqueued our last work package, check if we should be quitting
+      if (tq->con_flags & TQ_FINISHED)
+      {
+         break;
       }
 
       pthread_mutex_unlock(&tq->qlock); // release the lock

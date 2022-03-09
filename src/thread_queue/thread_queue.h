@@ -176,9 +176,10 @@ typedef struct queue_init_struct
          * The second argument is a reference to the previous work package produced/consumed by this thread
             ** This reference will be populated with NULL if the previous work package has already been
                processed (passed to the consumer func), enqueued, or no previous work package exists.
+         * The third argument is a copy of the control flags value at the time of thread termination
       - Return Value (NONE)
    */
-   void (*thread_term_func)(void **state, void **prev_work, int flg);
+   void (*thread_term_func)(void **state, void **prev_work, TQ_Control_Flags flg);
 
 } TQ_Init_Opts;
 
