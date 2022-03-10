@@ -68,9 +68,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #define NUM_CONS 10
 #define NUM_PROD 5
 #define QDEPTH 100
-#define TOT_WRK 10
-#define HLT_AT -1
-#define ABT_AT -1
+#define TOT_WRK 50
+#define HLT_AT 15
+#define ABT_AT 20
 #define SLP_PER_CONS 200000 // 0.2 sec
 #define SLP_PER_PROD 100000 // 0.1 sec
 
@@ -155,8 +155,9 @@ int my_producer(void **state, void **work)
    usleep(rand() % (SLP_PER_PROD));
    fprintf(stdout, "Thread %u created work package %d ( wkcnt = %d )\n", tstate->tID, wpkg->pkgnum, tstate->wkcnt);
    *work = (void *)wpkg;
-   if (wpkg->pkgnum > TOT_WRK)
+   if (wpkg->pkgnum == TOT_WRK)
    {
+      fprintf(stdout, "Thread %u is marking the queue as finished\n", tstate->tID);
       return 1;
    }
    return 0;
@@ -197,7 +198,7 @@ int main(int argc, char **argv)
 
    TQ_Init_Opts tqopts;
    tqopts.log_prefix = "MyTQ";
-   tqopts.init_flags = TQ_HALT;
+   tqopts.init_flags = TQ_NONE;
    tqopts.global_state = (void *)&gstruct;
    tqopts.num_threads = NUM_PROD + NUM_CONS;
    tqopts.num_prod_threads = NUM_PROD;
@@ -232,22 +233,51 @@ int main(int argc, char **argv)
          {
             printf("unexpected return from tq_wait_for_pause!\n");
          }
-         printf("...sleeping for 1 second (should see no activity)...\n");
-         sleep(1);
-         printf("...resuming queue...\n");
-         if (tq_unset_flags(tq, TQ_HALT))
-         {
-            printf("unexpected return from tq_unset_flags!\n");
+         else {
+            printf("...sleeping for 1 second (should see no activity)...\n");
+            sleep(1);
+            printf("...resuming queue...\n");
+            if (tq_unset_flags(tq, TQ_HALT))
+            {
+               printf("unexpected return from tq_unset_flags!\n");
+            }
          }
       }
    }
    if (flags & TQ_FINISHED)
    {
       printf("queue is finished!\n");
+      printf("master waiting for queue completion...\n");
+      while ( tq_wait_for_completion( tq ) ) {
+         printf( "failed to wait for queue completion\n" );
+         if ( tq_get_flags( tq, &flags ) ) {
+            printf( "failed to retrieve flags of incomplete queue\n" );
+            return -1;
+         }
+         if ( flags & TQ_HALT ) {
+            printf( "queue was halted while master waited for completion\n" );
+            printf("resuming queue...\n");
+            if (tq_unset_flags(tq, TQ_HALT))
+            {
+               printf("unexpected return from tq_unset_flags!\n");
+               return -1;
+            }
+         }
+         else if ( flags & TQ_ABORT ) {
+            break;
+         }
+         else {
+            return -1;
+         }
+      }
    }
-   else if (flags & TQ_ABORT)
+   if (flags & TQ_ABORT)
    {
       printf("queue has aborted!\n");
+   }
+   else
+   {
+      printf("queue has completed!\n");
    }
 
    int tnum = 0;
@@ -269,6 +299,7 @@ int main(int argc, char **argv)
    if (tres != 0)
    {
       printf("Failure of tq_next_thread_status()!\n");
+      return -1;
    }
 
    printf("Global state: %d\n", gstruct.pkgcnt);
@@ -279,7 +310,7 @@ int main(int argc, char **argv)
    {
       printf("Elements still remain on ABORTED queue!  Using tq_dequeue() to retrieve...\n");
       WorkPkg wpkg = NULL;
-      while (tq_dequeue(tq, TQ_ABORT, (void **)&wpkg) > 0)
+      while (tq_dequeue(tq, TQ_ABORT | TQ_HALT, (void **)&wpkg) > 0)
       {
          printf("Received work package %d from aborted queue\n", wpkg->pkgnum);
          free(wpkg);

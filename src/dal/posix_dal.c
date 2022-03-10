@@ -1126,7 +1126,7 @@ int posix_cleanup(DAL dal)
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)dal->ctxt; // should have been passed a posix context
 
    // free DAL context state
-   close(dctxt->sec_root);
+   if ( dctxt->sec_root > 0 ) { close( dctxt->sec_root ); }
    free(dctxt->dirtmp);
    free(dctxt);
    // free the DAL struct and its associated state

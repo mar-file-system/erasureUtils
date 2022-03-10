@@ -256,6 +256,7 @@ int test_values( ne_erasure* epat, size_t iosz, size_t partsz ) {
       printf( "ERROR: Failed to open a read handle!\n" );
       return -1;
    }
+   printf( "...read handle opened...\n" );
    // read out data
    for ( i = 0; i < iocnt; i++ ) {
       // read our into our data buffer

@@ -266,7 +266,19 @@ int terminate_thread(ioblock** iobref, ThreadQueue tq, gthread_state* state, ne_
       // attempt to abort, ignoring errors
       tq_set_flags(tq, TQ_ABORT);
    }
+   if (tq_unset_flags(tq, TQ_HALT)) {
+      LOG(LOG_ERR, "Failed to unset potential HALT state!\n");
+      ret_val = -1;
+      // attempt to abort, ignoring errors
+      tq_set_flags(tq, TQ_ABORT);
+   }
    if (mode == NE_RDONLY || mode == NE_RDALL) {
+      // wait for thread termination
+      if ( ret_val == 0  &&  tq_wait_for_completion( tq ) ) {
+         LOG( LOG_ERR, "Failed to wait for thread completion\n" );
+         ret_val = -1;
+         tq_set_flags(tq, TQ_ABORT);
+      }
       // we need to empty any remaining elements from the queue
       while (tq_dequeue(tq, TQ_NONE, NULL) > 0) {
          LOG(LOG_INFO, "Releasing unused queue element\n");
@@ -2111,6 +2123,7 @@ int ne_rebuild(ne_handle handle, ne_erasure* epat, ne_state* sref) {
                LOG(LOG_ERR, "Failed to terminate input thread %d\n", i);
                numerrs++;
                handle->mode = NE_ERR;
+               tq_next_thread_status(handle->thread_queues[i], NULL);
             }
             else {
                tq_next_thread_status(handle->thread_queues[i], NULL);
@@ -2167,6 +2180,12 @@ int ne_rebuild(ne_handle handle, ne_erasure* epat, ne_state* sref) {
    }
 
    LOG(LOG_INFO, "Rebuild completed with %d errors remaining\n", newerrs);
+
+   // populate any info structs
+   if (ne_get_info(handle, epat, sref) < 0) {
+      LOG(LOG_ERR, "Failed to populate info structs!\n");
+      return -1;
+   }
 
    // indicate if uncorrected errors remain
    return newerrs;
