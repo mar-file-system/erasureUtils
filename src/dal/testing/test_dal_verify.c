@@ -76,8 +76,14 @@ int main(int argc, char **argv)
   }
 
   errno = 0;
-  if ( mkdir( "./sec_root", 0700 )  &&  errno != EEXIST ) {
-    printf("failed to create './sec_root' subdir\n" );
+  if ( mkdir( "./top_dir", 0755 )  &&  errno != EEXIST ) {
+    printf("failed to create './top_dir' subdir\n" );
+    return -1;
+  }
+
+  errno = 0;
+  if ( mkdir( "./top_dir/sec_root", 0700 )  &&  errno != EEXIST ) {
+    printf("failed to create './top_dir/sec_root' subdir\n" );
     return -1;
   }
 
@@ -130,7 +136,7 @@ int main(int argc, char **argv)
   }
 
   printf("deleting directory \"pod1/block1/cap1/scatter1/\"\n");
-  if (rmdir("./sec_root/pod1/block1/cap1/scatter1/"))
+  if (rmdir("./top_dir/sec_root/pod1/block1/cap1/scatter1/"))
   {
     printf("error: failed to delete \"pod1/block1/cap1/scatter1/\" (%s)\n", strerror(errno));
     return -1;
@@ -165,19 +171,20 @@ int main(int argc, char **argv)
     for( b = 0; b < 2; b++ ) {
       for( c = 0; c < 2; c++ ) {
         for( s = 0; s < 2; s++ ) {
-          snprintf( tgtdir, 1024, "./sec_root/pod%d/block%d/cap%d/scatter%d", p, b, c, s );
+          snprintf( tgtdir, 1024, "./top_dir/sec_root/pod%d/block%d/cap%d/scatter%d", p, b, c, s );
           rmdir( tgtdir );
         }
-        snprintf( tgtdir, 1024, "./sec_root/pod%d/block%d/cap%d", p, b, c );
+        snprintf( tgtdir, 1024, "./top_dir/sec_root/pod%d/block%d/cap%d", p, b, c );
         rmdir( tgtdir );
       }
-      snprintf( tgtdir, 1024, "./sec_root/pod%d/block%d", p, b );
+      snprintf( tgtdir, 1024, "./top_dir/sec_root/pod%d/block%d", p, b );
       rmdir( tgtdir );
     }
-    snprintf( tgtdir, 1024, "./sec_root/pod%d", p );
+    snprintf( tgtdir, 1024, "./top_dir/sec_root/pod%d", p );
     rmdir( tgtdir );
   }
-  rmdir( "./sec_root" );
+  rmdir( "./top_dir/sec_root" );
+  rmdir( "./top_dir" );
 
   return 0;
 }

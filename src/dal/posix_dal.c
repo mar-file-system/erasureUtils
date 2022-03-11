@@ -697,23 +697,24 @@ int posix_verify(DAL_CTXT ctxt, char fix)
       LOG(LOG_ERR, "received a NULL dal context!\n");
       return -1;
    }
-   POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a s3 context
+   POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a POSIX context
 
    // zero out umask
    mode_t mask = umask(0);
 
    int num_err = 0;
-   struct stat info;
+   struct stat st;
 
    if ( dctxt->sec_root != AT_FDCWD ) {
       // verify secure root
-      if (fstat(dctxt->sec_root, &info) || !S_ISDIR(info.st_mode))
+      if (fstat(dctxt->sec_root, &st) || !S_ISDIR(st.st_mode))
       {
          LOG(LOG_ERR, "failed to verify secure root exists (%s)\n", strerror(errno));
          umask(mask); // restore umask
          return -1;
       }
-      if ( info.st_uid != uid )
+
+      if ( st.st_uid != uid || st.st_gid != gid)
       {
          LOG(LOG_ERR, "secure root does not have ownership matching this process\n");
          if (fix)
@@ -733,12 +734,12 @@ int posix_verify(DAL_CTXT ctxt, char fix)
             num_err++;
          }
       }
-      if ( (info.st_mode & S_IRWXG) ^ S_IRWXG || info.st_mode & S_IRWXO )
+      if ( (st.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO)) != (S_IRWXU | S_IXGRP | S_IXOTH) )
       {
          LOG(LOG_ERR, "failed to verify secure root permissions\n");
          if (fix)
          {
-            if (fchmod(dctxt->sec_root, S_IRWXU | S_IRWXG))
+            if (fchmod(dctxt->sec_root, S_IRWXU | S_IXGRP | S_IXOTH))
             {
                LOG(LOG_ERR, "failed to set secure root permissions (%s)\n", strerror(errno));
                num_err++;
@@ -752,6 +753,78 @@ int posix_verify(DAL_CTXT ctxt, char fix)
          {
             num_err++;
          }
+      }
+
+      int w_fd = -1;
+      int o_fd = dctxt->sec_root;
+      ino_t o_ino = -1;
+      while (st.st_ino != o_ino)
+      {
+         o_ino = st.st_ino;
+         if ((w_fd = openat(o_fd, "..", O_RDONLY)) < 0)
+         {
+            LOG(LOG_ERR, "failed to open parent dir\n");
+            num_err++;
+            o_ino = -1;
+            break;
+         }
+
+         if (fstat(w_fd, &st))
+         {
+            LOG(LOG_ERR, "failed to stat parent dir\n");
+            num_err++;
+            close(w_fd);
+            o_ino = -1;
+            break;
+         }
+
+         if (st.st_uid == uid && st.st_gid == gid && (st.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO)) == S_IRWXU)
+         {
+            close(w_fd);
+            o_ino = -1;
+            break;
+         }
+
+         if (o_fd != dctxt->sec_root)
+         {
+            close(o_fd);
+         }
+         o_fd = w_fd;
+      }
+      if (o_ino != -1)
+      {
+         close(w_fd);
+         LOG(LOG_ERR, "no parent directory of the secure root has fully restrictive permissions\n");
+         if (fix)
+         {
+            if (fchownat(dctxt->sec_root, "..", uid, gid, 0))
+            {
+               LOG(LOG_ERR, "failed to set owner and group of parent of secure root (%s)\n", strerror(errno));
+               num_err++;
+            }
+            else
+            {
+               LOG(LOG_INFO, "successfully set owner and group of parent of secure root\n");
+            }
+
+            if (fchmodat(dctxt->sec_root, "..", S_IRWXU, 0))
+            {
+               LOG(LOG_ERR, "failed to set permissions of parent of secure root (%s)\n", strerror(errno));
+               num_err++;
+            }
+            else
+            {
+               LOG(LOG_INFO, "successfully set permissions of parent of secure root\n");
+            }
+         }
+         else
+         {
+            num_err++;
+         }
+      }
+      else if (o_fd != dctxt->sec_root)
+      {
+         close(o_fd);
       }
    }
    char *path = malloc(sizeof(char) * (dctxt->tmplen + dctxt->dirpad + SFX_PADDING + 1));
@@ -780,14 +853,10 @@ int posix_verify(DAL_CTXT ctxt, char fix)
                loc.scatter = s;
                expand_path(dctxt->dirtmp, path, loc, NULL, 1);
                LOG(LOG_INFO, "checking path %s\n", path);
-               if (fstatat(dctxt->sec_root, path, &info, 0) || !S_ISDIR(info.st_mode))
+               if (fstatat(dctxt->sec_root, path, &st, 0) || !S_ISDIR(st.st_mode))
                {
                   LOG(LOG_ERR, "failed to verify directory \"%s\" exists (%s)\n", path, strerror(errno));
-                  if (fix)
-                  {
-                     num_err += r_mkdirat(dctxt->sec_root, path, S_IRWXU);
-                  }
-                  else
+                  if (!fix || r_mkdirat(dctxt->sec_root, path, S_IRWXU | S_IXGRP | S_IXOTH) || fchmodat(dctxt->sec_root, path, S_IRWXU | S_IWGRP | S_IXGRP | S_IWOTH | S_IXOTH, 0))
                   {
                      num_err++;
                   }
