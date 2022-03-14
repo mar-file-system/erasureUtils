@@ -277,6 +277,13 @@ int tq_wait_for_pause(ThreadQueue tq);
 int tq_wait_for_flags(ThreadQueue tq, TQ_Control_Flags ignore_flags, TQ_Control_Flags *flags);
 
 /**
+ * Waits for all threads of a given ThreadQueue to complete, then returns
+ * @param ThreadQueue tq : ThreadQueue on which to wait
+ * @return int : Zero on success and non-zero on failure (such as, if the queue is not FINISHED)
+ */
+int tq_wait_for_completion(ThreadQueue tq);
+
+/**
  * Populates a reference to the state for the next uncollected thread in a FINISHED or ABORTED ThreadQueue
  * @param ThreadQueue tq : ThreadQueue from which to collect state info
  * @param void** tstate : Reference to a void* be populated with thread state info

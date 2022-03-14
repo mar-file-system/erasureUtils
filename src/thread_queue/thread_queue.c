@@ -756,7 +756,6 @@ ThreadQueue tq_init(TQ_Init_Opts *opts)
    }
 
    // allocate and initialize producer pool, if necessary
-   unsigned int tID = 0;
    if (opts->num_prod_threads > 0)
    {
       tq->prod_pool = malloc(sizeof(struct thread_queue_worker_pool_struct));
@@ -775,21 +774,6 @@ ThreadQueue tq_init(TQ_Init_Opts *opts)
       wp->thread_pause_func = opts->thread_pause_func;
       wp->thread_resume_func = opts->thread_resume_func;
       wp->thread_term_func = opts->thread_term_func;
-      // create all producer threads
-      for (; tID < wp->num_thrds; tID++)
-      {
-         ThreadArg *targ = &targs[tID];
-         targ->global_state = opts->global_state;
-         targ->tID = tID;
-         targ->tq = tq;
-         LOG(LOG_INFO, "%s Starting %s Thread %u\n", tq->log_prefix, wp->pname, targ->tID);
-         if (pthread_create(&tq->threads[tID], NULL, producer_thread, (void *)targ))
-         {
-            LOG(LOG_ERR, "%s failed to create thread %d\n", tq->log_prefix, tID);
-            break;
-         }
-         tq->uncoll_thrds++;
-      }
    }
    // allocate and initialize consumer pool, if necessary
    if (opts->num_threads > opts->num_prod_threads)
@@ -810,22 +794,40 @@ ThreadQueue tq_init(TQ_Init_Opts *opts)
       wp->thread_pause_func = opts->thread_pause_func;
       wp->thread_resume_func = opts->thread_resume_func;
       wp->thread_term_func = opts->thread_term_func;
-      // create all consumer threads
-      // NOTE - value of 'tID' persists from producer thread creation
-      for (; tID < opts->num_threads; tID++)
+   }
+
+   // initialize all threads
+   unsigned int tID = 0;
+   // create all producer threads
+   for (; tID < opts->num_prod_threads; tID++)
+   {
+      ThreadArg *targ = &targs[tID];
+      targ->global_state = opts->global_state;
+      targ->tID = tID;
+      targ->tq = tq;
+      LOG(LOG_INFO, "%s Starting %s Thread %u\n", tq->log_prefix, tq->prod_pool->pname, targ->tID);
+      if (pthread_create(&tq->threads[tID], NULL, producer_thread, (void *)targ))
       {
-         ThreadArg *targ = &targs[tID];
-         targ->global_state = opts->global_state;
-         targ->tID = tID;
-         targ->tq = tq;
-         LOG(LOG_INFO, "%s Starting %s Thread %u\n", tq->log_prefix, wp->pname, targ->tID);
-         if (pthread_create(&tq->threads[tID], NULL, consumer_thread, (void *)targ))
-         {
-            LOG(LOG_ERR, "%s failed to create thread %d\n", tq->log_prefix, tID);
-            break;
-         }
-         tq->uncoll_thrds++;
+         LOG(LOG_ERR, "%s failed to create thread %d\n", tq->log_prefix, tID);
+         break;
       }
+      tq->uncoll_thrds++;
+   }
+   // create all consumer threads
+   // NOTE - value of 'tID' persists from producer thread creation
+   for (; tID < opts->num_threads; tID++)
+   {
+      ThreadArg *targ = &targs[tID];
+      targ->global_state = opts->global_state;
+      targ->tID = tID;
+      targ->tq = tq;
+      LOG(LOG_INFO, "%s Starting %s Thread %u\n", tq->log_prefix, tq->cons_pool->pname, targ->tID);
+      if (pthread_create(&tq->threads[tID], NULL, consumer_thread, (void *)targ))
+      {
+         LOG(LOG_ERR, "%s failed to create thread %d\n", tq->log_prefix, tID);
+         break;
+      }
+      tq->uncoll_thrds++;
    }
 
    // check for initialization of all threads
@@ -842,7 +844,7 @@ ThreadQueue tq_init(TQ_Init_Opts *opts)
          while ((tq->state_flags[tID] & (TQ_READY | TQ_ERROR)) == 0)
          { // wait for the thread to succeed or fail
             LOG(LOG_INFO, "%s waiting for thread %u to initialize\n", tq->log_prefix, tID);
-            pthread_cond_wait(&tq->state_resume, &tq->qlock); // since TQ_HALT is set, we will be notified when the thread blocks
+            pthread_cond_wait(&tq->state_resume, &tq->qlock); // we will be notified when the thread updates state value
          }
          if (tq->state_flags[tID] & TQ_ERROR)
          { // if we've hit an error, start terminating threads
@@ -1194,14 +1196,29 @@ int tq_wait_for_pause(ThreadQueue tq)
       LOG(LOG_ERR, "%s master failed to acquire queue lock\n", tq->log_prefix);
       return -1;
    }
-   // wait for halt of all consumer threads
+   // check that queue is in an expected state
+   if (!(tq->con_flags & TQ_HALT))
+   {
+      LOG(LOG_ERR, "%s master cannot wait on a queue that is not HALTED\n", tq->log_prefix);
+      pthread_mutex_unlock(&tq->qlock);
+      errno = EINVAL;
+      return -1;
+   }
+   if (tq->con_flags & (TQ_FINISHED | TQ_ABORT))
+   {
+      LOG(LOG_ERR, "%s master cannont wait on FINISHED or ABORTED queue!\n", tq->log_prefix);
+      pthread_mutex_unlock(&tq->qlock);
+      errno = EINVAL;
+      return -1;
+   }
    unsigned int thread = 0;
    // wait for halt of all producer threads
    if (tq->prod_pool != NULL)
    {
       for (; thread < tq->prod_pool->num_thrds; thread++)
       {
-         while (!(tq->state_flags[thread] & TQ_HALTED) && !(tq->con_flags & (TQ_FINISHED | TQ_ABORT)))
+         while (!(tq->state_flags[thread] & TQ_HALTED) && !(tq->con_flags & (TQ_FINISHED | TQ_ABORT))
+                                                       && (tq->con_flags & TQ_HALT) )
          {
             LOG(LOG_INFO, "%s master is waiting for thread %u to halt\n", tq->log_prefix, thread);
             pthread_cond_wait(&tq->state_resume, &tq->qlock);
@@ -1223,12 +1240,14 @@ int tq_wait_for_pause(ThreadQueue tq)
          LOG(LOG_INFO, "%s master detects that %s Thread %u has halted\n", tq->log_prefix, tq->prod_pool->pname, thread);
       }
    }
+   // wait for halt of all consumer threads
    unsigned int con_start = thread;
    if (tq->cons_pool != NULL)
    {
       for (; thread < (tq->cons_pool->num_thrds + con_start); thread++)
       {
-         while (!(tq->state_flags[thread] & TQ_HALTED) && (tq->con_flags & TQ_HALT) && !(tq->con_flags & (TQ_FINISHED | TQ_ABORT)))
+         while (!(tq->state_flags[thread] & TQ_HALTED) && !(tq->con_flags & (TQ_FINISHED | TQ_ABORT))
+                                                       && (tq->con_flags & TQ_HALT) )
          {
             LOG(LOG_INFO, "%s master is waiting for thread %u to halt\n", tq->log_prefix, thread);
             pthread_cond_wait(&tq->state_resume, &tq->qlock);
@@ -1251,6 +1270,98 @@ int tq_wait_for_pause(ThreadQueue tq)
       }
    }
    LOG(LOG_INFO, "%s master detects that all threads have halted\n", tq->log_prefix);
+   // release the lock and return
+   pthread_mutex_unlock(&tq->qlock);
+   return 0;
+}
+
+/**
+ * Waits for all threads of a given ThreadQueue to complete, then returns
+ * @param ThreadQueue tq : ThreadQueue on which to wait
+ * @return int : Zero on success and non-zero on failure (such as, if the queue is not FINISHED)
+ */
+int tq_wait_for_completion(ThreadQueue tq)
+{
+   // get the queue lock
+   if (pthread_mutex_lock(&tq->qlock))
+   {
+      LOG(LOG_ERR, "%s master failed to acquire queue lock\n", tq->log_prefix);
+      return -1;
+   }
+   // check that queue is in an expected state
+   if (!(tq->con_flags & TQ_FINISHED))
+   {
+      LOG(LOG_ERR, "%s master cannot wait on a queue that is not FINISHED\n", tq->log_prefix);
+      pthread_mutex_unlock(&tq->qlock);
+      errno = EINVAL;
+      return -1;
+   }
+   if (tq->con_flags & (TQ_HALT | TQ_ABORT))
+   {
+      LOG(LOG_ERR, "%s master cannont wait on HALTED or ABORTED queue!\n", tq->log_prefix);
+      pthread_mutex_unlock(&tq->qlock);
+      errno = EINVAL;
+      return -1;
+   }
+   // wait for completion of all producer threads
+   unsigned int thread = 0;
+   if (tq->prod_pool != NULL)
+   {
+      for (; thread < tq->prod_pool->num_thrds; thread++)
+      {
+         while ( (tq->state_flags[thread] & TQ_READY) && !(tq->con_flags & (TQ_HALTED | TQ_ABORT))
+                                                      &&  (tq->con_flags & TQ_FINISHED) )
+         {
+            LOG(LOG_INFO, "%s master is waiting for thread %u to complete\n", tq->log_prefix, thread);
+            pthread_cond_wait(&tq->state_resume, &tq->qlock);
+         }
+         if (!(tq->con_flags & TQ_FINISHED))
+         {
+            LOG(LOG_ERR, "%s master cannot wait on a queue that is not FINISHED\n", tq->log_prefix);
+            pthread_mutex_unlock(&tq->qlock);
+            errno = EINVAL;
+            return -1;
+         }
+         if (tq->con_flags & (TQ_HALT | TQ_ABORT))
+         {
+            LOG(LOG_ERR, "%s master cannont wait on HALTED or ABORTED queue!\n", tq->log_prefix);
+            pthread_mutex_unlock(&tq->qlock);
+            errno = EINVAL;
+            return -1;
+         }
+         LOG(LOG_INFO, "%s master detects that %s Thread %u has completed\n", tq->log_prefix, tq->prod_pool->pname, thread);
+      }
+   }
+   // wait for completion of all consumer threads
+   unsigned int con_start = thread;
+   if (tq->cons_pool != NULL)
+   {
+      for (; thread < (tq->cons_pool->num_thrds + con_start); thread++)
+      {
+         while ( (tq->state_flags[thread] & TQ_READY) && !(tq->con_flags & (TQ_HALTED | TQ_ABORT))
+                                                      &&  (tq->con_flags & TQ_FINISHED) )
+         {
+            LOG(LOG_INFO, "%s master is waiting for thread %u to complete\n", tq->log_prefix, thread);
+            pthread_cond_wait(&tq->state_resume, &tq->qlock);
+         }
+         if (!(tq->con_flags & TQ_FINISHED))
+         {
+            LOG(LOG_ERR, "%s master cannot wait on a queue that is not FINISHED\n", tq->log_prefix);
+            pthread_mutex_unlock(&tq->qlock);
+            errno = EINVAL;
+            return -1;
+         }
+         if (tq->con_flags & (TQ_HALT | TQ_ABORT))
+         {
+            LOG(LOG_ERR, "%s master cannont wait on HALTED or ABORTED queue!\n", tq->log_prefix);
+            pthread_mutex_unlock(&tq->qlock);
+            errno = EINVAL;
+            return -1;
+         }
+         LOG(LOG_INFO, "%s master detects that %s Thread %u has completed\n", tq->log_prefix, tq->cons_pool->pname, thread);
+      }
+   }
+   LOG(LOG_INFO, "%s master detects that all threads have completed\n", tq->log_prefix);
    // release the lock and return
    pthread_mutex_unlock(&tq->qlock);
    return 0;
@@ -1311,7 +1422,7 @@ int tq_next_thread_status(ThreadQueue tq, void **tstate)
       LOG(LOG_ERR, "%s master failed to acquire queue lock!\n", tq->log_prefix);
       return -1;
    }
-   // make sure the queue has been marked FINISHED/ABORTED but not HALTED
+   // make sure the queue has been marked FINISHED/ABORTED
    if (!(tq->con_flags & (TQ_FINISHED | TQ_ABORT)))
    {
       LOG(LOG_ERR, "%s cannont retrieve thread states from a non-FINISHED/ABORTED queue!\n", tq->log_prefix);
@@ -1320,7 +1431,7 @@ int tq_next_thread_status(ThreadQueue tq, void **tstate)
       return -1;
    }
    // make sure the queue is not HALTED with queue elements remaining
-   if ((tq->con_flags & TQ_HALT) && (tq->qdepth > 0))
+   if ((tq->con_flags & TQ_HALT) && (tq->qdepth > 0) && !(tq->con_flags & TQ_ABORT))
    {
       LOG(LOG_ERR, "%s cannont retrieve thread states from a HALTED and non-empty queue!\n", tq->log_prefix);
       errno = EINVAL;
