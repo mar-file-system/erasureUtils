@@ -313,24 +313,42 @@ int general_thread_post_work_behavior(ThreadQueue tq, TQWorkerPool wp, unsigned 
       pthread_cond_broadcast(&tq->state_resume); // should be safe with no lock (also, not much choice)
       return -1;                                 // not holding lock
    }
-   if (work_res != 0)
+   char setflags = 0;
+   if (work_res < 0)
    {
-      if (work_res > 1)
+      LOG(LOG_ERR, "%s %s Thread[%u]: Setting ABORT state\n", tq->log_prefix, wp->pname, tID);
+      tq->con_flags |= TQ_ABORT;
+      tq->state_flags[tID] |= TQ_ERROR;
+      setflags = 1;
+   }
+   else if (work_res == 1)
+   {
+      if ( tq->con_flags & TQ_ABORT )
       {
-         LOG(LOG_INFO, "%s %s Thread[%u]: Setting HALT state\n", tq->log_prefix, wp->pname, tID);
-         tq->con_flags |= TQ_HALT;
+         LOG(LOG_INFO, "%s %s Thread[%u]: SKIPPING seting FINISHED state due to presense of ABORT flag\n", tq->log_prefix, wp->pname, tID);
       }
-      else if (work_res == 1)
+      else
       {
          LOG(LOG_INFO, "%s %s Thread[%u]: Setting FINISHED state\n", tq->log_prefix, wp->pname, tID);
          tq->con_flags |= TQ_FINISHED;
+         setflags = 1;
       }
-      else if (work_res < 0)
+   }
+   else if (work_res > 1)
+   {
+      if ( tq->con_flags & TQ_ABORT  ||  tq->con_flags & TQ_FINISHED )
       {
-         LOG(LOG_ERR, "%s %s Thread[%u]: Setting ABORT state\n", tq->log_prefix, wp->pname, tID);
-         tq->con_flags |= TQ_ABORT;
-         tq->state_flags[tID] |= TQ_ERROR;
+         LOG(LOG_INFO, "%s %s Thread[%u]: SKIPPING setting HALT state due to existing FINISHED or ABORT flag(s)\n", tq->log_prefix, wp->pname, tID);
       }
+      else
+      {
+         LOG(LOG_INFO, "%s %s Thread[%u]: Setting HALT state\n", tq->log_prefix, wp->pname, tID);
+         tq->con_flags |= TQ_HALT;
+         setflags = 1;
+      }
+   }
+   if ( setflags )
+   {
       pthread_cond_broadcast(&tq->producer_resume);
       pthread_cond_broadcast(&tq->consumer_resume);
       pthread_cond_broadcast(&tq->state_resume);
