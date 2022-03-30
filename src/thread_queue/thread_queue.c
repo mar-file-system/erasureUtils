@@ -100,6 +100,7 @@ typedef struct thread_queue_worker_pool_struct
    const char *pname;
 
    // Thread Definitions
+   unsigned int start_tID; /* thread ID value of first thread in this pool ( range from this to this + num_thrds - 1 ) */
    unsigned int num_thrds; /* number of threads associated with this pool */
    unsigned int act_thrds; /* number of threads currently processing work */
    int (*thread_init_func)(unsigned int tID, void *global_state, void **state);
@@ -149,6 +150,19 @@ typedef struct thread_arg_struct
 } ThreadArg;
 
 /* -------------------------------------------------------  INTERNAL FUNCTIONS  ------------------------------------------------------- */
+
+// check that all threads in the given pool have terminated
+// NOTE -- expectation is that queue lock is held throughout this func
+char tq_threads_terminated(ThreadQueue tq, TQWorkerPool pool) {
+   // Queue Lock is held at this point
+   if ( pool == NULL ) { return 1; }
+   unsigned int curID = pool->start_tID;
+   for ( ; curID < (pool->start_tID + pool->num_thrds); curID++ ) {
+      if ( tq->state_flags[curID] & TQ_READY ) { return 0; }
+   }
+   // no READY flags means all threads have terminated
+   return 1;
+}
 
 // set a TQ control signal and wake all threads
 int tq_signal(ThreadQueue tq, TQ_Control_Flags sig)
@@ -313,24 +327,42 @@ int general_thread_post_work_behavior(ThreadQueue tq, TQWorkerPool wp, unsigned 
       pthread_cond_broadcast(&tq->state_resume); // should be safe with no lock (also, not much choice)
       return -1;                                 // not holding lock
    }
-   if (work_res != 0)
+   char setflags = 0;
+   if (work_res < 0)
    {
-      if (work_res > 1)
+      LOG(LOG_ERR, "%s %s Thread[%u]: Setting ABORT state\n", tq->log_prefix, wp->pname, tID);
+      tq->con_flags |= TQ_ABORT;
+      tq->state_flags[tID] |= TQ_ERROR;
+      setflags = 1;
+   }
+   else if (work_res == 1)
+   {
+      if ( tq->con_flags & TQ_ABORT )
       {
-         LOG(LOG_INFO, "%s %s Thread[%u]: Setting HALT state\n", tq->log_prefix, wp->pname, tID);
-         tq->con_flags |= TQ_HALT;
+         LOG(LOG_INFO, "%s %s Thread[%u]: SKIPPING seting FINISHED state due to presense of ABORT flag\n", tq->log_prefix, wp->pname, tID);
       }
-      else if (work_res == 1)
+      else
       {
          LOG(LOG_INFO, "%s %s Thread[%u]: Setting FINISHED state\n", tq->log_prefix, wp->pname, tID);
          tq->con_flags |= TQ_FINISHED;
+         setflags = 1;
       }
-      else if (work_res < 0)
+   }
+   else if (work_res > 1)
+   {
+      if ( tq->con_flags & TQ_ABORT  ||  tq->con_flags & TQ_FINISHED )
       {
-         LOG(LOG_ERR, "%s %s Thread[%u]: Setting ABORT state\n", tq->log_prefix, wp->pname, tID);
-         tq->con_flags |= TQ_ABORT;
-         tq->state_flags[tID] |= TQ_ERROR;
+         LOG(LOG_INFO, "%s %s Thread[%u]: SKIPPING setting HALT state due to existing FINISHED or ABORT flag(s)\n", tq->log_prefix, wp->pname, tID);
       }
+      else
+      {
+         LOG(LOG_INFO, "%s %s Thread[%u]: Setting HALT state\n", tq->log_prefix, wp->pname, tID);
+         tq->con_flags |= TQ_HALT;
+         setflags = 1;
+      }
+   }
+   if ( setflags )
+   {
       pthread_cond_broadcast(&tq->producer_resume);
       pthread_cond_broadcast(&tq->consumer_resume);
       pthread_cond_broadcast(&tq->state_resume);
@@ -347,6 +379,10 @@ void general_thread_term_behavior(ThreadQueue tq, TQWorkerPool wp, unsigned int 
    wp->act_thrds--; // likely won't matter at this point...
    TQ_Control_Flags flg = tq->con_flags;
    pthread_cond_broadcast(&tq->state_resume); // in case master proc(s) are waiting to join
+   if ( tq->cons_pool  &&  wp == tq->prod_pool )
+   {
+      pthread_cond_broadcast(&tq->consumer_resume); // in case consumer threads are waiting for this prod to term
+   }
    pthread_mutex_unlock(&tq->qlock);
 
    // call the termination function
@@ -377,12 +413,13 @@ void *consumer_thread(void *arg)
    while (1)
    {
       // This thread should always be holding the queue lock here
-      // Wait while there is no work available on a un-FINISHED queue
-      //      while the queue is HALTED
-      //  but NOT while the queue is ABORTed
-      while (((tq->qdepth == 0 && !(tq->con_flags & TQ_FINISHED)) ||
-              (tq->con_flags & TQ_HALT)) &&
-             !(tq->con_flags & TQ_ABORT))
+      // Wait here while there is no work available or the queue is HALTED
+      //  but NOT while the queue is FINISHED w/ no producers remaining OR ABORTed
+      // NOTE -- For a FINISHED queue, consumers must wait for producers to terminate,
+      //         as producers *may* still enqueue additional work.
+      while ( (tq->qdepth == 0  ||  (tq->con_flags & TQ_HALT))  &&
+             !(tq->con_flags & TQ_ABORT)  &&
+             !((tq->con_flags & TQ_FINISHED)  &&  tq_threads_terminated(tq, tq->prod_pool)) )
       {
 
          if (general_thread_pause_behavior(tq, wp, tID, &tstate, &cur_work) < 0)
@@ -403,7 +440,8 @@ void *consumer_thread(void *arg)
       } // end of holding pattern -- this thread has some action to take
 
       // First, check if we should be quitting
-      if ((tq->con_flags & TQ_ABORT) || ((tq->qdepth == 0) && (tq->con_flags & TQ_FINISHED)))
+      if ((tq->con_flags & TQ_ABORT)  ||
+         ( (tq->qdepth == 0)  &&  (tq->con_flags & TQ_FINISHED)  &&  tq_threads_terminated(tq, tq->prod_pool) ) )
       {
          break;
       }
@@ -497,11 +535,9 @@ void *producer_thread(void *arg)
          pthread_exit(tstate);
       }
 
-      // Wait while there is no space available
-      //      while the queue is halted
+      // Wait while there is no space available OR while the queue is halted
       //  but NOT while the queue is ABORTed OR FINISHED
-      while ((tq->qdepth == tq->max_qdepth ||
-              (tq->con_flags & TQ_HALT)) &&
+      while ((tq->qdepth == tq->max_qdepth || (tq->con_flags & TQ_HALT)) &&
              !((tq->con_flags & TQ_ABORT) || (tq->con_flags & TQ_FINISHED)))
       {
 
@@ -556,7 +592,7 @@ void *producer_thread(void *arg)
          cur_work = NULL; // clear this value to avoid confusion if we exit
       }
 
-      // Now that we've enqueued our last work package, check if we should be quitting
+      // Now that we've enqueued our (potentially last) work package, check if we should be quitting
       if (tq->con_flags & TQ_FINISHED)
       {
          break;
@@ -1296,9 +1332,9 @@ int tq_wait_for_completion(ThreadQueue tq)
       errno = EINVAL;
       return -1;
    }
-   if (tq->con_flags & (TQ_HALT | TQ_ABORT))
+   if (tq->con_flags & TQ_ABORT)
    {
-      LOG(LOG_ERR, "%s master cannont wait on HALTED or ABORTED queue!\n", tq->log_prefix);
+      LOG(LOG_ERR, "%s master cannont wait on an ABORTED queue!\n", tq->log_prefix);
       pthread_mutex_unlock(&tq->qlock);
       errno = EINVAL;
       return -1;
@@ -1309,7 +1345,7 @@ int tq_wait_for_completion(ThreadQueue tq)
    {
       for (; thread < tq->prod_pool->num_thrds; thread++)
       {
-         while ( (tq->state_flags[thread] & TQ_READY) && !(tq->con_flags & (TQ_HALTED | TQ_ABORT))
+         while ( (tq->state_flags[thread] & TQ_READY) && !(tq->con_flags & TQ_ABORT)
                                                       &&  (tq->con_flags & TQ_FINISHED) )
          {
             LOG(LOG_INFO, "%s master is waiting for thread %u to complete\n", tq->log_prefix, thread);
@@ -1322,9 +1358,9 @@ int tq_wait_for_completion(ThreadQueue tq)
             errno = EINVAL;
             return -1;
          }
-         if (tq->con_flags & (TQ_HALT | TQ_ABORT))
+         if (tq->con_flags & TQ_ABORT)
          {
-            LOG(LOG_ERR, "%s master cannont wait on HALTED or ABORTED queue!\n", tq->log_prefix);
+            LOG(LOG_ERR, "%s master cannont wait on an ABORTED queue!\n", tq->log_prefix);
             pthread_mutex_unlock(&tq->qlock);
             errno = EINVAL;
             return -1;
@@ -1338,7 +1374,7 @@ int tq_wait_for_completion(ThreadQueue tq)
    {
       for (; thread < (tq->cons_pool->num_thrds + con_start); thread++)
       {
-         while ( (tq->state_flags[thread] & TQ_READY) && !(tq->con_flags & (TQ_HALTED | TQ_ABORT))
+         while ( (tq->state_flags[thread] & TQ_READY) && !(tq->con_flags & TQ_ABORT)
                                                       &&  (tq->con_flags & TQ_FINISHED) )
          {
             LOG(LOG_INFO, "%s master is waiting for thread %u to complete\n", tq->log_prefix, thread);
@@ -1351,9 +1387,9 @@ int tq_wait_for_completion(ThreadQueue tq)
             errno = EINVAL;
             return -1;
          }
-         if (tq->con_flags & (TQ_HALT | TQ_ABORT))
+         if (tq->con_flags & TQ_ABORT)
          {
-            LOG(LOG_ERR, "%s master cannont wait on HALTED or ABORTED queue!\n", tq->log_prefix);
+            LOG(LOG_ERR, "%s master cannont wait on an ABORTED queue!\n", tq->log_prefix);
             pthread_mutex_unlock(&tq->qlock);
             errno = EINVAL;
             return -1;
@@ -1426,14 +1462,6 @@ int tq_next_thread_status(ThreadQueue tq, void **tstate)
    if (!(tq->con_flags & (TQ_FINISHED | TQ_ABORT)))
    {
       LOG(LOG_ERR, "%s cannont retrieve thread states from a non-FINISHED/ABORTED queue!\n", tq->log_prefix);
-      errno = EINVAL;
-      pthread_mutex_unlock(&tq->qlock);
-      return -1;
-   }
-   // make sure the queue is not HALTED with queue elements remaining
-   if ((tq->con_flags & TQ_HALT) && (tq->qdepth > 0) && !(tq->con_flags & TQ_ABORT))
-   {
-      LOG(LOG_ERR, "%s cannont retrieve thread states from a HALTED and non-empty queue!\n", tq->log_prefix);
       errno = EINVAL;
       pthread_mutex_unlock(&tq->qlock);
       return -1;

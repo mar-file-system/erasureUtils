@@ -75,12 +75,14 @@ OF SUCH DAMAGE.
 typedef enum
 {
    TQ_NONE = 0,             // filler value, used to indicate no flags at all
-   TQ_FINISHED = 0x01 << 0, // signals to threads that all work has been issued
-                            //   (producers immediately exit, consumers exit when the queue is empty)
-   TQ_ABORT = 0x01 << 1,    // signals to threads that an unrecoverable errror requires early termination
-                            //   (all threads exit, work elements may be left on the queue)
-   TQ_HALT = 0x01 << 2      // signals to threads that work should be paused
-                            //   (all threads sleep until the flag is removed)
+   TQ_HALT = 0x01 << 0,     // Signals to threads that work should be paused
+                            //  All threads sleep until the flag is removed
+   TQ_FINISHED = 0x01 << 1, // Signals to threads that all work has been issued
+                            //  Producers exit after enqueing final work package, consumers exit when the queue is empty
+                            //  Takes precedence over TQ_HALT flag ( that flag will be ignored )
+   TQ_ABORT = 0x01 << 2     // Signals to threads that an unrecoverable errror requires early termination
+                            //  All threads exit immediately, work elements may be left on the queue
+                            //  Takes precedence over TQ_HALT and TQ_FINISHED ( those flags will be ignored )
 } TQ_Control_Flags;
 
 typedef struct queue_init_struct
