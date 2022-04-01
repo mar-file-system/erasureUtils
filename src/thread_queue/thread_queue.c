@@ -803,6 +803,7 @@ ThreadQueue tq_init(TQ_Init_Opts *opts)
       }
       TQWorkerPool wp = tq->prod_pool; // shorthand reference
       wp->pname = "Producer";
+      wp->start_tID = 0;
       wp->num_thrds = opts->num_prod_threads;
       wp->act_thrds = wp->num_thrds;
       wp->thread_init_func = opts->thread_init_func;
@@ -823,6 +824,7 @@ ThreadQueue tq_init(TQ_Init_Opts *opts)
       }
       TQWorkerPool wp = tq->cons_pool; // shorthand reference
       wp->pname = "Consumer";
+      wp->start_tID = opts->num_prod_threads;
       wp->num_thrds = (opts->num_threads - opts->num_prod_threads);
       wp->act_thrds = wp->num_thrds;
       wp->thread_init_func = opts->thread_init_func;
