@@ -535,10 +535,10 @@ void *producer_thread(void *arg)
          pthread_exit(tstate);
       }
 
-      // Wait while there is no space available OR while the queue is halted
-      //  but NOT while the queue is ABORTed OR FINISHED
-      while ((tq->qdepth == tq->max_qdepth || (tq->con_flags & TQ_HALT)) &&
-             !((tq->con_flags & TQ_ABORT) || (tq->con_flags & TQ_FINISHED)))
+      // Wait while there is no space available OR while the queue is both halted and NOT FINISHED
+      //  but never wait while the queue is ABORTed
+      while ((tq->qdepth == tq->max_qdepth || ((tq->con_flags & TQ_HALT)  &&  !(tq->con_flags & TQ_FINISHED))) &&
+             !(tq->con_flags & TQ_ABORT))
       {
 
          if (general_thread_pause_behavior(tq, wp, tID, &tstate, &cur_work) < 0)

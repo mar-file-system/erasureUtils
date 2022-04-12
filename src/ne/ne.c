@@ -273,6 +273,11 @@ int terminate_thread(ioblock** iobref, ThreadQueue tq, gthread_state* state, ne_
       tq_set_flags(tq, TQ_ABORT);
    }
    if (mode == NE_RDONLY || mode == NE_RDALL) {
+      // make sure that the thread isn't stuck waiting for ioqueue elements
+      while (tq_dequeue(tq, TQ_HALT | TQ_ABORT, NULL) > 0) {
+         LOG(LOG_INFO, "Releasing unused queue element\n");
+         release_ioblock(state->ioq);
+      }
       // wait for thread termination
       if ( ret_val == 0  &&  tq_wait_for_completion( tq ) ) {
          LOG( LOG_ERR, "Failed to wait for thread completion\n" );
@@ -280,7 +285,7 @@ int terminate_thread(ioblock** iobref, ThreadQueue tq, gthread_state* state, ne_
          tq_set_flags(tq, TQ_ABORT);
       }
       // we need to empty any remaining elements from the queue
-      while (tq_dequeue(tq, TQ_NONE, NULL) > 0) {
+      while (tq_dequeue(tq, TQ_ABORT | TQ_HALT, NULL) > 0) {
          LOG(LOG_INFO, "Releasing unused queue element\n");
          release_ioblock(state->ioq);
       }
@@ -733,6 +738,11 @@ int read_stripes(ne_handle handle) {
                errno = EBADF;
                return -1;
             }
+         }
+         if ( tq_wait_for_pause( handle->thread_queues[cur_block] ) ) {
+            LOG( LOG_ERR, "Failed to verify that thread %d paused, prior to restarting\n", cur_block );
+            errno = EBADF;
+            return -1;
          }
          handle->thread_states[cur_block].offset = handle->iob_offset; // set offset for this read thread
          if (tq_unset_flags(handle->thread_queues[cur_block], TQ_HALT)) {
@@ -1669,7 +1679,7 @@ int ne_abort(ne_handle handle) {
          tq_set_flags(handle->thread_queues[i], TQ_ABORT);
          tq_unset_flags(handle->thread_queues[i], TQ_HALT);
          // we need to empty any remaining elements from the queue
-         while (tq_dequeue(handle->thread_queues[i], TQ_ABORT, NULL) > 0) {
+         while (tq_dequeue(handle->thread_queues[i], TQ_ABORT | TQ_HALT, NULL) > 0) {
             LOG(LOG_INFO, "Releasing unused thread queue element\n");
          }
          while (release_ioblock(handle->thread_states[i].ioq) >= 0) {
