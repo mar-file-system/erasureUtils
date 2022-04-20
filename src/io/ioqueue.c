@@ -226,8 +226,17 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
  * @return int : Zero on success and a negative value if an error occurred
  */
 int destroy_ioqueue( ioqueue* ioq ) {
+   if ( ioq == NULL ) {
+      LOG( LOG_ERR, "Received NULL ioqueue reference!\n" );
+      return -1;
+   }
+   if ( pthread_mutex_lock(&ioq->qlock) ) { // aquire the queue lock
+      LOG( LOG_ERR, "Failed to aquire ioqueue lock!\n" );
+      return -1;
+   }
    if ( ioq->depth != SUPER_BLOCK_CNT ) {
       LOG( LOG_ERR, "Cannot destroy ioqueue struct while ioblocks are in use!\n" );
+      pthread_mutex_unlock(&ioq->qlock);
       return -1;
    }
    int i;
@@ -235,6 +244,7 @@ int destroy_ioqueue( ioqueue* ioq ) {
       free( ioq->block_list[i].buff );
    }
    pthread_cond_destroy( &(ioq->avail_block) );
+   pthread_mutex_unlock(&ioq->qlock);
    pthread_mutex_destroy( &(ioq->qlock) );
    free( ioq );
    LOG( LOG_INFO, "IOQueue successfully destroyed\n" );
@@ -248,11 +258,11 @@ int destroy_ioqueue( ioqueue* ioq ) {
  * @return size_t : Max data size value
  */
 ssize_t ioqueue_maxdata( ioqueue* ioq ) {
-	if ( ioq == NULL ) {
-		LOG( LOG_ERR, "Received NULL ioqueue reference!\n" );
-		return -1;
-	}
-	return ( ioq->depth * ioq->split_threshold );
+   if ( ioq == NULL ) {
+      LOG( LOG_ERR, "Received NULL ioqueue reference!\n" );
+      return -1;
+   }
+   return ( ioq->depth * ioq->split_threshold );
 }
 
 
@@ -264,14 +274,14 @@ ssize_t ioqueue_maxdata( ioqueue* ioq ) {
  * @return int : A positive number of ioblocks to be thrown out or a negative value if an error occurred
  */
 int align_ioblock( ioblock* cur_block, size_t trim, ioqueue* ioq ) {
-	if ( ioq == NULL ) {
-		LOG( LOG_ERR, "Received NULL ioqueue reference!\n" );
-		return -1;
-	}
-	if ( cur_block == NULL ) {
-		LOG( LOG_ERR, "Received NULL ioblock reference!\n" );
-		return -1;
-	}
+   if ( ioq == NULL ) {
+      LOG( LOG_ERR, "Received NULL ioqueue reference!\n" );
+      return -1;
+   }
+   if ( cur_block == NULL ) {
+      LOG( LOG_ERR, "Received NULL ioblock reference!\n" );
+      return -1;
+   }
    // note how many ioblocks will need to be junked to hit this alignment
    int junk_blocks = (int)( trim / ioq->split_threshold) + 1;
    // adjust our trim value, if it exceeds the split_threshold
@@ -457,6 +467,7 @@ int release_ioblock( ioqueue* ioq ) {
    }
    if ( ioq->depth == SUPER_BLOCK_CNT ) {
       LOG( LOG_ERR, "No outstanding ioblocks to be released!\n" );
+      pthread_mutex_unlock(&ioq->qlock);
       return -1;
    }
    ioq->depth++;
