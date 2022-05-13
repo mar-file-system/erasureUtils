@@ -262,7 +262,7 @@ ssize_t ioqueue_maxdata( ioqueue* ioq ) {
       LOG( LOG_ERR, "Received NULL ioqueue reference!\n" );
       return -1;
    }
-   return ( ioq->depth * ioq->split_threshold );
+   return ( SUPER_BLOCK_CNT * ioq->split_threshold );
 }
 
 

@@ -127,7 +127,7 @@ underlying skt_etc() functions.
 #include <pthread.h>
 
 // Some configurable values
-#define QDEPTH 4
+#define QDEPTH SUPER_BLOCK_CNT + 1
 
 // NE context
 typedef struct ne_ctxt_struct {

@@ -124,9 +124,6 @@ typedef enum
  NE_REBUILD            //5  -- rebuild an existing object
 } ne_mode;
 
-#define MAX_QDEPTH 2
-#define MAX_RD_QDEPTH 3 /* (unused) */
-
 typedef struct ne_erasure_struct
 {
  int N;

@@ -333,6 +333,7 @@ int read_produce(void** state, void** work_tofill) {
          }
       }
       LOG(LOG_INFO, "Thread has reached end of block %d (bsz=%zu)\n", gstate->location.block, gstate->minfo.blocksz);
+      *work_tofill = NULL;
       return 2;
    }
 
@@ -340,6 +341,7 @@ int read_produce(void** state, void** work_tofill) {
    ioblock* push_block = NULL;
    int resres = 0;
    while (1) {
+      LOG( LOG_INFO, "Reserving an IOBlock for use in read from block %d\n", gstate->location.block );
       resres = reserve_ioblock(&(tstate->iob), &push_block, gstate->ioq);
       // check for an error condition
       if (resres == -1) {
