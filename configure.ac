@@ -170,24 +170,59 @@ AM_COND_IF([BENCH], [],
 #             [debug_all=no; debug_ne=no; debug_io=no; debug_dal=no; debug_tq=no])
 
 AC_ARG_ENABLE( [debugALL],
-               AS_HELP_STRING( [--enable-debugALL], [Enable all debug output] ),
-               AC_DEFINE( [DEBUG_ALL], [], [Enable all debug output] ), [] )
+               [ AS_HELP_STRING( [--enable-debugALL], [Enable all debug output] ) ],
+                  [ AS_CASE( [ x"${enableval}" ],
+                           [[ x[Ee]* ]],
+                              [ AC_DEFINE( [DEBUG_ALL], [3], [Enable all debug output] ) ],
+                           [[ x[Ww]* ]],
+                              [ AC_DEFINE( [DEBUG_ALL], [2], [Enable all debug output] ) ],
+                           [ AC_DEFINE( [DEBUG_ALL], [1], [Enable all debug output] ) ]
+                  ) ], []
+             )
 
 AC_ARG_ENABLE( [debugNE],
-               AS_HELP_STRING( [--enable-debugNE], [Enable 'ne'-subdir debug output] ),
-               AC_DEFINE( [DEBUG_NE], [], [Enable 'ne'-subdir debug output] ), [] )
+               [ AS_HELP_STRING( [--enable-debugNE], [Enable 'ne'-subdir debug output] ) ],
+                  [ AS_CASE( [ x"${enableval}" ],
+                           [[ x[Ee]* ]],
+                              [ AC_DEFINE( [DEBUG_NE], [3], [Enable 'ne'-subdir debug output] ) ],
+                           [[ x[Ww]* ]],
+                              [ AC_DEFINE( [DEBUG_NE], [2], [Enable 'ne'-subdir debug output] ) ],
+                           [ AC_DEFINE( [DEBUG_NE], [1], [Enable 'ne'-subdir debug output] ) ]
+                  ) ], []
+             )
 
 AC_ARG_ENABLE( [debugIO],
-               AS_HELP_STRING( [--enable-debugIO], [Enable 'io'-subdir debug output] ),
-               AC_DEFINE( [DEBUG_IO], [], [Enable 'io'-subdir debug output] ), [] )
+               [ AS_HELP_STRING( [--enable-debugIO], [Enable 'io'-subdir debug output] ) ],
+                  [ AS_CASE( [ x"${enableval}" ],
+                           [[ x[Ee]* ]],
+                              [ AC_DEFINE( [DEBUG_IO], [3], [Enable 'io'-subdir debug output] ) ],
+                           [[ x[Ww]* ]],
+                              [ AC_DEFINE( [DEBUG_IO], [2], [Enable 'io'-subdir debug output] ) ],
+                           [ AC_DEFINE( [DEBUG_IO], [1], [Enable 'io'-subdir debug output] ) ]
+                  ) ], []
+             )
 
 AC_ARG_ENABLE( [debugDAL],
-               AS_HELP_STRING( [--enable-debugDAL], [Enable 'dal'-subdir debug output] ),
-               AC_DEFINE( [DEBUG_DAL], [], [Enable 'dal'-subdir debug output] ), [] )
+               [ AS_HELP_STRING( [--enable-debugDAL], [Enable 'dal'-subdir debug output] ) ],
+                  [ AS_CASE( [ x"${enableval}" ],
+                           [[ x[Ee]* ]],
+                              [ AC_DEFINE( [DEBUG_DAL], [3], [Enable 'dal'-subdir debug output] ) ],
+                           [[ x[Ww]* ]],
+                              [ AC_DEFINE( [DEBUG_DAL], [2], [Enable 'dal'-subdir debug output] ) ],
+                           [ AC_DEFINE( [DEBUG_DAL], [1], [Enable 'dal'-subdir debug output] ) ]
+                  ) ], []
+             )
 
 AC_ARG_ENABLE( [debugTQ],
-               AS_HELP_STRING( [--enable-debugTQ], [Enable 'thread_queue'-subdir debug output] ),
-               AC_DEFINE( [DEBUG_TQ], [], [Enable 'thread_queue'-subdir debug output] ), [] )
+               [ AS_HELP_STRING( [--enable-debugTQ], [Enable 'thread_queue'-subdir debug output] ) ],
+                  [ AS_CASE( [ x"${enableval}" ],
+                           [[ x[Ee]* ]],
+                              [ AC_DEFINE( [DEBUG_TQ], [3], [Enable 'thread_queue'-subdir debug output] ) ],
+                           [[ x[Ww]* ]],
+                              [ AC_DEFINE( [DEBUG_TQ], [2], [Enable 'thread_queue'-subdir debug output] ) ],
+                           [ AC_DEFINE( [DEBUG_TQ], [1], [Enable 'thread_queue'-subdir debug output] ) ]
+                  ) ], []
+             )
 
 # debugging-output should go to syslog, instead of stdout/stderr?
 AC_ARG_ENABLE([syslog],

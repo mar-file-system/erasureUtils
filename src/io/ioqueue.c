@@ -107,8 +107,10 @@ underlying skt_etc() functions.
 // #include "libne_auto_config.h"   /* HAVE_LIBISAL */
 
 #include "erasureUtils_auto_config.h"
-#if defined(DEBUG_ALL)  ||  defined(DEBUG_IO)
-   #define DEBUG 1
+#ifdef DEBUG_IO
+#define DEBUG DEBUG_IO
+#elif (defined DEBUG_ALL)
+#define DEBUG DEBUG_ALL
 #endif
 #define LOG_PREFIX "ioqueue"
 #include "logging/logging.h"

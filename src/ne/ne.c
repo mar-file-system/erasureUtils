@@ -101,8 +101,10 @@ underlying skt_etc() functions.
 --------------------------------------------------------------------------- */
 
 #include "erasureUtils_auto_config.h"
-#if defined(DEBUG_ALL) || defined(DEBUG_NE)
-#define DEBUG 1
+#ifdef DEBUG_NE
+#define DEBUG DEBUG_NE
+#elif (defined DEBUG_ALL)
+#define DEBUG DEBUG_ALL
 #endif
 #define LOG_PREFIX "ne_core"
 #include "logging/logging.h"

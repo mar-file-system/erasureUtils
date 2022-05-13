@@ -70,8 +70,10 @@ OF SUCH DAMAGE.
 */
 
 #include "erasureUtils_auto_config.h"
-#if defined(DEBUG_ALL) || defined(DEBUG_TQ)
-#define DEBUG 1
+#ifdef DEBUG_TQ
+#define DEBUG DEBUG_TQ
+#elif (defined DEBUG_ALL)
+#define DEBUG DEBUG_ALL
 #endif
 #define LOG_PREFIX "thread_queue"
 #include "logging/logging.h" //small C file defining MarFS logging format/funcs (it's either this, or link against MarFS)

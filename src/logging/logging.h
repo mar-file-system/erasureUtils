@@ -49,28 +49,36 @@ extern "C" {
 // #  define INIT_LOG()  openlog(LOG_PREFIX, LOG_CONS|LOG_PERROR, LOG_USER)
 #  define INIT_LOG()  openlog(LOG_PREFIX, LOG_CONS|LOG_PID, LOG_USER)
 
-#  define LOG(PRIO, FMT, ...)                                           \
-   syslog((PRIO), xFMT FMT,                                  \
-          LOG_PREFIX,                                                   \
-          (unsigned int)pthread_self(),                                 \
-          __FILE__, __LINE__,                                           \
-          LOG_FNAME_SIZE-(int)strlen(__FILE__), "",                     \
-          __FUNCTION__,                                                 \
-          (((PRIO)<=LOG_ERR) ? "#ERR " : ""), ## __VA_ARGS__)
+#  define LOG(PRIO, FMT, ...)                                              \
+   if ( DEBUG == 1  ||                                                     \
+        ( DEBUG == 2  &&  PRIO <= LOG_WARNING )  ||                        \
+        ( PRIO <= LOG_ERR ) ) {                                            \
+      syslog((PRIO), xFMT FMT,                                             \
+             LOG_PREFIX,                                                   \
+             (unsigned int)pthread_self(),                                 \
+             __FILE__, __LINE__,                                           \
+             LOG_FNAME_SIZE-(int)strlen(__FILE__), "",                     \
+             __FUNCTION__,                                                 \
+             (((PRIO)<=LOG_ERR) ? "#ERR " : ""), ## __VA_ARGS__);          \
+   }
 
 #elif (DEBUG)
 // must start fuse with '-f' in order to allow stdout/stderr to work
 // NOTE: print_log call merges LOG_PREFIX w/ user format at compile-time
 #  define INIT_LOG()
 
-#  define LOG(PRIO, FMT, ...)                                           \
-   printf_log((PRIO), xFMT FMT,                                         \
-              LOG_PREFIX,                                               \
-              (unsigned int)pthread_self(),                             \
-              __FILE__, __LINE__,                                       \
-              LOG_FNAME_SIZE-(int)strlen(__FILE__), "",                 \
-              __FUNCTION__,                                             \
-              (((PRIO)<=LOG_ERR) ? "#ERR " : ""), ## __VA_ARGS__)
+#  define LOG(PRIO, FMT, ...)                                              \
+   if ( DEBUG == 1  ||                                                     \
+        ( DEBUG == 2  &&  PRIO <= LOG_WARNING )  ||                        \
+        ( PRIO <= LOG_ERR ) ) {                                            \
+      printf_log((PRIO), xFMT FMT,                                         \
+                 LOG_PREFIX,                                               \
+                 (unsigned int)pthread_self(),                             \
+                 __FILE__, __LINE__,                                       \
+                 LOG_FNAME_SIZE-(int)strlen(__FILE__), "",                 \
+                 __FUNCTION__,                                             \
+                 (((PRIO)<=LOG_ERR) ? "#ERR " : ""), ## __VA_ARGS__);      \
+   }
 
    ssize_t printf_log(size_t prio, const char* format, ...);
 

@@ -59,8 +59,10 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
 #include "erasureUtils_auto_config.h"
-#if defined(DEBUG_ALL) || defined(DEBUG_DAL)
-#define DEBUG 1
+#ifdef DEBUG_DAL
+#define DEBUG DEBUG_DAL
+#elif (defined DEBUG_ALL)
+#define DEBUG DEBUG_ALL
 #endif
 #define LOG_PREFIX "posix_dal"
 #include "logging/logging.h"
@@ -1216,6 +1218,7 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    POSIX_BLOCK_CTXT bctxt = malloc(sizeof(struct posix_block_context_struct));
    if (bctxt == NULL)
    {
+      LOG( LOG_ERR, "Failed to allocate a new block ctxt struct\n" );
       return NULL;
    } // malloc will set errno
 

@@ -59,8 +59,10 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
 #include "erasureUtils_auto_config.h"
-#if defined(DEBUG_ALL) || defined(DEBUG_DAL)
-#define DEBUG 1
+#ifdef DEBUG_DAL
+#define DEBUG DEBUG_DAL
+#elif (defined DEBUG_ALL)
+#define DEBUG DEBUG_ALL
 #endif
 #define LOG_PREFIX "fuzzing_dal"
 #include "logging/logging.h"
