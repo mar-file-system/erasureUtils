@@ -195,6 +195,13 @@ typedef struct thread_queue_struct *ThreadQueue; // forward decl.
 ThreadQueue tq_init(TQ_Init_Opts *opts);
 
 /**
+ * Check for successful initialization of all threads of a ThreadQueue
+ * @param ThreadQueue tq : ThreadQueue for which to check status
+ * @return int : Zero on success, -1 on failure
+ */
+int tq_check_init(ThreadQueue tq);
+
+/**
  * Populate a given TQ_Init_Opts struct with the current parameters of a ThreadQueue
  * NOTE -- this will NOT populate the init_flags and global_state values!
  * @param ThreadQueue tq : ThreadQueue from which to gather info

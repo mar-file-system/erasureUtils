@@ -1341,6 +1341,19 @@ ne_handle ne_convert_handle(ne_handle handle, ne_mode mode) {
    }
    free(lprefstr);
 
+   // verify successfull initialization of all threads
+   for (i = 0; i < handle->epat.N + handle->epat.E; i++) {
+      if ( tq_check_init(handle->thread_queues[i]) ) {
+         LOG( LOG_ERR, "Detected initialization failure for thread %d\n", i );
+         for (i = 0; i < handle->epat.N + handle->epat.E; i++) {
+            tq_set_flags(handle->thread_queues[i], TQ_ABORT);
+            tq_next_thread_status(handle->thread_queues[i], NULL);
+            tq_close(handle->thread_queues[i]);
+         }
+         return NULL;
+      }
+   }
+
    // For reading handles, we may need to get meta info consensus and correct any outliers
    if (mode != NE_WRONLY && mode != NE_WRALL && handle->totsz == 0) {
       // only get meta info if it hasn't already been set (totsz is a good example value)
@@ -1956,6 +1969,27 @@ int ne_rebuild(ne_handle handle, ne_erasure* epat, ne_state* sref) {
    }
    free(lprefstr);
 
+   // verify thread initialization
+   for (i = 0; i < handle->epat.N + handle->epat.E; i++) {
+      if (OutTQs[i] != NULL) {
+         if( tq_check_init(OutTQs[i]) ) {
+            LOG( LOG_ERR, "Detected init failure for OutTQ %d\n", i );
+            for (i = 0; i < handle->epat.N + handle->epat.E; i++) {
+               // terminate all output threads
+               if ( OutTQs[i] != NULL ) {
+                  tq_set_flags(OutTQs[i], TQ_ABORT);
+                  tq_next_thread_status(OutTQs[i], NULL);
+                  tq_close(OutTQs[i]);
+               }
+            }
+            free(OutTQs);
+            free(outstates);
+            return -1;
+         }
+      }
+   }
+
+
    // unpause threads
    for (i = 0; i < N + E; i++) {
       // only bother with thread queues we've initialized
@@ -2169,6 +2203,15 @@ int ne_rebuild(ne_handle handle, ne_erasure* epat, ne_state* sref) {
                handle->thread_queues[i] = tq_init(&opts);
                if (handle->thread_queues[i] == NULL) {
                   LOG(LOG_ERR, "Failed to initialize new thread queue at position %d!\n", i);
+                  numerrs++;
+                  handle->mode = NE_ERR;
+               }
+               else if ( tq_check_init(handle->thread_queues[i]) ) {
+                  LOG(LOG_ERR, "Detected initialization failure for thread queue at position %d!\n", i);
+                  tq_set_flags(handle->thread_queues[i], TQ_ABORT);
+                  tq_next_thread_status(handle->thread_queues[i], NULL);
+                  tq_close(handle->thread_queues[i]);
+                  handle->thread_queues[i] = NULL;
                   numerrs++;
                   handle->mode = NE_ERR;
                }

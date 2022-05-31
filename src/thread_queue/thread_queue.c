@@ -401,7 +401,8 @@ void *consumer_thread(void *arg)
    TQWorkerPool wp = tq->cons_pool;
    unsigned int tID = targ->tID;
    void *global_state = targ->global_state;
-   // 'targ' should never be referenced again by this thread, which will allow the init_tq() func to alter it out from underneath us
+   // 'targ' should never be referenced again by this thread, so we will free it now
+   free( targ );
 
    // attempt initialization of state for this thread
    void *tstate = NULL;
@@ -496,7 +497,8 @@ void *producer_thread(void *arg)
    TQWorkerPool wp = tq->prod_pool;
    unsigned int tID = targ->tID;
    void *global_state = targ->global_state;
-   // 'targ' should never be referenced again by this thread, which will allow the init_tq() func to alter it out from underneath us
+   // 'targ' should never be referenced again by this thread, so we will free it now
+   free( targ );
 
    // attempt initialization of state for this thread
    void *tstate = NULL;
@@ -785,12 +787,24 @@ ThreadQueue tq_init(TQ_Init_Opts *opts)
    }
 
    // allocate space for thread arg structs
-   ThreadArg *targs = malloc(sizeof(struct thread_arg_struct) * opts->num_threads);
+   ThreadArg** targs = malloc(sizeof(ThreadArg*) * opts->num_threads);
    if (targs == NULL)
    {
-      LOG(LOG_ERR, "%s failed to allocate space for a ThreadArg structures!\n", tq->log_prefix);
+      LOG(LOG_ERR, "%s failed to allocate space for a ThreadArg list!\n", tq->log_prefix);
       tq_free_all(tq);
       return NULL;
+   }
+   for ( i = 0; i < opts->num_threads; i++ ) {
+      targs[i] = malloc(sizeof(struct thread_arg_struct));
+      if ( targs[i] == NULL ) {
+         LOG(LOG_ERR, "%s failed to allocate space for a ThreadArg struct!\n", tq->log_prefix);
+         for ( ; i > 0; i-- ) {
+            free( targs[i-1] );
+         }
+         free( targs );
+         tq_free_all(tq);
+         return NULL;
+      }
    }
 
    // allocate and initialize producer pool, if necessary
@@ -800,6 +814,10 @@ ThreadQueue tq_init(TQ_Init_Opts *opts)
       if (tq->prod_pool == NULL)
       {
          LOG(LOG_ERR, "%s failed to allocate space for TQ Producer Pool!\n", tq->log_prefix);
+         for ( i = 0; i < opts->num_threads; i++ ) {
+            free( targs[i] );
+         }
+         free( targs );
          tq_free_all(tq);
          return NULL;
       }
@@ -821,6 +839,10 @@ ThreadQueue tq_init(TQ_Init_Opts *opts)
       if (tq->cons_pool == NULL)
       {
          LOG(LOG_ERR, "%s failed to allocate space for TQ Producer Pool!\n", tq->log_prefix);
+         for ( i  = 0; i < opts->num_threads; i++ ) {
+            free( targs[i] );
+         }
+         free( targs );
          tq_free_all(tq);
          return NULL;
       }
@@ -841,7 +863,7 @@ ThreadQueue tq_init(TQ_Init_Opts *opts)
    // create all producer threads
    for (; tID < opts->num_prod_threads; tID++)
    {
-      ThreadArg *targ = &targs[tID];
+      ThreadArg *targ = targs[tID];
       targ->global_state = opts->global_state;
       targ->tID = tID;
       targ->tq = tq;
@@ -857,7 +879,7 @@ ThreadQueue tq_init(TQ_Init_Opts *opts)
    // NOTE - value of 'tID' persists from producer thread creation
    for (; tID < opts->num_threads; tID++)
    {
-      ThreadArg *targ = &targs[tID];
+      ThreadArg *targ = targs[tID];
       targ->global_state = opts->global_state;
       targ->tID = tID;
       targ->tq = tq;
@@ -865,35 +887,21 @@ ThreadQueue tq_init(TQ_Init_Opts *opts)
       if (pthread_create(&tq->threads[tID], NULL, consumer_thread, (void *)targ))
       {
          LOG(LOG_ERR, "%s failed to create thread %d\n", tq->log_prefix, tID);
+         for( i = tID; i < opts->num_threads; i++ ) { free( targs[i] ); }
          break;
       }
       tq->uncoll_thrds++;
    }
+   // NOTE -- leaving 'targs' subpointers allocated.  These will be freed by the threads themselves
+   free( targs );
 
-   // check for initialization of all threads
+   // acquire queue lock
    if (pthread_mutex_lock(&tq->qlock))
    {
       LOG(LOG_ERR, "%s failed to acquire queue lock!\n", tq->log_prefix);
       tID = opts->num_threads + 1; // if we fail to get the lock, this is an easy way to cleanup (skips following loop)
    }
-   if (tID == opts->num_threads)
-   { // only if we successfully created all threads and acquired the lock
-      for (tID = 0; tID < opts->num_threads; tID++)
-      {
-         // wait for thread to initialize (we're still holding the lock through this entire loop; not too efficient but very conventient)
-         while ((tq->state_flags[tID] & (TQ_READY | TQ_ERROR)) == 0)
-         { // wait for the thread to succeed or fail
-            LOG(LOG_INFO, "%s waiting for thread %u to initialize\n", tq->log_prefix, tID);
-            pthread_cond_wait(&tq->state_resume, &tq->qlock); // we will be notified when the thread updates state value
-         }
-         if (tq->state_flags[tID] & TQ_ERROR)
-         { // if we've hit an error, start terminating threads
-            LOG(LOG_ERR, "%s thread %u indicates init failed!\n", tq->log_prefix, tID);
-            break;
-         }
-         LOG(LOG_INFO, "%s thread %u initialized successfully\n", tq->log_prefix, tID);
-      }
-   }
+
    // still holding lock (so long as that wasn't the reason we're aborting)
    if (tID != opts->num_threads)
    { // an error occured while creating threads
@@ -911,16 +919,52 @@ ThreadQueue tq_init(TQ_Init_Opts *opts)
          LOG(LOG_INFO, "%s joined with thread %u\n", tq->log_prefix, tID);
       }
       // free everything we allocated and terminate
-      free(targs);
       tq_free_all(tq);
       return NULL;
    }
    // release the lock and allow threads to get back to work!
    pthread_mutex_unlock(&tq->qlock);
-   // all threads have initialized, so we should never need to reference thread args again
-   free(targs);
 
    return tq;
+}
+
+/**
+ * Check for successful initialization of all threads of a ThreadQueue
+ * @param ThreadQueue tq : ThreadQueue for which to check status
+ * @return int : Zero on success, -1 on failure
+ */
+int tq_check_init(ThreadQueue tq) {
+   // acquire queue lock
+   if (pthread_mutex_lock(&tq->qlock))
+   {
+      LOG(LOG_ERR, "%s failed to acquire queue lock!\n", tq->log_prefix);
+      return -1;
+   }
+
+   // check for initialization of all threads
+   int num_threads = 0;
+   if ( tq->cons_pool ) { num_threads += tq->cons_pool->num_thrds; }
+   if ( tq->prod_pool ) { num_threads += tq->prod_pool->num_thrds; }
+   int tID;
+   for (tID = 0; tID < num_threads; tID++)
+   {
+      // wait for thread to initialize (we're still holding the lock through this entire loop; not too efficient but very conventient)
+      while ((tq->state_flags[tID] & (TQ_READY | TQ_ERROR)) == 0)
+      { // wait for the thread to succeed or fail
+         LOG(LOG_INFO, "%s waiting for thread %u to initialize\n", tq->log_prefix, tID);
+         pthread_cond_wait(&tq->state_resume, &tq->qlock); // we will be notified when the thread updates state value
+      }
+      if (tq->state_flags[tID] & TQ_ERROR)
+      { // if we've hit an error, quit out
+         LOG(LOG_ERR, "%s thread %u indicates init failed!\n", tq->log_prefix, tID);
+         pthread_mutex_unlock(&tq->qlock);
+         return -1;
+      }
+      LOG(LOG_INFO, "%s thread %u initialized successfully\n", tq->log_prefix, tID);
+   }
+
+   pthread_mutex_unlock(&tq->qlock);
+   return 0;
 }
 
 /**
