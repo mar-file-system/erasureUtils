@@ -1362,7 +1362,9 @@ int tq_wait_for_pause(ThreadQueue tq)
 /**
  * Waits for all threads of a given ThreadQueue to complete, then returns
  * @param ThreadQueue tq : ThreadQueue on which to wait
- * @return int : Zero on success and non-zero on failure (such as, if the queue is not FINISHED)
+ * @return int : Zero on success,
+ *               < zero on failure (such as, if the queue is not FINISHED),
+ *               or > zero if a deadlock condition is possible ( such as, if queue is full and no consumers exist )
  */
 int tq_wait_for_completion(ThreadQueue tq)
 {
@@ -1396,6 +1398,12 @@ int tq_wait_for_completion(ThreadQueue tq)
          while ( (tq->state_flags[thread] & TQ_READY) && !(tq->con_flags & TQ_ABORT)
                                                       &&  (tq->con_flags & TQ_FINISHED) )
          {
+            // special check for possible deadlock
+            if ( tq->cons_pool == NULL  &&  tq->qdepth == (tq->max_qdepth - 1) ) {
+               LOG( LOG_WARNING, "Possible deadlock condition: Queue is full and no consumer threads exist\n" );
+               pthread_mutex_unlock(&tq->qlock);
+               return 1;
+            }
             LOG(LOG_INFO, "%s master is waiting for thread %u to complete\n", tq->log_prefix, thread);
             pthread_cond_wait(&tq->state_resume, &tq->qlock);
          }

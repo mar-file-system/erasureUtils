@@ -268,30 +268,6 @@ int terminate_thread(ioblock** iobref, ThreadQueue tq, gthread_state* state, ne_
       // attempt to abort, ignoring errors
       tq_set_flags(tq, TQ_ABORT);
    }
-   if (tq_unset_flags(tq, TQ_HALT)) {
-      LOG(LOG_ERR, "Failed to unset potential HALT state!\n");
-      ret_val = -1;
-      // attempt to abort, ignoring errors
-      tq_set_flags(tq, TQ_ABORT);
-   }
-   if (mode == NE_RDONLY || mode == NE_RDALL) {
-      // make sure that the thread isn't stuck waiting for ioqueue elements
-      while (tq_dequeue(tq, TQ_HALT | TQ_ABORT, NULL) > 0) {
-         LOG(LOG_INFO, "Releasing unused queue element\n");
-         release_ioblock(state->ioq);
-      }
-      // wait for thread termination
-      if ( ret_val == 0  &&  tq_wait_for_completion( tq ) ) {
-         LOG( LOG_ERR, "Failed to wait for thread completion\n" );
-         ret_val = -1;
-         tq_set_flags(tq, TQ_ABORT);
-      }
-      // we need to empty any remaining elements from the queue
-      while (tq_dequeue(tq, TQ_ABORT | TQ_HALT, NULL) > 0) {
-         LOG(LOG_INFO, "Releasing unused queue element\n");
-         release_ioblock(state->ioq);
-      }
-   }
    return ret_val;
 }
 
@@ -1631,6 +1607,28 @@ int ne_close(ne_handle handle, ne_erasure* epat, ne_state* sref) {
       // verify thread termination and close all queues
       for (i = 0; i < handle->epat.N + handle->epat.E; i++) {
          LOG(LOG_INFO, "Terminating queue %d\n", i);
+         if (handle->mode == NE_RDONLY || handle->mode == NE_RDALL) {
+            // wait for thread termination
+            int waitres = 0;
+            while ( (waitres = tq_wait_for_completion( handle->thread_queues[i] )) ) {
+               if ( waitres > 0 ) {
+                  while ( tq_dequeue(handle->thread_queues[i], TQ_ABORT | TQ_HALT, NULL) > 0 ) {
+                     LOG(LOG_INFO, "Releasing unused queue element prior to completion of queue %d\n", i);
+                     release_ioblock(handle->thread_states[i].ioq);
+                  }
+               }
+               else {
+                  LOG( LOG_ERR, "Failed to wait for thread %d completion\n", i );
+                  ret_val = -1;
+                  tq_set_flags(handle->thread_queues[i], TQ_ABORT);
+               }
+            }
+            // we need to empty any remaining elements from the queue
+            while (tq_dequeue(handle->thread_queues[i], TQ_ABORT | TQ_HALT, NULL) > 0) {
+               LOG(LOG_INFO, "Releasing unused queue element for thread %d\n", i);
+               release_ioblock(handle->thread_states[i].ioq);
+            }
+         }
          tq_next_thread_status(handle->thread_queues[i], NULL);
          tq_close(handle->thread_queues[i]);
          destroy_ioqueue(handle->thread_states[i].ioq);

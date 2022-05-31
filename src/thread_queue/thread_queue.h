@@ -288,7 +288,9 @@ int tq_wait_for_flags(ThreadQueue tq, TQ_Control_Flags ignore_flags, TQ_Control_
 /**
  * Waits for all threads of a given ThreadQueue to complete, then returns
  * @param ThreadQueue tq : ThreadQueue on which to wait
- * @return int : Zero on success and non-zero on failure (such as, if the queue is not FINISHED)
+ * @return int : Zero on success,
+ *               < zero on failure (such as, if the queue is not FINISHED),
+ *               or > zero if a deadlock condition is possible ( such as, if queue is full and no consumers exist )
  */
 int tq_wait_for_completion(ThreadQueue tq);
 
