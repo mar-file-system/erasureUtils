@@ -169,7 +169,8 @@ int main(int argc, char **argv)
     printf("error: failed to open block context for write: %s\n", strerror(errno));
     return -1;
   }
-  for (int i = 0; i < 1024; i++)
+  int i;
+  for (i = 0; i < 1024; i++)
   {
     if (dal->put(block, writebuffer, (10 * 1024)))
     {

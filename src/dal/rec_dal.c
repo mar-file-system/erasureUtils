@@ -773,7 +773,8 @@ DAL rec_dal_init(xmlNode *root, DAL_location max_loc)
     }
 
     // fail if any location mapping data is missing
-    for (int i = 0; i < 3; i++)
+    int i;
+    for (i = 0; i < 3; i++)
     {
       if (dctxt->lmap[i] != 'p' && dctxt->lmap[i] != 'b' && dctxt->lmap[i] != 'c' && dctxt->lmap[i] != 's')
       {

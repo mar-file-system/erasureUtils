@@ -217,7 +217,8 @@ int main(int argc, char **argv)
       return -1;
    }
 
-   for (int i = 0; i < NUM_ENQ; i++)
+   int i;
+   for (i = 0; i < NUM_ENQ; i++)
    {
       WorkPkg wpkg = malloc(sizeof(struct work_package_struct));
       if (wpkg == NULL)

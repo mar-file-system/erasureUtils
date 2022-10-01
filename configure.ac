@@ -116,15 +116,21 @@ AC_CHECK_LIB([pthread], [pthread_create], [], [AC_MSG_ERROR(["Could not locate l
 
 AC_CHECK_LIB([xml2], [xmlReadFile], [], [AC_MSG_ERROR(["Could not locate libxml2!"])])
 
+# Check if we'll be building the S3 DAL
 warnlibs=""
+nos3=""
+AC_ARG_ENABLE([S3],
+               AS_HELP_STRING( [--disable-S3], [Skip Build of the S3 DAL @{:@ useful on systems with outdated libS3 @:}@] ),
+               [nos3="true"], [] )
 AC_CHECK_LIB([s3], [S3_initialize], [], [warnlibs="libs3 "])
-AM_CONDITIONAL([S3DAL], [test "$warnlibs" = ""])
+AM_CONDITIONAL([S3DAL], [test "$warnlibs" = ""  &&  test "$nos3" = ""])
 AM_COND_IF([S3DAL], [AC_DEFINE( [S3DAL], [], [Flag indicating activation of S3 DAL] )],
-   [echo
+  [ if test "$nos3" = ""; then
+    echo
     echo "WARNING: failed to properly link all necessary functions from $( echo "$warnlibs" | sed 's/ $/\./' | sed 's/ /, /g' )"
     echo "         These libraries may be missing, or below the required versions."
     echo "         The 'S3' DAL will be disabled!"
-    echo ])
+    echo; fi ] )
 
 PKG_CHECK_MODULES( XML, libxml-2.0 )
 
@@ -136,8 +142,6 @@ AC_CHECK_LIB([isal],    [crc32_ieee],
         echo "          IN THIS STATE, THESE UTILITES MAY NOT FUNCTION AS EXPECTED AND WILL ALMOST CERTAINLY HAVE VERY POOR PERFORMANCE"
         echo], 
        [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!  Please verify that the proper version of the library (v2.16.0 or higher) is installed."])])])
-
-AC_DEFINE( [GTESTNEVAR], [], [Testing variable] )
 
 # check for presence of zlib
 warnlibs=""

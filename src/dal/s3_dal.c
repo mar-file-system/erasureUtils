@@ -626,11 +626,14 @@ int s3_verify(DAL_CTXT ctxt, char fix)
    int size = sizeof(char) * (4 + num_digits(dctxt->max_loc.block) + num_digits(dctxt->max_loc.cap) + num_digits(dctxt->max_loc.scatter));
    char *bucket = malloc(size);
    int num_err = 0;
-   for (int b = 0; b <= dctxt->max_loc.block; b++)
+   int b;
+   for (b = 0; b <= dctxt->max_loc.block; b++)
    {
-      for (int c = 0; c <= dctxt->max_loc.cap; c++)
+      int c;
+      for (c = 0; c <= dctxt->max_loc.cap; c++)
       {
-         for (int s = 0; s <= dctxt->max_loc.scatter; s++)
+         int s;
+         for (s = 0; s <= dctxt->max_loc.scatter; s++)
          {
             sprintf(bucket, "b%d.%d.%d", b, c, s);
             int i = TRIES;

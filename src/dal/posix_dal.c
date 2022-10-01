@@ -491,7 +491,8 @@ static char *convert_relative(char *oldpath, char *newpath)
    *result = '\0';
 
    // form path that traverses from destination location to secure root
-   for (int i = 0; i < nBack; i++)
+   int i;
+   for (i = 0; i < nBack; i++)
    {
       if (strcat(result, "../") != result)
       {
@@ -841,16 +842,20 @@ int posix_verify(DAL_CTXT ctxt, char fix)
       return num_err;
    }
    // check every valid combination of pod/block/cap/scatter
-   for (int p = 0; p <= (loc_flags.pod ? dctxt->max_loc.pod : 0); p++)
+   int p;
+   for (p = 0; p <= (loc_flags.pod ? dctxt->max_loc.pod : 0); p++)
    {
       loc.pod = p;
-      for (int b = 0; b <= (loc_flags.block ? dctxt->max_loc.block : 0); b++)
+      int b;
+      for (b = 0; b <= (loc_flags.block ? dctxt->max_loc.block : 0); b++)
       {
          loc.block = b;
-         for (int c = 0; c <= (loc_flags.cap ? dctxt->max_loc.cap : 0); c++)
+         int c;
+         for (c = 0; c <= (loc_flags.cap ? dctxt->max_loc.cap : 0); c++)
          {
             loc.cap = c;
-            for (int s = 0; s <= (loc_flags.scatter ? dctxt->max_loc.scatter : 0); s++)
+            int s;
+            for (s = 0; s <= (loc_flags.scatter ? dctxt->max_loc.scatter : 0); s++)
             {
                loc.scatter = s;
                expand_path(dctxt->dirtmp, path, loc, NULL, 1);
