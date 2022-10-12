@@ -1399,8 +1399,8 @@ int tq_wait_for_completion(ThreadQueue tq)
                                                       &&  (tq->con_flags & TQ_FINISHED) )
          {
             // special check for possible deadlock
-            if ( tq->cons_pool == NULL  &&  tq->qdepth == (tq->max_qdepth - 1) ) {
-               LOG( LOG_WARNING, "Possible deadlock condition: Queue is full and no consumer threads exist\n" );
+            if ( tq->cons_pool == NULL  &&  tq->qdepth ) {
+               LOG( LOG_WARNING, "Possible deadlock condition: Queue is non-empty and no consumer threads exist\n" );
                pthread_mutex_unlock(&tq->qlock);
                return 1;
             }
