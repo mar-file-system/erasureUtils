@@ -10,7 +10,7 @@
 #FOR THE USE OF THIS SOFTWARE.  If software is modified to produce derivative
 #works, such modified software should be clearly marked, so as not to confuse it
 #with the version available from LANL.
-# 
+#
 #Additionally, redistribution and use in source and binary forms, with or without
 #modification, are permitted provided that the following conditions are met:
 #1. Redistributions of source code must retain the above copyright notice, this
@@ -71,12 +71,14 @@
 #    we do generate this file, but we avoid exporting it.
 
 AC_PREREQ([2.69])
-AC_INIT([erasureUtils], [1.0], [gransom@lanl.gov])
+AC_INIT([erasureUtils],[1.0],[gransom@lanl.gov])
 AC_CONFIG_SRCDIR([COPYRIGHT.h])
 AC_CONFIG_HEADERS([src/erasureUtils_auto_config.h])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE([subdir-objects])
+AC_PROG_CC([mpicc mpiCC])
 AM_PROG_CC_C_O
+# LT_INIT
 AC_PROG_LIBTOOL
 
 # default to empty flags, instead of "-g -O2"
@@ -115,6 +117,8 @@ AXATTR_SET_FUNC_CHECK
 AC_CHECK_LIB([pthread], [pthread_create], [], [AC_MSG_ERROR(["Could not locate libpthread!"])])
 
 AC_CHECK_LIB([xml2], [xmlReadFile], [], [AC_MSG_ERROR(["Could not locate libxml2!"])])
+AC_CHECK_LIB([mpi], [MPI_Abort], [], [AC_MSG_ERROR(["Could not locate libmpi!"])])
+
 
 # Check if we'll be building the S3 DAL
 warnlibs=""
@@ -140,7 +144,7 @@ AC_CHECK_LIB([isal],    [crc32_ieee],
        [echo
         echo "WARNING:  Could not properly link 'crc32_ieee' from isa-l, defaulting to '_base' implementation"
         echo "          IN THIS STATE, THESE UTILITES MAY NOT FUNCTION AS EXPECTED AND WILL ALMOST CERTAINLY HAVE VERY POOR PERFORMANCE"
-        echo], 
+        echo],
        [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!  Please verify that the proper version of the library (v2.16.0 or higher) is installed."])])])
 
 # check for presence of zlib
@@ -151,15 +155,15 @@ AC_CHECK_LIB([isal], [crc32_gzip_refl], [:], [warnlibs="$warnlibs""libisal(need-
 librdmacm_present=true
 AC_CHECK_LIB([rdmacm], [rdma_getaddrinfo], [], [librdmacm_present=false  &&  warnlibs="$warnlibs""librdmacm "])
 AM_CONDITIONAL([BENCH], [test "$warnlibs" = ""  ])
-AM_COND_IF([BENCH], [], 
+AM_COND_IF([BENCH], [],
    [echo
     echo "WARNING: failed to properly link all necessary functions from $( echo "$warnlibs" | sed 's/ $/\./' | sed 's/ /, /g' )"
     echo "         These libraries may be missing, or below the required versions."
     echo "         The 'isal_benchmark' subdir will not be built!"
     echo ])
 
- 
- 
+
+
 # Allow turning on debugging flags
 # NOTE: There are currently no fast-timer (i.e. 'ft') diagnostics.
 #       If there were, we would probably only want to see them for specialized debugging.

@@ -85,6 +85,11 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #define IO_SIZE 1048576 // Preferred I/O Size
 
+#define MAX_LOC_BUF 1048576 // Default Location Buffer Size
+
+#define REB_DIR "rebuild-" // For emergency rebuild
+#define RBLOCK_DIR "/p%d-b%d-c%d-s%d" // For emergency rebuild
+
 //   -------------    POSIX CONTEXT    -------------
 
 typedef struct posix_block_context_struct
@@ -106,6 +111,22 @@ typedef struct posix_dal_context_struct
    int dirpad;           // Number of chars by which dirtmp may expand via substitutions
    int sec_root;         // Handle of secure root directory
 } * POSIX_DAL_CTXT;
+
+/* For emergency rebuild. This indicates all the combinations of locations that either need to be rebuilt,
+ * or locations that the rebuild data can be distributed to.
+ */
+typedef struct posix_rebuild_location_struct
+{
+   int pod[MAX_LOC_BUF];     // List of pod numbers for rebuild
+   int pod_size;             // Size of pod
+   int block[MAX_LOC_BUF];   // List of block numbers for rebuild
+   int block_size;           // Size of block
+   int cap[MAX_LOC_BUF];     // List of cap numbers for rebuild
+   int cap_size;             // Size of block
+   int scatter[MAX_LOC_BUF]; // List of scatter numbers for rebuild
+   int scatter_size;         // Size of scatter
+   char* ts;                 // Time the rebuild was initiated
+} * POSIX_REBUILD_LOC;
 
 //   -------------    POSIX INTERNAL FUNCTIONS    -------------
 
@@ -517,43 +538,248 @@ static char *convert_relative(char *oldpath, char *newpath)
 }
 
 /** (INTERNAL HELPER FUNCTION)
+ * Checks if a value matches any elements of an integer array.
+ * @param int val : Value to check
+ * @param int* arr : The array to check against
+ * @param int size: Size of arr
+ * @return int : 0 in case of a match, 1 otherwise
+ */
+int checkMatch(int val, int* arr, int size) {
+   int i;
+   for (i = 0; i < size; i++) {
+      if (val == arr[i]) {
+         return 0;
+      }
+   }
+   return 1;
+}
+
+/** (INTERNAL HELPER FUNCTION)
+ * Checks if a DAL_location matches any possible rebuild location combinations.
+ * @param DAL_location* loc : Location to check
+ * @param POSIX_REBUILD_LOCATION tgt : Rebuild locations to check against
+ * @return int : 0 in case of a match, 1 otherwise
+ */
+int tgtMatch(DAL_location* loc, POSIX_REBUILD_LOC tgt) {
+   if (tgt == NULL) {
+      return 1;
+   }
+   return checkMatch(loc->pod, tgt->pod, tgt->pod_size) ||
+         checkMatch(loc->block, tgt->block, tgt->block_size) ||
+         checkMatch(loc->cap, tgt->cap, tgt->cap_size) ||
+         checkMatch(loc->scatter, tgt->scatter, tgt->scatter_size);
+}
+
+// Next two fn's taken from marfs/src/hash/hash.c
+
+/** (INTERNAL HELPER FUNCTION)
+ * Taken from https://github.com/mar-file-system/marfs/fuse/src/common.c
+ * POLYHASH implementation
+ *
+ * Computes a good, uniform, hash of the string.
+ *
+ * Treats each character in the length n string as a coefficient of a
+ * degree n polynomial.
+ *
+ * f(x) = string[n -1] + string[n - 2] * x + ... + string[0] * x^(n-1)
+ *
+ * The hash is computed by evaluating the polynomial for x=33 using
+ * Horner's rule.
+ *
+ * Reference: http://cseweb.ucsd.edu/~kube/cls/100/Lectures/lec16/lec16-14.html
+ * @param const char* string : String to hash
+ * @return uint64_t : hash of the string
+ */
+uint64_t polyhash(const char* string) {
+   // According to http://www.cse.yorku.ca/~oz/hash.html
+   // 33 is a magical number that inexplicably works the best.
+   const int salt = 33;
+   char c;
+   uint64_t h = *string++;
+   while((c = *string++))
+      h = salt * h + c;
+   return h;
+}
+
+/** (INTERNAL HELPER FUNCTION)
+ * Taken from https://github.com/mar-file-system/marfs/fuse/src/common.c
+ * compute the hash function h(x) = (a*x) >> 32
+ * @param const uint64_t key : first value to hash
+ * @param uint64_t a : second value to hash
+ * @return uint64_t : hash of the two values
+ */
+uint64_t h_a(const uint64_t key, uint64_t a) {
+   return ((a * key) >> 32);
+}
+
+/** (INTERNAL HELPER FUNCTION)
+ * Adapted from get_path_template() in https://github.com/mar-file-system/marfs/fuse/src/common.c
+ * Hashes a path name to a location from the provided distribution
+ * @param char* pathname : Name of the path to hash
+ * @param POSIX_REBUILD_LOC dist : Possible locations to distribute to
+ * @return DAL_location : Hashed location
+ */
+DAL_location hash_loc(char* pathname, POSIX_REBUILD_LOC dist) {
+   DAL_location ret_loc;
+   uint64_t hash = polyhash(pathname);
+   unsigned int seed = hash;
+   uint64_t a[4];
+   int i;
+   for (i = 0; i < 4; i++) {
+   a[i] = rand_r(&seed) * 2 + 1;
+   }
+   ret_loc.pod = dist->pod[h_a(hash, a[0]) % dist->pod_size];
+   ret_loc.block = dist->block[h_a(hash, a[1]) % dist->block_size];
+   ret_loc.cap = dist->cap[h_a(hash, a[2]) % dist->cap_size];
+   ret_loc.scatter = dist->scatter[h_a(hash, a[3]) % dist->scatter_size];
+
+   return ret_loc;
+}
+
+/** (INTERNAL HELPER FUNCTION)
  * Recursively makes missing directories in file path relative to directory file
- * descriptor.
+ * descriptor. If rebuild target and distribution locations are given, also
+ * creates subdirs within the distribution that are pointed to by symlinks from
+ * target locations.
  * @param int dirfd : Directory file descriptor all paths are relative to
  * @param char *pathname : math of directory to create
  * @param mode_t mode : permissions to use
+ * @param char* dirtmp : Template string for generating directory paths
+ * @param int dirpad : Number of chars by which dirtmp may expand via substitutions
+ * @param DAL_location* loc : DAL location that pathname corresponds with. Only
+ * valid if tgt != NULL
+ * @param POSIX_REBUILD_LOC tgt : List of rebuild location targets that should
+ * be directed to a distribution location, or NULL
+ * @param POSIX_REBUILD_LOC dist : List of distribution locations that target
+ * locations could point to. Only valid if tgt != NULL
  * @return int : Zero on success, Non-zero if one or more directories could not
  * be created
  */
-static int r_mkdirat(int dirfd, char *pathname, mode_t mode)
+static int r_mkdirat(int dirfd, char *pathname, mode_t mode, char *dirtmp, int dirpad,
+   DAL_location* loc, POSIX_REBUILD_LOC tgt, POSIX_REBUILD_LOC dist)
 {
    char *parse = pathname;
    int num_err = 0;
    struct stat info;
+   // Iterate through the dirs in pathname, creating them (if needed) as we go
    while (*parse != '\0')
    {
       if (*parse == '/')
       {
          *parse = '\0';
          // check if we have any more dirs remaining
-         char* lookahead = parse+1;
+         char* lookahead = parse + 1;
          while ( *lookahead != '\0'  &&  *lookahead != '/' ) { lookahead++; }
-         if ( *lookahead == '\0' ) {
-            // always create the bottom dir with global write/execute
-            mode |= S_IWOTH | S_IXOTH;
+         // If this is the last dir, and it is a rebuild target, create a symlink to a distribution location
+         if ( *lookahead == '\0'  && !tgtMatch(loc, tgt)) {
+               // Generate our write target from the distribution locations
+               DAL_location wtgt_loc = hash_loc(pathname, dist);
+
+               // If our write target is also a rebuild target, create a dir like normal
+               if (!tgtMatch(&wtgt_loc, tgt)) {
+                  goto normal;
+               }
+
+               // Form the base path for our write target
+               int rblock_len = strlen(RBLOCK_DIR) + num_digits(loc->pod) + num_digits(loc->block) + num_digits(loc->cap) + num_digits(loc->scatter) - 8;
+               char wtgt_path[256] = {0};
+               expand_path(dirtmp, wtgt_path, wtgt_loc, NULL, 1);
+               char* wtgt_end = wtgt_path + strlen(wtgt_path);
+
+               // If they don't already exist, create the normal dirs above the write target
+               // We need to call this before r_mkdirat() on the full write target to ensure that the last
+               // normal dir above the write target subdirs has the correct permissions
+               if (r_mkdirat(dirfd, wtgt_path, mode, dirtmp, dirpad, NULL, NULL, NULL)) {
+                  LOG(LOG_ERR, "failed to create directory \"%s\" (%s)\n", wtgt_path, strerror(errno));
+                  num_err++;
+                  *parse = '/';
+                  return num_err;
+               }
+
+               // Form the rest of the path for our write target
+               char *res = strncat(wtgt_end, REB_DIR, 255 - strlen(wtgt_path));\
+               if (res != wtgt_end) {
+                  num_err++;
+                  *parse = '/';
+                  return num_err;
+               }
+               wtgt_end += strlen(REB_DIR);
+
+               res = strncat(wtgt_end, tgt->ts, 255 - strlen(wtgt_path));\
+               if (res != wtgt_end) {
+                  num_err++;
+                  *parse = '/';
+                  return num_err;
+               }
+               wtgt_end += strlen(tgt->ts);
+
+               sprintf(wtgt_end, RBLOCK_DIR, loc->pod, loc->block, loc->cap, loc->scatter);
+
+               wtgt_end += rblock_len;
+
+               res = strncat(wtgt_end, "/\0", 255 - strlen(wtgt_path));\
+               if (res != wtgt_end) {
+                  num_err++;
+                  *parse = '/';
+                  return num_err;
+               }
+
+               // Create our write target
+               if (r_mkdirat(dirfd, wtgt_path, mode, dirtmp, dirpad, NULL, NULL, NULL)) {
+                  LOG(LOG_ERR, "failed to create rebuild directory \"%s\" (%s)\n", wtgt_path, strerror(errno));
+                  num_err++;
+                  *parse = '/';
+                  return num_err;
+               }
+
+               // Remove any existing file/dir at the rebuild target to replace with a symlink to the write target
+               if (!fstatat(dirfd, pathname, &info, 0) && unlinkat(dirfd, pathname, AT_REMOVEDIR)) {
+                  LOG(LOG_ERR, "failed to remove existing file/dir \"%s\" to replace with symlink for rebuild (%s)\n", pathname, strerror(errno));
+                  num_err++;
+                  *parse = '/';
+                  return num_err;
+               }
+
+               // attempt to symlink rebuild target to write target
+               printf("creating symlink \"%s\" that points to write target \"%s\"\n", pathname, wtgt_path);
+               LOG(LOG_INFO, "creating symlink \"%s\" that points to write target \"%s\"\n", pathname, wtgt_path);
+               char *oldpath = convert_relative(wtgt_path, pathname);
+               if (oldpath == NULL)
+               {
+                  LOG(LOG_ERR, "failed to create relative data path for symlink\n");
+                  num_err++;
+                  *parse = '/';
+                  return num_err;
+               }
+
+               if (symlinkat(oldpath, dirfd, pathname))
+               {
+                  LOG(LOG_ERR, "failed to create data symlink from \"%s\" to \"%s\"\n", pathname, oldpath);
+                  num_err++;
+                  *parse = '/';
+                  return num_err;
+               }
          }
-         if (fstatat(dirfd, pathname, &info, 0) || !S_ISDIR(info.st_mode))
-         {
-            if (mkdirat(dirfd, pathname, mode))
+         else {
+normal:
+            // If a directory does not exist at the current path, create it
+            if (fstatat(dirfd, pathname, &info, 0) || !S_ISDIR(info.st_mode))
             {
-               LOG(LOG_ERR, "failed to create directory \"%s\" (%s)\n", pathname, strerror(errno));
-               num_err++;
-               *parse = '/';
-               return num_err;
-            }
-            else
-            {
-               LOG(LOG_INFO, "successfully created directory \"%s\"\n", pathname);
+               // The last dir needs special permissions
+               if (*lookahead == '\0') {
+                  mode |= S_IWOTH | S_IXOTH;
+               }
+               if (mkdirat(dirfd, pathname, mode))
+               {
+                  LOG(LOG_ERR, "failed to create directory \"%s\" (%s)\n", pathname, strerror(errno));
+                  num_err++;
+                  *parse = '/';
+                  return num_err;
+               }
+               else
+               {
+                  LOG(LOG_INFO, "successfully created directory \"%s\"\n", pathname);
+               }
             }
          }
          *parse = '/';
@@ -688,10 +914,27 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
    return 0;
 }
 
-//   -------------    POSIX IMPLEMENTATION    -------------
+/** (INTERNAL HELPER FUNCTION)
+ * Ensure that the DAL is properly configured, functional, and secure. Log any problems encountered
+ * @param DAL_CTXT ctxt : Context reference of the current POSIX DAL
+ * @param char fix : If non-zero, attempt to correct any problems encountered
+ * @param POSIX_REBUILD_LOC tgt : List of rebuild location targets that should
+ * be directed to a distribution location, or NULL
+ * @param POSIX_REBUILD_LOC dist : List of distribution locations that target
+ * locations could point to. Only valid if tgt != NULL
+ * @return int : Zero on success, Non-zero if unresolved problems were found
+ */
+int _posix_verify(DAL_CTXT ctxt, char fix, POSIX_REBUILD_LOC tgt, POSIX_REBUILD_LOC dist) {
+   // NOTE: fix arg is forced high when rebuilding
+   if (!tgt != !dist) {
+      LOG(LOG_ERR, "received incomplete rebuild locations!\n");
+      return -1;
+   }
 
-int posix_verify(DAL_CTXT ctxt, char fix)
-{
+   if (tgt && dist) {
+      fix = 1;
+   }
+
    // try to limit access explicitly to the running user/group
    uid_t uid = geteuid();
    gid_t gid = getegid();
@@ -860,10 +1103,11 @@ int posix_verify(DAL_CTXT ctxt, char fix)
                loc.scatter = s;
                expand_path(dctxt->dirtmp, path, loc, NULL, 1);
                LOG(LOG_INFO, "checking path %s\n", path);
-               if (fstatat(dctxt->sec_root, path, &st, 0) || !S_ISDIR(st.st_mode))
+               // If we are fixing and the dir does not exist, or corresponds to a rebuild target and is not a symlink, create it
+               if (fstatat(dctxt->sec_root, path, &st, 0) || !S_ISDIR(st.st_mode) || (!tgtMatch(&loc, tgt) && !S_ISLNK(st.st_mode)))
                {
                   LOG(LOG_ERR, "failed to verify directory \"%s\" exists (%s)\n", path, strerror(errno));
-                  if (!fix || r_mkdirat(dctxt->sec_root, path, S_IRWXU | S_IXGRP | S_IXOTH) || fchmodat(dctxt->sec_root, path, S_IRWXU | S_IWGRP | S_IXGRP | S_IWOTH | S_IXOTH, 0))
+                  if (!fix || r_mkdirat(dctxt->sec_root, path, S_IRWXU | S_IXGRP | S_IXOTH, dctxt->dirtmp, dctxt->dirpad, &loc, tgt, dist) || fchmodat(dctxt->sec_root, path, S_IRWXU | S_IWGRP | S_IXGRP | S_IWOTH | S_IXOTH, 0))
                   {
                      num_err++;
                   }
@@ -875,6 +1119,13 @@ int posix_verify(DAL_CTXT ctxt, char fix)
    free(path);
    umask(mask); // restore umask
    return num_err;
+}
+
+
+//   -------------    POSIX IMPLEMENTATION    -------------
+
+int posix_verify(DAL_CTXT ctxt, char fix) {
+   return _posix_verify(ctxt, fix, NULL, NULL);
 }
 
 int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_location dest, char offline)

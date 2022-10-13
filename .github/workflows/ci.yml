@@ -1,16 +1,17 @@
-name: MarFS CI
-# There should be some way to use the workflow from the erasureUtils repo instead of duplicating the code from its
-# workflow, but I haven't been able to get it to work, so we're going to do this manually
+
+name: erasureUtils CI
+
 
 on:
   push:
   pull_request:
+  workflow_call:
 
 jobs:
   Build:
     env:
       Isal_assembler: nasm
-      Ne_deps: "autoconf libxml2-dev"
+      Ne_deps: "autoconf libxml2-dev openmpi-bin openmpi-common libopenmpi-dev"
     runs-on: ubuntu-latest
     steps:
     - name: Checkout ISA-L
@@ -29,13 +30,13 @@ jobs:
         ./configure
         make
         sudo make install
+
     - name: Return to workspace root
       run: cd $GITHUB_WORKSPACE
 
     - name: Checkout erasureUtils
       uses: actions/checkout@v3
       with:
-        repository: gransom/erasureUtils
         path: erasureUtils
 
     - name: Install erasureUtils build dependencies
@@ -52,4 +53,3 @@ jobs:
         
     - name: Return to workspace root
       run: cd $GITHUB_WORKSPACE
-

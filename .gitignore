@@ -28,6 +28,7 @@ m4/lt*.m4
 
 # Build/Vim artifacts
 src/dal/dalverify
+src/dal/emerg_reb
 src/dal/test_dal
 src/dal/test_dal_abort
 src/dal/test_dal_migrate

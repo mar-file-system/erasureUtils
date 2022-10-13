@@ -74,10 +74,15 @@ libdal_la_SOURCES = posix_dal.c dal.c fuzzing_dal.c $(S3_SOURCES) timer_dal.c no
 libdal_la_CFLAGS = $(XML_CFLAGS)
 DAL_LIB = libdal.la
 
-bin_PROGRAMS = dalverify
+bin_PROGRAMS = dalverify emerg_reb
 dalverify_SOURCES = dalverify.c
 dalverify_LDADD = $(DAL_LIB) $(SIDE_LIBS)
 dalverify_CFLAGS = $(XML_CFLAGS)
+
+emerg_reb_CC = mpicc
+emerg_reb_SOURCES = emergency_rebuild.c ../thread_queue/thread_queue.c
+emerg_reb_LDADD = $(SIDE_LIBS)
+emerg_reb_CFLAGS = $(XML_CFLAGS)
 
 # ---
 POSIX_TESTS = test_dal_verify test_dal test_dal_abort test_dal_migrate
