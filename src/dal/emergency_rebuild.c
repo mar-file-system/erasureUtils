@@ -987,8 +987,8 @@ int main(int argc, char** argv) {
     DAL_location max_loc;
     POSIX_REBUILD_LOC tgt = NULL;
     POSIX_REBUILD_LOC dist = NULL;
-    int n_tgt;
-    int n_dist;
+    int n_tgt = 0;
+    int n_dist = 0;
 
     char pr_usage = 0;
     int c;
