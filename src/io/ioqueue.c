@@ -188,13 +188,14 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
    //size_t spillage = ioq->fill_threshold - ioq->split_threshold;
    ioq->blocksz = ioq->split_threshold + CRC_BYTES;
    // check for misalignment of IOSZ and PARTSZ values
-   size_t overflow = 0;
-   if ( (overflow = ioq->split_threshold % subsz) ) {
-      LOG( LOG_INFO, "Split threshold of %zu does not cleanly align with subsz of %zu\n", ioq->split_threshold, subsz );
+   //size_t overflow = 0;
+   //if ( (overflow = ioq->split_threshold % subsz) ) {
+   //   LOG( LOG_INFO, "Split threshold of %zu does not cleanly align with subsz of %zu\n", ioq->split_threshold, subsz );
       //overflow = 1;
       // NOTE -- misalignment means we need space for potentially another subsz worth of overlap
-      ioq->blocksz += subsz;
-   }
+   // NOTE -- ne_seek can result in misalignment regardless of IO/PARTSZ values, so *always* expand this buffer
+   ioq->blocksz += subsz;
+   //}
    //if ( (ioq->fill_threshold - spillage) % subsz ) {
    //   LOG( LOG_INFO, "Post spillage fill %zu does not cleanly align with subsz of %zu\n", ioq->fill_threshold - spillage, subsz );
    //   overflow = 1;
