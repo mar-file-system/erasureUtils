@@ -177,6 +177,7 @@ AM_COND_IF([BENCH], [],
 #             [ AS_IF( [ x"${enableval}" =~ ^x\(.*,\)?all\(,.*\)?$ ], [AC_DEFINE( [DEBUG_ALL] )], [] ) ],
 #             [debug_all=no; debug_ne=no; debug_io=no; debug_dal=no; debug_tq=no])
 
+fulldebugstr=""
 AC_ARG_ENABLE( [debugALL],
                [ AS_HELP_STRING( [--enable-debugALL], [Enable all debug output] ) ],
                   [ AS_CASE( [ x"${enableval}" ],
@@ -185,7 +186,7 @@ AC_ARG_ENABLE( [debugALL],
                            [[ x[Ww]* ]],
                               [ AC_DEFINE( [DEBUG_ALL], [2], [Enable all debug output] ) ],
                            [ AC_DEFINE( [DEBUG_ALL], [1], [Enable all debug output] ) ]
-                  ) ], []
+                  ) && fulldebugstr="$fulldebugstr""ALL=\"$enableval\" " ], []
              )
 
 AC_ARG_ENABLE( [debugNE],
@@ -196,7 +197,7 @@ AC_ARG_ENABLE( [debugNE],
                            [[ x[Ww]* ]],
                               [ AC_DEFINE( [DEBUG_NE], [2], [Enable 'ne'-subdir debug output] ) ],
                            [ AC_DEFINE( [DEBUG_NE], [1], [Enable 'ne'-subdir debug output] ) ]
-                  ) ], []
+                  ) && fulldebugstr="$fulldebugstr""NE=\"$enableval\" " ], []
              )
 
 AC_ARG_ENABLE( [debugIO],
@@ -207,7 +208,7 @@ AC_ARG_ENABLE( [debugIO],
                            [[ x[Ww]* ]],
                               [ AC_DEFINE( [DEBUG_IO], [2], [Enable 'io'-subdir debug output] ) ],
                            [ AC_DEFINE( [DEBUG_IO], [1], [Enable 'io'-subdir debug output] ) ]
-                  ) ], []
+                  ) && fulldebugstr="$fulldebugstr""IO=\"$enableval\" " ], []
              )
 
 AC_ARG_ENABLE( [debugDAL],
@@ -218,7 +219,7 @@ AC_ARG_ENABLE( [debugDAL],
                            [[ x[Ww]* ]],
                               [ AC_DEFINE( [DEBUG_DAL], [2], [Enable 'dal'-subdir debug output] ) ],
                            [ AC_DEFINE( [DEBUG_DAL], [1], [Enable 'dal'-subdir debug output] ) ]
-                  ) ], []
+                  ) && fulldebugstr="$fulldebugstr""DAL=\"$enableval\" " ], []
              )
 
 AC_ARG_ENABLE( [debugTQ],
@@ -229,7 +230,7 @@ AC_ARG_ENABLE( [debugTQ],
                            [[ x[Ww]* ]],
                               [ AC_DEFINE( [DEBUG_TQ], [2], [Enable 'thread_queue'-subdir debug output] ) ],
                            [ AC_DEFINE( [DEBUG_TQ], [1], [Enable 'thread_queue'-subdir debug output] ) ]
-                  ) ], []
+                  ) && fulldebugstr="$fulldebugstr""TQ=\"$enableval\" " ], []
              )
 
 # debugging-output should go to syslog, instead of stdout/stderr?
@@ -261,4 +262,18 @@ AC_CONFIG_FILES([Makefile
                  src/isal_benchmark/Makefile
                ])
 AC_OUTPUT
+
+# let the user know the configuration
+
+cat << EOF
+
+erasureUtils configuration
+#####################
+CC       : $CC
+CFLAGS   : $CFLAGS
+LDFLAGS  : $LDFLAGS
+LIBS     : $LIBS
+DEBUG    : $fulldebugstr
+
+EOF
 
