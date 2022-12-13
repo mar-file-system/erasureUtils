@@ -53,17 +53,35 @@
 #LANL contributions is found at https://github.com/jti-lanl/aws4c.
 #
 #GNU licenses can be found at http://www.gnu.org/licenses/.
-#
-
-ACLOCAL_AMFLAGS = -I m4
-AUTOMAKE_OPTIONS = foreign
 
 
-### nodist_include_HEADERS = libne_auto_config.h
+# automake requires '=' before '+=', even for these built-in vars
+AM_CPPFLAGS =
+AM_CFLAGS   =
+AM_LDFLAGS  =
 
-if BENCH
-  MAYBE_BENCHMARK = isal_benchmark
-endif
 
-SUBDIRS = src
+#if debugALL
+#  AM_CFLAGS   += -g -O0
+#  DEFS        += -DDEBUG_NE=1  -fstack-protector-all -fstack-check
+#else
+#  AM_CFLAGS   += -g -O3
+#  DEFS        += -DDEBUG_NE=0
+#endif
+
+
+#if GPROF
+#  AM_CFLAGS  += -pg
+#  AM_LDFLAGS += -pg
+#endif
+
+
+
+# ---
+bin_PROGRAMS = ec_parallel_benchmark ec_rdma_client
+
+ec_parallel_benchmark_SOURCES = ec_parallel_benchmark.c
+
+ec_rdma_client_SOURCES = ec_rdma_client.c
+
 

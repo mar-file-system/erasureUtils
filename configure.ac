@@ -10,7 +10,7 @@
 #FOR THE USE OF THIS SOFTWARE.  If software is modified to produce derivative
 #works, such modified software should be clearly marked, so as not to confuse it
 #with the version available from LANL.
-# 
+#
 #Additionally, redistribution and use in source and binary forms, with or without
 #modification, are permitted provided that the following conditions are met:
 #1. Redistributions of source code must retain the above copyright notice, this
@@ -71,26 +71,30 @@
 #    we do generate this file, but we avoid exporting it.
 
 AC_PREREQ([2.69])
-AC_INIT([erasureUtils], [1.0], [gransom@lanl.gov])
+AC_INIT([erasureUtils],[1.0],[gransom@lanl.gov])
 AC_CONFIG_SRCDIR([COPYRIGHT.h])
-AC_CONFIG_HEADERS([libne_auto_config.h])
+AC_CONFIG_HEADERS([src/erasureUtils_auto_config.h])
 AC_CONFIG_MACRO_DIR([m4])
-AM_INIT_AUTOMAKE
-
-# # suppress compile/link details, if the option is available
-# m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
-
+AM_INIT_AUTOMAKE([subdir-objects])
+AC_PROG_CC([mpicc mpiCC])
+AM_PROG_CC_C_O
+# LT_INIT
+AC_PROG_LIBTOOL
 
 # default to empty flags, instead of "-g -O2"
 : ${CFLAGS=""}
-AC_PROG_CC
+# AC_PROG_CC
 
-AC_PROG_RANLIB
+# AC_PROG_RANLIB
 
-# # ignored without 'libtoolize'
-# AM_PROG_AR
-# AC_PROG_LIBTOOL
-
+# check for '-Wall' support and use it if we can
+AC_MSG_CHECKING(whether compiler understands -Wall)
+old_CFLAGS="$CFLAGS"
+CFLAGS="$CFLAGS -Wall"
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([],[])],
+  AC_MSG_RESULT(yes),
+  AC_MSG_RESULT(no)
+  CFLAGS="$old_CFLAGS")
 
 # Checks for header files.
 AC_CHECK_HEADERS([fcntl.h stdint.h stdlib.h string.h unistd.h])
@@ -105,30 +109,43 @@ AC_TYPE_UINT64_T
 AC_TYPE_UINT8_T
 
 # Checks for library functions.
-AC_CHECK_FUNCS([bzero ftruncate memset strerror strtol strtoul])
-
-# AC_FUNC_MALLOC runs into "undefined reference to 'rpl_malloc'"
-### AC_FUNC_MALLOC
-AC_CHECK_FUNCS([malloc])
-
+AC_CHECK_FUNCS([bzero ftruncate memset strerror strtol strtoul malloc])
 
 AXATTR_GET_FUNC_CHECK
 AXATTR_SET_FUNC_CHECK
 
-
-
 AC_CHECK_LIB([pthread], [pthread_create], [], [AC_MSG_ERROR(["Could not locate libpthread!"])])
 
-# sockets subdir doesn't actually need this
+AC_CHECK_LIB([xml2], [xmlReadFile], [], [AC_MSG_ERROR(["Could not locate libxml2!"])])
+AC_CHECK_LIB([mpi], [MPI_Abort], [], [AC_MSG_ERROR(["Could not locate libmpi!"])])
+
+
+# Check if we'll be building the S3 DAL
+warnlibs=""
+nos3=""
+AC_ARG_ENABLE([S3],
+               AS_HELP_STRING( [--disable-S3], [Skip Build of the S3 DAL @{:@ useful on systems with outdated libS3 @:}@] ),
+               [nos3="true"], [] )
+AC_CHECK_LIB([s3], [S3_initialize], [], [warnlibs="libs3 "])
+AM_CONDITIONAL([S3DAL], [test "$warnlibs" = ""  &&  test "$nos3" = ""])
+AM_COND_IF([S3DAL], [AC_DEFINE( [S3DAL], [], [Flag indicating activation of S3 DAL] )],
+  [ if test "$nos3" = ""; then
+    echo
+    echo "WARNING: failed to properly link all necessary functions from $( echo "$warnlibs" | sed 's/ $/\./' | sed 's/ /, /g' )"
+    echo "         These libraries may be missing, or below the required versions."
+    echo "         The 'S3' DAL will be disabled!"
+    echo; fi ] )
+
+PKG_CHECK_MODULES( XML, libxml-2.0 )
+
 AC_CHECK_LIB([isal],    [crc32_ieee],
     [],
     [AC_CHECK_LIB([isal], [crc32_ieee_base],
        [echo
         echo "WARNING:  Could not properly link 'crc32_ieee' from isa-l, defaulting to '_base' implementation"
         echo "          IN THIS STATE, THESE UTILITES MAY NOT FUNCTION AS EXPECTED AND WILL ALMOST CERTAINLY HAVE VERY POOR PERFORMANCE"
-        echo], 
+        echo],
        [AC_MSG_ERROR(["Could not locate Intel's Intelligent Storage Acceleration Library (isa-l) on this system!  Please verify that the proper version of the library (v2.16.0 or higher) is installed."])])])
-
 
 # check for presence of zlib
 warnlibs=""
@@ -138,140 +155,12 @@ AC_CHECK_LIB([isal], [crc32_gzip_refl], [:], [warnlibs="$warnlibs""libisal(need-
 librdmacm_present=true
 AC_CHECK_LIB([rdmacm], [rdma_getaddrinfo], [], [librdmacm_present=false  &&  warnlibs="$warnlibs""librdmacm "])
 AM_CONDITIONAL([BENCH], [test "$warnlibs" = ""  ])
-AM_COND_IF([BENCH], [], 
+AM_COND_IF([BENCH], [],
    [echo
     echo "WARNING: failed to properly link all necessary functions from $( echo "$warnlibs" | sed 's/ $/\./' | sed 's/ /, /g' )"
     echo "         These libraries may be missing, or below the required versions."
     echo "         The 'isal_benchmark' subdir will not be built!"
     echo ])
-
-
-# RDMA/MC is now a run-time option, rather than a configure option.  (This
-# allows single build to access both types of repos).  However, someone may
-# still want to disable it, in order to allow builds in which they are
-# willing to forgo simultaneous access to both types of repo in order to
-# avoid the need to link with packages supporting RDMA.  Therefore, sockets
-# is now an implict-enable/explicit-disable option.
- 
-# optional build uses RDMA-sockets
-# The server must be deployed on remote hosts (after building) to support this mode.
-
-# *** WARNING: If not set, we leave the value as "none", instead of the usual "no"
-
-AC_ARG_ENABLE([sockets],
-              AS_HELP_STRING([--enable-sockets],
-                             [One of {rdma,ip,unix,no}.  Default=no. File operations go to a server, via sockets.]),
-              [case "${enableval}" in
-                 (rdma)   ;;
-                 # (ip)   ;;  # TBD
-                 # (unix) ;;  # TBD
-                 (none)   ;;
-                 (no)     enable_sockets=none ;;
-                 (*)      AC_MSG_FAILURE([enable-sockets={rdma,ip,unix,no}. Currently, only rdma is supported]) ;;
-               esac],
-               [enable_sockets=none])
-
-
-AM_CONDITIONAL([ANY_SOCKETS],   [test "$enable_sockets" != none ])
-AM_CONDITIONAL([RDMA_SOCKETS],  [test "$enable_sockets"  = rdma])
-
-AM_COND_IF([ANY_SOCKETS],
-            [ AC_CHECK_LIB([rt], [aio_cancel], [], [ AC_MSG_ERROR(["Could not locate librt!"]) ]) ])
-           #[AC_CHECK_LIB([pthread], [pthread_create])
-
-AM_COND_IF([RDMA_SOCKETS],
-           [AC_CHECK_LIB([rdmacm], [rdma_getaddrinfo], [], [ AC_MSG_ERROR(["Could not locate librdmacm!"]) ]) ])
-#           [AC_SEARCH_LIBS([rdma_getaddrinfo], [rdmacm :librdmacm.so.1]) ])
-
-
-# --- (see comments in skt_config.h.in)
-
-# this is "SKT_" plus "$enable_sockets"
-AC_SUBST(SKT_none, [0])
-AC_SUBST(SKT_rdma, [1])
-AC_SUBST(SKT_ip,   [2])
-AC_SUBST(SKT_unix, [3])
-
-AC_SUBST(SOCKETS, [SKT_$enable_sockets])
-
-AS_IF([test "$enable_sockets"  = rdma],
-            [AC_SUBST(USE_RIOWRITE, [1])],
-            [AC_SUBST(USE_RIOWRITE, [0])])
-
-
-
-            
-
-
-
-
-
-
-# whether an S3 authentication header is required/provided by client-functions to socket servers.
-# libaws4c is used to generate authentication-headers for RDMA socket server.
-AC_ARG_ENABLE([auth],
-               AS_HELP_STRING([--disable-auth],
-                              [Do not require RDMA client/server to use authentication.  (Avoids link with aws4c, curl, etc)]),
-               [enable_auth=${enableval}],
-               [enable_auth=yes])
-
-AS_IF([test x"$enable_auth" != xyes && test x"$enable_sockets" == xnone],
-      [AC_MSG_ERROR(["Cannot --disable-auth  without --enable-sockets=..."])])
-
-AM_CONDITIONAL([AUTH_SOCKETS],  [test x"$enable_auth" != xno])
-
-AM_CONDITIONAL([AUTH_AWS], [test x"$enable_auth" != xno && test "$AWS4C"])
-
-AM_COND_IF([AUTH_SOCKETS],
-           [AC_CHECK_LIB([crypto],      [MD5_Init],          [], [AC_MSG_ERROR(["Could not locate libcrypto!"])])
-            AC_CHECK_LIB([xml2],        [xmlReadMemory],     [], [AC_MSG_ERROR(["Could not locate libxml2!"])])
-            AC_CHECK_LIB([curl],        [curl_easy_cleanup], [], [AC_MSG_ERROR(["Could not locate libcurl!"])])
-            AC_CHECK_LIB([aws4c],       [GetStringToSign],   [], [AC_MSG_ERROR(["Could not locate libaws4c!  Make sure that the library has been built and is included in LDFLAGS."])])
-            AC_CHECK_LIB([aws4c_extra], [get_object_list],   [], [AC_MSG_ERROR(["Could not locate libaws4c_extra!  Was aws4c built improperly?"])]) ])
-
-
-# --- (see comments in skt_config.h.in)
-AS_IF([test x"$enable_auth" != xno],
-            [AC_SUBST(S3_AUTH, [1])],
-            [AC_SUBST(S3_AUTH, [0])])
-
-
-
-
-
-# whether to disable file I/O used in the sockets sub-library.  For
-# example, if disabled, neither GET nor PUT via test_client do any
-# file-reads or file-writes.
-AC_ARG_ENABLE([file-io],
-               AS_HELP_STRING([--disable-file-io],
-                              [Suppress file I/O for GET/PUT through RDMA client/server.  (For throughput tests)]),
-               [enable_file_io=${enableval}],
-               [enable_file_io=yes])
-
-AM_CONDITIONAL([SUPPRESS_FILE_IO],  [test "$enable_file_io" != yes])
-
-
-
-
-# Delete me.  These flags are now installed at run-time, via ne_open1() or
-# ne_open1_vl().  MarFS does this installation through the DAL, at
-# open-time.
-#
-# # option enables collection of stats
-# # (This value goes right into the code.  e.g. --enable-stats=0x30)
-# # For now, this is the only way to set stat flags, so stat-gathering will be
-# # useless overhead if you don't add the GLOBAL flag.  Later, it may be possible
-# # set flags on a per-handle basis.
-# AC_ARG_ENABLE([stats],
-#               AS_HELP_STRING([--enable-stats],
-#                              [bitmask: 0x80=HNDL, 0x40=THR, 0x20=ERAS, 0x10=CRC, 8=REN, 4=CLOSE, 2=RW, 1=OPEN]),
-#               [enable_stats=${enableval}],
-#               [enable_stats=0])
-# 
-# AC_SUBST([enable_stats], [${enable_stats}])
-
-
-
 
 
 
@@ -282,95 +171,109 @@ AM_CONDITIONAL([SUPPRESS_FILE_IO],  [test "$enable_file_io" != yes])
 #       case where a developer wants to be able to take their time stepping through
 #       protocol steps, without worrying about timeouts.  In all other ways, it is the
 #       same as 'yes' (which is the default if you just configure with '--enable-debug')
-AC_ARG_ENABLE([debug],
-               AS_HELP_STRING([--enable-debug],
-                              [Turn on internal debugging.  One of {yes,no,ne,sockets,ft,gdb}]),
-               [case "${enableval}" in
-                  yes)       enable_debug=all ;;
-                  no)        enable_debug=no ;;
-                  ne)        enable_debug=ne ;;
-                  sockets)   enable_debug=sockets ;;
-                  ft)        enable_debug=ft ;;
-                  gdb)       enable_debug=all; debug_mode=gdb ;;
-                  *)    AC_MSG_FAILURE([enable-debug={yes,no,ne,sockets,ft,gdb}.]) ;;
-                esac],
-               [enable_debug=no])
+#AC_ARG_ENABLE([debug],
+#             AS_HELP_STRING([--enable-debug],
+#                            [Turn on internal debugging.  One of {yes,no,ne,sockets,ft,gdb}]),
+#             [ AS_IF( [ x"${enableval}" =~ ^x\(.*,\)?all\(,.*\)?$ ], [AC_DEFINE( [DEBUG_ALL] )], [] ) ],
+#             [debug_all=no; debug_ne=no; debug_io=no; debug_dal=no; debug_tq=no])
 
-AM_CONDITIONAL([DEBUG_NE],          [test "$enable_debug" = ne      || test "$enable_debug" = all ])
-AM_CONDITIONAL([DEBUG_SOCKETS],     [test "$enable_debug" = sockets || test "$enable_debug" = all ])
-AM_CONDITIONAL([DEBUG_SOCKETS_GDB], [test "x$debug_mode" = "xgdb" ])
-AM_CONDITIONAL([DEBUG_FT],          [test "$enable_debug" = ft ])
+fulldebugstr=""
+AC_ARG_ENABLE( [debugALL],
+               [ AS_HELP_STRING( [--enable-debugALL], [Enable all debug output] ) ],
+                  [ AS_CASE( [ x"${enableval}" ],
+                           [[ x[Ee]* ]],
+                              [ AC_DEFINE( [DEBUG_ALL], [3], [Enable all debug output] ) ],
+                           [[ x[Ww]* ]],
+                              [ AC_DEFINE( [DEBUG_ALL], [2], [Enable all debug output] ) ],
+                           [ AC_DEFINE( [DEBUG_ALL], [1], [Enable all debug output] ) ]
+                  ) && fulldebugstr="$fulldebugstr""ALL=\"$enableval\" " ], []
+             )
 
+AC_ARG_ENABLE( [debugNE],
+               [ AS_HELP_STRING( [--enable-debugNE], [Enable 'ne'-subdir debug output] ) ],
+                  [ AS_CASE( [ x"${enableval}" ],
+                           [[ x[Ee]* ]],
+                              [ AC_DEFINE( [DEBUG_NE], [3], [Enable 'ne'-subdir debug output] ) ],
+                           [[ x[Ww]* ]],
+                              [ AC_DEFINE( [DEBUG_NE], [2], [Enable 'ne'-subdir debug output] ) ],
+                           [ AC_DEFINE( [DEBUG_NE], [1], [Enable 'ne'-subdir debug output] ) ]
+                  ) && fulldebugstr="$fulldebugstr""NE=\"$enableval\" " ], []
+             )
 
+AC_ARG_ENABLE( [debugIO],
+               [ AS_HELP_STRING( [--enable-debugIO], [Enable 'io'-subdir debug output] ) ],
+                  [ AS_CASE( [ x"${enableval}" ],
+                           [[ x[Ee]* ]],
+                              [ AC_DEFINE( [DEBUG_IO], [3], [Enable 'io'-subdir debug output] ) ],
+                           [[ x[Ww]* ]],
+                              [ AC_DEFINE( [DEBUG_IO], [2], [Enable 'io'-subdir debug output] ) ],
+                           [ AC_DEFINE( [DEBUG_IO], [1], [Enable 'io'-subdir debug output] ) ]
+                  ) && fulldebugstr="$fulldebugstr""IO=\"$enableval\" " ], []
+             )
+
+AC_ARG_ENABLE( [debugDAL],
+               [ AS_HELP_STRING( [--enable-debugDAL], [Enable 'dal'-subdir debug output] ) ],
+                  [ AS_CASE( [ x"${enableval}" ],
+                           [[ x[Ee]* ]],
+                              [ AC_DEFINE( [DEBUG_DAL], [3], [Enable 'dal'-subdir debug output] ) ],
+                           [[ x[Ww]* ]],
+                              [ AC_DEFINE( [DEBUG_DAL], [2], [Enable 'dal'-subdir debug output] ) ],
+                           [ AC_DEFINE( [DEBUG_DAL], [1], [Enable 'dal'-subdir debug output] ) ]
+                  ) && fulldebugstr="$fulldebugstr""DAL=\"$enableval\" " ], []
+             )
+
+AC_ARG_ENABLE( [debugTQ],
+               [ AS_HELP_STRING( [--enable-debugTQ], [Enable 'thread_queue'-subdir debug output] ) ],
+                  [ AS_CASE( [ x"${enableval}" ],
+                           [[ x[Ee]* ]],
+                              [ AC_DEFINE( [DEBUG_TQ], [3], [Enable 'thread_queue'-subdir debug output] ) ],
+                           [[ x[Ww]* ]],
+                              [ AC_DEFINE( [DEBUG_TQ], [2], [Enable 'thread_queue'-subdir debug output] ) ],
+                           [ AC_DEFINE( [DEBUG_TQ], [1], [Enable 'thread_queue'-subdir debug output] ) ]
+                  ) && fulldebugstr="$fulldebugstr""TQ=\"$enableval\" " ], []
+             )
 
 # debugging-output should go to syslog, instead of stdout/stderr?
 AC_ARG_ENABLE([syslog],
-               AS_HELP_STRING([--enable-syslog],
-                              [Send debugging output to syslog, instead of stdout/stderr]),
-              [enable_syslog=$enableval],
-              [enable_syslog=no])
+               AS_HELP_STRING( [--enable-syslog], [Send debugging output to syslog, instead of stdout/stderr] ),
+               AC_DEFINE( [USE_SYSLOG], [], [Send debugging output to syslog, instead of stdout/stderr] ), [] )
+
+#AM_COND_IF( [DEBUG_ALL], [test "$debug_all" = yes], [AC_DEFINE( [DEBUG_ALL] )], [])
+
+
+#AM_CONDITIONAL([DEBUG_SOCKETS],     [test "$enable_debug" = sockets || test "$enable_debug" = all ])
+#AM_CONDITIONAL([DEBUG_SOCKETS_GDB], [test "x$debug_mode" = "xgdb" ])
+AM_CONDITIONAL([DEBUG_FT],          [test "$enable_debug" = ft ])
+AM_CONDITIONAL([GPROF],          [test "$enable_gprof" = yes ])
+
+
+
 
 AM_CONDITIONAL([USE_SYSLOG], [test x"$enable_syslog" != xno])
 
-
-
-
-# Build the server so that it will respond to "test" commands, which allow
-# low-level custom tests.  (Currently, test_client is the only client that
-# invokes these tests, and they just revolve around rpoll() functionality.)
-#
-# NOTE: The server-side test-interface is not, strictly speaking, a "back
-# door", because the test functions, like all other server functions, must
-# still go through regular authentication [assuming configuration with
-# --enable-auth], and the test-functions do not (currently) change the
-# operation of the server, or provide special access to data.  However,
-# there is no need to enable the test API during normal operation.
-
-AC_ARG_ENABLE([test-api],
-               AS_HELP_STRING([--enable-test-api],
-                              [Server presents testing interface.  (Developers only.)]),
-              [enable_test_api=$enableval],
-              [enable_test_api=no])
-
-AM_CONDITIONAL([TEST_API],  [test "x$enable_test_api" != "xno"])
-
-
-
-
-# build for gprof
-AC_ARG_ENABLE(gprof,
-   AS_HELP_STRING([--enable-gprof], [Dump run-time profiling info for gprof]))
-AM_CONDITIONAL([GPROF], [test x$enable_gprof = xyes])
-
-
-
-
-# We depend on a number of environment variables
-AC_ARG_VAR(AWS4C, [The location of the aws4c installation])
-
-# Customization of server-side buffer-size
-AC_ARG_VAR([S_BUFSIZE],
-           [If RDMA sockets are enabled, this is the size of buffers used for server-side
-            transfers between sockets and files (default is 1MB)])
-AM_CONDITIONAL([HAVE_S_BUFSIZE], [test x"$S_BUFSIZE" != x])
-
-
-# Customization of client-side buffer-size for get/put.
-AC_ARG_VAR([C_BUFSIZE],
-           [size of client-side buffer, used for client_get()/client_put() only.
-            All other functions take client-side buffer and buffer-size as arguments.  (default is 1MB)])
-AM_CONDITIONAL([HAVE_C_BUFSIZE], [test x"$C_BUFSIZE" != x])
-
-
-
-
-
 AC_CONFIG_FILES([Makefile
-                 fast_timer/Makefile
-                 config/erasure_config.h:config/erasure_config.h.in
-                 config/udal_config.h:config/udal_config.h.in
-                 config/Makefile
-                 sockets/Makefile
-                 isal_benchmark/Makefile
-                 erasureLib/Makefile])
+                 src/Makefile
+                 src/logging/Makefile
+                 src/thread_queue/Makefile
+                 src/dal/Makefile
+                 src/io/Makefile
+                 src/ne/Makefile
+                 src/recursion/Makefile
+                 src/isal_benchmark/Makefile
+               ])
 AC_OUTPUT
+
+# let the user know the configuration
+
+cat << EOF
+
+erasureUtils configuration
+#####################
+CC       : $CC
+CFLAGS   : $CFLAGS
+LDFLAGS  : $LDFLAGS
+LIBS     : $LIBS
+DEBUG    : $fulldebugstr
+
+EOF
+
