@@ -11,7 +11,7 @@ jobs:
   Build:
     env:
       Isal_assembler: nasm
-      Ne_deps: "autoconf libxml2-dev openmpi-bin openmpi-common libopenmpi-dev"
+      Ne_deps: "autoconf libxml2-dev openmpi-bin openmpi-common libopenmpi-dev libs3-dev rdmacm-utils"
     runs-on: ubuntu-latest
     steps:
     - name: Checkout ISA-L
