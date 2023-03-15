@@ -1094,7 +1094,7 @@ ne_handle ne_stat(ne_ctxt ctxt, const char* objID, ne_location loc) {
    char* tmp_data_errs = tmp_meta_errs + ctxt->max_block;
 
    // allocate space for a full set of meta_info structs
-   meta_info consensus;
+   meta_info consensus = {0};
    meta_info* minfo_list = calloc(ctxt->max_block, sizeof(struct meta_info_struct));
    if (minfo_list == NULL) {
       LOG(LOG_ERR, "Failed to allocate space for a meta_info_struct list!\n");
