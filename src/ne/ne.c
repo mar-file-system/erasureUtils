@@ -658,21 +658,16 @@ int read_stripes(ne_handle handle) {
    unsigned int start_stripe = (unsigned int)(offset / stripesz); // get a stripe num based on offset
 #endif
 
-   // make sure our sub_offset is stripe aligned and at the end of our current ioblocks
-   if (handle->sub_offset % stripesz || handle->sub_offset != (handle->iob_datasz * N)) {
-      if (handle->iob_datasz) {
-         LOG(LOG_ERR, "Called on handle with an inappropriate sub_offset (%zd)!\n", handle->sub_offset);
-         errno = EBADF;
-         return -1;
-      }
-      // we don't current have any ioblocks at all, so allow the read to proceed
+   // make sure our sub_offset is stripe aligned and at the end of our ioblocks ( or zero, if none present )
+   if ( handle->sub_offset % stripesz || handle->sub_offset != (handle->iob_datasz * N) ) {
+      LOG(LOG_ERR, "Called on handle with an inappropriate sub_offset (%zd)!\n", handle->sub_offset);
+      errno = EBADF;
+      return -1;
    }
-   else {
-      // normal case, we're retrieving a new set of stripes after exhausing the previous
-      // update handle offset values
-      handle->iob_offset += handle->iob_datasz;
-      handle->sub_offset = 0;
-   }
+   // update handle offset values ( NOTE : no effect if we don't yet have populated ioblocks )
+   handle->iob_offset += handle->iob_datasz;
+   // always start with a fresh sub_offset for new stripes
+   handle->sub_offset = 0;
 
    // if we have previous block references, we'll need to release them
    int i;
@@ -2375,15 +2370,28 @@ off_t ne_seek(ne_handle handle, off_t offset) {
          return -1;
       }
 
+      handle->sub_offset = 0; // old sub_offset is irrelevant
       handle->iob_datasz = 0;                           // indicate we have to repopulate all ioblocks
       handle->iob_offset = (tgt_stripe * partsz);       //new_iob_off;
                                                         //      int iob_stripe = (int)( new_iob_off / partsz );
+      LOG( LOG_INFO, "Reading in additional stripes post-thread-reseek\n", handle->iob_datasz, handle->sub_offset);
+      if (read_stripes(handle)) {
+         LOG(LOG_ERR, "Failed to read additional stripes!\n");
+         return -1;
+      }
       handle->sub_offset = offset - (handle->iob_offset * N); //( iob_stripe * stripesz );
    }
    else {
       // reset out sub_offset to the start of the ioblock data
       handle->sub_offset = 0;
       LOG(LOG_INFO, "Offset of %zd is within readable bounds (tgt_stripe=%d / cur_stripe=%d)\n", offset, tgt_stripe, cur_stripe);
+      // don't update our sub_offset until we actually have some ioblocks populated
+      if ( handle->iob_datasz == 0 ) {
+         if (read_stripes(handle)) {
+            LOG(LOG_ERR, "Failed to read initial stripe, pre-munch\n");
+            return -1;
+         }
+      }
       // we may still be many stripes behind the given offset.  Calculate how many.
       unsigned int munch_stripes = tgt_stripe - cur_stripe;
       // if we're at all behind...
