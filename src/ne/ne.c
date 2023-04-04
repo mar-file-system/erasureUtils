@@ -2390,22 +2390,20 @@ off_t ne_seek(ne_handle handle, off_t offset) {
       if (munch_stripes) {
          LOG(LOG_INFO, "Attempting to 'munch' %d stripes to reach offset of %zu\n", munch_stripes, offset);
 
-         // first, skip our sub_offset ahead to the next stripe boundary
-         handle->sub_offset = ((cur_stripe + 1) * stripesz) - (handle->iob_offset * N);
-
          // just chuck buffers off of each queue until we hit the right stripe
-         unsigned int thread_munched = 1;
+         unsigned int thread_munched = 0;
          for (; thread_munched < munch_stripes; thread_munched++) {
 
+            // skip to the start of the next stripe
+            handle->sub_offset += stripesz;
+
             if (handle->sub_offset >= (handle->iob_datasz * N)) {
+               LOG( LOG_INFO, "Reading in additional stripes (datasz=%zu/sub_offset=%zu)\n", handle->iob_datasz, handle->sub_offset);
                if (read_stripes(handle)) {
                   LOG(LOG_ERR, "Failed to read additional stripes!\n");
                   return -1;
                }
             }
-
-            // skip to the start of the next stripe
-            handle->sub_offset += stripesz;
          }
          LOG(LOG_INFO, "Finished buffer 'munching'\n");
       }

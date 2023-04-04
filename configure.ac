@@ -269,6 +269,7 @@ cat << EOF
 
 erasureUtils configuration
 #####################
+PREFIX   : $prefix
 CC       : $CC
 CFLAGS   : $CFLAGS
 LDFLAGS  : $LDFLAGS
