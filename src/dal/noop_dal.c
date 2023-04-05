@@ -300,12 +300,12 @@ ssize_t noop_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
       size_t copied = 0;
       while ( copied < maxcopy ) {
          // calculate the offset and size to pull from our buffer
-         off_t suboffset = offset % bctxt->dctxt->c_datalen[bctxt->block]; // get an offset in terms of this buffer iteration
+         off_t suboffset = offset % bctxt->dctxt->datalen[bctxt->block]; // get an offset in terms of this buffer iteration
          size_t copysize = maxcopy - copied; // start with the total remaining bytes
-         if ( copysize > bctxt->dctxt->c_datalen[bctxt->block] ) // reduce to our buffer size, at most
-            copysize = bctxt->dctxt->c_datalen[bctxt->block];
+         if ( copysize > bctxt->dctxt->datalen[bctxt->block] ) // reduce to our buffer size, at most
+            copysize = bctxt->dctxt->datalen[bctxt->block];
          copysize -= suboffset; // exclude our starting offset
-         memcpy(data_buf + copied, bctxt->dctxt->c_data[bctxt->block] + suboffset, copysize);
+         memcpy(buf + copied, bctxt->dctxt->c_data[bctxt->block] + suboffset, copysize);
          // increment our offset and copied count to include the newly copied data
          copied += copysize;
          offset += copysize;

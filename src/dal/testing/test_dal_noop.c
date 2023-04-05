@@ -118,7 +118,7 @@ int main(int argc, char **argv)
 
    // populate source blocks
    while ( curloc.block < maxloc.block ) {
-      BLOCK_CTXT block = posixdal->open(dal->ctxt, DAL_WRITE, curloc, "noopsource");
+      BLOCK_CTXT block = posixdal->open(posixdal->ctxt, DAL_WRITE, curloc, "noopsource");
       if ( block == NULL ) {
          printf( "failed to open posix block %d for write\n", curloc.block );
          return -1;
@@ -206,7 +206,7 @@ int main(int argc, char **argv)
       }
       if (memcmp(writebuffer, readbuffer, (1024 * 1024)))
       {
-         printf("warning: retrieved data 1 from block does not match written!\n", curloc.block);
+         printf("warning: retrieved data 1 from block %d does not match written!\n", curloc.block);
       }
       if ((ret = dal->get(block, readbuffer, (1024 * 1024), 1024*1024)) != (1024 * 1024))
       {
@@ -214,7 +214,7 @@ int main(int argc, char **argv)
       }
       if (memcmp(writebuffer, readbuffer, (1024 * 1024)))
       {
-         printf("warning: retrieved data 2 does not match written!\n", curloc.block);
+         printf("warning: retrieved data 2 from block %d does not match written!\n", curloc.block);
       }
       int metalen = snprintf( metabuffer, 1024, "Meta-%d", curloc.block );
       if ((ret = dal->get_meta(block, readbuffer, (10 * 1024))) != metalen + 1)

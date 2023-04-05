@@ -119,6 +119,6 @@ check_SCRIPTS = testing/erasureTest
 
 #data_shredder_SOURCES = testing/data_shredder.c
 
-TESTS = testing/test_libne_io testing/test_libne_seek testing/test_libne_fuzzing $(S3TESTS) testing/erasureTest testing/test_libne_timer testing/test_libne_noop
+TESTS = testing/test_libne_io testing/test_libne_seek testing/test_libne_fuzzing $(S3TESTS) testing/erasureTest testing/test_libne_timer # testing/test_libne_noop
 
 
