@@ -1613,6 +1613,11 @@ int posix_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
    }
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
 
+   // reseek to the start of the sidecar file
+   if ( lseek( bctxt->mfd, 0, SEEK_SET ) ) {
+      LOG( LOG_ERR, "failed to reseek to start of meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
+      return -1;
+   }
    // write the provided buffer out to the sidecar file
    if (write(bctxt->mfd, meta_buf, size) != size)
    {
@@ -1632,8 +1637,23 @@ ssize_t posix_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
    }
    POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
 
+   // reseek to the start of the sidecar file
+   if ( lseek( bctxt->mfd, 0, SEEK_SET ) ) {
+      LOG( LOG_ERR, "failed to reseek to start of meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
+      return -1;
+   }
    ssize_t result = read(bctxt->mfd, meta_buf, size);
-
+   // potentially indicate excess meta information
+   if ( result == size ) {
+      // we need to stat this sidecar file to get the total meta info length
+      struct stat stval;
+      if ( fstat(bctxt->mfd, &stval) ) {
+         LOG( LOG_ERR, "failed to stat meta file \"%s\" to check for possible excess meta length (%s)\n", bctxt->filepath, strerror(errno) );
+         return -1;
+      }
+      // increase result to match the total meta info size, if appropriate
+      if ( result < stval.st_size ) { result = stval.st_size; }
+   }
    return result;
 }
 
