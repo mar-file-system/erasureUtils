@@ -519,6 +519,7 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
    }
    // validate and ingest any cache source
    if ( sourcedal  ||  sourceobj  ||  sourceloc.pod >= 0  ||  sourceloc.block >= 0  ||  sourceloc.cap >= 0  ||  sourceloc.scatter >= 0 ) {
+      // we're no in do-or-die mode for source caching
       // we have some values -- ensure we have all of them
       char fatalerror = 0;
       if ( sourcedal == NULL ) {
@@ -551,7 +552,10 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
          return NULL;
       }
 
-      // allocate all cache elements
+      // update our dal iosize to match that of the source dal
+      ndal->io_size = sourcedal->io_size;
+
+      // allocate all cache list elements
       dctxt->numblocks = sourceloc.block;
       dctxt->c_meta =  calloc( dctxt->numblocks, sizeof(char*) );
       dctxt->metalen = calloc( dctxt->numblocks, sizeof(size_t) );
@@ -623,6 +627,11 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
             }
          }
          free( cmp_data ); // no longer needed
+         // close our handle
+         if ( sourcedal->close( sourceblock ) ) {
+            LOG( LOG_ERR, "close error on cache source block %d\n", sourceloc.block );
+            break;
+         }
          if ( getres < 0 ) {
             LOG( LOG_ERR, "read error from cache source block %d after %zu bytes read\n", sourceloc.block, dctxt->maxdata[sourceloc.block] );
             break;

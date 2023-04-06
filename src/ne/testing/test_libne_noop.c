@@ -226,57 +226,112 @@ int test_values(xmlNode *root_element, ne_erasure *epat, size_t iosz, size_t par
   printf("\nTesting basic libne capabilities with iosz=%zu / partsz=%zu\n", iosz, partsz);
 
   void *iobuff = calloc(1, iosz);
-  void *verbuff = calloc(1, iosz);
   if (iobuff == NULL)
   {
     printf("ERROR: Failed to allocate space for an iobuffer!\n");
     return -1;
   }
 
-  // create a new libne ctxt
-  ne_location cur_loc = {.pod = 0, .cap = 0, .scatter = 0};
-  ne_ctxt ctxt = ne_init(root_element, cur_loc, epat->N + epat->E);
-  if (ctxt == NULL)
+  // start by creating a source dal libne ctxt
+  ne_location max_loc = {.pod = 1, .cap = 2, .scatter = 3};
+  ne_ctxt pctxt = ne_init(root_element->children, max_loc, epat->N + epat->E);
+  if (pctxt == NULL)
   {
     printf("ERROR: Failed to initialize ne_ctxt!\n");
     return -1;
   }
+  ne_location cur_loc = {.pod = 0, .cap = 1, .scatter = 2};
 
   // open a write handle
   printf("Writing out data stripe...\n");
-  ne_handle write_handle = ne_open(ctxt, "", cur_loc, *epat, NE_WRALL);
+  ne_handle write_handle = ne_open(pctxt, "noopsource", cur_loc, *epat, NE_WRALL);
   if (write_handle == NULL)
   {
     printf("ERROR: Failed to open a write handle!\n");
     return -1;
   }
   // write out data
-  int iocnt = 10;
+  int iocnt = 10; // note that we'll hit issues if this division isn't clean
   int i;
   for (i = 0; i < iocnt; i++)
   {
-    /*
-    // populate our data buffer
-    if (iosz != fill_buffer(iosz * i, iosz, partsz, iobuff))
+    // populate our data buffer ( zero prev_bytes value guarantees repeated buffers
+    if (iosz != fill_buffer(0, iosz, partsz, iobuff))
     {
-      printf("ERROR: Failed to populate data buffer!\n");
+      printf("ERROR: Failed to populate data buffer 1 %d!\n", i);
       return -1;
     }
-    */
     // write our data buffer
-    if (iosz != ne_write(write_handle, verbuff, iosz))
+    if (iosz != ne_write(write_handle, iobuff, iosz))
     {
-      printf("ERROR: Unexpected return value from ne_write!\n");
+      printf("ERROR: Unexpected return value from ne_write 1 %d!\n", i);
       return -1;
     }
   }
   // close our handle
   if (ne_close(write_handle, NULL, NULL) < 0)
   {
-    printf("ERROR: Failure of ne_close!\n");
+    printf("ERROR: Failure of ne_close 1!\n");
     return -1;
   }
-  printf("...write handle closed...\n");
+  printf("...write handle 1 closed...\n");
+
+
+
+  // create a new libne ctxt
+  ne_ctxt ctxt = ne_init(root_element, max_loc, epat->N + epat->E);
+  if (ctxt == NULL)
+  {
+    printf("ERROR: Failed to initialize ne_ctxt 2!\n");
+    return -1;
+  }
+
+  // delete our source object
+  if (ne_delete(pctxt, "noopsource", cur_loc))
+  {
+    printf("ERROR: Failed to delete source object!\n");
+    return -1;
+  }
+  // close our ne_ctxt
+  if (ne_term(pctxt))
+  {
+    printf("ERROR: Failure of ne_term 1!\n");
+    return -1;
+  }
+
+
+  // open a write handle
+  printf("Writing out data stripe...\n");
+  write_handle = ne_open(ctxt, "", cur_loc, *epat, NE_WRALL);
+  if (write_handle == NULL)
+  {
+    printf("ERROR: Failed to open a write handle!\n");
+    return -1;
+  }
+  // write out data
+  iocnt = 10;
+  for (i = 0; i < iocnt; i++)
+  {
+    // populate our data buffer
+    if (iosz != fill_buffer(iosz * i, iosz, partsz, iobuff))
+    {
+      printf("ERROR: Failed to populate data buffer 2 %d!\n", i);
+      return -1;
+    }
+    // write our data buffer
+    if (iosz != ne_write(write_handle, iobuff, iosz))
+    {
+      printf("ERROR: Unexpected return value from ne_write 2 %d!\n", i);
+      return -1;
+    }
+  }
+  // close our handle
+  if (ne_close(write_handle, NULL, NULL) < 0)
+  {
+    printf("ERROR: Failure of ne_close 2!\n");
+    return -1;
+  }
+  printf("...write handle 2 closed...\n");
 
   // open a read handle to verify our data
   printf("...Verifying written data (RDONLY)...\n");
@@ -296,19 +351,12 @@ int test_values(xmlNode *root_element, ne_erasure *epat, size_t iosz, size_t par
       printf("ERROR: Unexpected return value from ne_read: %zd\n", readsz);
       return -1;
     }
-    if (memcmp(iobuff, verbuff, partsz))
-    {
-      printf("ERROR: Failed to verify data buffer!\n");
-      return -1;
-    }
-    /*
     // populate our data buffer
-    if (iosz != verify_data(iosz * i, partsz, iosz, iobuff))
+    if (iosz != verify_data(0, partsz, iosz, iobuff))
     {
       printf("ERROR: Failed to verify data buffer!\n");
       return -1;
     }
-    */
   }
   // seek back to the beginning and re-read
   printf("...seeking to offset zero to re-read...\n");
@@ -327,19 +375,12 @@ int test_values(xmlNode *root_element, ne_erasure *epat, size_t iosz, size_t par
       printf("ERROR: Unexpected return value from ne_read: %zd\n", readsz);
       return -1;
     }
-    if (memcmp(iobuff, verbuff, partsz))
-    {
-      printf("ERROR: Failed to verify data buffer!\n");
-      return -1;
-    }
-    /*
     // populate our data buffer
-    if (iosz != verify_data(iosz * i, partsz, iosz, iobuff))
+    if (iosz != verify_data(0, partsz, iosz, iobuff))
     {
       printf("ERROR: Failed to verify data buffer!\n");
       return -1;
     }
-    */
   }
   // close our handle
   if (ne_close(read_handle, NULL, NULL) < 0)
@@ -365,19 +406,12 @@ int test_values(xmlNode *root_element, ne_erasure *epat, size_t iosz, size_t par
       printf("ERROR: Unexpected return value from ne_read!\n");
       return -1;
     }
-    if (memcmp(iobuff, verbuff, partsz))
-    {
-      printf("ERROR: Failed to verify data buffer!\n");
-      return -1;
-    }
-    /*
     // populate our data buffer
-    if (iosz != verify_data(iosz * i, partsz, iosz, iobuff))
+    if (iosz != verify_data(0, partsz, iosz, iobuff))
     {
       printf("ERROR: Failed to populate data buffer!\n");
       return -1;
     }
-    */
   }
   // close our handle
   if (ne_close(read_handle, NULL, NULL) < 0)
@@ -410,19 +444,12 @@ int test_values(xmlNode *root_element, ne_erasure *epat, size_t iosz, size_t par
       printf("ERROR: Unexpected return value from ne_read!\n");
       return -1;
     }
-    if (memcmp(iobuff, verbuff, partsz))
-    {
-      printf("ERROR: Failed to verify data buffer!\n");
-      return -1;
-    }
-    /*
     // populate our data buffer
-    if (iosz != verify_data(iosz * i, partsz, iosz, iobuff))
+    if (iosz != verify_data(0, partsz, iosz, iobuff))
     {
       printf("ERROR: Failed to populate data buffer!\n");
       return -1;
     }
-    */
   }
   // close our handle
   if (ne_close(read_handle, NULL, NULL) < 0)
@@ -445,7 +472,6 @@ int test_values(xmlNode *root_element, ne_erasure *epat, size_t iosz, size_t par
     return -1;
   }
   free(iobuff);
-  free(verbuff);
 
   return 0;
 }
@@ -477,14 +503,14 @@ int main(int argc, char **argv)
   // Test with a small partsz and larger, aligned iosz
   size_t iosz = 8196;
   size_t partsz = 4096;
-  ne_erasure epat = {.N = 10, .E = 4, .O = 1, .partsz = 1024};
+  ne_erasure epat = {.N = 5, .E = 3, .O = 2, .partsz = 4096};
   if (test_values(root_element, &epat, iosz, partsz))
   {
     return -1;
   }
   // Test with a larger partsz and much larger iosz
-  partsz = 471859;
-  iosz = 943718;
+  partsz = 71859;
+  iosz = 262143; // note that this value divides cleanly into 1048572 ( the io_size of the posix DAL - 4byte CRC )
   epat.partsz = partsz;
   if (test_values(root_element, &epat, iosz, partsz))
   {

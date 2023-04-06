@@ -143,11 +143,6 @@ int main(int argc, char **argv)
       curloc.block++;
    }
 
-   if ( posixdal->cleanup( posixdal ) ) {
-      printf( "failed to destroy posixdal ref\n" );
-      return -1;
-   }
-
    // finally, initialize our noop dal
    DAL dal = init_dal( root_element, maxloc );
 
@@ -158,6 +153,19 @@ int main(int argc, char **argv)
     *have been allocated by the parser.
     */
    xmlCleanupParser();
+
+   // cleanup our cache source obj
+   for ( curloc.block = 0; curloc.block < maxloc.block; curloc.block++ ) {
+      if (posixdal->del(posixdal->ctxt, curloc, "noopsource"))
+      {
+         printf("warning: del failed!\n");
+      }
+   }
+   if ( posixdal->cleanup( posixdal ) ) {
+      printf( "failed to destroy posixdal ref\n" );
+      return -1;
+   }
+
 
    // check that initialization succeeded
    if (dal == NULL)
@@ -250,6 +258,7 @@ int main(int argc, char **argv)
    /*free buffers */
    free(writebuffer);
    free(readbuffer);
+   free(metabuffer);
 
    return 0;
 }

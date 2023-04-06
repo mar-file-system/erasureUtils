@@ -90,7 +90,7 @@ AC_PROG_LIBTOOL
 # check for '-Wall' support and use it if we can
 AC_MSG_CHECKING(whether compiler understands -Wall)
 old_CFLAGS="$CFLAGS"
-CFLAGS="$CFLAGS -Wall"
+CFLAGS="$CFLAGS -Wall -g"
 AC_COMPILE_IFELSE([AC_LANG_PROGRAM([],[])],
   AC_MSG_RESULT(yes),
   AC_MSG_RESULT(no)

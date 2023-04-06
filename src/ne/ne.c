@@ -500,6 +500,19 @@ void free_handle(ne_handle handle) {
  * @return int : Lesser of the counts of matching N/E values
  */
 int check_matches(meta_info** minfo_structs, int num_blocks, int max_blocks, meta_info* ret_buf) {
+   // pre-populate ret_buf with failure values
+   ret_buf->N = 0;
+   ret_buf->E = -1;
+   ret_buf->O = -1;
+   ret_buf->partsz = 0;
+   ret_buf->versz = -1;
+   ret_buf->blocksz = -1;
+   ret_buf->totsz = -1;
+   // bounds checking
+   if ( num_blocks < 1 ) {
+      LOG( LOG_ERR, "Called with zero blocks, nothing to check\n" );
+      return 0;
+   }
    // allocate space for ALL match arrays
    int* N_match = calloc(7, sizeof(int) * num_blocks);
    if (N_match == NULL) {
@@ -581,56 +594,35 @@ int check_matches(meta_info** minfo_structs, int num_blocks, int max_blocks, met
       ret_buf->N = minfo_structs[N_index]->N;
       anyvalid = 1;
    }
-   else {
-      ret_buf->N = 0;
-   }
 
    if (E_match[E_index]) {
       ret_buf->E = minfo_structs[E_index]->E;
       anyvalid = 1;
-   }
-   else {
-      ret_buf->E = -1;
    }
 
    if (O_match[O_index]) {
       ret_buf->O = minfo_structs[O_index]->O;
       anyvalid = 1;
    }
-   else {
-      ret_buf->O = -1;
-   }
 
    if (partsz_match[partsz_index]) {
       ret_buf->partsz = minfo_structs[partsz_index]->partsz;
       anyvalid = 1;
-   }
-   else {
-      ret_buf->partsz = 0;
    }
 
    if (versz_match[versz_index]) {
       ret_buf->versz = minfo_structs[versz_index]->versz;
       anyvalid = 1;
    }
-   else {
-      ret_buf->versz = -1;
-   }
 
    if (blocksz_match[blocksz_index]) {
       ret_buf->blocksz = minfo_structs[blocksz_index]->blocksz;
       anyvalid = 1;
    }
-   else {
-      ret_buf->blocksz = -1;
-   }
 
    if (totsz_match[totsz_index]) {
       ret_buf->totsz = minfo_structs[totsz_index]->totsz;
       anyvalid = 1;
-   }
-   else {
-      ret_buf->totsz = -1;
    }
 
    int retval = (N_match[N_index] > E_match[E_index]) ? E_match[E_index] : N_match[N_index];
