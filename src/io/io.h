@@ -72,7 +72,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <pthread.h>
 #include <stdint.h>
 
-#define SUPER_BLOCK_CNT 8
+#define SUPER_BLOCK_CNT 4
 #define CRC_BYTES 4 // DO NOT decrease without adjusting CRC gen and block creation code!
 #define CRC_SEED 57
 #define MINFO_VER 1
