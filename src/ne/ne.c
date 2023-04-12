@@ -500,6 +500,19 @@ void free_handle(ne_handle handle) {
  * @return int : Lesser of the counts of matching N/E values
  */
 int check_matches(meta_info** minfo_structs, int num_blocks, int max_blocks, meta_info* ret_buf) {
+   // pre-populate ret_buf with failure values
+   ret_buf->N = 0;
+   ret_buf->E = -1;
+   ret_buf->O = -1;
+   ret_buf->partsz = 0;
+   ret_buf->versz = -1;
+   ret_buf->blocksz = -1;
+   ret_buf->totsz = -1;
+   // bounds checking
+   if ( num_blocks < 1 ) {
+      LOG( LOG_ERR, "Called with zero blocks, nothing to check\n" );
+      return 0;
+   }
    // allocate space for ALL match arrays
    int* N_match = calloc(7, sizeof(int) * num_blocks);
    if (N_match == NULL) {
@@ -581,56 +594,35 @@ int check_matches(meta_info** minfo_structs, int num_blocks, int max_blocks, met
       ret_buf->N = minfo_structs[N_index]->N;
       anyvalid = 1;
    }
-   else {
-      ret_buf->N = 0;
-   }
 
    if (E_match[E_index]) {
       ret_buf->E = minfo_structs[E_index]->E;
       anyvalid = 1;
-   }
-   else {
-      ret_buf->E = -1;
    }
 
    if (O_match[O_index]) {
       ret_buf->O = minfo_structs[O_index]->O;
       anyvalid = 1;
    }
-   else {
-      ret_buf->O = -1;
-   }
 
    if (partsz_match[partsz_index]) {
       ret_buf->partsz = minfo_structs[partsz_index]->partsz;
       anyvalid = 1;
-   }
-   else {
-      ret_buf->partsz = 0;
    }
 
    if (versz_match[versz_index]) {
       ret_buf->versz = minfo_structs[versz_index]->versz;
       anyvalid = 1;
    }
-   else {
-      ret_buf->versz = -1;
-   }
 
    if (blocksz_match[blocksz_index]) {
       ret_buf->blocksz = minfo_structs[blocksz_index]->blocksz;
       anyvalid = 1;
    }
-   else {
-      ret_buf->blocksz = -1;
-   }
 
    if (totsz_match[totsz_index]) {
       ret_buf->totsz = minfo_structs[totsz_index]->totsz;
       anyvalid = 1;
-   }
-   else {
-      ret_buf->totsz = -1;
    }
 
    int retval = (N_match[N_index] > E_match[E_index]) ? E_match[E_index] : N_match[N_index];
@@ -658,21 +650,16 @@ int read_stripes(ne_handle handle) {
    unsigned int start_stripe = (unsigned int)(offset / stripesz); // get a stripe num based on offset
 #endif
 
-   // make sure our sub_offset is stripe aligned and at the end of our current ioblocks
-   if (handle->sub_offset % stripesz || handle->sub_offset != (handle->iob_datasz * N)) {
-      if (handle->iob_datasz) {
-         LOG(LOG_ERR, "Called on handle with an inappropriate sub_offset (%zd)!\n", handle->sub_offset);
-         errno = EBADF;
-         return -1;
-      }
-      // we don't current have any ioblocks at all, so allow the read to proceed
+   // make sure our sub_offset is stripe aligned and at the end of our ioblocks ( or zero, if none present )
+   if ( handle->sub_offset % stripesz || handle->sub_offset != (handle->iob_datasz * N) ) {
+      LOG(LOG_ERR, "Called on handle with an inappropriate sub_offset (%zd)!\n", handle->sub_offset);
+      errno = EBADF;
+      return -1;
    }
-   else {
-      // normal case, we're retrieving a new set of stripes after exhausing the previous
-      // update handle offset values
-      handle->iob_offset += handle->iob_datasz;
-      handle->sub_offset = 0;
-   }
+   // update handle offset values ( NOTE : no effect if we don't yet have populated ioblocks )
+   handle->iob_offset += handle->iob_datasz;
+   // always start with a fresh sub_offset for new stripes
+   handle->sub_offset = 0;
 
    // if we have previous block references, we'll need to release them
    int i;
@@ -1094,7 +1081,7 @@ ne_handle ne_stat(ne_ctxt ctxt, const char* objID, ne_location loc) {
    char* tmp_data_errs = tmp_meta_errs + ctxt->max_block;
 
    // allocate space for a full set of meta_info structs
-   meta_info consensus;
+   meta_info consensus = {0};
    meta_info* minfo_list = calloc(ctxt->max_block, sizeof(struct meta_info_struct));
    if (minfo_list == NULL) {
       LOG(LOG_ERR, "Failed to allocate space for a meta_info_struct list!\n");
@@ -2375,37 +2362,48 @@ off_t ne_seek(ne_handle handle, off_t offset) {
          return -1;
       }
 
+      handle->sub_offset = 0; // old sub_offset is irrelevant
       handle->iob_datasz = 0;                           // indicate we have to repopulate all ioblocks
       handle->iob_offset = (tgt_stripe * partsz);       //new_iob_off;
                                                         //      int iob_stripe = (int)( new_iob_off / partsz );
+      LOG( LOG_INFO, "Reading in additional stripes post-thread-reseek\n", handle->iob_datasz, handle->sub_offset);
+      if (read_stripes(handle)) {
+         LOG(LOG_ERR, "Failed to read additional stripes!\n");
+         return -1;
+      }
       handle->sub_offset = offset - (handle->iob_offset * N); //( iob_stripe * stripesz );
    }
    else {
       // reset out sub_offset to the start of the ioblock data
       handle->sub_offset = 0;
       LOG(LOG_INFO, "Offset of %zd is within readable bounds (tgt_stripe=%d / cur_stripe=%d)\n", offset, tgt_stripe, cur_stripe);
+      // don't update our sub_offset until we actually have some ioblocks populated
+      if ( handle->iob_datasz == 0 ) {
+         if (read_stripes(handle)) {
+            LOG(LOG_ERR, "Failed to read initial stripe, pre-munch\n");
+            return -1;
+         }
+      }
       // we may still be many stripes behind the given offset.  Calculate how many.
       unsigned int munch_stripes = tgt_stripe - cur_stripe;
       // if we're at all behind...
       if (munch_stripes) {
          LOG(LOG_INFO, "Attempting to 'munch' %d stripes to reach offset of %zu\n", munch_stripes, offset);
 
-         // first, skip our sub_offset ahead to the next stripe boundary
-         handle->sub_offset = ((cur_stripe + 1) * stripesz) - (handle->iob_offset * N);
-
          // just chuck buffers off of each queue until we hit the right stripe
-         unsigned int thread_munched = 1;
+         unsigned int thread_munched = 0;
          for (; thread_munched < munch_stripes; thread_munched++) {
 
+            // skip to the start of the next stripe
+            handle->sub_offset += stripesz;
+
             if (handle->sub_offset >= (handle->iob_datasz * N)) {
+               LOG( LOG_INFO, "Reading in additional stripes (datasz=%zu/sub_offset=%zu)\n", handle->iob_datasz, handle->sub_offset);
                if (read_stripes(handle)) {
                   LOG(LOG_ERR, "Failed to read additional stripes!\n");
                   return -1;
                }
             }
-
-            // skip to the start of the next stripe
-            handle->sub_offset += stripesz;
          }
          LOG(LOG_INFO, "Finished buffer 'munching'\n");
       }

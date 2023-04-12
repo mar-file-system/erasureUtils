@@ -83,365 +83,569 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 typedef struct noop_dal_context_struct
 {
-  char *c_objID; // Cached object ID for future read ops
-  char *c_meta;  // Cached metadata string for future read ops
-  void *c_data;  // Cached data buffer for future read ops
+   int   numblocks;  // Number of blocks for which we have cached info
+   char**   c_meta;  // Cached metadata buffer(s) for future read ops
+   size_t* metalen;  // Length of each cached metadata buffer
+   void**   c_data;  // Cached data buffer(s) for future read ops
+   size_t* datalen;  // Length of each cached data buffer
+   size_t* maxdata;  // Total ( theoretical ) size of each cached data block
+                     // NOTE -- Data content beyond the 'datalen' value will
+                     //         be generated via repeated reuse of the cached
+                     //         buffer.  As in, 'datalen' sized buffers,
+                     //         repeated up to 'maxdata' total data size.
 } * NOOP_DAL_CTXT;
 
 typedef struct noop_block_context_struct
 {
-  NOOP_DAL_CTXT dctxt; // Global DAL context
-  int n_puts;          // Flag determining behavior on write ops
+   NOOP_DAL_CTXT dctxt; // Global DAL context
+   DAL_MODE       mode; // Mode of this block ctxt
+   int           block; // Block number which this corresponds to
 } * NOOP_BLOCK_CTXT;
 
 //   -------------    NO-OP INTERNAL FUNCTIONS    -------------
 
-/** (INTERNAL HELPER FUNCTION)
- * Calculate the number of decimal digits required to represent a given value
- * @param int value : Integer value to be represented in decimal
- * @return int : Number of decimal digits required, or -1 on a bounds error
- */
-static int num_digits(int value)
-{
-  if (value < 0)
-  {
-    return -1;
-  } // negative values not permitted
-  if (value < 10)
-  {
-    return 1;
-  }
-  if (value < 100)
-  {
-    return 2;
-  }
-  if (value < 1000)
-  {
-    return 3;
-  }
-  if (value < 10000)
-  {
-    return 4;
-  }
-  if (value < 100000)
-  {
-    return 5;
-  }
-  // only support values up to 5 digits long
-  return -1;
-}
 
 //   -------------    NO-OP IMPLEMENTATION    -------------
 
 int noop_verify(DAL_CTXT ctxt, char fix)
 {
-  if (ctxt == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL dal context!\n");
-    return -1;
-  }
-
-  // Do nothing
-  return 0;
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return -1;
+   }
+   // do nothing and assume success
+   return 0;
 }
 
 int noop_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_location dest, char offline)
 {
-  if (ctxt == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL dal context!\n");
-    return -1;
-  }
-
-  // Do nothing
-  return 0;
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return -1;
+   }
+   // do nothing and assume success
+   return 0;
 }
 
 int noop_del(DAL_CTXT ctxt, DAL_location location, const char *objID)
 {
-  if (ctxt == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL dal context!\n");
-    return -1;
-  }
-
-  // Do nothing
-  return 0;
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return -1;
+   }
+   // do nothing and assume success
+   return 0;
 }
 
 int noop_stat(DAL_CTXT ctxt, DAL_location location, const char *objID)
 {
-  if (ctxt == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL dal context!\n");
-    return -1;
-  }
-
-  // Do nothing
-  return 0;
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return -1;
+   }
+   // do nothing and assume success
+   return 0;
 }
 
 int noop_cleanup(DAL dal)
 {
-  if (dal == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL dal!\n");
-    return -1;
-  }
-
-  NOOP_DAL_CTXT dctxt = (NOOP_DAL_CTXT)dal->ctxt; // Should have been passed a DAL context
-
-  // Free DAL and its context state
-  free(dctxt->c_objID);
-  free(dctxt->c_meta);
-  free(dctxt->c_data);
-  free(dctxt);
-  free(dal);
-  return 0;
+   if (dal == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal!\n");
+      return -1;
+   }
+   NOOP_DAL_CTXT dctxt = (NOOP_DAL_CTXT)dal->ctxt; // Should have been passed a DAL context
+   // Free DAL and its context state
+   int curblock;
+   if ( dctxt->c_meta ) {
+      // free all meta buffers
+      for ( curblock = 0; curblock < dctxt->numblocks; curblock++ ) {
+         if ( dctxt->c_meta[curblock] ) { free( dctxt->c_meta[curblock] ); }
+      }
+      free( dctxt->c_meta );
+   }
+   if ( dctxt->metalen ) { free( dctxt->metalen ); }
+   if ( dctxt->c_data ) {
+      // free all data buffers
+      for ( curblock = 0; curblock < dctxt->numblocks; curblock++ ) {
+         if ( dctxt->c_data[curblock] ) { free( dctxt->c_data[curblock] ); }
+      }
+      free( dctxt->c_data );
+   }
+   if ( dctxt->datalen ) { free( dctxt->datalen ); }
+   if ( dctxt->maxdata ) { free( dctxt->maxdata ); }
+   free(dctxt);
+   free(dal);
+   return 0;
 }
 
 BLOCK_CTXT noop_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char *objID)
 {
-  if (ctxt == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL dal context!\n");
-    return NULL;
-  }
-
-  NOOP_DAL_CTXT dctxt = (NOOP_DAL_CTXT)ctxt; // Should have been passed a DAL context
-
-  // Allocate space for a new block context
-  NOOP_BLOCK_CTXT bctxt = malloc(sizeof(struct noop_block_context_struct));
-  if (bctxt == NULL)
-  {
-    return NULL;
-  }
-
-  bctxt->dctxt = dctxt;
-  bctxt->n_puts = -1;
-
-  // Clear our caches if we are about to write a new block (we will be adding
-  // new data to them)
-  if ((mode == DAL_WRITE || mode == DAL_REBUILD) && location.block == 0)
-  {
-    bctxt->n_puts = 0;
-    if (dctxt->c_objID)
-    {
-      free(dctxt->c_objID);
-    }
-    if (dctxt->c_meta)
-    {
-      free(dctxt->c_meta);
-    }
-    if (dctxt->c_data)
-    {
-      free(dctxt->c_data);
-    }
-    dctxt->c_objID = strdup(objID);
-  }
-  // Invalidate the caches if they do not match the object we are about to read
-  else if (dctxt->c_objID && strcmp(dctxt->c_objID, objID))
-  {
-    if (dctxt->c_objID)
-    {
-      free(dctxt->c_objID);
-    }
-    if (dctxt->c_meta)
-    {
-      free(dctxt->c_meta);
-    }
-    if (dctxt->c_data)
-    {
-      free(dctxt->c_data);
-    }
-  }
-
-  return bctxt;
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL dal context!\n");
+      return NULL;
+   }
+   NOOP_DAL_CTXT dctxt = (NOOP_DAL_CTXT)ctxt; // Should have been passed a DAL context
+   // attempting to read from a non-cached block is an error
+   if ( location.block >= dctxt->numblocks  &&
+        ( mode == DAL_READ  ||  mode == DAL_METAREAD ) ) {
+      LOG( LOG_ERR, "attempted to read from nonexistent block %d ( max cached = %d )\n", location.block, dctxt->numblocks );
+      errno = EEXIST;
+      return NULL;
+   }
+   NOOP_BLOCK_CTXT bctxt = malloc(sizeof(struct noop_block_context_struct));
+   if (bctxt == NULL)
+   {
+      LOG( LOG_ERR, "failed to allocate a new block ctxt\n" );
+      return NULL;
+   }
+   // populate values and global ctxt reference
+   bctxt->dctxt = dctxt;
+   bctxt->mode = mode;
+   bctxt->block = location.block; // pod, cap, scat are all irrelevant for this DAL
+   return bctxt;
 }
 
 int noop_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
 {
-  if (ctxt == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL block context!\n");
-    return -1;
-  }
-
-  NOOP_BLOCK_CTXT bctxt = (NOOP_BLOCK_CTXT)ctxt; // Should have been passed a block context
-
-  // Cache metadata
-  if (bctxt->n_puts >= 0)
-  {
-    bctxt->dctxt->c_meta = malloc(size);
-    if (!bctxt->dctxt->c_meta)
-    {
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      errno = EINVAL;
       return -1;
-    }
-    memcpy(bctxt->dctxt->c_meta, meta_buf, size);
-  }
-
-  return 0;
+   }
+   NOOP_BLOCK_CTXT bctxt = (NOOP_BLOCK_CTXT)ctxt; // Should have been passed a block context
+   // validate mode
+   if ( bctxt->mode != DAL_WRITE  &&  bctxt->mode != DAL_REBUILD ) {
+      LOG( LOG_ERR, "received block handle has inappropriate mode\n" );
+      errno = EINVAL;
+      return -1;
+   }
+   // do nothing and assume success
+   return 0;
 }
 
 ssize_t noop_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
 {
-  if (ctxt == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL block context!\n");
-    return -1;
-  }
-
-  NOOP_BLOCK_CTXT bctxt = (NOOP_BLOCK_CTXT)ctxt; // Should have been passed a block context
-
-  // Return cached metadata
-  if (bctxt->dctxt->c_meta)
-  {
-    int len = size < strlen(bctxt->dctxt->c_meta) + 1 ? size : strlen(bctxt->dctxt->c_meta) + 1;
-    memcpy(meta_buf, bctxt->dctxt->c_meta, len);
-    return len;
-  }
-
-  return -1;
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
+   NOOP_BLOCK_CTXT bctxt = (NOOP_BLOCK_CTXT)ctxt; // Should have been passed a block context
+   // validate mode
+   if ( bctxt->mode != DAL_READ  &&  bctxt->mode != DAL_METAREAD ) {
+      LOG( LOG_ERR, "received block handle has inappropriate mode\n" );
+      errno = EINVAL;
+      return -1;
+   }
+   // Return cached metadata, if present
+   if (bctxt->dctxt->c_meta  &&  bctxt->dctxt->c_meta[bctxt->block]  &&  bctxt->dctxt->metalen[bctxt->block])
+   {
+      size_t maxcopy = ( size > bctxt->dctxt->metalen[bctxt->block] ) ? bctxt->dctxt->metalen[bctxt->block] : size;
+      memcpy(meta_buf, bctxt->dctxt->c_meta[bctxt->block], maxcopy);
+      return bctxt->dctxt->metalen[bctxt->block]; // always return the maximum, so the caller knows if it is missing info
+   }
+   // no cached metadata exists ( not necessarily a total failure )
+   return 0;
 }
 
 int noop_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
 {
-  if (ctxt == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL block context!\n");
-    return -1;
-  }
-
-  NOOP_BLOCK_CTXT bctxt = (NOOP_BLOCK_CTXT)ctxt; // Should have been passed a block context
-
-  // Cache data
-  if (bctxt->n_puts == 0)
-  {
-    bctxt->n_puts++;
-    bctxt->dctxt->c_data = malloc(size);
-    if (!bctxt->dctxt->c_data)
-    {
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
       return -1;
-    }
-    memcpy(bctxt->dctxt->c_data, buf, size);
-  }
-
-  return 0;
+   }
+   NOOP_BLOCK_CTXT bctxt = (NOOP_BLOCK_CTXT)ctxt; // Should have been passed a block context
+   // validate mode
+   if ( bctxt->mode != DAL_WRITE  &&  bctxt->mode != DAL_REBUILD ) {
+      LOG( LOG_ERR, "received block handle has inappropriate mode\n" );
+      errno = EINVAL;
+      return -1;
+   }
+   // do nothing and assume success
+   return 0;
 }
 
 ssize_t noop_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
 {
-  if (ctxt == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL block context!\n");
-    return -1;
-  }
-
-  NOOP_BLOCK_CTXT bctxt = (NOOP_BLOCK_CTXT)ctxt; // Should have been passed a block context
-
-  // Return cached data
-  if (bctxt->dctxt->c_data)
-  {
-    memcpy(buf, bctxt->dctxt->c_data, size);
-    return size;
-  }
-
-  return 0;
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
+   NOOP_BLOCK_CTXT bctxt = (NOOP_BLOCK_CTXT)ctxt; // Should have been passed a block context
+   // validate mode
+   if ( bctxt->mode != DAL_READ  &&  bctxt->mode != DAL_METAREAD ) {
+      LOG( LOG_ERR, "received block handle has inappropriate mode\n" );
+      errno = EINVAL;
+      return -1;
+   }
+   // validate offset
+   if ( offset > bctxt->dctxt->maxdata[bctxt->block] ) {
+      LOG( LOG_ERR, "offset %zd is beyond EOF at %zu\n", offset, bctxt->dctxt->maxdata[bctxt->block] );
+      errno = EINVAL;
+      return -1;
+   }
+   // Return cached data, if present
+   if (bctxt->dctxt->c_data  &&  bctxt->dctxt->c_data[bctxt->block]  &&  bctxt->dctxt->datalen[bctxt->block])
+   {
+      size_t maxcopy = ( size > (bctxt->dctxt->maxdata[bctxt->block] - offset) ) ? (bctxt->dctxt->datalen[bctxt->block] - offset) : size;
+      size_t copied = 0;
+      while ( copied < maxcopy ) {
+         // calculate the offset and size to pull from our buffer
+         off_t suboffset = offset % bctxt->dctxt->datalen[bctxt->block]; // get an offset in terms of this buffer iteration
+         size_t copysize = maxcopy - copied; // start with the total remaining bytes
+         if ( copysize > bctxt->dctxt->datalen[bctxt->block] ) // reduce to our buffer size, at most
+            copysize = bctxt->dctxt->datalen[bctxt->block];
+         copysize -= suboffset; // exclude our starting offset
+         memcpy(buf + copied, bctxt->dctxt->c_data[bctxt->block] + suboffset, copysize);
+         // increment our offset and copied count to include the newly copied data
+         copied += copysize;
+         offset += copysize;
+      }
+      return maxcopy; // return however many bytes were provided
+   }
+   // no cached datadata exists ( not necessarily a total failure )
+   return 0;
 }
 
 int noop_abort(BLOCK_CTXT ctxt)
 {
-  if (ctxt == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL block context!\n");
-    return -1;
-  }
-
-  // Free block context
-  free(ctxt);
-  return 0;
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
+   NOOP_BLOCK_CTXT bctxt = (NOOP_BLOCK_CTXT)ctxt; // Should have been passed a block context
+   // Free block context
+   free(bctxt);
+   return 0;
 }
 
 int noop_close(BLOCK_CTXT ctxt)
 {
-  if (ctxt == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL block context!\n");
-    return -1;
-  }
-
-  // Free block context
-  free(ctxt);
-  return 0;
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
+   NOOP_BLOCK_CTXT bctxt = (NOOP_BLOCK_CTXT)ctxt; // Should have been passed a block context
+   // Free block context
+   free(bctxt);
+   return 0;
 }
 
 //   -------------    NO-OP INITIALIZATION    -------------
 
 DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
 {
-  // first, calculate the number of digits required for pod/cap/block/scatter
-  int d_pod = num_digits(max_loc.pod);
-  if (d_pod < 1)
-  {
-    errno = EDOM;
-    LOG(LOG_ERR, "detected an inappropriate value for maximum pod: %d\n", max_loc.pod);
-    return NULL;
-  }
-  int d_cap = num_digits(max_loc.cap);
-  if (d_cap < 1)
-  {
-    errno = EDOM;
-    LOG(LOG_ERR, "detected an inappropriate value for maximum cap: %d\n", max_loc.cap);
-    return NULL;
-  }
-  int d_block = num_digits(max_loc.block);
-  if (d_block < 1)
-  {
-    errno = EDOM;
-    LOG(LOG_ERR, "detected an inappropriate value for maximum block: %d\n", max_loc.block);
-    return NULL;
-  }
-  int d_scatter = num_digits(max_loc.scatter);
-  if (d_scatter < 1)
-  {
-    errno = EDOM;
-    LOG(LOG_ERR, "detected an inappropriate value for maximum scatter: %d\n", max_loc.scatter);
-    return NULL;
-  }
+   // allocate space for our context struct ( initialized to zero vals, by calloc )
+   NOOP_DAL_CTXT dctxt = calloc( 1, sizeof(struct noop_dal_context_struct) );
+   if (dctxt == NULL)
+   {
+      LOG( LOG_ERR, "failed to allocate a new DAL ctxt\n" );
+      return NULL;
+   }
 
-  // allocate space for our context struct
-  NOOP_DAL_CTXT dctxt = malloc(sizeof(struct noop_dal_context_struct));
-  if (dctxt == NULL)
-  {
-    return NULL;
-  }
+   // allocate and populate a new DAL structure
+   DAL ndal = malloc(sizeof(struct DAL_struct));
+   if (ndal == NULL)
+   {
+      LOG(LOG_ERR, "failed to allocate space for a DAL_struct\n");
+      free(dctxt);
+      return NULL;
+   }
+   ndal->name = "noop";
+   ndal->ctxt = (DAL_CTXT)dctxt;
+   ndal->io_size = IO_SIZE;
+   ndal->verify = noop_verify;
+   ndal->migrate = noop_migrate;
+   ndal->open = noop_open;
+   ndal->set_meta = noop_set_meta;
+   ndal->get_meta = noop_get_meta;
+   ndal->put = noop_put;
+   ndal->get = noop_get;
+   ndal->abort = noop_abort;
+   ndal->close = noop_close;
+   ndal->del = noop_del;
+   ndal->stat = noop_stat;
+   ndal->cleanup = noop_cleanup;
 
-  dctxt->c_objID = NULL;
-  dctxt->c_meta = NULL;
-  dctxt->c_data = NULL;
+   // loop over XML elements, checking for a read-chache source
+   const char* sourceobj = NULL;
+   DAL_location sourceloc = {
+      .pod = -1,
+      .block = -1,
+      .cap = -1,
+      .scatter = -1
+   };
+   DAL sourcedal = NULL;
+   while ( root != NULL ) {
+      if ( root->type == XML_ELEMENT_NODE  &&  strncmp( (char*)root->name, "DAL", 4 ) == 0 ) {
+         // check for duplicate
+         if ( sourcedal ) {
+            LOG( LOG_ERR, "detected duplicate source DAL definitions\n" );
+            break;
+         }
+         // try to initialize our source DAL
+         sourcedal = init_dal( root, max_loc );
+         if ( sourcedal == NULL ) {
+            LOG( LOG_ERR, "failed to intialize source DAL\n" );
+            break;
+         }
+      }
+      else if ( root->type == XML_ELEMENT_NODE  &&  strncmp( (char*)root->name, "obj", 4 ) == 0 ) {
+         // check for duplicate
+         if ( sourceobj ) {
+            LOG( LOG_ERR, "detected duplicate 'obj' definition\n" );
+            break;
+         }
+         if ( root->children  &&  root->children->type == XML_TEXT_NODE ) {
+            // store a ref to this string
+            sourceobj = (const char*)root->children->content;
+         }
+      }
+      else if ( root->type == XML_ELEMENT_NODE  &&  strncmp( (char*)root->name, "pod", 4 ) == 0 ) {
+         // check for duplicate
+         if ( sourceloc.pod >= 0 ) {
+            LOG( LOG_ERR, "detected duplicate 'pod' definition\n" );
+            break;
+         }
+         if ( root->children  &&  root->children->type == XML_TEXT_NODE  &&  root->children->content ) {
+            // parse this text as a decimal number
+            char* endptr = NULL;
+            long int parseval = strtol( (char*)root->children->content, &endptr, 10 );
+            // check for parse failure
+            if ( endptr  &&  ( *endptr != '\0'  ||  *((char*)root->children->content) == '\0' ) ) {
+               LOG( LOG_ERR, "failed to parse 'pod' value: \"%s\"\n", (char*)root->children->content );
+               break;
+            }
+            // check for type overflow
+            if ( parseval > INT_MAX ) {
+               LOG( LOG_ERR, "'pod' value exceeds type bounds: %ld\n", parseval );
+               break;
+            }
+            sourceloc.pod = (int)parseval;
+         }
+      }
+      else if ( root->type == XML_ELEMENT_NODE  &&  strncmp( (char*)root->name, "cap", 4 ) == 0 ) {
+         // check for duplicate
+         if ( sourceloc.cap >= 0 ) {
+            LOG( LOG_ERR, "detected duplicate 'cap' definition\n" );
+            break;
+         }
+         if ( root->children  &&  root->children->type == XML_TEXT_NODE  &&  root->children->content ) {
+            // parse this text as a decimal number
+            char* endptr = NULL;
+            long int parseval = strtol( (char*)root->children->content, &endptr, 10 );
+            // check for parse failure
+            if ( endptr  &&  ( *endptr != '\0'  ||  *((char*)root->children->content) == '\0' ) ) {
+               LOG( LOG_ERR, "failed to parse 'cap' value: \"%s\"\n", (char*)root->children->content );
+               break;
+            }
+            // check for type overflow
+            if ( parseval > INT_MAX ) {
+               LOG( LOG_ERR, "'cap' value exceeds type bounds: %ld\n", parseval );
+               break;
+            }
+            sourceloc.cap = (int)parseval;
+         }
+      }
+      else if ( root->type == XML_ELEMENT_NODE  &&  strncmp( (char*)root->name, "scat", 5 ) == 0 ) {
+         // check for duplicate
+         if ( sourceloc.scatter >= 0 ) {
+            LOG( LOG_ERR, "detected duplicate 'scat' definition\n" );
+            break;
+         }
+         if ( root->children  &&  root->children->type == XML_TEXT_NODE  &&  root->children->content ) {
+            // parse this text as a decimal number
+            char* endptr = NULL;
+            long int parseval = strtol( (char*)root->children->content, &endptr, 10 );
+            // check for parse failure
+            if ( endptr  &&  ( *endptr != '\0'  ||  *((char*)root->children->content) == '\0' ) ) {
+               LOG( LOG_ERR, "failed to parse 'scat' value: \"%s\"\n", (char*)root->children->content );
+               break;
+            }
+            // check for type overflow
+            if ( parseval > INT_MAX ) {
+               LOG( LOG_ERR, "'scat' value exceeds type bounds: %ld\n", parseval );
+               break;
+            }
+            sourceloc.scatter = (int)parseval;
+         }
+      }
+      else if ( root->type == XML_ELEMENT_NODE  &&  strncmp( (char*)root->name, "width", 6 ) == 0 ) {
+         // check for duplicate
+         if ( sourceloc.block >= 0 ) {
+            LOG( LOG_ERR, "detected duplicate 'width' definition\n" );
+            break;
+         }
+         if ( root->children  &&  root->children->type == XML_TEXT_NODE  &&  root->children->content ) {
+            // parse this text as a decimal number
+            char* endptr = NULL;
+            long int parseval = strtol( (char*)root->children->content, &endptr, 10 );
+            // check for parse failure
+            if ( endptr  &&  ( *endptr != '\0'  ||  *((char*)root->children->content) == '\0' ) ) {
+               LOG( LOG_ERR, "failed to parse 'width' value: \"%s\"\n", (char*)root->children->content );
+               break;
+            }
+            // check for type overflow
+            if ( parseval > INT_MAX ) {
+               LOG( LOG_ERR, "'width' value exceeds type bounds: %ld\n", parseval );
+               break;
+            }
+            sourceloc.block = (int)parseval;
+         }
+      }
+      else {
+         LOG( LOG_ERR, "encountered unrecognized config element: \"%s\"\n", (char*)root->name );
+         break;
+      }
+      // progress to the next element
+      root = root->next;
+   }
+   // check for fatal error
+   if ( root ) {
+      if ( sourcedal ) { sourcedal->cleanup( sourcedal ); }
+      noop_cleanup(ndal);
+      return NULL;
+   }
+   // validate and ingest any cache source
+   if ( sourcedal  ||  sourceobj  ||  sourceloc.pod >= 0  ||  sourceloc.block >= 0  ||  sourceloc.cap >= 0  ||  sourceloc.scatter >= 0 ) {
+      // we're no in do-or-die mode for source caching
+      // we have some values -- ensure we have all of them
+      char fatalerror = 0;
+      if ( sourcedal == NULL ) {
+         LOG( LOG_ERR, "missing source cache 'DAL' definition\n" );
+         fatalerror = 1;
+      }
+      if ( sourceobj == NULL ) {
+         LOG( LOG_ERR, "missing source cache 'obj' definition\n" );
+         fatalerror = 1;
+      }
+      if ( sourceloc.pod < 0 ) {
+         LOG( LOG_ERR, "missing source cache 'pod' definition\n" );
+         fatalerror = 1;
+      }
+      if ( sourceloc.cap < 0 ) {
+         LOG( LOG_ERR, "missing source cache 'cap' definition\n" );
+         fatalerror = 1;
+      }
+      if ( sourceloc.scatter < 0 ) {
+         LOG( LOG_ERR, "missing source cache 'scat' definition\n" );
+         fatalerror = 1;
+      }
+      if ( sourceloc.block < 0 ) {
+         LOG( LOG_ERR, "missing source cache 'width' definition\n" );
+         fatalerror = 1;
+      }
+      if ( fatalerror ) {
+         if ( sourcedal ) { sourcedal->cleanup( sourcedal ); }
+         noop_cleanup(ndal);
+         return NULL;
+      }
 
-  // allocate and populate a new DAL structure
-  DAL ndal = malloc(sizeof(struct DAL_struct));
-  if (ndal == NULL)
-  {
-    LOG(LOG_ERR, "failed to allocate space for a DAL_struct\n");
-    free(dctxt);
-    return NULL;
-  }
-  ndal->name = "no-op";
-  ndal->ctxt = (DAL_CTXT)dctxt;
-  ndal->io_size = IO_SIZE;
-  ndal->verify = noop_verify;
-  ndal->migrate = noop_migrate;
-  ndal->open = noop_open;
-  ndal->set_meta = noop_set_meta;
-  ndal->get_meta = noop_get_meta;
-  ndal->put = noop_put;
-  ndal->get = noop_get;
-  ndal->abort = noop_abort;
-  ndal->close = noop_close;
-  ndal->del = noop_del;
-  ndal->stat = noop_stat;
-  ndal->cleanup = noop_cleanup;
-  return ndal;
+      // update our dal iosize to match that of the source dal
+      ndal->io_size = sourcedal->io_size;
+
+      // allocate all cache list elements
+      dctxt->numblocks = sourceloc.block;
+      dctxt->c_meta =  calloc( dctxt->numblocks, sizeof(char*) );
+      dctxt->metalen = calloc( dctxt->numblocks, sizeof(size_t) );
+      dctxt->c_data =  calloc( dctxt->numblocks, sizeof(void*) );
+      dctxt->datalen = calloc( dctxt->numblocks, sizeof(size_t) );
+      dctxt->maxdata = calloc( dctxt->numblocks, sizeof(size_t) );
+      if ( dctxt->c_meta == NULL  ||  dctxt->metalen == NULL  ||  dctxt->c_data == NULL  ||  dctxt->datalen == NULL  ||  dctxt->maxdata == NULL ) {
+         LOG( LOG_ERR, "failed to allocate all cache elements\n" );
+         sourcedal->cleanup( sourcedal );
+         noop_cleanup(ndal);
+         return NULL;
+      }
+
+      // iterate over all blocks and populate all cached info
+      for ( sourceloc.block = 0; sourceloc.block < dctxt->numblocks; sourceloc.block++ ) {
+         // open a block ctxt
+         BLOCK_CTXT sourceblock = sourcedal->open( sourcedal->ctxt, DAL_READ, sourceloc, sourceobj );
+         if ( sourceblock == NULL ) {
+            // doesn't necessarily have to be a failure ( we could consider this a block with no data / no meta info )
+            // However, that seems likely to create confusion.  We'll just abort instead.
+            LOG( LOG_ERR, "failed to open cache source block %d\n", sourceloc.block );
+            break;
+         }
+         // populate meta info
+         ssize_t metalen = sourcedal->get_meta( sourceblock, NULL, 0 );
+         if ( metalen < 0 ) {
+            LOG( LOG_ERR, "failed to identify meta length of block %d\n", sourceloc.block );
+            sourcedal->close( sourceblock );
+            break;
+         }
+         dctxt->metalen[sourceloc.block] = (size_t)metalen;
+         dctxt->c_meta[sourceloc.block] = calloc( metalen, sizeof(char) );
+         if ( dctxt->c_meta[sourceloc.block] == NULL ) {
+            LOG( LOG_ERR, "failed to allocate meta buffer for cache source block %d of length %zd\n", sourceloc.block, metalen );
+            sourcedal->close( sourceblock );
+            break;
+         }
+         if ( sourcedal->get_meta( sourceblock, dctxt->c_meta[sourceloc.block], dctxt->metalen[sourceloc.block] ) != metalen ) {
+            LOG( LOG_ERR, "inconsistent length of meta buffer for cache source block %d\n", sourceloc.block );
+            sourcedal->close( sourceblock );
+            break;
+         }
+         // populate data info
+         dctxt->c_data[sourceloc.block] = malloc( sourcedal->io_size );
+         void* cmp_data = malloc( sourcedal->io_size );
+         if ( dctxt->c_data[sourceloc.block] == NULL  ||  cmp_data == NULL ) {
+            LOG( LOG_ERR, "failed to allocate data cache buffers for source block %d\n", sourceloc.block );
+            if ( dctxt->c_data[sourceloc.block] ) { free( dctxt->c_data[sourceloc.block] ); }
+            if ( cmp_data ) { free( cmp_data ); }
+            sourcedal->close( sourceblock );
+            break;
+         }
+         dctxt->datalen[sourceloc.block] = sourcedal->io_size;
+         ssize_t getres = sourcedal->get( sourceblock, dctxt->c_data[sourceloc.block], sourcedal->io_size, 0 );
+         while ( getres > 0 ) {
+            dctxt->maxdata[sourceloc.block] += getres; // add the most recent 'get' to our max data value
+            getres = sourcedal->get( sourceblock, cmp_data, sourcedal->io_size, dctxt->maxdata[sourceloc.block] );
+            if ( getres > 0 ) {
+               // compare this new buffer against our original
+               if ( memcmp( cmp_data, dctxt->c_data[sourceloc.block], getres ) ) {
+                  LOG( LOG_ERR, "detected cached data buffer mismatch for block %d in buffer spanning bytes %zu to %zu\n",
+                                sourceloc.block, dctxt->maxdata[sourceloc.block], dctxt->maxdata[sourceloc.block] + getres );
+                  free( cmp_data );
+                  sourcedal->close( sourceblock );
+                  sourcedal->cleanup( sourcedal );
+                  noop_cleanup(ndal);
+                  return NULL;
+               }
+            }
+         }
+         free( cmp_data ); // no longer needed
+         // close our handle
+         if ( sourcedal->close( sourceblock ) ) {
+            LOG( LOG_ERR, "close error on cache source block %d\n", sourceloc.block );
+            break;
+         }
+         if ( getres < 0 ) {
+            LOG( LOG_ERR, "read error from cache source block %d after %zu bytes read\n", sourceloc.block, dctxt->maxdata[sourceloc.block] );
+            break;
+         }
+      }
+      sourcedal->cleanup( sourcedal ); // no longer needed
+      // check for error
+      if ( sourceloc.block != dctxt->numblocks ) {
+         noop_cleanup(ndal);
+         return NULL;
+      }
+   }
+   // NOTE -- no source cache defs is valid ( all reads will fail )
+   //         only 'some', but not all source defs will result in init() error
+
+   return ndal;
 }

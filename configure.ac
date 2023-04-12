@@ -90,7 +90,7 @@ AC_PROG_LIBTOOL
 # check for '-Wall' support and use it if we can
 AC_MSG_CHECKING(whether compiler understands -Wall)
 old_CFLAGS="$CFLAGS"
-CFLAGS="$CFLAGS -Wall"
+CFLAGS="$CFLAGS -Wall -g"
 AC_COMPILE_IFELSE([AC_LANG_PROGRAM([],[])],
   AC_MSG_RESULT(yes),
   AC_MSG_RESULT(no)
@@ -126,7 +126,7 @@ nos3=""
 AC_ARG_ENABLE([S3],
                AS_HELP_STRING( [--disable-S3], [Skip Build of the S3 DAL @{:@ useful on systems with outdated libS3 @:}@] ),
                [nos3="true"], [] )
-AC_CHECK_LIB([s3], [S3_initialize], [], [warnlibs="libs3 "])
+AC_CHECK_LIB([s3], [S3_initiate_multipart], [], [warnlibs="libs3 "])
 AM_CONDITIONAL([S3DAL], [test "$warnlibs" = ""  &&  test "$nos3" = ""])
 AM_COND_IF([S3DAL], [AC_DEFINE( [S3DAL], [], [Flag indicating activation of S3 DAL] )],
   [ if test "$nos3" = ""; then
@@ -269,6 +269,7 @@ cat << EOF
 
 erasureUtils configuration
 #####################
+PREFIX   : $prefix
 CC       : $CC
 CFLAGS   : $CFLAGS
 LDFLAGS  : $LDFLAGS

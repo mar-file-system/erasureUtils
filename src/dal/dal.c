@@ -130,7 +130,7 @@ DAL init_dal(xmlNode *dal_conf_root, DAL_location max_loc)
    {
       return timer_dal_init(dal_conf_root->children, max_loc);
    }
-   else if (strncasecmp((char *)typetxt->content, "no-op", 6) == 0)
+   else if (strncasecmp((char *)typetxt->content, "noop", 5) == 0)
    {
       return noop_dal_init(dal_conf_root->children, max_loc);
    }
