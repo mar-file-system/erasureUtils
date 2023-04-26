@@ -550,14 +550,6 @@ void write_term(void** state, void** prev_work, TQ_Control_Flags flg) {
       gstate->meta_error = 1;
    }
 
-   // attempt to close our block
-   if ( tstate->handle ) {
-      if ( gstate->dal->close(tstate->handle) ) {
-         LOG(LOG_ERR, "Failed to close block %d!\n", gstate->location.block);
-         gstate->data_error = 1;
-      }
-   } else { gstate->data_error = 1; } // just to be certain we're noting this NULL handle
-
    // don't leave potentially bad data behind
    // NOTE -- not really a problem of data being corrupt (crcs can catch that)
    //         Rather, completely skipped writes *could* mean our erasure stripes end up
@@ -567,11 +559,24 @@ void write_term(void** state, void** prev_work, TQ_Control_Flags flg) {
       // just in case, be CERTAIN to note this as a failure
       gstate->meta_error = 1;
       gstate->data_error = 1;
-      if (gstate->dal->abort(tstate->handle)) {
+      if (tstate->handle  &&  gstate->dal->abort(tstate->handle)) {
          LOG(LOG_ERR, "Abort of block %d failed!\n", gstate->location.block);
          // not really much to do besides complain
       }
    }
+   else if ( tstate->handle ) { // attempt to close our block
+      if ( gstate->dal->close(tstate->handle) ) {
+         LOG(LOG_ERR, "Failed to close block %d!\n", gstate->location.block);
+         gstate->data_error = 1;
+         if (gstate->dal->abort(tstate->handle)) {
+            LOG(LOG_ERR, "Abort of block %d failed!\n", gstate->location.block);
+            // not really much to do besides complain
+         }
+      }
+   }
+   else { gstate->data_error = 1; } // just to be certain we're noting this NULL handle
+
+
 
    // just free and NULL our state, there isn't any useful info in there
    free(tstate);
