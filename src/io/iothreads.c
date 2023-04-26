@@ -550,12 +550,23 @@ void write_term(void** state, void** prev_work, TQ_Control_Flags flg) {
       gstate->meta_error = 1;
    }
 
+   // attempt to close our block
+   if ( tstate->handle ) {
+      if ( gstate->dal->close(tstate->handle) ) {
+         LOG(LOG_ERR, "Failed to close block %d!\n", gstate->location.block);
+         gstate->data_error = 1;
+      }
+   } else { gstate->data_error = 1; } // just to be certain we're noting this NULL handle
+
    // don't leave potentially bad data behind
    // NOTE -- not really a problem of data being corrupt (crcs can catch that)
    //         Rather, completely skipped writes *could* mean our erasure stripes end up
    //         misaligned, something we can't easily detect.
-   if (gstate->data_error != 0 || (TQ_Control_Flags)flg == TQ_ABORT || gstate->dal->close(tstate->handle)) {
+   if (gstate->data_error != 0 || (flg & TQ_ABORT) != 0) {
       LOG(LOG_ERR, "Aborting write of block %d due to previous errors!\n", gstate->location.block);
+      // just in case, be CERTAIN to note this as a failure
+      gstate->meta_error = 1;
+      gstate->data_error = 1;
       if (gstate->dal->abort(tstate->handle)) {
          LOG(LOG_ERR, "Abort of block %d failed!\n", gstate->location.block);
          // not really much to do besides complain
@@ -599,6 +610,8 @@ void read_term(void** state, void** prev_work, TQ_Control_Flags flg) {
 
    // close our DAL handle
    if (gstate->dal->close(tstate->handle)) {
+      // pessimistically call this a data erorr ( may not be necessary )
+      gstate->data_error = 1;
       LOG(LOG_ERR, "Failed to close read handle for block %d!\n", gstate->location.block);
       // can only really complain, nothing else to be done
    }
