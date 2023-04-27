@@ -857,6 +857,7 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
       if (res < 0)
       {
          posix_abort((BLOCK_CTXT)src_ctxt);
+         block_delete(dest_ctxt, 0);  // delete any in-progress output
          posix_abort((BLOCK_CTXT)dest_ctxt);
          free(data_buf);
          free(meta_buf);
@@ -866,6 +867,7 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
       if (posix_put((BLOCK_CTXT)dest_ctxt, data_buf, res))
       {
          posix_abort((BLOCK_CTXT)src_ctxt);
+         block_delete(dest_ctxt, 0);  // delete any in-progress output
          posix_abort((BLOCK_CTXT)dest_ctxt);
          free(data_buf);
          free(meta_buf);
@@ -878,6 +880,7 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
    if (res < 0)
    {
       posix_abort((BLOCK_CTXT)src_ctxt);
+      block_delete(dest_ctxt, 0);  // delete any in-progress output
       posix_abort((BLOCK_CTXT)dest_ctxt);
       free(data_buf);
       free(meta_buf);
@@ -886,6 +889,7 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
    if (posix_set_meta((BLOCK_CTXT)dest_ctxt, meta_buf, res))
    {
       posix_abort((BLOCK_CTXT)src_ctxt);
+      block_delete(dest_ctxt, 0);  // delete any in-progress output
       posix_abort((BLOCK_CTXT)dest_ctxt);
       free(data_buf);
       free(meta_buf);
@@ -898,6 +902,7 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
    // close both locations
    if (posix_close((BLOCK_CTXT)src_ctxt))
    {
+      block_delete(dest_ctxt, 0);  // delete any in-progress output
       posix_abort((BLOCK_CTXT)dest_ctxt);
       return -1;
    }
@@ -1735,11 +1740,6 @@ int posix_abort(BLOCK_CTXT ctxt)
    if (close(bctxt->mfd) != 0)
    {
       LOG(LOG_WARNING, "failed to close meta file \"%s%s\" during abort (%s)\n", bctxt->filepath, META_SFX, strerror(errno));
-   }
-   if (block_delete(bctxt, 0))
-   {
-      LOG(LOG_ERR, "failed to delete data file \"%s\" during abort (%s)\n", bctxt->filepath, strerror(errno));
-      retval = 1;
    }
 
    // free state
