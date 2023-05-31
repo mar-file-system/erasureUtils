@@ -48,7 +48,7 @@ jobs:
         mkdir install
         autoreconf -i
         ./configure --prefix=$PWD/install
-        make check
+        make check  &&  cat src/dal/*.log
         make install
         
     - name: Return to workspace root
