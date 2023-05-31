@@ -58,6 +58,8 @@ LANL contributions is found at https://github.com/jti-lanl/aws4c.
 GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
+#define _GNU_SOURCE // for O_DIRECT
+
 #include "erasureUtils_auto_config.h"
 #ifdef DEBUG_DAL
 #define DEBUG DEBUG_DAL
@@ -1510,16 +1512,16 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
 
    int metalen = strlen(META_SFX);
 
-   int oflags = O_WRONLY | O_CREAT | O_TRUNC;
+   int oflags = O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT;
    if (mode == DAL_READ)
    {
       LOG(LOG_INFO, "Open for READ\n");
-      oflags = O_RDONLY;
+      oflags = O_RDONLY | O_DIRECT;
    }
    else if (mode == DAL_METAREAD)
    {
       LOG(LOG_INFO, "Open for METAREAD\n");
-      oflags = O_RDONLY;
+      oflags = O_RDONLY | O_DIRECT;
       bctxt->fd = -1;
    }
    else
