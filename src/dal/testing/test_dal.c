@@ -107,12 +107,13 @@ int main(int argc, char **argv)
    }
 
    // Open, write to, and set meta info for a specific block
-   void *writebuffer = calloc(4, 1024);
+   void *writebuffer = aligned_alloc(4 * 1024, 4 * 1024);
    if (writebuffer == NULL)
    {
       printf("error: failed to allocate write buffer\n");
       return -1;
    }
+   bzero( writebuffer, 4 * 1024 );
    BLOCK_CTXT block = dal->open(dal->ctxt, DAL_WRITE, maxloc, "");
    if (block == NULL)
    {
