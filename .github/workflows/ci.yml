@@ -53,7 +53,7 @@ jobs:
         make install
 
     - name: Dump Error Logs
-      run: cat src/dal/test_dal.log
+      run: cat $GITHUB_WORKSPACE/erasureUtils/src/dal/test_dal.log
 
     - name: Return to workspace root
       run: cd $GITHUB_WORKSPACE
