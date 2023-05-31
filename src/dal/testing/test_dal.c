@@ -138,12 +138,13 @@ int main(int argc, char **argv)
    }
 
    // Open the same block for read and verify all values
-   void *readbuffer = malloc(sizeof(char) * 4 * 1024);
+   void *readbuffer = aligned_alloc(4 * 1024, 4 * 1024);
    if (readbuffer == NULL)
    {
       printf("error: failed to allocate read buffer\n");
       return -1;
    }
+   bzero( readbuffer, 4 * 1024 );
    block = dal->open(dal->ctxt, DAL_READ, maxloc, "");
    if (block == NULL)
    {
