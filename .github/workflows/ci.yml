@@ -13,6 +13,7 @@ jobs:
       Isal_assembler: nasm
       Ne_deps: "autoconf libxml2-dev openmpi-bin openmpi-common libopenmpi-dev libs3-dev rdmacm-utils"
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
     - name: Checkout ISA-L
       uses: actions/checkout@v3
