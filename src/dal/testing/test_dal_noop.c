@@ -158,7 +158,8 @@ int main(int argc, char **argv)
    for ( curloc.block = 0; curloc.block < maxloc.block; curloc.block++ ) {
       if (posixdal->del(posixdal->ctxt, curloc, "noopsource"))
       {
-         printf("warning: del failed!\n");
+         printf("error: del failed!\n");
+         return -1;
       }
    }
    if ( posixdal->cleanup( posixdal ) ) {
@@ -185,12 +186,14 @@ int main(int argc, char **argv)
    }
    if (dal->put(block, writebuffer, (10 * 1024)))
    {
-      printf("warning: put did not return expected value\n");
+      printf("error: put did not return expected value\n");
+      return -1;
    }
    char *meta_val = "this is a meta value!\n";
    if (dal->set_meta(block, meta_val, 22))
    {
-      printf("warning: set_meta did not return expected value\n");
+      printf("error: set_meta did not return expected value\n");
+      return -1;
    }
    if (dal->close(block))
    {
@@ -210,28 +213,34 @@ int main(int argc, char **argv)
       int ret;
       if ((ret = dal->get(block, readbuffer, (1024 * 1024), 0)) != (1024 * 1024))
       {
-         printf("warning: get 1 from block %d did not return expected value %d\n", curloc.block, ret);
+         printf("error: get 1 from block %d did not return expected value %d\n", curloc.block, ret);
+         return -1;
       }
       if (memcmp(writebuffer, readbuffer, (1024 * 1024)))
       {
-         printf("warning: retrieved data 1 from block %d does not match written!\n", curloc.block);
+         printf("error: retrieved data 1 from block %d does not match written!\n", curloc.block);
+         return -1;
       }
       if ((ret = dal->get(block, readbuffer, (1024 * 1024), 1024*1024)) != (1024 * 1024))
       {
-         printf("warning: get 2 from block %d did not return expected value %d\n", curloc.block, ret);
+         printf("error: get 2 from block %d did not return expected value %d\n", curloc.block, ret);
+         return -1;
       }
       if (memcmp(writebuffer, readbuffer, (1024 * 1024)))
       {
-         printf("warning: retrieved data 2 from block %d does not match written!\n", curloc.block);
+         printf("error: retrieved data 2 from block %d does not match written!\n", curloc.block);
+         return -1;
       }
       int metalen = snprintf( metabuffer, 1024, "Meta-%d", curloc.block );
       if ((ret = dal->get_meta(block, readbuffer, (10 * 1024))) != metalen + 1)
       {
-         printf("warning: get_meta from block %d returned an unexpected value %d\n", curloc.block, ret);
+         printf("error: get_meta from block %d returned an unexpected value %d\n", curloc.block, ret);
+         return -1;
       }
       if (strncmp(metabuffer, readbuffer, metalen + 1))
       {
-         printf("warning: retrieved meta value from block %d does not match written!\n", curloc.block);
+         printf("error: retrieved meta value from block %d does not match written!\n", curloc.block);
+         return -1;
       }
       if (dal->close(block))
       {
@@ -245,7 +254,8 @@ int main(int argc, char **argv)
    curloc.block = 1;
    if (dal->del(dal->ctxt, curloc, "junk"))
    {
-      printf("warning: del failed!\n");
+      printf("error: del failed!\n");
+      return -1;
    }
 
    // Free the DAL

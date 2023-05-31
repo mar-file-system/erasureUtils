@@ -132,7 +132,8 @@ int main(int argc, char **argv)
   int rdres = read(rfd, writebuffer, DATASIZE);
   if (rdres != DATASIZE)
   {
-    printf("warning: reading from /dev/random did not return expected value: %d\n", rdres);
+    printf("error: reading from /dev/random did not return expected value: %d\n", rdres);
+    return -1;
   }
   if (close(rfd))
   {
@@ -149,12 +150,14 @@ int main(int argc, char **argv)
   int res;
   if ((res = dal->put(block, writebuffer, DATASIZE)))
   {
-    printf("warning: put did not return expected value %d\n", res);
+    printf("error: put did not return expected value %d\n", res);
+    return -1;
   }
   char *meta_val = "this is a meta value!\n";
   if (dal->set_meta(block, meta_val, strlen(meta_val) + 1))
   {
-    printf("warning: set_meta did not return expected value\n");
+    printf("error: set_meta did not return expected value\n");
+    return -1;
   }
   if (dal->close(block))
   {
@@ -187,11 +190,13 @@ int main(int argc, char **argv)
   }
   if ((res = dal->get_meta(block, readbuffer, DATASIZE)) != strlen(meta_val) + 1)
   {
-    printf("warning: get_meta returned an unexpected value: %d\n", res);
+    printf("error: get_meta returned an unexpected value: %d\n", res);
+    return -1;
   }
   if (strncmp(meta_val, readbuffer, 22))
   {
-    printf("warning: retrieved meta value does not match written!\n");
+    printf("error: retrieved meta value does not match written!\n");
+    return -1;
   }
   if (dal->close(block))
   {
@@ -202,7 +207,8 @@ int main(int argc, char **argv)
   // Delete the block we created
   if (dal->del(dal->ctxt, maxloc, "test_dal_s3"))
   {
-    printf("warning: del failed!\n");
+    printf("error: del failed!\n");
+    return -1;
   }
 
   // Free the DAL

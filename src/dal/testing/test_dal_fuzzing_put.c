@@ -119,14 +119,16 @@ int main(int argc, char **argv)
     printf("error: failed to open block context for write: %s\n", strerror(errno));
     return -1;
   }
-  if (dal->put(block, writebuffer, (10 * 1024)))
+  if (dal->put(block, writebuffer, (10 * 1024)) == 0) // we EXPECT a failure here
   {
-    printf("warning: put did not return expected value\n");
+    printf("error: put did not return expected value\n");
+    return -1;
   }
   char *meta_val = "this is a meta value!\n";
   if (dal->set_meta(block, meta_val, 22))
   {
-    printf("warning: set_meta did not return expected value\n");
+    printf("error: set_meta did not return expected value\n");
+    return -1;
   }
   if (dal->close(block))
   {
@@ -150,21 +152,25 @@ int main(int argc, char **argv)
   /*
   if (dal->get(block, readbuffer, (10 * 1024), 0) != (10 * 1024))
   {
-    printf("warning: get did not return expected value\n");
+    printf("error: get did not return expected value\n");
+    return -1;
   }
   else if (memcmp(writebuffer, readbuffer, (10 * 1024)))
   {
-    printf("warning: retrieved data does not match written!\n");
+    printf("error: retrieved data does not match written!\n");
+    return -1;
   }
   */
   int ret;
   if ((ret = dal->get_meta(block, readbuffer, (10 * 1024))) != 22)
   {
-    printf("warning: get_meta returned an unexpected value %d\n", ret);
+    printf("error: get_meta returned an unexpected value %d\n", ret);
+    return -1;
   }
   else if (strncmp(meta_val, readbuffer, 22))
   {
-    printf("warning: retrieved meta value does not match written!\n");
+    printf("error: retrieved meta value does not match written!\n");
+    return -1;
   }
   if (dal->close(block))
   {
@@ -175,7 +181,8 @@ int main(int argc, char **argv)
   // Delete the block we created
   if (dal->del(dal->ctxt, maxloc, ""))
   {
-    printf("warning: del failed!\n");
+    printf("error: del failed!\n");
+    return -1;
   }
 
   // Free the DAL
