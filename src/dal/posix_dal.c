@@ -1547,7 +1547,7 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
 
    // open the meta file and check for success
    mode_t mask = umask(0);
-   bctxt->mfd = openat(dctxt->sec_root, bctxt->filepath, oflags, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
+   bctxt->mfd = openat(dctxt->sec_root, bctxt->filepath, oflags & ~(O_DIRECT), S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
    if (bctxt->mfd < 0)
    {
       LOG(LOG_ERR, "failed to open meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
