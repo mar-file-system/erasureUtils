@@ -85,7 +85,7 @@ emerg_reb_LDADD = $(SIDE_LIBS)
 emerg_reb_CFLAGS = $(XML_CFLAGS)
 
 # ---
-POSIX_TESTS = test_dal_verify test_dal test_dal_abort test_dal_migrate
+POSIX_TESTS = test_dal_verify test_dal test_dal_abort test_dal_migrate test_dal_oflags
 FUZZING_TESTS = test_dal_fuzzing test_dal_fuzzing_put
 if S3DAL
 S3_TESTS = test_dal_s3_verify test_dal_s3 test_dal_s3_abort test_dal_s3_multipart test_dal_s3_migrate
@@ -109,6 +109,10 @@ test_dal_migrate_CFLAGS= $(XML_CFLAGS)
 test_dal_verify_SOURCES = testing/test_dal_verify.c
 test_dal_verify_LDADD = $(DAL_LIB) $(SIDE_LIBS)
 test_dal_verify_CFLAGS= $(XML_CFLAGS)
+
+test_dal_oflags_SOURCES = testing/test_dal_oflags.c
+test_dal_oflags_LDADD = $(DAL_LIB) $(SIDE_LIBS)
+test_dal_oflags_CFLAGS= $(XML_CFLAGS)
 
 test_dal_fuzzing_SOURCES = testing/test_dal_fuzzing.c
 test_dal_fuzzing_LDADD = $(DAL_LIB) $(SIDE_LIBS)

@@ -76,11 +76,11 @@ int main(int argc, char **argv)
    LIBXML_TEST_VERSION
 
    /*parse the file and get the DOM */
-   doc = xmlReadFile("./testing/fuzzing_config.xml", NULL, XML_PARSE_NOBLANKS);
+   doc = xmlReadFile("./testing/oflags_config.xml", NULL, XML_PARSE_NOBLANKS);
 
    if (doc == NULL)
    {
-      printf("error: could not parse file %s\n", "./dal/testing/fuzzing_config.xml");
+      printf("error: could not parse file %s\n", "./dal/testing/config.xml");
       return -1;
    }
 
@@ -106,20 +106,27 @@ int main(int argc, char **argv)
       return -1;
    }
 
+   // validate the io size of the new DAL
+   if ( dal->io_size != 4096 ) {
+      printf( "error: unexpected io-size value of new DAL: %zd\n", dal->io_size );
+      return -1;
+   }
+
    // Open, write to, and set meta info for a specific block
-   void *writebuffer = calloc(10, 1024);
+   void *writebuffer = aligned_alloc(4 * 1024, 4 * 1024);
    if (writebuffer == NULL)
    {
       printf("error: failed to allocate write buffer\n");
       return -1;
    }
+   bzero( writebuffer, 4 * 1024 );
    BLOCK_CTXT block = dal->open(dal->ctxt, DAL_WRITE, maxloc, "");
    if (block == NULL)
    {
       printf("error: failed to open block context for write: %s\n", strerror(errno));
       return -1;
    }
-   if (dal->put(block, writebuffer, (10 * 1024)) == 0) // we EXPECT a failure here
+   if (dal->put(block, writebuffer, (4 * 1024)))
    {
       printf("error: put did not return expected value\n");
       return -1;
@@ -137,29 +144,35 @@ int main(int argc, char **argv)
    }
 
    // Open the same block for read and verify all values
-   void *readbuffer = malloc(sizeof(char) * 10 * 1024);
+   void *readbuffer = aligned_alloc(4 * 1024, 4 * 1024);
    if (readbuffer == NULL)
    {
       printf("error: failed to allocate read buffer\n");
       return -1;
    }
+   bzero( readbuffer, 4 * 1024 );
    block = dal->open(dal->ctxt, DAL_READ, maxloc, "");
    if (block == NULL)
    {
       printf("error: failed to open block context for read: %s\n", strerror(errno));
       return -1;
    }
-   if (dal->get(block, readbuffer, (10 * 1024), 0) > 0) // we EXPECT a failure here
+   if (dal->get(block, readbuffer, (4 * 1024), 0) != (4 * 1024))
    {
       printf("error: get did not return expected value\n");
       return -1;
    }
-   if (dal->get_meta(block, readbuffer, (10 * 1024)) != 22)
+   if (memcmp(writebuffer, readbuffer, (4 * 1024)))
+   {
+      printf("error: retrieved data does not match written!\n");
+      return -1;
+   }
+   if (dal->get_meta(block, readbuffer, (4 * 1024)) != 22)
    {
       printf("error: get_meta returned an unexpected value\n");
       return -1;
    }
-   else if (strncmp(meta_val, readbuffer, 22))
+   if (strncmp(meta_val, readbuffer, 22))
    {
       printf("error: retrieved meta value does not match written!\n");
       return -1;
