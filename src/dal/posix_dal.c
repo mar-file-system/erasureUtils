@@ -2047,7 +2047,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
             if ( strncasecmp( (char*)attr->name, "size", 5 ) == 0 ) {
                if (atol((char *)attr->children->content))
                {
-                  io_size = atol((char *)root->children->content);
+                  io_size = atol((char *)attr->children->content);
                }
                else {
                   LOG( LOG_ERR, "Failed to parse POSIX DAL 'io' size value: \"%s\"\n", (char *)attr->children->content );
