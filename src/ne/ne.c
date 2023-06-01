@@ -1825,8 +1825,8 @@ int ne_seed_status(ne_handle handle, ne_state* sref) {
  * @param ne_handle handle : Handle on which to perform a rebuild
  * @param ne_erasure* epat : Erasure pattern of the object to be rebuilt
  * @param ne_state* sref : Address of an ne_state struct to be populated (ignored, if NULL)
- * @return int : Zero if no stripe errors were found, a positive integer bitmask of any repaired
- *               errors, or a negative value if an unrecoverable failure occurred
+ * @return int : Zero if all errors were repaired, a positive integer count of any remaining UNREPAIRED
+ *               errors ( rerun this func ), or a negative value if an unrecoverable failure occurred
  */
 int ne_rebuild(ne_handle handle, ne_erasure* epat, ne_state* sref) {
    // check boundary and invalid call conditions
@@ -2136,13 +2136,32 @@ int ne_rebuild(ne_handle handle, ne_erasure* epat, ne_state* sref) {
    }
 
    int newerrs = 0; // for checking uncorrected errors
-   // verify thread termination and close all queues
+   // terminate output threads and close queues
    for (i = 0; i < N + E; i++) {
       if (OutTQs[i]) {
          LOG(LOG_INFO, "Terminating queue %d\n", i);
          tq_next_thread_status(OutTQs[i], NULL);
          tq_close(OutTQs[i]);
          destroy_ioqueue(outstates[i].ioq);
+      }
+      else if (handle->thread_states[i].meta_error || handle->thread_states[i].data_error) {
+         // if errors exist for which we never started output threads, record them
+         LOG(LOG_INFO, "Detected errors in block %d during rebuild\n", i);
+         newerrs++;
+      }
+   }
+
+
+   // populate any info structs BEFORE clearing errors from rebuilt blocks
+   if (ne_get_info(handle, epat, sref) < 0) {
+      LOG(LOG_ERR, "Failed to populate info structs!\n");
+      numerrs++; // easy way to make sure we return a failure for this case
+   }
+
+
+   // cleanup thread states and restart any read threads for newly rebuilt blocks
+   for (i = 0; i < N + E; i++) {
+      if (OutTQs[i]) {
          // check for any output errors
          if (outstates[i].meta_error || outstates[i].data_error) {
             LOG(LOG_ERR, "Detected error in regenerated block %d!\n");
@@ -2204,11 +2223,6 @@ int ne_rebuild(ne_handle handle, ne_erasure* epat, ne_state* sref) {
             free(opts.log_prefix);
          }
       }
-      else if (handle->thread_states[i].meta_error || handle->thread_states[i].data_error) {
-         // if errors exist for which we never started output threads, record them
-         LOG(LOG_INFO, "Detected errors in block %d during rebuild\n", i);
-         newerrs++;
-      }
    }
    free(outblocks);
    free(OutTQs);
@@ -2222,12 +2236,6 @@ int ne_rebuild(ne_handle handle, ne_erasure* epat, ne_state* sref) {
    }
 
    LOG(LOG_INFO, "Rebuild completed with %d errors remaining\n", newerrs);
-
-   // populate any info structs
-   if (ne_get_info(handle, epat, sref) < 0) {
-      LOG(LOG_ERR, "Failed to populate info structs!\n");
-      return -1;
-   }
 
    // indicate if uncorrected errors remain
    return newerrs;

@@ -293,8 +293,8 @@ int ne_seed_status(ne_handle handle, ne_state *sref);
  * @param ne_handle handle : Handle on which to perform a rebuild
  * @param ne_erasure* epat : Erasure pattern of the object to be rebuilt
  * @param ne_state* sref : Address of an ne_state struct to be populated (ignored, if NULL)
- * @return int : Zero if no stripe errors were found, a positive integer bitmask of any repaired
- *               errors, or a negative value if an unrecoverable failure occurred
+ * @return int : Zero if all errors were repaired, a positive integer count of any remaining UNREPAIRED
+ *               errors ( rerun this func ), or a negative value if an unrecoverable failure occurred
  */
 int ne_rebuild(ne_handle handle, ne_erasure *epat, ne_state *sref);
 
