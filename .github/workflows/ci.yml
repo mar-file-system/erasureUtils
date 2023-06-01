@@ -43,7 +43,6 @@ jobs:
       run: sudo apt install $Ne_deps
 
     - name: Build and check erasureUtils
-      continue-on-error: true
       run: |
         cd erasureUtils
         mkdir install
@@ -51,9 +50,6 @@ jobs:
         ./configure --prefix=$PWD/install
         make check
         make install
-
-    - name: Dump Error Logs
-      run: cat $GITHUB_WORKSPACE/erasureUtils/src/dal/test_dal.log
 
     - name: Return to workspace root
       run: cd $GITHUB_WORKSPACE
