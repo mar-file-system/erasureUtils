@@ -153,7 +153,7 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
    }
    LOG( LOG_INFO, "Subsz = %zu,  and  Partcnt = %d\n", subsz, partcnt );
    // create an ioqueue struct
-   ioqueue* ioq = malloc( sizeof( struct ioqueue_struct ) );
+   ioqueue* ioq = calloc( 1, sizeof( struct ioqueue_struct ) );
    if ( ioq == NULL ) {
       LOG( LOG_ERR, "failed to allocate memory for an ioqueue_struct!\n" );
       return NULL;
@@ -204,8 +204,8 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
    int i;
    for ( i = 0; i < SUPER_BLOCK_CNT; i++ ) {
       // initialize state and struct for each ioblock
-      ioq->block_list[i].buff = malloc( sizeof( char ) * ioq->blocksz );
-      if ( ioq->block_list[i].buff == NULL ) {
+      int allocres = posix_memalign( &(ioq->block_list[i].buff), 4096, sizeof( char ) * ioq->blocksz );
+      if ( allocres  ||  ioq->block_list[i].buff == NULL ) {
          // we've messed up, time to try to clean everything up
          LOG( LOG_ERR, "failed to allocate space for ioblock %d!\n", i );
          for ( i -= 1; i >= 0; i-- ) {
@@ -214,6 +214,7 @@ ioqueue* create_ioqueue( size_t iosz, size_t partsz, DAL_MODE mode ) {
          pthread_cond_destroy( &(ioq->avail_block) );
          pthread_mutex_destroy( &(ioq->qlock) );
          free( ioq );
+         errno = allocres; // posix_memalign() does not set errno for us
          return NULL;
       }
       ioq->block_list[i].data_size   = 0;
