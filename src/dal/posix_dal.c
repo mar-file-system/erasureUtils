@@ -113,6 +113,8 @@ typedef struct posix_dal_context_struct
    DAL_location max_loc; // Maximum pod/cap/block/scatter values
    int dirpad;           // Number of chars by which dirtmp may expand via substitutions
    int sec_root;         // Handle of secure root directory
+   int dataflags;        // Any additional flag values to be passed to open() of data files
+   int metaflags;        // Any additional flag values to be passed to open() of meta files
 } * POSIX_DAL_CTXT;
 
 /* For emergency rebuild. This indicates all the combinations of locations that either need to be rebuilt,
@@ -198,6 +200,48 @@ static int num_digits(int value)
    }
    // only support values up to 5 digits long
    return -1;
+}
+
+/** (INTERNAL HELPER FUNCTION)
+ * Parse a comma-separated string of open() flag values and add them to the referenced flag set
+ * @param const char* flagstr : String to be parsed
+ * @param int* oflags : Reference to the flag values to be updated
+ * @return int : Zero on success, or -1 on failure
+ */
+static int parse_open_flags( const char* flagstr, int* oflags ) {
+   if ( flagstr == NULL ) {
+      LOG( LOG_ERR, "Received a NULL open flag value string\n" );
+      return -1;
+   }
+   int tmpflags = 0;
+   while ( *flagstr != '\0' ) {
+      // before doing anything else, find the end of the current flag element
+      const char* readahead = flagstr;
+      while ( *readahead != '\0'  &&  *readahead != ',' ) { readahead++; }
+      // note that these string comparisions DO NOT include the NULL-terminator, as the parsed string may not have one yet
+      if ( (readahead - flagstr) == 9  &&  strncasecmp( flagstr, "O_NOATIME", 9 ) == 0 ) {
+         tmpflags |= O_NOATIME;
+      }
+      else if ( (readahead - flagstr) == 8  &&  strncasecmp( flagstr, "O_DIRECT", 8 ) == 0 ) {
+         tmpflags |= O_DIRECT;
+      }
+      else if ( (readahead - flagstr) == 7  &&  strncasecmp( flagstr, "O_DSYNC", 7 ) == 0 ) {
+         tmpflags |= O_DSYNC;
+      }
+      else if ( (readahead - flagstr) == 6  &&  strncasecmp( flagstr, "O_SYNC", 6 ) == 0 ) {
+         tmpflags |= O_SYNC;
+      }
+      else if ( readahead - flagstr ) { // only complain if this element was populated at all
+         LOG( LOG_ERR, "POSIX DAL def contains unrecognized open() flag value: \"%.*s\"\n", (int)(readahead - flagstr), flagstr );
+         return -1;
+      }
+      // update to the next flag element
+      flagstr = readahead;
+      while ( *flagstr == ',' ) { flagstr++; } // skip over any number of repeated commas
+   }
+   // update our *actual* flags
+   *oflags |= tmpflags;
+   return 0;
 }
 
 static char *expand_path(const char *parse, char *fill, DAL_location loc, DAL_location *loc_flags, int dir)
@@ -1512,16 +1556,16 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
 
    int metalen = strlen(META_SFX);
 
-   int oflags = O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT;
+   int oflags = O_WRONLY | O_CREAT | O_TRUNC;
    if (mode == DAL_READ)
    {
       LOG(LOG_INFO, "Open for READ\n");
-      oflags = O_RDONLY | O_DIRECT;
+      oflags = O_RDONLY;
    }
    else if (mode == DAL_METAREAD)
    {
       LOG(LOG_INFO, "Open for METAREAD\n");
-      oflags = O_RDONLY | O_DIRECT;
+      oflags = O_RDONLY;
       bctxt->fd = -1;
    }
    else
@@ -1547,7 +1591,7 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
 
    // open the meta file and check for success
    mode_t mask = umask(0);
-   bctxt->mfd = openat(dctxt->sec_root, bctxt->filepath, oflags & ~(O_DIRECT), S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
+   bctxt->mfd = openat(dctxt->sec_root, bctxt->filepath, oflags | dctxt->metaflags, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
    if (bctxt->mfd < 0)
    {
       LOG(LOG_ERR, "failed to open meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
@@ -1590,7 +1634,7 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    if (mode != DAL_METAREAD)
    {
       // open the file and check for success
-      bctxt->fd = openat(dctxt->sec_root, bctxt->filepath, oflags, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
+      bctxt->fd = openat(dctxt->sec_root, bctxt->filepath, oflags | dctxt->dataflags, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
       if (bctxt->fd < 0)
       {
          LOG(LOG_ERR, "failed to open file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
@@ -1891,15 +1935,17 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
    }
 
    // allocate space for our context struct
-   POSIX_DAL_CTXT dctxt = malloc(sizeof(struct posix_dal_context_struct));
+   POSIX_DAL_CTXT dctxt = calloc(1,sizeof(struct posix_dal_context_struct));
    if (dctxt == NULL)
    {
       return NULL;
-   } // malloc will set errno
+   } // calloc will set errno
 
    // initialize some vals
    dctxt->dirtmp = NULL;
    dctxt->sec_root = AT_FDCWD;
+   dctxt->dataflags = 0;
+   dctxt->metaflags = 0;
    size_t io_size = IO_SIZE;
 
    int origerrno = errno;
@@ -1985,14 +2031,41 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
             dctxt->sec_root = open((char *)root->children->content, O_DIRECTORY | O_RDONLY );
          }
       }
-      else if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "io_size", 8) == 0)
+      else if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "io", 3) == 0)
       {
-         if (atol((char *)root->children->content))
-         {
-            io_size = atol((char *)root->children->content);
+         // loop through and parse all 'io' attribute values
+         xmlAttr* attr = root->properties;
+         for ( ; attr; attr = attr->next ) {
+            if ( attr->type != XML_ATTRIBUTE_NODE ) {
+               LOG( LOG_ERR, "Encountered unrecognized property type of POSIX DAL 'io' definition\n" );
+               break;
+            }
+            if ( attr->children == NULL  ||  attr->children->type != XML_TEXT_NODE  ||  attr->children->content == NULL ) {
+               LOG( LOG_ERR, "Encountered a \"%s\" property of POSIX DAL 'io' definition with no associated value\n", (char*)attr->name );
+               break;
+            }
+            if ( strncasecmp( (char*)attr->name, "size", 5 ) == 0 ) {
+               if (atol((char *)attr->children->content))
+               {
+                  io_size = atol((char *)root->children->content);
+               }
+               else {
+                  LOG( LOG_ERR, "Failed to parse POSIX DAL 'io' size value: \"%s\"\n", (char *)attr->children->content );
+                  break;
+               }
+            }
+            else if ( strncasecmp( (char*)attr->name, "dataflags", 10 ) == 0 ) {
+               if ( parse_open_flags( (const char*)attr->children->content, &(dctxt->dataflags) ) ) { break; }
+            }
+            else if ( strncasecmp( (char*)attr->name, "metaflags", 10 ) == 0 ) {
+               if ( parse_open_flags( (const char*)attr->children->content, &(dctxt->metaflags) ) ) { break; }
+            }
+            else {
+               LOG( LOG_ERR, "Encountered an unrecognized \"%s\" property of POSIX DAL 'io' definition\n", (char*)attr->name );
+               break;
+            }
          }
-         else {
-            LOG( LOG_ERR, "Failed to parse 'io_size' value: \"%s\"\n", (char *)root->children->content );
+         if ( attr ) { // indicates a 'break' from the above loop
             if ( dctxt->sec_root > 0 ) { close( dctxt->sec_root ); }
             if ( dctxt->dirtmp ) { free( dctxt->dirtmp ); }
             free( dctxt );
@@ -2027,7 +2100,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
    }
 
    // allocate and populate a new DAL structure
-   DAL pdal = malloc(sizeof(struct DAL_struct));
+   DAL pdal = calloc( 1, sizeof(struct DAL_struct) );
    if (pdal == NULL)
    {
       LOG(LOG_ERR, "failed to allocate space for a DAL_struct\n");
@@ -2035,7 +2108,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
       free( dctxt->dirtmp );
       free(dctxt);
       return NULL;
-   } // malloc will set errno
+   } // calloc will set errno
    pdal->name = "posix";
    pdal->ctxt = (DAL_CTXT)dctxt;
    pdal->io_size = io_size;
