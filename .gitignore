@@ -35,6 +35,7 @@ src/dal/test_dal_migrate
 src/dal/test_dal_verify
 src/dal/test_dal_fuzzing
 src/dal/test_dal_fuzzing_put
+src/dal/test_dal_oflags
 src/dal/test_dal_s3
 src/dal/test_dal_s3_abort
 src/dal/test_dal_s3_migrate
