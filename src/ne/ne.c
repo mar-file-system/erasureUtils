@@ -1629,6 +1629,7 @@ int ne_close(ne_handle handle, ne_erasure* epat, ne_state* sref) {
          LOG(LOG_ERR, "Detected an error for block %d!\n", i);
          numerrs++;
       }
+      else if ( handle->blocksz == 0 ) { handle->blocksz = handle->thread_states[i].minfo.blocksz; } // set bsz if unknown
    }
    if (handle->mode == NE_WRONLY || handle->mode == NE_WRALL) {
       // verify that our data meets safetly thresholds
@@ -1642,7 +1643,6 @@ int ne_close(ne_handle handle, ne_erasure* epat, ne_state* sref) {
    // populate any info structs
    if (ne_get_info(handle, epat, sref) < 0) {
       LOG(LOG_ERR, "Failed to populate info structs!\n");
-
       ret_val = -1;
    }
 
