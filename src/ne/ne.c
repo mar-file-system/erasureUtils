@@ -684,6 +684,7 @@ int read_stripes(ne_handle handle) {
    // use case of reading a file start to finish, we'll eventually need this
    // entire stripe regardless.
    int cur_block;
+   int stripecnt = 0;
    int nstripe_errors = 0;
    for (cur_block = 0; (cur_block < (N + nstripe_errors) || cur_block < (N + handle->ethreads_running)) && cur_block < (N + E); cur_block++) {
       // check if we can even handle however many errors we've hit so far
@@ -730,7 +731,7 @@ int read_stripes(ne_handle handle) {
          LOG(LOG_ERR, "Detected an error at offset %zu of ioblock %d\n", cur_iob->error_end, cur_block);
          nstripe_errors++;
       }
-      // make sure our stripecnt is logical
+      // make sure our ioblock sizes are consistent
       if (handle->iob_datasz) {
          if (cur_iob->data_size != handle->iob_datasz) {
             LOG(LOG_ERR, "Detected a ioblock of size %zd from block %d which conflicts with expected value of %zd!\n",
@@ -740,6 +741,7 @@ int read_stripes(ne_handle handle) {
          }
       }
       else {
+         stripecnt = (cur_iob->data_size / partsz);
          handle->iob_datasz = cur_iob->data_size;
       } // or set it, if we haven't yet
    }
