@@ -365,6 +365,11 @@ int read_produce(void** state, void** work_tofill) {
          tstate->iob = NULL;
          break;
       }
+      if ( to_read <= CRC_BYTES ) {
+         LOG( LOG_ERR, "Remaining data at offset %zu of block %d ( %zd ) is <= CRC_BYTES!\n", tstate->offset, gstate->location.block, to_read );
+         gstate->data_error = 1;
+         return -1; // force an abort
+      }
       void* store_tgt = ioblock_write_target(tstate->iob);
       char data_err = 0;
       LOG(LOG_INFO, "Reading %zd bytes from offset %zu of block %d\n", to_read, tstate->offset, gstate->location.block);

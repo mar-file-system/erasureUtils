@@ -660,6 +660,7 @@ int read_stripes(ne_handle handle) {
    handle->iob_offset += handle->iob_datasz;
    // always start with a fresh sub_offset for new stripes
    handle->sub_offset = 0;
+   handle->iob_datasz = 0;
 
    // if we have previous block references, we'll need to release them
    int i;
@@ -683,7 +684,6 @@ int read_stripes(ne_handle handle) {
    // use case of reading a file start to finish, we'll eventually need this
    // entire stripe regardless.
    int cur_block;
-   int stripecnt = 0;
    int nstripe_errors = 0;
    for (cur_block = 0; (cur_block < (N + nstripe_errors) || cur_block < (N + handle->ethreads_running)) && cur_block < (N + E); cur_block++) {
       // check if we can even handle however many errors we've hit so far
@@ -731,16 +731,15 @@ int read_stripes(ne_handle handle) {
          nstripe_errors++;
       }
       // make sure our stripecnt is logical
-      if (stripecnt) {
-         if ((cur_iob->data_size / partsz) != stripecnt) {
-            LOG(LOG_ERR, "Detected a ioblock of size %zd from block %d which conflicts with stripe count of %d!\n",
-               cur_iob->data_size, cur_block, stripecnt);
+      if (handle->iob_datasz) {
+         if (cur_iob->data_size != handle->iob_datasz) {
+            LOG(LOG_ERR, "Detected a ioblock of size %zd from block %d which conflicts with expected value of %zd!\n",
+               cur_iob->data_size, cur_block, handle->iob_datasz);
             errno = EBADF;
             return -1;
          }
       }
       else {
-         stripecnt = (cur_iob->data_size / partsz);
          handle->iob_datasz = cur_iob->data_size;
       } // or set it, if we haven't yet
    }
@@ -1245,7 +1244,7 @@ ne_handle ne_convert_handle(ne_handle handle, ne_mode mode) {
    }
 
    // we need to startup some threads
-   TQ_Init_Opts tqopts;
+   TQ_Init_Opts tqopts = {0};
    char* lprefstr = malloc(sizeof(char) * (6 + (handle->ctxt->max_block / 10)));
    if (lprefstr == NULL) {
       LOG(LOG_ERR, "Failed to allocate space for TQ log prefix string!\n");
@@ -1907,7 +1906,7 @@ int ne_rebuild(ne_handle handle, ne_erasure* epat, ne_state* sref) {
       outstates[i].data_error = 0;
    }
 
-   TQ_Init_Opts tqopts;
+   TQ_Init_Opts tqopts = {0};
    char* lprefstr = malloc(sizeof(char) * (6 + (handle->ctxt->max_block / 10)));
    if (lprefstr == NULL) {
       LOG(LOG_ERR, "Failed to allocate space for TQ log prefix string!\n");
@@ -2187,7 +2186,7 @@ int ne_rebuild(ne_handle handle, ne_erasure* epat, ne_state* sref) {
             handle->thread_states[i].meta_error = 0;
             handle->thread_states[i].data_error = 0;
             // populate a tqopts
-            TQ_Init_Opts opts;
+            TQ_Init_Opts opts = {0};
             opts.log_prefix = malloc(sizeof(char) * (6 + i / 10));
             if (opts.log_prefix == NULL) {
                LOG(LOG_ERR, "Failed to allocate space for a log_prefix string!\n");
