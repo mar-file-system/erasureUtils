@@ -687,12 +687,6 @@ int read_stripes(ne_handle handle) {
    int stripecnt = 0;
    int nstripe_errors = 0;
    for (cur_block = 0; (cur_block < (N + nstripe_errors) || cur_block < (N + handle->ethreads_running)) && cur_block < (N + E); cur_block++) {
-      // check if we can even handle however many errors we've hit so far
-      if (nstripe_errors > E) {
-         LOG(LOG_ERR, "Data beyond stripe %d has too many errors (%d) to be recovered\n", start_stripe, nstripe_errors);
-         errno = ENODATA;
-         return -1;
-      }
       // if this thread isn't running, we need to start it
       if (cur_block >= N + handle->ethreads_running) {
          LOG(LOG_INFO, "Starting up thread %d to cope with errors beyond stripe %d\n", cur_block, start_stripe);
@@ -730,6 +724,12 @@ int read_stripes(ne_handle handle) {
       if (cur_iob->error_end > 0) {
          LOG(LOG_ERR, "Detected an error at offset %zu of ioblock %d\n", cur_iob->error_end, cur_block);
          nstripe_errors++;
+      }
+      // check if we can even handle however many errors we've hit so far
+      if (nstripe_errors > E) {
+         LOG(LOG_ERR, "Data beyond stripe %d has too many errors (%d) to be recovered\n", start_stripe, nstripe_errors);
+         errno = ENODATA;
+         return -1;
       }
       // make sure our ioblock sizes are consistent
       if (handle->iob_datasz) {
@@ -1289,7 +1289,7 @@ ne_handle ne_convert_handle(ne_handle handle, ne_mode mode) {
       handle->thread_states[i].dmode = dmode;
       tqopts.global_state = &(handle->thread_states[i]);
       // set a log_prefix value for this queue
-      sprintf(lprefstr, preffmt, i);
+      snprintf(lprefstr, 6 + (handle->ctxt->max_block/10), preffmt, i);
       handle->thread_queues[i] = tq_init(&tqopts);
       if (handle->thread_queues[i] == NULL) {
          LOG(LOG_ERR, "Failed to create thread_queue for block %d!\n", i);
@@ -1795,22 +1795,18 @@ int ne_seed_status(ne_handle handle, ne_state* sref) {
    if (sref->meta_status) {
       int i;
       for (i = 0; i < handle->epat.N + handle->epat.E; i++) {
+         // only set additional error values, don't ignore any previously encountered
          if (sref->meta_status[i]) {
             handle->thread_states[i].meta_error = 1;
-         }
-         else {
-            handle->thread_states[i].meta_error = 0;
          }
       }
    }
    if (sref->data_status) {
       int i;
       for (i = 0; i < handle->epat.N + handle->epat.E; i++) {
+         // only set additional error values, don't ignore any previously encountered
          if (sref->data_status[i]) {
             handle->thread_states[i].data_error = 1;
-         }
-         else {
-            handle->thread_states[i].data_error = 0;
          }
       }
    }
@@ -1934,7 +1930,7 @@ int ne_rebuild(ne_handle handle, ne_erasure* epat, ne_state* sref) {
       if (handle->thread_states[i].data_error || handle->thread_states[i].meta_error) {
          LOG(LOG_INFO, "Starting up output thread %d\n", i);
          // set a log_prefix value for this queue
-         sprintf(lprefstr, "RWQ%d", i);
+         snprintf(lprefstr, 6 + (handle->ctxt->max_block/10), "RWQ%d", i);
          OutTQs[i] = tq_init(&tqopts);
          if (OutTQs[i] == NULL) {
             LOG(LOG_ERR, "Failed to create output thread_queue for block %d!\n", i);

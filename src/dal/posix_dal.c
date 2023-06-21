@@ -102,7 +102,6 @@ typedef struct posix_block_context_struct
    int sfd;        // Secure Root File Descriptor (if open)
    char *filepath; // File Path (if open)
    int filelen;    // Length of filepath string
-   off_t offset;   // Current file offset (only relevant when reading)
    DAL_MODE mode;  // Mode in which this block was opened
 } * POSIX_BLOCK_CTXT;
 
@@ -896,7 +895,7 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
 
    // move data file from source location to destination location
    ssize_t res;
-   int off = 0;
+   off_t off = 0;
    do
    {
       res = posix_get((BLOCK_CTXT)src_ctxt, data_buf, IO_SIZE, off);
@@ -909,7 +908,7 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
          free(meta_buf);
          return -1;
       }
-      off = src_ctxt->offset;
+      off += res;
       if (posix_put((BLOCK_CTXT)dest_ctxt, data_buf, res))
       {
          posix_abort((BLOCK_CTXT)src_ctxt);
@@ -1538,7 +1537,6 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    }
 
    // populate other BLOCK context fields
-   bctxt->offset = 0;
    bctxt->mode = mode;
 
    char *res = NULL;
@@ -1556,7 +1554,7 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
 
    int metalen = strlen(META_SFX);
 
-   int oflags = O_WRONLY | O_CREAT | O_TRUNC;
+   int oflags = O_WRONLY | O_CREAT | O_EXCL;
    if (mode == DAL_READ)
    {
       LOG(LOG_INFO, "Open for READ\n");
@@ -1592,6 +1590,11 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    // open the meta file and check for success
    mode_t mask = umask(0);
    bctxt->mfd = openat(dctxt->sec_root, bctxt->filepath, oflags | dctxt->metaflags, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
+   if (bctxt->mfd < 0  &&  errno == EEXIST  &&  mode != DAL_READ  &&  mode != DAL_METAREAD ) {
+      // specifically for a write EEXIST error, unlink the dest path and retry once
+      unlinkat( dctxt->sec_root, bctxt->filepath, 0 ); // don't bother checking for this failure, only the open result matters
+      bctxt->mfd = openat(dctxt->sec_root, bctxt->filepath, oflags | dctxt->metaflags, S_IRWXU | S_IRWXG | S_IRWXO);
+   }
    if (bctxt->mfd < 0)
    {
       LOG(LOG_ERR, "failed to open meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
@@ -1624,6 +1627,7 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
       {
          LOG(LOG_ERR, "failed to append suffix to file path!\n");
          errno = EBADF;
+         close(bctxt->mfd);
          umask(mask);
          free(bctxt->filepath);
          free(bctxt);
@@ -1635,9 +1639,15 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    {
       // open the file and check for success
       bctxt->fd = openat(dctxt->sec_root, bctxt->filepath, oflags | dctxt->dataflags, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
+      if (bctxt->fd < 0  &&  errno == EEXIST  &&  mode != DAL_READ ) {
+         // specifically for a write EEXIST error, unlink the dest path and retry once
+         unlinkat( dctxt->sec_root, bctxt->filepath, 0 ); // don't bother checking for this failure, only the open result matters
+         bctxt->fd = openat(dctxt->sec_root, bctxt->filepath, oflags | dctxt->metaflags, S_IRWXU | S_IRWXG | S_IRWXO);
+      }
       if (bctxt->fd < 0)
       {
          LOG(LOG_ERR, "failed to open file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
+         close(bctxt->mfd);
          umask(mask);
          free(bctxt->filepath);
          free(bctxt);
@@ -1743,27 +1753,18 @@ ssize_t posix_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
       return -1;
    }
 
-   // check if we need to seek
-   if (offset != bctxt->offset)
+   // always reseek ( minimal performance impact and a bit more explicitly safe )
+   LOG(LOG_INFO, "Performing seek to offset of %zd\n", offset);
+   off_t newoff = lseek(bctxt->fd, offset, SEEK_SET);
+   // make sure our new offset makes sense
+   if (newoff != offset)
    {
-      LOG(LOG_INFO, "Performing seek to new offset of %zd\n", offset);
-      bctxt->offset = lseek(bctxt->fd, offset, SEEK_SET);
-      // make sure our new offset makes sense
-      if (bctxt->offset != offset)
-      {
-         LOG(LOG_ERR, "failed to seek to offset %zd of file \"%s\" (%s)\n", offset, bctxt->filepath, strerror(errno));
-         return -1;
-      }
+      LOG(LOG_ERR, "failed to seek to offset %zd of file \"%s\" (%s)\n", offset, bctxt->filepath, strerror(errno));
+      return -1;
    }
 
    // just a read from our pre-opened FD
    ssize_t res = read(bctxt->fd, buf, size);
-
-   // adjust our offset value
-   if (res > 0)
-   {
-      bctxt->offset += res;
-   }
 
    return res;
 }
