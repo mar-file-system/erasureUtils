@@ -2783,7 +2783,7 @@ ssize_t ne_write(ne_handle handle, const void* buffer, size_t bytes) {
    return written;
 }
 
-/* The following function was copied from Intel's ISA-L (https://github.com/intel/isa-l/blob/master/examples/ec/ec_simple_example.c).
+/* The following function was copied from Intel's ISA-L (https://github.com/intel/isa-l/blob/v2.30.0/examples/ec/ec_simple_example.c).
    The associated Copyright info has been reproduced below */
 
    /**********************************************************************
