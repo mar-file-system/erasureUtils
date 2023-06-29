@@ -137,6 +137,9 @@ typedef struct ne_ctxt_struct {
    int max_block;
    // DAL definitions
    DAL dal;
+   // Synchronization
+   pthread_mutex_t locallock;
+   pthread_mutex_t* erasurelock;
 } *ne_ctxt;
 
 typedef struct ne_handle_struct {
@@ -779,6 +782,7 @@ int read_stripes(ne_handle handle) {
       unsigned char* stripe_err_list = calloc(N + E, sizeof(unsigned char));
       if (stripe_err_list == NULL) {
          LOG(LOG_ERR, "Failed to allocate space for a stripe_err_list array!\n");
+         free( stripe_in_err );
          return -1;
       }
 
@@ -811,41 +815,61 @@ int read_stripes(ne_handle handle) {
             }
          }
 
+
          if (!(handle->e_ready)) {
 
-            // Generate an encoding matrix
             LOG(LOG_INFO, "Initializing erasure structs...\n");
-            gf_gen_cauchy1_matrix(handle->encode_matrix, N + E, N);
-
-            // Generate g_tbls from encode matrix
-            ec_init_tables(N, E, &(handle->encode_matrix[N * N]), handle->g_tbls);
 
             unsigned char* tmpmatrix = calloc((N + E) * (N + E), sizeof(unsigned char));
             if (tmpmatrix == NULL) {
                LOG(LOG_ERR, "Failed to allocate space for a tmpmatrix!\n");
-               free(tmpmatrix);
                free(stripe_in_err);
                free(stripe_err_list);
                return -1;
             }
+
+            // critical section : we are now going to call some inlined assembly erasure funcs
+            if ( pthread_mutex_lock( handle->ctxt->erasurelock ) ) {
+               LOG( LOG_ERR, "Failed to acquire erasurelock prior to table generation for stripe %d\n", cur_stripe + start_stripe );
+               free(tmpmatrix);
+               free( stripe_err_list );
+               free( stripe_in_err );
+               return -1;
+            }
+
+            // Generate an encoding matrix
+            gf_gen_cauchy1_matrix(handle->encode_matrix, N + E, N);
+
+            // Generate g_tbls from encode matrix
+            ec_init_tables(N, E, &(handle->encode_matrix[N * N]), handle->g_tbls);
             int ret_code = gf_gen_decode_matrix_simple(handle->encode_matrix, handle->decode_matrix,
                handle->invert_matrix, tmpmatrix, handle->decode_index, stripe_err_list,
                nstripe_errors, N, N + E);
 
-            free(tmpmatrix);
-
             if (ret_code != 0) {
                // this is the only error for which we will at least attempt to continue
                LOG(LOG_ERR, "Failure to generate decode matrix, errors may exceed erasure limits (%d)!\n", nstripe_errors);
+               pthread_mutex_unlock( handle->ctxt->erasurelock );
+               free(tmpmatrix);
                free(stripe_in_err);
                free(stripe_err_list);
                // return the number of stripes we failed to regenerate
                errno = ENODATA;
-               return cur_stripe + 1;
+               return -1;
             }
 
             LOG(LOG_INFO, "Initializing erasure tables ( nstripe_errors = %d )\n", nstripe_errors);
             ec_init_tables(N, nstripe_errors, handle->decode_matrix, handle->g_tbls);
+
+            // exiting critical section
+            if ( pthread_mutex_unlock( handle->ctxt->erasurelock ) ) {
+               LOG( LOG_ERR, "Failed to relinquish erasurelock after table generation for stripe %d\n", cur_stripe + start_stripe );
+               free(tmpmatrix);
+               free( stripe_err_list );
+               free( stripe_in_err );
+               return -1;
+            }
+            free(tmpmatrix);
 
             handle->e_ready = 1; //indicate that rebuild structures are initialized
          }
@@ -888,8 +912,23 @@ int read_stripes(ne_handle handle) {
          }
 
          LOG(LOG_INFO, "Performing regeneration of stripe %d from erasure\n", cur_stripe + start_stripe);
-
+         // critical section : we are now going to call some inlined assembly erasure funcs
+         if ( pthread_mutex_lock( handle->ctxt->erasurelock ) ) {
+            LOG( LOG_ERR, "Failed to acquire erasurelock prior to regeneration of stripe %d\n", cur_stripe + start_stripe );
+            free(recov);
+            free( stripe_err_list );
+            free( stripe_in_err );
+            return -1;
+         }
          ec_encode_data(partsz, N, nstripe_errors, handle->g_tbls, recov, &temp_buffs[0]);
+         // exiting critical section
+         if ( pthread_mutex_unlock( handle->ctxt->erasurelock ) ) {
+            LOG( LOG_ERR, "Failed to relinquish erasurelock after regeneration of stripe %d\n", cur_stripe + start_stripe );
+            free(recov);
+            free( stripe_err_list );
+            free( stripe_in_err );
+            return -1;
+         }
 
          free(recov);
          free(temp_buffs);
@@ -911,9 +950,17 @@ int read_stripes(ne_handle handle) {
  * This fucntion is intended primarily for use with test utilities and commandline tools.
  * @param const char* path : The complete path template for the erasure stripe
  * @param ne_location max_loc : The maximum pod/cap/scatter values for this context
+ * @param pthread_mutex_t* erasurelock : Reference to a pthread_mutex lock, to be used for synchronizing access
+ *                                       to isa-l erasure generation functions in multi-threaded programs.
+ *                                       If NULL, libne will create such a lock internally.  In such a case,
+ *                                       the internal lock will continue to protect multi-threaded programs
+ *                                       ONLY if they exclusively use a single ne_ctxt at a time.
+ *                                       Multi-threaded programs using multiple ne_ctxt references in parallel
+ *                                       MUST create + initialize their own pthread_mutex and pass it into
+ *                                       ALL ne_init*() calls.
  * @return ne_ctxt : The initialized ne_ctxt or NULL if an error occurred
  */
-ne_ctxt ne_path_init(const char* path, ne_location max_loc, int max_block) {
+ne_ctxt ne_path_init(const char* path, ne_location max_loc, int max_block, pthread_mutex_t* erasurelock) {
    // create a stand-in XML config
    char* configtemplate = "<DAL type=\"posix\"><dir_template>%s</dir_template><sec_root></sec_root></DAL>";
    int len = strlen(path) + strlen(configtemplate);
@@ -957,15 +1004,29 @@ ne_ctxt ne_path_init(const char* path, ne_location max_loc, int max_block) {
    }
 
    // allocate a context struct
-   ne_ctxt ctxt = malloc(sizeof(struct ne_ctxt_struct));
+   ne_ctxt ctxt = calloc(1,sizeof(struct ne_ctxt_struct));
    if (ctxt == NULL) {
       LOG(LOG_ERR, "Failed to allocate an ne_ctxt struct\n");
+      dal->cleanup(dal); // cleanup our DAL context, ignoring errors
       return NULL;
    }
 
    // fill in context elements
    ctxt->max_block = max_block;
    ctxt->dal = dal;
+   // verify or create our erasurelock
+   if ( erasurelock ) {
+      ctxt->erasurelock = erasurelock;
+   }
+   else {
+      if ( pthread_mutex_init( &(ctxt->locallock), NULL ) ) {
+         LOG( LOG_ERR, "failed to intialize internal erasurelock\n" );
+         free( ctxt );
+         dal->cleanup(dal); // cleanup our DAL context, ignoring errors
+         return NULL;
+      }
+      ctxt->erasurelock = &(ctxt->locallock);
+   }
 
    // return the new ne_ctxt
    return ctxt;
@@ -977,9 +1038,17 @@ ne_ctxt ne_path_init(const char* path, ne_location max_loc, int max_block) {
  * @param ne_location max_loc : ne_location struct containing maximum allowable pod/cap/scatter
  *                              values for this context
  * @param int max_block : Integer maximum block value ( N + E ) for this context
+ * @param pthread_mutex_t* erasurelock : Reference to a pthread_mutex lock, to be used for synchronizing access
+ *                                       to isa-l erasure generation functions in multi-threaded programs.
+ *                                       If NULL, libne will create such a lock internally.  In such a case,
+ *                                       the internal lock will continue to protect multi-threaded programs
+ *                                       ONLY if they exclusively use a single ne_ctxt at a time.
+ *                                       Multi-threaded programs using multiple ne_ctxt references in parallel
+ *                                       MUST create + initialize their own pthread_mutex and pass it into
+ *                                       ALL ne_init*() calls.
  * @return ne_ctxt : New ne_ctxt or NULL if an error was encountered
  */
-ne_ctxt ne_init(xmlNode* dal_root, ne_location max_loc, int max_block) {
+ne_ctxt ne_init(xmlNode* dal_root, ne_location max_loc, int max_block, pthread_mutex_t* erasurelock) {
    // Initialize a DAL instance
    DAL_location maxdal = { .pod = max_loc.pod, .block = max_block - 1, .cap = max_loc.cap, .scatter = max_loc.scatter };
    DAL dal = init_dal(dal_root, maxdal);
@@ -990,11 +1059,25 @@ ne_ctxt ne_init(xmlNode* dal_root, ne_location max_loc, int max_block) {
    }
 
    // allocate a new context struct
-   ne_ctxt ctxt = malloc(sizeof(struct ne_ctxt_struct));
+   ne_ctxt ctxt = calloc( 1, sizeof(struct ne_ctxt_struct) );
    if (ctxt == NULL) {
       LOG(LOG_ERR, "failed to allocate memory for a new ne_ctxt struct!\n");
       dal->cleanup(dal); // cleanup our DAL context, ignoring errors
       return NULL;
+   }
+
+   // verify or create our erasurelock
+   if ( erasurelock ) {
+      ctxt->erasurelock = erasurelock;
+   }
+   else {
+      if ( pthread_mutex_init( &(ctxt->locallock), NULL ) ) {
+         LOG( LOG_ERR, "failed to intialize internal erasurelock\n" );
+         free( ctxt );
+         dal->cleanup(dal); // cleanup our DAL context, ignoring errors
+         return NULL;
+      }
+      ctxt->erasurelock = &(ctxt->locallock);
    }
 
    // fill in context values and return
@@ -1025,6 +1108,10 @@ int ne_term(ne_ctxt ctxt) {
    if (ctxt->dal->cleanup(ctxt->dal) != 0) {
       LOG(LOG_ERR, "failed to cleanup DAL context!\n");
       return -1;
+   }
+   // potentially cleanup our local lock
+   if ( ctxt->erasurelock == &(ctxt->locallock) ) {
+      pthread_mutex_destroy( ctxt->erasurelock );
    }
    free(ctxt);
    return 0;
@@ -2571,14 +2658,24 @@ ssize_t ne_write(ne_handle handle, const void* buffer, size_t bytes) {
    // initialize erasure structs (these never change for writes, so we can just check here)
    if (handle->e_ready == 0) {
       LOG(LOG_INFO, "Initializing erasure matricies...\n");
+      // critical section : we are now going to call some inlined assembly erasure funcs
+      if ( pthread_mutex_lock( handle->ctxt->erasurelock ) ) {
+         LOG( LOG_ERR, "Failed to acquire erasurelock prior to regeneration of stripe %d\n", cur_stripe + start_stripe );
+         return -1;
+      }
       // Generate an encoding matrix
       // NOTE: The matrix generated by gf_gen_rs_matrix is not always invertable for N>=6 and E>=5!
       gf_gen_cauchy1_matrix(handle->encode_matrix, N + E, N);
       // Generate g_tbls from encode matrix
       ec_init_tables(N, E, &(handle->encode_matrix[N * N]), handle->g_tbls);
-
+      // exiting critical section
+      if ( pthread_mutex_unlock( handle->ctxt->erasurelock ) ) {
+         LOG( LOG_ERR, "Failed to relinquish erasurelock after regeneration of stripe %d\n", cur_stripe + start_stripe );
+         return -1;
+      }
       handle->e_ready = 1;
    }
+
    // allocate space for our buffer references
    void** tgt_refs = calloc(N + E, sizeof(char*));
    if (tgt_refs == NULL) {
@@ -2639,10 +2736,20 @@ ssize_t ne_write(ne_handle handle, const void* buffer, size_t bytes) {
                // previously written data will be one partsz behind
                tgt_refs[outblock] = ioblock_write_target(handle->iob[outblock]) - partsz;
             }
+            // critical section : we are now going to call some inlined assembly erasure funcs
+            if ( pthread_mutex_lock( handle->ctxt->erasurelock ) ) {
+               LOG( LOG_ERR, "Failed to acquire erasurelock prior to regeneration of stripe %d\n", cur_stripe + start_stripe );
+               free( tgt_refs );
+               return -1;
+            }
             // generate erasure parts
-            ec_encode_data(partsz, N, E, handle->g_tbls,
-               (unsigned char**)tgt_refs,
-               (unsigned char**)&(tgt_refs[N]));
+            ec_encode_data(partsz, N, E, handle->g_tbls, (unsigned char**)tgt_refs, (unsigned char**)&(tgt_refs[N]));
+            // exiting critical section
+            if ( pthread_mutex_unlock( handle->ctxt->erasurelock ) ) {
+               LOG( LOG_ERR, "Failed to relinquish erasurelock after regeneration of stripe %d\n", cur_stripe + start_stripe );
+               free( tgt_refs );
+               return -1;
+            }
             // reset outblock
             outblock = 0;
          }

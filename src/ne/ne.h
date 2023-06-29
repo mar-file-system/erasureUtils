@@ -168,18 +168,34 @@ typedef struct ne_ctxt_struct *ne_ctxt; // forward decl.
  * @param ne_location max_loc : ne_location struct containing maximum allowable pod/cap/scatter
  *                              values for this context
  * @param int max_block : Integer maximum block value ( N + E ) for this context
+ * @param pthread_mutex_t* erasurelock : Reference to a pthread_mutex lock, to be used for synchronizing access
+ *                                       to isa-l erasure generation functions in multi-threaded programs.
+ *                                       If NULL, libne will create such a lock internally.  In such a case,
+ *                                       the internal lock will continue to protect multi-threaded programs
+ *                                       ONLY if they exclusively use a single ne_ctxt at a time.
+ *                                       Multi-threaded programs using multiple ne_ctxt references in parallel
+ *                                       MUST create + initialize their own pthread_mutex and pass it into
+ *                                       ALL ne_init*() calls.
  * @return ne_ctxt : New ne_ctxt or NULL if an error was encountered
  */
-ne_ctxt ne_init(xmlNode *dal_root, ne_location max_loc, int max_block);
+ne_ctxt ne_init(xmlNode *dal_root, ne_location max_loc, int max_block, pthread_mutex_t* erasurelock);
 
 /**
  * Initializes an ne_ctxt with a default posix DAL configuration.
  * This fucntion is intended primarily for use with test utilities and commandline tools.
  * @param const char* path : The complete path template for the erasure stripe
  * @param ne_location max_loc : The maximum pod/cap/scatter values for this context
+ * @param pthread_mutex_t* erasurelock : Reference to a pthread_mutex lock, to be used for synchronizing access
+ *                                       to isa-l erasure generation functions in multi-threaded programs.
+ *                                       If NULL, libne will create such a lock internally.  In such a case,
+ *                                       the internal lock will continue to protect multi-threaded programs
+ *                                       ONLY if they exclusively use a single ne_ctxt at a time.
+ *                                       Multi-threaded programs using multiple ne_ctxt references in parallel
+ *                                       MUST create + initialize their own pthread_mutex and pass it into
+ *                                       ALL ne_init*() calls.
  * @return ne_ctxt : The initialized ne_ctxt or NULL if an error occurred
  */
-ne_ctxt ne_path_init(const char *path, ne_location max_loc, int max_block);
+ne_ctxt ne_path_init(const char *path, ne_location max_loc, int max_block, pthread_mutex_t* erasurelock);
 
 /**
  * Verify an existing ne_ctxt

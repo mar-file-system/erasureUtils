@@ -814,7 +814,7 @@ DAL rec_dal_init(xmlNode *root, DAL_location max_loc)
     dctxt->epat = epat;
 
     // initialize underlying libne instance
-    dctxt->nctxt = ne_init(root, conv_loc(dctxt->lmap, max_loc), 6);
+    dctxt->nctxt = ne_init(root, conv_loc(dctxt->lmap, max_loc), 6, NULL);
     if (dctxt->nctxt == NULL)
     {
       free(dctxt->meta_sfx);

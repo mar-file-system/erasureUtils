@@ -195,7 +195,7 @@ BLOCK_CTXT noop_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const 
    if ( location.block >= dctxt->numblocks  &&
         ( mode == DAL_READ  ||  mode == DAL_METAREAD ) ) {
       LOG( LOG_ERR, "attempted to read from nonexistent block %d ( max cached = %d )\n", location.block, dctxt->numblocks );
-      errno = EEXIST;
+      errno = ENOENT;
       return NULL;
    }
    NOOP_BLOCK_CTXT bctxt = malloc(sizeof(struct noop_block_context_struct));
@@ -504,7 +504,7 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
             sourceloc.block = (int)parseval;
          }
       }
-      else {
+      else if ( root->type != XML_TEXT_NODE ) {
          LOG( LOG_ERR, "encountered unrecognized config element: \"%s\"\n", (char*)root->name );
          break;
       }

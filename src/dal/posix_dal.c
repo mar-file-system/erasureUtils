@@ -387,7 +387,10 @@ static int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL
    // allocate string to hold the dirpath
    // NOTE -- allocation size is an estimate, based on the above pod/block/cap/scat limits
    bctxt->filepath = malloc(sizeof(char) * (dctxt->tmplen + dctxt->dirpad + strlen(objID) + SFX_PADDING + 1));
-
+   if ( bctxt->filepath == NULL ) {
+      LOG( LOG_ERR, "Failed to allocate filepath string of length %d\n", (dctxt->tmplen + dctxt->dirpad + strlen(objID) + SFX_PADDING + 1) );
+      return -1;
+   } // malloc will set errno
    // parse through the directory template string, populating filepath as we go
    const char *parse = dctxt->dirtmp;
    char *fill = bctxt->filepath;
@@ -1522,12 +1525,12 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a posix context
 
    // allocate space for a new BLOCK context
-   POSIX_BLOCK_CTXT bctxt = malloc(sizeof(struct posix_block_context_struct));
+   POSIX_BLOCK_CTXT bctxt = calloc( 1, sizeof(struct posix_block_context_struct));
    if (bctxt == NULL)
    {
       LOG( LOG_ERR, "Failed to allocate a new block ctxt struct\n" );
       return NULL;
-   } // malloc will set errno
+   } // calloc will set errno
 
    // popultate the full file path for this object
    if (expand_dir_template(dctxt, bctxt, location, objID) != 0)

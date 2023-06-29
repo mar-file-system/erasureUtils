@@ -213,7 +213,7 @@ int test_values( ne_erasure* epat, size_t iosz, size_t partsz ) {
 
    // create a new libne ctxt
    ne_location cur_loc = { .pod = 0, .cap = 0, .scatter = 0 };
-   ne_ctxt ctxt = ne_path_init ( "./test_libne_io.block{b}.pod{p}.cap{c}.scatter{s}", cur_loc, epat->N + epat->E );
+   ne_ctxt ctxt = ne_path_init ( "./test_libne_io.block{b}.pod{p}.cap{c}.scatter{s}", cur_loc, epat->N + epat->E , NULL);
    if ( ctxt == NULL ) {
       printf( "ERROR: Failed to initialize ne_ctxt!\n" );
       return -1;

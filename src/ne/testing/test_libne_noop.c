@@ -234,7 +234,7 @@ int test_values(xmlNode *root_element, ne_erasure *epat, size_t iosz, size_t par
 
   // start by creating a source dal libne ctxt
   ne_location max_loc = {.pod = 1, .cap = 2, .scatter = 3};
-  ne_ctxt pctxt = ne_init(root_element->children, max_loc, epat->N + epat->E);
+  ne_ctxt pctxt = ne_init(root_element->children, max_loc, epat->N + epat->E, NULL);
   if (pctxt == NULL)
   {
     printf("ERROR: Failed to initialize ne_ctxt!\n");
@@ -279,7 +279,7 @@ int test_values(xmlNode *root_element, ne_erasure *epat, size_t iosz, size_t par
 
 
   // create a new libne ctxt
-  ne_ctxt ctxt = ne_init(root_element, max_loc, epat->N + epat->E);
+  ne_ctxt ctxt = ne_init(root_element, max_loc, epat->N + epat->E, NULL);
   if (ctxt == NULL)
   {
     printf("ERROR: Failed to initialize ne_ctxt 2!\n");
