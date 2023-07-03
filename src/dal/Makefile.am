@@ -70,7 +70,7 @@ if S3DAL
 S3_SOURCES = s3_dal.c
 endif
 
-libdal_la_SOURCES = posix_dal.c dal.c fuzzing_dal.c $(S3_SOURCES) timer_dal.c noop_dal.c
+libdal_la_SOURCES = posix_dal.c dal.c fuzzing_dal.c $(S3_SOURCES) timer_dal.c noop_dal.c metainfo.c
 libdal_la_CFLAGS = $(XML_CFLAGS)
 DAL_LIB = libdal.la
 

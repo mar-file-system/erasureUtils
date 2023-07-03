@@ -126,7 +126,8 @@ int main(int argc, char **argv)
       return -1;
    }
    char *meta_val = "this is a meta value!\n";
-   if (dal->set_meta(block, meta_val, 22))
+   meta_info meta_val = { .N = 3, .E = 1, .O = 3, .partsz = 4096, .versz = 1048576, .blocksz = 10485760, .crcsum = 1234567, .totsz = 7654321 };
+   if (dal->set_meta(block, &meta_val))
    {
       printf("error: set_meta did not return expected value\n");
       return -1;
@@ -160,12 +161,13 @@ int main(int argc, char **argv)
       printf("error: retrieved data does not match written!\n");
       return -1;
    }
-   if (dal->get_meta(block, readbuffer, (10 * 1024)) != 22)
+   meta_info readmeta;
+   if (dal->get_meta(block, &readmeta))
    {
       printf("error: get_meta returned an unexpected value\n");
       return -1;
    }
-   if (strncmp(meta_val, readbuffer, 22))
+   if (cmp_minfo(&meta_val, &readmeta))
    {
       printf("error: retrieved meta value does not match written!\n");
       return -1;
@@ -213,8 +215,8 @@ int main(int argc, char **argv)
       printf("error: put did not return expected value\n");
       return -1;
    }
-   char *meta_val_2 = "this is another meta value!\n";
-   if (dal->set_meta(block, meta_val_2, 28))
+   meta_info meta_val_2 = { .N = 0, .E = 1, .O = 3, .partsz = 4096, .versz = 1048576, .blocksz = 10485760, .crcsum = 1234567, .totsz = 7654321 };
+   if (dal->set_meta(block, &meta_val_2))
    {
       printf("error: set_meta did not return expected value\n");
       return -1;
@@ -248,14 +250,14 @@ int main(int argc, char **argv)
       printf("error: retrieved data does not match written!\n");
       return -1;
    }
-   int gmres = dal->get_meta(block, readbuffer, (10 * 1024));
-   if (gmres != 22)
+   int gmres = dal->get_meta(block, &readmeta);
+   if (gmres)
    {
       printf("error: get_meta returned an unexpected value: %d, %s\n", gmres, (char *)readbuffer);
       return -1;
       ;
    }
-   if (strncmp(meta_val, readbuffer, 22))
+   if (cmp_minfo(&meta_val, &readmeta))
    {
       printf("error: retrieved meta value does not match written! \n");
       return -1;

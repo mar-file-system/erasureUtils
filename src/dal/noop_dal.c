@@ -68,6 +68,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "logging/logging.h"
 
 #include "dal.h"
+#include "general_include/crcs.c"
 
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -83,26 +84,103 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 typedef struct noop_dal_context_struct
 {
-   int   numblocks;  // Number of blocks for which we have cached info
-   char**   c_meta;  // Cached metadata buffer(s) for future read ops
-   size_t* metalen;  // Length of each cached metadata buffer
-   void**   c_data;  // Cached data buffer(s) for future read ops
-   size_t* datalen;  // Length of each cached data buffer
-   size_t* maxdata;  // Total ( theoretical ) size of each cached data block
-                     // NOTE -- Data content beyond the 'datalen' value will
-                     //         be generated via repeated reuse of the cached
-                     //         buffer.  As in, 'datalen' sized buffers,
-                     //         repeated up to 'maxdata' total data size.
+   meta_info   minfo;  // meta info values to be returned to the caller
+   void*      c_data;  // cached data buffer, representing each 'complete' I/O
+   void* c_data_tail;  // cached data buffer, representing a trailing 'partial' I/O ( if any )
+   size_t  tail_size;  // size of the c_data_tail buffer
 } * NOOP_DAL_CTXT;
 
 typedef struct noop_block_context_struct
 {
    NOOP_DAL_CTXT dctxt; // Global DAL context
    DAL_MODE       mode; // Mode of this block ctxt
-   int           block; // Block number which this corresponds to
 } * NOOP_BLOCK_CTXT;
 
 //   -------------    NO-OP INTERNAL FUNCTIONS    -------------
+
+
+/**
+ * (INTERNAL HELPER FUNC)
+ * Parse the content of an xmlNode to populate an int value
+ * @param int* target : Reference to the value to populate
+ * @param xmlNode* node : Node to be parsed
+ * @return int : Zero on success, -1 on error
+ */
+int parse_int_node( int* target, xmlNode* node ) {
+   // check for an included value
+   if ( node->children != NULL  &&
+        node->children->type == XML_TEXT_NODE  &&
+        node->children->content != NULL ) {
+      char* valuestr = (char*)node->children->content;
+      char* endptr = NULL;
+      unsigned long long parsevalue = strtoull( valuestr, &(endptr), 10 );
+      // check for any trailing unit specification
+      if ( *endptr != '\0' ) {
+         LOG( LOG_ERR, "encountered unrecognized trailing character in \"%s\" value: \"%c\"", (char*)node->name, *endptr );
+         return -1;
+      }
+      if ( parsevalue >= INT_MAX ) {  // check for possible overflow
+         LOG( LOG_ERR, "specified \"%s\" value is too large to store: \"%s\"\n", (char*)node->name, valuestr );
+         return -1;
+      }
+      // actually store the value
+      *target = parsevalue;
+      return 0;
+   }
+   LOG( LOG_ERR, "failed to identify a value string within the \"%s\" definition\n", (char*)node->name );
+   return -1;
+}
+
+/**
+ * (INTERNAL HELPER FUNC)
+ * Parse the content of an xmlNode to populate a size value
+ * @param size_t* target : Reference to the value to populate
+ * @param xmlNode* node : Node to be parsed
+ * @return int : Zero on success, -1 on error
+ */
+int parse_size_node( ssize_t* target, xmlNode* node ) {
+   // check for unexpected node format
+   if ( node->children == NULL  ||  node->children->type != XML_TEXT_NODE ) {
+      LOG( LOG_ERR, "unexpected format of size node: \"%s\"\n", (char*)node->name );
+      return -1;
+   }
+   // check for an included value
+   if ( node->children->content != NULL ) {
+      char* valuestr = (char*)node->children->content;
+      size_t unitmult = 1;
+      char* endptr = NULL;
+      unsigned long long parsevalue = strtoull( valuestr, &(endptr), 10 );
+      // check for any trailing unit specification
+      if ( *endptr != '\0' ) {
+         if ( *endptr == 'K' ) { unitmult = 1024ULL; }
+         else if ( *endptr == 'M' ) { unitmult = 1048576ULL; }
+         else if ( *endptr == 'G' ) { unitmult = 1073741824ULL; }
+         else if ( *endptr == 'T' ) { unitmult = 1099511627776ULL; }
+         else if ( *endptr == 'P' ) { unitmult = 1125899906842624ULL; }
+         else {
+            LOG( LOG_ERR, "encountered unrecognized character in \"%s\" value: \"%c\"", (char*)node->name, *endptr );
+            return -1;
+         }
+         // check for unacceptable trailing characters
+         endptr++;
+         if ( *endptr != '\0' ) {
+            LOG( LOG_ERR, "encountered unrecognized trailing character in \"%s\" value: \"%c\"", (char*)node->name, *endptr );
+            return -1;
+         }
+      }
+      if ( (parsevalue * unitmult) >= SSIZE_MAX ) {  // check for possible overflow
+         LOG( LOG_ERR, "specified \"%s\" value is too large to store: \"%s\"\n", (char*)node->name, valuestr );
+         return -1;
+      }
+      // actually store the value
+      LOG( LOG_INFO, "detected value of %llu with unit of %zu for \"%s\" node\n", parsevalue, unitmult, (char*)node->name );
+      *target = (parsevalue * unitmult);
+      return 0;
+   }
+   // allow empty string to indicate zero value
+   *target = 0;
+   return 0;
+}
 
 
 //   -------------    NO-OP IMPLEMENTATION    -------------
@@ -160,24 +238,8 @@ int noop_cleanup(DAL dal)
    }
    NOOP_DAL_CTXT dctxt = (NOOP_DAL_CTXT)dal->ctxt; // Should have been passed a DAL context
    // Free DAL and its context state
-   int curblock;
-   if ( dctxt->c_meta ) {
-      // free all meta buffers
-      for ( curblock = 0; curblock < dctxt->numblocks; curblock++ ) {
-         if ( dctxt->c_meta[curblock] ) { free( dctxt->c_meta[curblock] ); }
-      }
-      free( dctxt->c_meta );
-   }
-   if ( dctxt->metalen ) { free( dctxt->metalen ); }
-   if ( dctxt->c_data ) {
-      // free all data buffers
-      for ( curblock = 0; curblock < dctxt->numblocks; curblock++ ) {
-         if ( dctxt->c_data[curblock] ) { free( dctxt->c_data[curblock] ); }
-      }
-      free( dctxt->c_data );
-   }
-   if ( dctxt->datalen ) { free( dctxt->datalen ); }
-   if ( dctxt->maxdata ) { free( dctxt->maxdata ); }
+   if ( dctxt->c_data ) { free( dctxt->c_data ); }
+   if ( dctxt->c_data_tail ) { free( dctxt->c_data_tail ); }
    free(dctxt);
    free(dal);
    return 0;
@@ -192,12 +254,6 @@ BLOCK_CTXT noop_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const 
    }
    NOOP_DAL_CTXT dctxt = (NOOP_DAL_CTXT)ctxt; // Should have been passed a DAL context
    // attempting to read from a non-cached block is an error
-   if ( location.block >= dctxt->numblocks  &&
-        ( mode == DAL_READ  ||  mode == DAL_METAREAD ) ) {
-      LOG( LOG_ERR, "attempted to read from nonexistent block %d ( max cached = %d )\n", location.block, dctxt->numblocks );
-      errno = ENOENT;
-      return NULL;
-   }
    NOOP_BLOCK_CTXT bctxt = malloc(sizeof(struct noop_block_context_struct));
    if (bctxt == NULL)
    {
@@ -207,11 +263,10 @@ BLOCK_CTXT noop_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const 
    // populate values and global ctxt reference
    bctxt->dctxt = dctxt;
    bctxt->mode = mode;
-   bctxt->block = location.block; // pod, cap, scat are all irrelevant for this DAL
    return bctxt;
 }
 
-int noop_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
+int noop_set_meta(BLOCK_CTXT ctxt, const meta_info* source)
 {
    if (ctxt == NULL)
    {
@@ -230,7 +285,7 @@ int noop_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
    return 0;
 }
 
-ssize_t noop_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
+int noop_get_meta(BLOCK_CTXT ctxt, meta_info* dest )
 {
    if (ctxt == NULL)
    {
@@ -244,14 +299,8 @@ ssize_t noop_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
       errno = EINVAL;
       return -1;
    }
-   // Return cached metadata, if present
-   if (bctxt->dctxt->c_meta  &&  bctxt->dctxt->c_meta[bctxt->block]  &&  bctxt->dctxt->metalen[bctxt->block])
-   {
-      size_t maxcopy = ( size > bctxt->dctxt->metalen[bctxt->block] ) ? bctxt->dctxt->metalen[bctxt->block] : size;
-      memcpy(meta_buf, bctxt->dctxt->c_meta[bctxt->block], maxcopy);
-      return bctxt->dctxt->metalen[bctxt->block]; // always return the maximum, so the caller knows if it is missing info
-   }
-   // no cached metadata exists ( not necessarily a total failure )
+   // Return cached metadata
+   memcpy(dest, &(bctxt->dctxt->minfo), sizeof(struct meta_info_struct));
    return 0;
 }
 
@@ -287,30 +336,42 @@ ssize_t noop_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
       errno = EINVAL;
       return -1;
    }
-   // validate offset
-   if ( offset > bctxt->dctxt->maxdata[bctxt->block] ) {
-      LOG( LOG_ERR, "offset %zd is beyond EOF at %zu\n", offset, bctxt->dctxt->maxdata[bctxt->block] );
-      errno = EINVAL;
-      return -1;
-   }
    // Return cached data, if present
    if (bctxt->dctxt->c_data  &&  bctxt->dctxt->c_data[bctxt->block]  &&  bctxt->dctxt->datalen[bctxt->block])
    {
-      size_t maxcopy = ( size > (bctxt->dctxt->maxdata[bctxt->block] - offset) ) ? (bctxt->dctxt->datalen[bctxt->block] - offset) : size;
+      // validate offset
+      if ( offset > bctxt->dctxt->minfo.blocksz ) {
+         LOG( LOG_ERR, "offset %zd is beyond EOF at %zu\n", offset, bctxt->dctxt->minfo.blocksz );
+         errno = EINVAL;
+         return -1;
+      }
+
+      // copy from our primary data buff first
+      size_t maxcopy = ( size > (bctxt->dctxt->minfo.blocksz - offset) ) ? (bctxt->dctxt->minfo.blocksz - offset) : size;
       size_t copied = 0;
-      while ( copied < maxcopy ) {
+      while ( copied < maxcopy  &&  offset < (bctxt->dctxt->minfo.blocksz - bctxt->dctxt->tail_size) ) {
          // calculate the offset and size to pull from our buffer
-         off_t suboffset = offset % bctxt->dctxt->datalen[bctxt->block]; // get an offset in terms of this buffer iteration
+         off_t suboffset = offset % bctxt->dctxt->minfo.versz; // get an offset in terms of this buffer iteration
          size_t copysize = maxcopy - copied; // start with the total remaining bytes
-         if ( copysize > bctxt->dctxt->datalen[bctxt->block] ) // reduce to our buffer size, at most
-            copysize = bctxt->dctxt->datalen[bctxt->block];
+         if ( copysize > bctxt->dctxt->minfo.versz ) // reduce to our buffer size, at most
+            copysize = bctxt->dctxt->minfo.versz;
          copysize -= suboffset; // exclude our starting offset
-         memcpy(buf + copied, bctxt->dctxt->c_data[bctxt->block] + suboffset, copysize);
+         memcpy(buf + copied, bctxt->dctxt->c_data + suboffset, copysize);
          // increment our offset and copied count to include the newly copied data
          copied += copysize;
          offset += copysize;
       }
-      return maxcopy; // return however many bytes were provided
+      // fill any remaining from our tail buffer
+      if ( copied < maxcopy ) {
+         off_t suboffset = offset % bctxt->dctxt->minfo.versz; // get an offset in terms of this buffer iteration
+         size_t copysize = maxcopy - copied; // start with the total remaining bytes
+         if ( copysize > bctxt->dctxt->tail_size ) // reduce to our buffer size, at most
+            copysize = bctxt->dctxt->tail_size;
+         copysize -= suboffset; // exclude our starting offset
+         memcpy(buf + copied, bctxt->dctxt->c_data_tail + suboffset, copysize);
+         copied += copysize;
+      }
+      return copied; // return however many bytes were provided
    }
    // no cached datadata exists ( not necessarily a total failure )
    return 0;
@@ -353,6 +414,11 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
       LOG( LOG_ERR, "failed to allocate a new DAL ctxt\n" );
       return NULL;
    }
+   // initialize values to indicate absence
+   dctxt.minfo.N = -1;
+   dctxt.minfo.E = -1;
+   // initialize versz to match io size
+   dctxt.minfo.versz = IO_SIZE;
 
    // allocate and populate a new DAL structure
    DAL ndal = malloc(sizeof(struct DAL_struct));
@@ -379,133 +445,42 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
    ndal->cleanup = noop_cleanup;
 
    // loop over XML elements, checking for a read-chache source
-   const char* sourceobj = NULL;
-   DAL_location sourceloc = {
-      .pod = -1,
-      .block = -1,
-      .cap = -1,
-      .scatter = -1
-   };
-   DAL sourcedal = NULL;
    while ( root != NULL ) {
-      if ( root->type == XML_ELEMENT_NODE  &&  strncmp( (char*)root->name, "DAL", 4 ) == 0 ) {
-         // check for duplicate
-         if ( sourcedal ) {
-            LOG( LOG_ERR, "detected duplicate source DAL definitions\n" );
-            break;
-         }
-         // try to initialize our source DAL
-         sourcedal = init_dal( root, max_loc );
-         if ( sourcedal == NULL ) {
-            LOG( LOG_ERR, "failed to intialize source DAL\n" );
+      // validate + parse this node
+      if ( root->type != XML_ELEMENT_NODE ) {
+         // skip comment nodes
+         if ( root->type == XML_COMMENT_NODE ) { continue; }
+         // skip text nodes ( could occur if we are passed an empty DAL tag body )
+         if ( root->type == XML_TEXT_NODE ) { continue; }
+         LOG( LOG_ERR, "encountered unknown node within a NoOp DAL definition\n" );
+         break;
+      }
+      if ( strncmp( (char*)root->name, "N", 2 ) == 0 ) {
+         if( parse_int_node( &(dctxt.minfo.N), root ) ) {
+            LOG( LOG_ERR, "failed to parse 'N' value\n" );
             break;
          }
       }
-      else if ( root->type == XML_ELEMENT_NODE  &&  strncmp( (char*)root->name, "obj", 4 ) == 0 ) {
-         // check for duplicate
-         if ( sourceobj ) {
-            LOG( LOG_ERR, "detected duplicate 'obj' definition\n" );
+      else if ( strncmp( (char*)root->name, "E", 2 ) == 0 ) {
+         if( parse_int_node( &(dctxt.minfo.E), root ) ) {
+            LOG( LOG_ERR, "failed to parse 'E' value\n" );
             break;
          }
-         if ( root->children  &&  root->children->type == XML_TEXT_NODE ) {
-            // store a ref to this string
-            sourceobj = (const char*)root->children->content;
-         }
       }
-      else if ( root->type == XML_ELEMENT_NODE  &&  strncmp( (char*)root->name, "pod", 4 ) == 0 ) {
-         // check for duplicate
-         if ( sourceloc.pod >= 0 ) {
-            LOG( LOG_ERR, "detected duplicate 'pod' definition\n" );
+      else if ( strncmp( (char*)root->name, "PSZ", 4 ) == 0 ) {
+         if( parse_size_node( &(dctxt.minfo.partsz), root ) ) {
+            LOG( LOG_ERR, "failed to parse 'PSZ' value\n" );
             break;
          }
-         if ( root->children  &&  root->children->type == XML_TEXT_NODE  &&  root->children->content ) {
-            // parse this text as a decimal number
-            char* endptr = NULL;
-            long int parseval = strtol( (char*)root->children->content, &endptr, 10 );
-            // check for parse failure
-            if ( endptr  &&  ( *endptr != '\0'  ||  *((char*)root->children->content) == '\0' ) ) {
-               LOG( LOG_ERR, "failed to parse 'pod' value: \"%s\"\n", (char*)root->children->content );
-               break;
-            }
-            // check for type overflow
-            if ( parseval > INT_MAX ) {
-               LOG( LOG_ERR, "'pod' value exceeds type bounds: %ld\n", parseval );
-               break;
-            }
-            sourceloc.pod = (int)parseval;
-         }
       }
-      else if ( root->type == XML_ELEMENT_NODE  &&  strncmp( (char*)root->name, "cap", 4 ) == 0 ) {
-         // check for duplicate
-         if ( sourceloc.cap >= 0 ) {
-            LOG( LOG_ERR, "detected duplicate 'cap' definition\n" );
+      else if ( strncmp( (char*)root->name, "max_size", 9 ) == 0 ) {
+         if( parse_size_node( &(dctxt.minfo.totsz), root ) ) {
+            LOG( LOG_ERR, "failed to parse 'max_size' value\n" );
             break;
          }
-         if ( root->children  &&  root->children->type == XML_TEXT_NODE  &&  root->children->content ) {
-            // parse this text as a decimal number
-            char* endptr = NULL;
-            long int parseval = strtol( (char*)root->children->content, &endptr, 10 );
-            // check for parse failure
-            if ( endptr  &&  ( *endptr != '\0'  ||  *((char*)root->children->content) == '\0' ) ) {
-               LOG( LOG_ERR, "failed to parse 'cap' value: \"%s\"\n", (char*)root->children->content );
-               break;
-            }
-            // check for type overflow
-            if ( parseval > INT_MAX ) {
-               LOG( LOG_ERR, "'cap' value exceeds type bounds: %ld\n", parseval );
-               break;
-            }
-            sourceloc.cap = (int)parseval;
-         }
       }
-      else if ( root->type == XML_ELEMENT_NODE  &&  strncmp( (char*)root->name, "scat", 5 ) == 0 ) {
-         // check for duplicate
-         if ( sourceloc.scatter >= 0 ) {
-            LOG( LOG_ERR, "detected duplicate 'scat' definition\n" );
-            break;
-         }
-         if ( root->children  &&  root->children->type == XML_TEXT_NODE  &&  root->children->content ) {
-            // parse this text as a decimal number
-            char* endptr = NULL;
-            long int parseval = strtol( (char*)root->children->content, &endptr, 10 );
-            // check for parse failure
-            if ( endptr  &&  ( *endptr != '\0'  ||  *((char*)root->children->content) == '\0' ) ) {
-               LOG( LOG_ERR, "failed to parse 'scat' value: \"%s\"\n", (char*)root->children->content );
-               break;
-            }
-            // check for type overflow
-            if ( parseval > INT_MAX ) {
-               LOG( LOG_ERR, "'scat' value exceeds type bounds: %ld\n", parseval );
-               break;
-            }
-            sourceloc.scatter = (int)parseval;
-         }
-      }
-      else if ( root->type == XML_ELEMENT_NODE  &&  strncmp( (char*)root->name, "width", 6 ) == 0 ) {
-         // check for duplicate
-         if ( sourceloc.block >= 0 ) {
-            LOG( LOG_ERR, "detected duplicate 'width' definition\n" );
-            break;
-         }
-         if ( root->children  &&  root->children->type == XML_TEXT_NODE  &&  root->children->content ) {
-            // parse this text as a decimal number
-            char* endptr = NULL;
-            long int parseval = strtol( (char*)root->children->content, &endptr, 10 );
-            // check for parse failure
-            if ( endptr  &&  ( *endptr != '\0'  ||  *((char*)root->children->content) == '\0' ) ) {
-               LOG( LOG_ERR, "failed to parse 'width' value: \"%s\"\n", (char*)root->children->content );
-               break;
-            }
-            // check for type overflow
-            if ( parseval > INT_MAX ) {
-               LOG( LOG_ERR, "'width' value exceeds type bounds: %ld\n", parseval );
-               break;
-            }
-            sourceloc.block = (int)parseval;
-         }
-      }
-      else if ( root->type != XML_TEXT_NODE ) {
-         LOG( LOG_ERR, "encountered unrecognized config element: \"%s\"\n", (char*)root->name );
+      else {
+         LOG( LOG_ERR, "encountered an unrecognized \"%s\" node within a NoOp DAL definition\n", (char*)subnode->name );
          break;
       }
       // progress to the next element
@@ -513,136 +488,80 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
    }
    // check for fatal error
    if ( root ) {
-      if ( sourcedal ) { sourcedal->cleanup( sourcedal ); }
       noop_cleanup(ndal);
       return NULL;
    }
    // validate and ingest any cache source
-   if ( sourcedal  ||  sourceobj  ||  sourceloc.pod >= 0  ||  sourceloc.block >= 0  ||  sourceloc.cap >= 0  ||  sourceloc.scatter >= 0 ) {
+   if ( dctxt.minfo.N != -1  ||  dctxt.minfo.E != -1  ||  dctxt.minfo.partsz > 0  ||  dctxt.minfo.totsz > 0 ) {
       // we're no in do-or-die mode for source caching
       // we have some values -- ensure we have all of them
       char fatalerror = 0;
-      if ( sourcedal == NULL ) {
-         LOG( LOG_ERR, "missing source cache 'DAL' definition\n" );
+      if ( dctxt.minfo.N == -1 ) {
+         LOG( LOG_ERR, "missing source cache 'N' definition\n" );
          fatalerror = 1;
       }
-      if ( sourceobj == NULL ) {
-         LOG( LOG_ERR, "missing source cache 'obj' definition\n" );
+      if ( dctxt.minfo.E == -1 ) {
+         LOG( LOG_ERR, "missing source cache 'E' definition\n" );
          fatalerror = 1;
       }
-      if ( sourceloc.pod < 0 ) {
-         LOG( LOG_ERR, "missing source cache 'pod' definition\n" );
+      if ( dctxt.minfo.partsz <= 0 ) {
+         LOG( LOG_ERR, "missing source cache 'PSZ' definition\n" );
          fatalerror = 1;
       }
-      if ( sourceloc.cap < 0 ) {
-         LOG( LOG_ERR, "missing source cache 'cap' definition\n" );
-         fatalerror = 1;
-      }
-      if ( sourceloc.scatter < 0 ) {
-         LOG( LOG_ERR, "missing source cache 'scat' definition\n" );
-         fatalerror = 1;
-      }
-      if ( sourceloc.block < 0 ) {
-         LOG( LOG_ERR, "missing source cache 'width' definition\n" );
+      if ( dctxt.minfo.totsz <= 0 ) {
+         LOG( LOG_ERR, "missing source cache 'max_size' definition\n" );
          fatalerror = 1;
       }
       if ( fatalerror ) {
-         if ( sourcedal ) { sourcedal->cleanup( sourcedal ); }
          noop_cleanup(ndal);
          return NULL;
       }
 
-      // update our dal iosize to match that of the source dal
-      ndal->io_size = sourcedal->io_size;
-
-      // allocate all cache list elements
-      dctxt->numblocks = sourceloc.block;
-      dctxt->c_meta =  calloc( dctxt->numblocks, sizeof(char*) );
-      dctxt->metalen = calloc( dctxt->numblocks, sizeof(size_t) );
-      dctxt->c_data =  calloc( dctxt->numblocks, sizeof(void*) );
-      dctxt->datalen = calloc( dctxt->numblocks, sizeof(size_t) );
-      dctxt->maxdata = calloc( dctxt->numblocks, sizeof(size_t) );
-      if ( dctxt->c_meta == NULL  ||  dctxt->metalen == NULL  ||  dctxt->c_data == NULL  ||  dctxt->datalen == NULL  ||  dctxt->maxdata == NULL ) {
-         LOG( LOG_ERR, "failed to allocate all cache elements\n" );
-         sourcedal->cleanup( sourcedal );
+      // allocate and populate our primary data buffer
+      dctxt->c_data =  calloc( 1, dctxt->versz );
+      if ( dctxt->c_data == NULL ) {
+         LOG( LOG_ERR, "failed to allocate cached data buffer\n" );
          noop_cleanup(ndal);
          return NULL;
       }
+      size_t datasize = dctxt->versz - sizeof(uint32_t);
+      uint32_t crcval = crc32_ieee_base(CRC_SEED, dctxt->c_data, datasize);
+      *(uint32_t*)( dctxt->c_data + datasize ) = crcval;
 
-      // iterate over all blocks and populate all cached info
-      for ( sourceloc.block = 0; sourceloc.block < dctxt->numblocks; sourceloc.block++ ) {
-         // open a block ctxt
-         BLOCK_CTXT sourceblock = sourcedal->open( sourcedal->ctxt, DAL_READ, sourceloc, sourceobj );
-         if ( sourceblock == NULL ) {
-            // doesn't necessarily have to be a failure ( we could consider this a block with no data / no meta info )
-            // However, that seems likely to create confusion.  We'll just abort instead.
-            LOG( LOG_ERR, "failed to open cache source block %d\n", sourceloc.block );
-            break;
+      // calculate our blocksize
+      size_t totalwritten = dctxt->minfo.totsz; // note the total volume of data to be contained in this object
+      totalwritten += totalwritten % (dctxt->minfo.partsz * dctxt->minfo.N); // account for erasure stripe alignment
+      size_t iocnt = totalwritten / (datasize * dctxt->minfo.N); // calculate the number of buffers required to store this info
+      dctxt->minfo.blocksz = iocnt * dctxt->minfo.versz; // record blocksz based on number of complete I/O buffers
+      uint32_t tail_crcval = 0;
+      if ( totalwritten % (datasize * dctxt->minfo.N) ) { // account for misalignment
+         // populate our 'tail' data buffer info
+         size_t remainder = totalwritten % (datasize * dctxt->minfo.N);
+         if ( remainder % dctxt->minfo.N ) { // sanity check
+            LOG( LOG_ERR, "Remainder value of %zu is not cleanly divisible by N=%d ( tell 'gransom' that he doesn't understand math )\n",
+                          remainder, dctxt->minfo.N );
+            noop_cleanup(ndal);
+            return NULL;
          }
-         // populate meta info
-         ssize_t metalen = sourcedal->get_meta( sourceblock, NULL, 0 );
-         if ( metalen < 0 ) {
-            LOG( LOG_ERR, "failed to identify meta length of block %d\n", sourceloc.block );
-            sourcedal->close( sourceblock );
-            break;
+         remainder /= dctxt->minfo.N;
+         dctxt->tail_size = remainder + sizeof(uint32_t);
+         dctxt->minfo.blocksz += dctxt->tail_size;
+         dctxt->c_data_tail = calloc( 1, dctxt->tail_size );
+         if ( dctxt->c_data_tail == NULL ) {
+            LOG( LOG_ERR, "Failed to allocate c_data_tail buffer\n" );
+            noop_cleanup(ndal);
+            return NULL;
          }
-         dctxt->metalen[sourceloc.block] = (size_t)metalen;
-         dctxt->c_meta[sourceloc.block] = calloc( metalen, sizeof(char) );
-         if ( dctxt->c_meta[sourceloc.block] == NULL ) {
-            LOG( LOG_ERR, "failed to allocate meta buffer for cache source block %d of length %zd\n", sourceloc.block, metalen );
-            sourcedal->close( sourceblock );
-            break;
-         }
-         if ( sourcedal->get_meta( sourceblock, dctxt->c_meta[sourceloc.block], dctxt->metalen[sourceloc.block] ) != metalen ) {
-            LOG( LOG_ERR, "inconsistent length of meta buffer for cache source block %d\n", sourceloc.block );
-            sourcedal->close( sourceblock );
-            break;
-         }
-         // populate data info
-         dctxt->c_data[sourceloc.block] = malloc( sourcedal->io_size );
-         void* cmp_data = malloc( sourcedal->io_size );
-         if ( dctxt->c_data[sourceloc.block] == NULL  ||  cmp_data == NULL ) {
-            LOG( LOG_ERR, "failed to allocate data cache buffers for source block %d\n", sourceloc.block );
-            if ( dctxt->c_data[sourceloc.block] ) { free( dctxt->c_data[sourceloc.block] ); }
-            if ( cmp_data ) { free( cmp_data ); }
-            sourcedal->close( sourceblock );
-            break;
-         }
-         dctxt->datalen[sourceloc.block] = sourcedal->io_size;
-         ssize_t getres = sourcedal->get( sourceblock, dctxt->c_data[sourceloc.block], sourcedal->io_size, 0 );
-         while ( getres > 0 ) {
-            dctxt->maxdata[sourceloc.block] += getres; // add the most recent 'get' to our max data value
-            getres = sourcedal->get( sourceblock, cmp_data, sourcedal->io_size, dctxt->maxdata[sourceloc.block] );
-            if ( getres > 0 ) {
-               // compare this new buffer against our original
-               if ( memcmp( cmp_data, dctxt->c_data[sourceloc.block], getres ) ) {
-                  LOG( LOG_ERR, "detected cached data buffer mismatch for block %d in buffer spanning bytes %zu to %zu\n",
-                                sourceloc.block, dctxt->maxdata[sourceloc.block], dctxt->maxdata[sourceloc.block] + getres );
-                  free( cmp_data );
-                  sourcedal->close( sourceblock );
-                  sourcedal->cleanup( sourcedal );
-                  noop_cleanup(ndal);
-                  return NULL;
-               }
-            }
-         }
-         free( cmp_data ); // no longer needed
-         // close our handle
-         if ( sourcedal->close( sourceblock ) ) {
-            LOG( LOG_ERR, "close error on cache source block %d\n", sourceloc.block );
-            break;
-         }
-         if ( getres < 0 ) {
-            LOG( LOG_ERR, "read error from cache source block %d after %zu bytes read\n", sourceloc.block, dctxt->maxdata[sourceloc.block] );
-            break;
-         }
+         tail_crcval = crc32_ieee_base(CRC_SEED, dctxt->c_data_tail, remainder);
+         *(uint32_t*)( dctxt->c_data_tail + remainder ) = tail_crcval;
       }
-      sourcedal->cleanup( sourcedal ); // no longer needed
-      // check for error
-      if ( sourceloc.block != dctxt->numblocks ) {
-         noop_cleanup(ndal);
-         return NULL;
+
+      // calculate our crcsum
+      size_t ioindex = 0;
+      for ( ; ioindex < iocnt; ioindex++ ) {
+         dctxt->minfo.crcsum += crcval;
       }
+      dctxt->minfo.crcsum += tail_crcval;
    }
    // NOTE -- no source cache defs is valid ( all reads will fail )
    //         only 'some', but not all source defs will result in init() error

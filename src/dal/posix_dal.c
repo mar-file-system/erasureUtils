@@ -70,6 +70,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "logging/logging.h"
 
 #include "dal.h"
+#include "metainfo.h"
 
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -838,14 +839,79 @@ normal:
    return num_err;
 }
 
+/** (INTERNAL HELPER FUNCTION)
+ * Set meta info as an xattr of the given block
+ * @param BLOCK_CTXT ctxt : Reference to the target block
+ * @param const char* meta_buf : Reference to the source buffer
+ * @param size_t size : Size of the source buffer
+ * @return int : Zero on success, or -1 on failure
+ */
+int posix_set_meta_internal(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
+{
+
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
+   POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
+
+   // reseek to the start of the sidecar file
+   if ( lseek( bctxt->mfd, 0, SEEK_SET ) ) {
+      LOG( LOG_ERR, "failed to reseek to start of meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
+      return -1;
+   }
+   // write the provided buffer out to the sidecar file
+   if (write(bctxt->mfd, meta_buf, size) != size)
+   {
+      LOG(LOG_ERR, "failed to write buffer to meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
+      return -1;
+   }
+
+   return 0;
+}
+
+/** (INTERNAL HELPER FUNCTION)
+ * Get meta info from the xattr of the given block
+ * @param BLOCK_CTXT ctxt : Reference to the target block
+ * @param const char* meta_buf : Reference to the buffer to be populated
+ * @param size_t size : Size of the dest buffer
+ * @return ssize_t : Total meta info size for the block, or -1 on failure
+ */
+ssize_t posix_get_meta_internal(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
+{
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
+   POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
+
+   // reseek to the start of the sidecar file
+   if ( lseek( bctxt->mfd, 0, SEEK_SET ) ) {
+      LOG( LOG_ERR, "failed to reseek to start of meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
+      return -1;
+   }
+   ssize_t result = read(bctxt->mfd, meta_buf, size);
+   // potentially indicate excess meta information
+   if ( result == size ) {
+      // we need to stat this sidecar file to get the total meta info length
+      struct stat stval;
+      if ( fstat(bctxt->mfd, &stval) ) {
+         LOG( LOG_ERR, "failed to stat meta file \"%s\" to check for possible excess meta length (%s)\n", bctxt->filepath, strerror(errno) );
+         return -1;
+      }
+      // increase result to match the total meta info size, if appropriate
+      if ( result < stval.st_size ) { result = stval.st_size; }
+   }
+   return result;
+}
+
+
 // forward-declarations to allow these functions to be used in manual_migrate
 int posix_del(DAL_CTXT ctxt, DAL_location location, const char *objID);
 
 BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char *objID);
-
-int posix_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size);
-
-ssize_t posix_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size);
 
 int posix_put(BLOCK_CTXT ctxt, const void *buf, size_t size);
 
@@ -924,7 +990,7 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
    } while (res > 0);
 
    // move meta file from source location to destination location
-   res = posix_get_meta((BLOCK_CTXT)src_ctxt, meta_buf, IO_SIZE);
+   res = posix_get_meta_internal((BLOCK_CTXT)src_ctxt, meta_buf, IO_SIZE);
    if (res < 0)
    {
       posix_abort((BLOCK_CTXT)src_ctxt);
@@ -934,7 +1000,7 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
       free(meta_buf);
       return -1;
    }
-   if (posix_set_meta((BLOCK_CTXT)dest_ctxt, meta_buf, res))
+   if (posix_set_meta_internal((BLOCK_CTXT)dest_ctxt, meta_buf, res))
    {
       posix_abort((BLOCK_CTXT)src_ctxt);
       block_delete(dest_ctxt, 0);  // delete any in-progress output
@@ -1667,58 +1733,14 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    return bctxt;
 }
 
-int posix_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
+int posix_set_meta(BLOCK_CTXT ctxt, const meta_info* source )
 {
-
-   if (ctxt == NULL)
-   {
-      LOG(LOG_ERR, "received a NULL block context!\n");
-      return -1;
-   }
-   POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
-
-   // reseek to the start of the sidecar file
-   if ( lseek( bctxt->mfd, 0, SEEK_SET ) ) {
-      LOG( LOG_ERR, "failed to reseek to start of meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
-      return -1;
-   }
-   // write the provided buffer out to the sidecar file
-   if (write(bctxt->mfd, meta_buf, size) != size)
-   {
-      LOG(LOG_ERR, "failed to write buffer to meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
-      return -1;
-   }
-
-   return 0;
+   return dal_set_meta_helper( posix_set_meta_internal, ctxt, source );
 }
 
-ssize_t posix_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
+int posix_get_meta(BLOCK_CTXT ctxt, meta_info* target )
 {
-   if (ctxt == NULL)
-   {
-      LOG(LOG_ERR, "received a NULL block context!\n");
-      return -1;
-   }
-   POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
-
-   // reseek to the start of the sidecar file
-   if ( lseek( bctxt->mfd, 0, SEEK_SET ) ) {
-      LOG( LOG_ERR, "failed to reseek to start of meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
-      return -1;
-   }
-   ssize_t result = read(bctxt->mfd, meta_buf, size);
-   // potentially indicate excess meta information
-   if ( result == size ) {
-      // we need to stat this sidecar file to get the total meta info length
-      struct stat stval;
-      if ( fstat(bctxt->mfd, &stval) ) {
-         LOG( LOG_ERR, "failed to stat meta file \"%s\" to check for possible excess meta length (%s)\n", bctxt->filepath, strerror(errno) );
-         return -1;
-      }
-      // increase result to match the total meta info size, if appropriate
-      if ( result < stval.st_size ) { result = stval.st_size; }
-   }
-   return result;
+   return dal_get_meta_helper( posix_get_meta_internal, ctxt, source );
 }
 
 int posix_put(BLOCK_CTXT ctxt, const void *buf, size_t size)

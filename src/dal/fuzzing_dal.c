@@ -313,14 +313,10 @@ int fuzzing_cleanup(DAL dal)
 	}
 
 	int res = dctxt->under_dal->cleanup(dctxt->under_dal);
-	if (res)
-	{
-		return res;
-	}
 	free_fuzz(dctxt);
 
 	free(dal);
-	return 0;
+	return res;
 }
 
 BLOCK_CTXT fuzzing_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char *objID)
@@ -355,7 +351,7 @@ BLOCK_CTXT fuzzing_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, con
 	return bctxt;
 }
 
-int fuzzing_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
+int fuzzing_set_meta(BLOCK_CTXT ctxt, const meta_info* source)
 {
 	if (ctxt == NULL)
 	{
@@ -371,10 +367,10 @@ int fuzzing_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
 		return -2;
 	}
 
-	return bctxt->global_ctxt->under_dal->set_meta(bctxt->bctxt, meta_buf, size);
+	return bctxt->global_ctxt->under_dal->set_meta(bctxt->bctxt, source);
 }
 
-ssize_t fuzzing_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
+ssize_t fuzzing_get_meta(BLOCK_CTXT ctxt, meta_info* target)
 {
 	if (ctxt == NULL)
 	{
@@ -390,7 +386,7 @@ ssize_t fuzzing_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
 		return -2;
 	}
 
-	return bctxt->global_ctxt->under_dal->get_meta(bctxt->bctxt, meta_buf, size);
+	return bctxt->global_ctxt->under_dal->get_meta(bctxt->bctxt, target);
 }
 
 int fuzzing_put(BLOCK_CTXT ctxt, const void *buf, size_t size)

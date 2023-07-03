@@ -68,6 +68,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "logging/logging.h"
 
 #include "dal.h"
+#include "metainfo.h"
 #include "ne/ne.h"
 
 #include <sys/stat.h>
@@ -250,6 +251,67 @@ static int close_handle(ne_handle handle, REC_BLOCK_CTXT bctxt, char *objID)
   free(sref);
   return ret;
 }
+
+
+int rec_set_meta_internal(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
+{
+  if (ctxt == NULL)
+  {
+    LOG(LOG_ERR, "received a NULL block context!\n");
+    return -1;
+  }
+  REC_BLOCK_CTXT bctxt = (REC_BLOCK_CTXT)ctxt; // should have been passed a rec context
+
+  // abort, unless we're writing
+  if (bctxt->mode != DAL_WRITE && bctxt->mode != DAL_REBUILD)
+  {
+    LOG(LOG_ERR, "Can only perform get ops on a DAL_READ or DAL_REBUILD block handle!\n");
+    return -1;
+  }
+
+  // write the provided buffer out to the handle
+  if (ne_write(bctxt->m_handle, meta_buf, size) != size)
+  {
+    LOG(LOG_ERR, "failed to write buffer to meta object: \"%s%s\" (%s)\n", bctxt->objID, bctxt->dctxt->meta_sfx, strerror(errno));
+    return -1;
+  }
+  bctxt->m_acc = 1;
+
+  return 0;
+}
+
+ssize_t rec_get_meta_internal(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
+{
+  if (ctxt == NULL)
+  {
+    LOG(LOG_ERR, "received a NULL block context!\n");
+    return -1;
+  }
+  REC_BLOCK_CTXT bctxt = (REC_BLOCK_CTXT)ctxt; // should have been passed a rec context
+
+  // abort, unless we're reading
+  if (bctxt->mode != DAL_READ && bctxt->mode != DAL_METAREAD)
+  {
+    LOG(LOG_ERR, "Can only perform get ops on a DAL_READ or DAL_METAREAD block handle!\n");
+    return -1;
+  }
+
+  // seek to given offset
+  if (ne_seek(bctxt->m_handle, 0) != 0)
+  {
+    LOG(LOG_ERR, "failed to seek to offset %d in \"%s%s\" (%s)\n", 0, bctxt->objID, bctxt->dctxt->meta_sfx, strerror(errno));
+    return -1;
+  }
+
+  // read data from the handle to the provided buffer
+  ssize_t result = ne_read(bctxt->m_handle, meta_buf, size);
+
+  bctxt->m_acc = 1;
+
+  return result;
+}
+
+
 
 //   -------------    REC IMPLEMENTATION    -------------
 
@@ -466,64 +528,16 @@ BLOCK_CTXT rec_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const c
   return bctxt;
 }
 
-int rec_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
+int rec_set_meta(BLOCK_CTXT ctxt, const meta_info* source)
 {
   LOG(LOG_INFO, "rec_set_meta\n");
-  if (ctxt == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL block context!\n");
-    return -1;
-  }
-  REC_BLOCK_CTXT bctxt = (REC_BLOCK_CTXT)ctxt; // should have been passed a rec context
-
-  // abort, unless we're writing
-  if (bctxt->mode != DAL_WRITE && bctxt->mode != DAL_REBUILD)
-  {
-    LOG(LOG_ERR, "Can only perform get ops on a DAL_READ or DAL_REBUILD block handle!\n");
-    return -1;
-  }
-
-  // write the provided buffer out to the handle
-  if (ne_write(bctxt->m_handle, meta_buf, size) != size)
-  {
-    LOG(LOG_ERR, "failed to write buffer to meta object: \"%s%s\" (%s)\n", bctxt->objID, bctxt->dctxt->meta_sfx, strerror(errno));
-    return -1;
-  }
-  bctxt->m_acc = 1;
-
-  return 0;
+  return dal_set_meta_helper( rec_set_meta_internal, ctxt, source );
 }
 
-ssize_t rec_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
+int rec_get_meta(BLOCK_CTXT ctxt, meta_info* target)
 {
   LOG(LOG_INFO, "rec_get_meta\n");
-  if (ctxt == NULL)
-  {
-    LOG(LOG_ERR, "received a NULL block context!\n");
-    return -1;
-  }
-  REC_BLOCK_CTXT bctxt = (REC_BLOCK_CTXT)ctxt; // should have been passed a rec context
-
-  // abort, unless we're reading
-  if (bctxt->mode != DAL_READ && bctxt->mode != DAL_METAREAD)
-  {
-    LOG(LOG_ERR, "Can only perform get ops on a DAL_READ or DAL_METAREAD block handle!\n");
-    return -1;
-  }
-
-  // seek to given offset
-  if (ne_seek(bctxt->m_handle, 0) != 0)
-  {
-    LOG(LOG_ERR, "failed to seek to offset %d in \"%s%s\" (%s)\n", 0, bctxt->objID, bctxt->dctxt->meta_sfx, strerror(errno));
-    return -1;
-  }
-
-  // read data from the handle to the provided buffer
-  ssize_t result = ne_read(bctxt->m_handle, meta_buf, size);
-
-  bctxt->m_acc = 1;
-
-  return result;
+  return dal_get_meta_helper( rec_get_meta_internal, ctxt, target );
 }
 
 int rec_put(BLOCK_CTXT ctxt, const void *buf, size_t size)

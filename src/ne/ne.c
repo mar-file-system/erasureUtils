@@ -1201,7 +1201,7 @@ ne_handle ne_stat(ne_ctxt ctxt, const char* objID, ne_location loc) {
       }
       else {
          // attempt to retrive meta info
-         if (dal_get_minfo(ctxt->dal, dblock, &(minfo_list[curblock]))) {
+         if (ctxt->dal->get_meta(dblock, &(minfo_list[curblock]))) {
             LOG(LOG_WARNING, "Detected a meta error for block %d\n", curblock);
             tmp_meta_errs[curblock] = 1;
          }
@@ -1453,18 +1453,28 @@ ne_handle ne_convert_handle(ne_handle handle, ne_mode mode) {
          return NULL;
       }
       // check that our erasure pattern matches expected values
+      char noopcase = 0;
       if (consensus.N != handle->epat.N || consensus.E != handle->epat.E ||
          consensus.O != handle->epat.O || consensus.partsz != handle->epat.partsz) {
-         LOG(LOG_ERR, "Read meta values ( N=%d, E=%d, O=%d, partsz=%zd ) disagree with handle values ( N=%d, E=%d, O=%d, partsz=%zd )!\n",
-            consensus.N, consensus.E, consensus.O, consensus.partsz, handle->epat.N, handle->epat.E, handle->epat.O, handle->epat.partsz);
-         // might as well continue to use 'i'
-         for (i -= 1; i >= 0; i--) {
-            tq_set_flags(handle->thread_queues[i], TQ_ABORT);
-            tq_next_thread_status(handle->thread_queues[i], NULL);
-            tq_close(handle->thread_queues[i]);
+         // special case check for NoOp DAL
+         if ( strncmp( handle->ctxt->dal->name, "noop", 5 ) == 0  &&
+              ( consensus.N == handle->epat.N || consensus.E == handle->epat.E || consensus.partsz == handle->epat.partsz ) ) {
+            LOG( LOG_INFO, "Inserting handle 'offset' value of %d into consensus due to NoOp DAL target\n", handle->epat.O );
+            consensus.O = handle->epat.O;
+            noopcase = 1;
          }
-         errno = EINVAL;
-         return NULL;
+         else {
+            LOG(LOG_ERR, "Read meta values ( N=%d, E=%d, O=%d, partsz=%zd ) disagree with handle values ( N=%d, E=%d, O=%d, partsz=%zd )!\n",
+               consensus.N, consensus.E, consensus.O, consensus.partsz, handle->epat.N, handle->epat.E, handle->epat.O, handle->epat.partsz);
+            // might as well continue to use 'i'
+            for (i -= 1; i >= 0; i--) {
+               tq_set_flags(handle->thread_queues[i], TQ_ABORT);
+               tq_next_thread_status(handle->thread_queues[i], NULL);
+               tq_close(handle->thread_queues[i]);
+            }
+            errno = EINVAL;
+            return NULL;
+         }
       }
       // set handle constants based on consensus values
       handle->versz = consensus.versz;
@@ -1473,6 +1483,11 @@ ne_handle ne_convert_handle(ne_handle handle, ne_mode mode) {
 
       // confirm and correct meta info values
       for (i = 0; i < handle->epat.N + handle->epat.E; i++) {
+         // special case check for NoOp DAL
+         if ( noopcase ) {
+            // update offset values of all threads, without throwing an error
+            handle->thread_states[i].minfo.O = handle->epat.O;
+         }
          if (cmp_minfo(&(handle->thread_states[i].minfo), &(consensus))) {
             LOG(LOG_WARNING, "Meta values of thread %d do not match consensus!\n", i);
             handle->thread_states[i].meta_error = 1;

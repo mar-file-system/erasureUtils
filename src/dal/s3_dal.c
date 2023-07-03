@@ -612,6 +612,78 @@ static S3ListServiceHandler listHandler = {
 
 };
 
+
+int s3_set_meta_internal(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
+{
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
+   S3_BLOCK_CTXT bctxt = (S3_BLOCK_CTXT)ctxt; // should have been passed a s3 context
+
+   // abort, unless we're writing or rebuliding
+   if (bctxt->mode != DAL_WRITE && bctxt->mode != DAL_REBUILD)
+   {
+      LOG(LOG_ERR, "Can only perform set_meta ops on a DAL_WRITE or DAL_REBUILD block handle!\n");
+      return -1;
+   }
+
+   // Save metadata to be written back later
+   bctxt->meta = strdup(meta_buf);
+
+   // Strip any newlines from the end of the buffer
+   while (bctxt->meta[strlen(bctxt->meta) - 1] == '\n')
+   {
+      bctxt->meta[strlen(bctxt->meta) - 1] = '\0';
+   }
+
+   return 0;
+}
+
+ssize_t s3_get_meta_internal(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
+{
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
+   S3_BLOCK_CTXT bctxt = (S3_BLOCK_CTXT)ctxt; // should have been passed a s3 context
+
+   // abort, unless we're reading
+   if (bctxt->mode != DAL_READ && bctxt->mode != DAL_METAREAD)
+   {
+      LOG(LOG_ERR, "Can only perform get_meta ops on a DAL_READ or DAL_METAREAD block handle!\n");
+      return -1;
+   }
+
+   // Give several tries to retrieve metadata
+   int i = TRIES;
+   do
+   {
+      S3_head_object(bctxt->bucketContext, bctxt->key, NULL, TIMEOUT, &getMetaHandler, meta_buf);
+      i--;
+   } while (S3_status_is_retryable(statusG) && i >= 0);
+
+   if (statusG != S3StatusOK)
+   {
+      LOG(LOG_ERR, "failed to retrieve metadata from \"%s/%s\" (%s)\n", bctxt->bucketContext->bucketName, bctxt->key, S3_get_status_name(statusG));
+      errno = EIO;
+      return -1;
+   }
+
+   // Add a newline to the end of the metadata if we have room
+   if (strlen(meta_buf) < size)
+   {
+      strcat(meta_buf, "\n\0");
+   }
+
+   return strlen(meta_buf) + 1;
+}
+
+
+
+
 //   -------------    S3 IMPLEMENTATION    -------------
 
 int s3_verify(DAL_CTXT ctxt, char fix)
@@ -980,72 +1052,14 @@ BLOCK_CTXT s3_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const ch
    return bctxt;
 }
 
-int s3_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
+int s3_set_meta(BLOCK_CTXT ctxt, const meta_info* source)
 {
-   if (ctxt == NULL)
-   {
-      LOG(LOG_ERR, "received a NULL block context!\n");
-      return -1;
-   }
-   S3_BLOCK_CTXT bctxt = (S3_BLOCK_CTXT)ctxt; // should have been passed a s3 context
-
-   // abort, unless we're writing or rebuliding
-   if (bctxt->mode != DAL_WRITE && bctxt->mode != DAL_REBUILD)
-   {
-      LOG(LOG_ERR, "Can only perform set_meta ops on a DAL_WRITE or DAL_REBUILD block handle!\n");
-      return -1;
-   }
-
-   // Save metadata to be written back later
-   bctxt->meta = strdup(meta_buf);
-
-   // Strip any newlines from the end of the buffer
-   while (bctxt->meta[strlen(bctxt->meta) - 1] == '\n')
-   {
-      bctxt->meta[strlen(bctxt->meta) - 1] = '\0';
-   }
-
-   return 0;
+   return dal_set_meta_helper( s3_set_meta_internal, ctxt, source );
 }
 
-ssize_t s3_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
+int s3_get_meta(BLOCK_CTXT ctxt, meta_info* target)
 {
-   if (ctxt == NULL)
-   {
-      LOG(LOG_ERR, "received a NULL block context!\n");
-      return -1;
-   }
-   S3_BLOCK_CTXT bctxt = (S3_BLOCK_CTXT)ctxt; // should have been passed a s3 context
-
-   // abort, unless we're reading
-   if (bctxt->mode != DAL_READ && bctxt->mode != DAL_METAREAD)
-   {
-      LOG(LOG_ERR, "Can only perform get_meta ops on a DAL_READ or DAL_METAREAD block handle!\n");
-      return -1;
-   }
-
-   // Give several tries to retrieve metadata
-   int i = TRIES;
-   do
-   {
-      S3_head_object(bctxt->bucketContext, bctxt->key, NULL, TIMEOUT, &getMetaHandler, meta_buf);
-      i--;
-   } while (S3_status_is_retryable(statusG) && i >= 0);
-
-   if (statusG != S3StatusOK)
-   {
-      LOG(LOG_ERR, "failed to retrieve metadata from \"%s/%s\" (%s)\n", bctxt->bucketContext->bucketName, bctxt->key, S3_get_status_name(statusG));
-      errno = EIO;
-      return -1;
-   }
-
-   // Add a newline to the end of the metadata if we have room
-   if (strlen(meta_buf) < size)
-   {
-      strcat(meta_buf, "\n\0");
-   }
-
-   return strlen(meta_buf) + 1;
+   return dal_get_meta_helper( s3_get_meta_internal, ctxt, target );
 }
 
 int s3_put(BLOCK_CTXT ctxt, const void *buf, size_t size)

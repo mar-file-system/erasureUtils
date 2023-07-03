@@ -124,8 +124,8 @@ int main(int argc, char **argv)
     printf("error: put did not return expected value\n");
     return -1;
   }
-  char *meta_val = "this is a meta value!\n";
-  if (dal->set_meta(block, meta_val, 22))
+  meta_info meta_val = { .N = 3, .E = 1, .O = 3, .partsz = 4096, .versz = 1048576, .blocksz = 10485760, .crcsum = 1234567, .totsz = 7654321 };
+  if (dal->set_meta(block, &meta_val))
   {
     printf("error: set_meta did not return expected value\n");
     return -1;
@@ -161,8 +161,9 @@ int main(int argc, char **argv)
     return -1;
   }
   */
+  meta_info readmeta;
   int ret;
-  if ((ret = dal->get_meta(block, readbuffer, (10 * 1024))) != 22)
+  if ((ret = dal->get_meta(block, &readmeta)))
   {
     printf("error: get_meta returned an unexpected value %d\n", ret);
     return -1;

@@ -60,63 +60,16 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 
 
- 
-
-/* ---------------------------------------------------------------------------
-
-This file provides the implementation of multiple operations intended for
-use by the MarFS MultiComponent DAL.
-
-These include:   ne_read(), ne_write(), ne_health(), and ne_rebuild().
-
-Additionally, each output file gets an xattr added to it (yes all 12 files
-in the case of a 10+2 the xattr looks something like this:
-
-   10 2 64 0 196608 196608 3304199718723886772 1717171
-
-These fields, in order, are:
-
-    N         is nparts
-    E         is numerasure
-    offset    is the starting position of the stripe in terms of part number
-    chunksize is chunksize
-    nsz       is the size of the part
-    ncompsz   is the size of the part but might get used if we ever compress the parts
-    totsz     is the total real data in the N part files.
-
-Since creating erasure requires full stripe writes, the last part of the
-file may all be zeros in the parts.  Thus, totsz is the real size of the
-data, not counting the trailing zeros.
-
-All the parts and all the erasure stripes should be the same size.  To fill
-in the trailing zeros, this program uses truncate - punching a hole in the
-N part files for the zeros.
-
-In the case where libne is built to include support for S3-authentication,
-and to use the libne sockets extensions (RDMA, etc) instead of files, then
-the caller (for example, the MarFS sockets DAL) may acquire
-authentication-information at program-initialization-time which we could
-not acquire at run-time.  For example, access to authentication-information
-may require escalated privileges, whereas fuse and pftool de-escalate
-priviledges after start-up.  To support such cases, we must allow a caller
-to pass cached credentials through the ne_etc() functions, to the
-underlying skt_etc() functions.
-
---------------------------------------------------------------------------- */
-
-// #include "libne_auto_config.h"   /* HAVE_LIBISAL */
-
 #include "erasureUtils_auto_config.h"
-#ifdef DEBUG_IO
-#define DEBUG DEBUG_IO
+#ifdef DEBUG_DAL
+#define DEBUG DEBUG_DAL
 #elif (defined DEBUG_ALL)
 #define DEBUG DEBUG_ALL
 #endif
 #define LOG_PREFIX "metainfo"
 #include "logging/logging.h"
 
-#include "io/io.h"
-#include "dal/dal.h"
+#include "metainfo.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -127,8 +80,9 @@ underlying skt_etc() functions.
 #include <sys/stat.h>
 #include <errno.h>
 #include <assert.h>
-#include <pthread.h>
 
+
+#define MINFO_VER 1
 
 
 /* ------------------------------   INTERNAL HELPER FUNCTIONS   ------------------------------ */
@@ -150,14 +104,17 @@ size_t get_minfo_strlen( ) {
 /**
  * Perform a DAL get_meta call and parse the resulting string 
  * into the provided meta_info_struct reference.
- * @param DAL dal : Dal on which to perfrom the get_meta operation
+ * @param ssize_t (*meta_filler)(BLOCK_CTXT handle, char *meta_buf, size_t size) :
+ *                Function for retrieving meta info buffers
+ *                Expected to fill 'meta_buf' with at most 'size' bytes of stored meta info
+ *                Expected to return a total byte count of stored meta info ( even if 'size' < this value ), or -1 on failure
  * @param int block : Block on which this operation is being performed (for logging only)
  * @param meta_info* minfo : meta_info reference to populate with values 
  * @return int : Zero on success, a negative value if a failure occurred, or the number of 
  *               meta values successfully parsed if only portions of the meta info could 
  *               be recovered.
  */
-int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
+int dal_get_meta_helper( ssize_t (*meta_filler)(BLOCK_CTXT handle, char *meta_buf, size_t size), BLOCK_CTXT handle, meta_info* minfo ) {
    // Allocate space for a string
    size_t strmax = get_minfo_strlen();
    char* str = (char*) malloc( strmax );
@@ -176,8 +133,13 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
    minfo->totsz   = -1;
    // get the meta info for the given object
    ssize_t dstrbytes;
-   if ( (dstrbytes = dal->get_meta( handle, str, strmax )) <= 0 ) {
+   if ( (dstrbytes = meta_filler( handle, str, strmax )) <= 0 ) {
       LOG( LOG_ERR, "failed to retrieve meta value!\n" );
+      free( str );
+      return -1;
+   }
+   if ( dstrbytes > strmax ) {
+      LOG( LOG_ERR, "meta value of size %zd exceeds buffer bounds of %zu!\n", dstrbytes, strmax );
       free( str );
       return -1;
    }
@@ -290,12 +252,15 @@ int dal_get_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
 
 /**
  * Convert a meta_info struct to string format and perform a DAL set_meta call
- * @param DAL dal : Dal on which to perfrom the get_meta operation
+ * @param int (*meta_writer)(BLOCK_CTXT handle, const char *meta_buf, size_t size) :
+ *            Function for storing meta info buffers to a block handle
+ *            Expected to write 'size' bytes from 'meta_buf' as meta info of the given handle
+ *            Expected to return zero on success, or -1 on failure
  * @param BLOCK_CTXT handle : Block on which this operation is being performed
  * @param meta_info* minfo : meta_info reference to populate with values 
  * @return int : Zero on success, or a negative value if an error occurred 
  */
-int dal_set_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
+int dal_set_meta_helper( int (*meta_writer)(BLOCK_CTXT handle, const char *meta_buf, size_t size), BLOCK_CTXT handle, const meta_info* minfo ) {
    // Allocate space for a string
    size_t strmax = get_minfo_strlen();
    char* str = (char*) malloc( strmax );
@@ -320,7 +285,7 @@ int dal_set_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
       return -1;
    }
 
-	if ( dal->set_meta( handle, str, strlen( str ) + 1 ) ) {
+	if ( meta_writer( handle, str, strlen( str ) + 1 ) ) {
 		LOG( LOG_ERR, "failed to set meta value!\n" );
 		free( str );
 		return -1;
@@ -328,40 +293,6 @@ int dal_set_minfo( DAL dal, BLOCK_CTXT handle, meta_info* minfo ) {
 
    free( str );
 	return 0;
-}
-
-
-/**
- * Duplicates info from one meta_info struct to another (excluding CRCSUM!)
- * @param meta_info* target : Target struct reference
- * @param meta_info* source : Source struct reference
- */
-void cpy_minfo( meta_info* target, meta_info* source ) {
-   target->N = source->N;
-   target->E = source->E;
-   target->O = source->O;
-   target->partsz = source->partsz;
-   target->versz = source->versz;
-   target->blocksz = source->blocksz;
-   target->totsz = source->totsz;
-}
-
-
-/**
- * Compares the values of two meta_info structs (excluding CRCSUM!)
- * @param meta_info* minfo1 : First struct reference
- * @param meta_info* minfo2 : Second struct reference
- * @return int : A zero value if the structures match, non-zero otherwise
- */
-int cmp_minfo( meta_info* minfo1, meta_info* minfo2 ) {
-   if ( minfo1->N != minfo2->N ) { return -1; }
-   if ( minfo1->E != minfo2->E ) { return -1; }
-   if ( minfo1->O != minfo2->O ) { return -1; }
-   if ( minfo1->partsz != minfo2->partsz ) { return -1; }
-   if ( minfo1->versz != minfo2->versz ) { return -1; }
-   if ( minfo1->blocksz != minfo2->blocksz ) { return -1; }
-   if ( minfo1->totsz != minfo2->totsz ) { return -1; }
-   return 0;
 }
 
 
