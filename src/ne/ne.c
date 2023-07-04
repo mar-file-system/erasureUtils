@@ -1458,7 +1458,7 @@ ne_handle ne_convert_handle(ne_handle handle, ne_mode mode) {
          consensus.O != handle->epat.O || consensus.partsz != handle->epat.partsz) {
          // special case check for NoOp DAL
          if ( strncmp( handle->ctxt->dal->name, "noop", 5 ) == 0  &&
-              ( consensus.N == handle->epat.N || consensus.E == handle->epat.E || consensus.partsz == handle->epat.partsz ) ) {
+              ( consensus.N == handle->epat.N && consensus.E == handle->epat.E && consensus.partsz == handle->epat.partsz ) ) {
             LOG( LOG_INFO, "Inserting handle 'offset' value of %d into consensus due to NoOp DAL target\n", handle->epat.O );
             consensus.O = handle->epat.O;
             noopcase = 1;
@@ -2675,7 +2675,7 @@ ssize_t ne_write(ne_handle handle, const void* buffer, size_t bytes) {
       LOG(LOG_INFO, "Initializing erasure matricies...\n");
       // critical section : we are now going to call some inlined assembly erasure funcs
       if ( pthread_mutex_lock( handle->ctxt->erasurelock ) ) {
-         LOG( LOG_ERR, "Failed to acquire erasurelock prior to regeneration of stripe %d\n", cur_stripe + start_stripe );
+         LOG( LOG_ERR, "Failed to acquire erasurelock prior to encoding prep of stripe %d\n", stripenum );
          return -1;
       }
       // Generate an encoding matrix
@@ -2685,7 +2685,7 @@ ssize_t ne_write(ne_handle handle, const void* buffer, size_t bytes) {
       ec_init_tables(N, E, &(handle->encode_matrix[N * N]), handle->g_tbls);
       // exiting critical section
       if ( pthread_mutex_unlock( handle->ctxt->erasurelock ) ) {
-         LOG( LOG_ERR, "Failed to relinquish erasurelock after regeneration of stripe %d\n", cur_stripe + start_stripe );
+         LOG( LOG_ERR, "Failed to relinquish erasurelock after encoding prep of stripe %d\n", stripenum );
          return -1;
       }
       handle->e_ready = 1;
@@ -2753,7 +2753,7 @@ ssize_t ne_write(ne_handle handle, const void* buffer, size_t bytes) {
             }
             // critical section : we are now going to call some inlined assembly erasure funcs
             if ( pthread_mutex_lock( handle->ctxt->erasurelock ) ) {
-               LOG( LOG_ERR, "Failed to acquire erasurelock prior to regeneration of stripe %d\n", cur_stripe + start_stripe );
+               LOG( LOG_ERR, "Failed to acquire erasurelock prior to encoding of stripe %d\n", stripenum );
                free( tgt_refs );
                return -1;
             }
@@ -2761,7 +2761,7 @@ ssize_t ne_write(ne_handle handle, const void* buffer, size_t bytes) {
             ec_encode_data(partsz, N, E, handle->g_tbls, (unsigned char**)tgt_refs, (unsigned char**)&(tgt_refs[N]));
             // exiting critical section
             if ( pthread_mutex_unlock( handle->ctxt->erasurelock ) ) {
-               LOG( LOG_ERR, "Failed to relinquish erasurelock after regeneration of stripe %d\n", cur_stripe + start_stripe );
+               LOG( LOG_ERR, "Failed to relinquish erasurelock after encoding of stripe %d\n", stripenum );
                free( tgt_refs );
                return -1;
             }

@@ -80,7 +80,7 @@ dalverify_LDADD = $(DAL_LIB) $(SIDE_LIBS)
 dalverify_CFLAGS = $(XML_CFLAGS)
 
 emerg_reb_CC = mpicc
-emerg_reb_SOURCES = emergency_rebuild.c ../thread_queue/thread_queue.c
+emerg_reb_SOURCES = emergency_rebuild.c metainfo.c ../thread_queue/thread_queue.c
 emerg_reb_LDADD = $(SIDE_LIBS)
 emerg_reb_CFLAGS = $(XML_CFLAGS)
 

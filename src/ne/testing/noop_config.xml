@@ -59,14 +59,9 @@
 -->
 
 <DAL type="noop">
-   <DAL type="posix">
-      <dir_template>p{p}.c{c}.s{s}.stripefile.{b}</dir_template>
-      <sec_root>./</sec_root>
-   </DAL>
-   <obj>noopsource</obj>
-   <pod>0</pod>
-   <cap>1</cap>
-   <scat>2</scat>
-   <width>8</width>
+   <N>10</N>
+   <E>2</E>
+   <PSZ>1048572</PSZ>
+   <max_size>1G</max_size>
 </DAL>
 

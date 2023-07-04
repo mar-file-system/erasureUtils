@@ -112,7 +112,7 @@ underlying skt_etc() functions.
 #include "io/io.h"
 #include "thread_queue/thread_queue.h"
 #include "dal/dal.h"
-#include "general_include/crcs.c"
+#include "general_include/crc.c"
 
 #include <stdio.h>
 #include <stdint.h>

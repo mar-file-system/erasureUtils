@@ -68,7 +68,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "logging/logging.h"
 
 #include "dal.h"
-#include "general_include/crcs.c"
+#include "general_include/crc.c"
 
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -337,7 +337,7 @@ ssize_t noop_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
       return -1;
    }
    // Return cached data, if present
-   if (bctxt->dctxt->c_data  &&  bctxt->dctxt->c_data[bctxt->block]  &&  bctxt->dctxt->datalen[bctxt->block])
+   if (bctxt->dctxt->c_data)
    {
       // validate offset
       if ( offset > bctxt->dctxt->minfo.blocksz ) {
@@ -415,10 +415,10 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
       return NULL;
    }
    // initialize values to indicate absence
-   dctxt.minfo.N = -1;
-   dctxt.minfo.E = -1;
+   dctxt->minfo.N = -1;
+   dctxt->minfo.E = -1;
    // initialize versz to match io size
-   dctxt.minfo.versz = IO_SIZE;
+   dctxt->minfo.versz = IO_SIZE;
 
    // allocate and populate a new DAL structure
    DAL ndal = malloc(sizeof(struct DAL_struct));
@@ -456,31 +456,31 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
          break;
       }
       if ( strncmp( (char*)root->name, "N", 2 ) == 0 ) {
-         if( parse_int_node( &(dctxt.minfo.N), root ) ) {
+         if( parse_int_node( &(dctxt->minfo.N), root ) ) {
             LOG( LOG_ERR, "failed to parse 'N' value\n" );
             break;
          }
       }
       else if ( strncmp( (char*)root->name, "E", 2 ) == 0 ) {
-         if( parse_int_node( &(dctxt.minfo.E), root ) ) {
+         if( parse_int_node( &(dctxt->minfo.E), root ) ) {
             LOG( LOG_ERR, "failed to parse 'E' value\n" );
             break;
          }
       }
       else if ( strncmp( (char*)root->name, "PSZ", 4 ) == 0 ) {
-         if( parse_size_node( &(dctxt.minfo.partsz), root ) ) {
+         if( parse_size_node( &(dctxt->minfo.partsz), root ) ) {
             LOG( LOG_ERR, "failed to parse 'PSZ' value\n" );
             break;
          }
       }
       else if ( strncmp( (char*)root->name, "max_size", 9 ) == 0 ) {
-         if( parse_size_node( &(dctxt.minfo.totsz), root ) ) {
+         if( parse_size_node( &(dctxt->minfo.totsz), root ) ) {
             LOG( LOG_ERR, "failed to parse 'max_size' value\n" );
             break;
          }
       }
       else {
-         LOG( LOG_ERR, "encountered an unrecognized \"%s\" node within a NoOp DAL definition\n", (char*)subnode->name );
+         LOG( LOG_ERR, "encountered an unrecognized \"%s\" node within a NoOp DAL definition\n", (char*)root->name );
          break;
       }
       // progress to the next element
@@ -492,23 +492,23 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
       return NULL;
    }
    // validate and ingest any cache source
-   if ( dctxt.minfo.N != -1  ||  dctxt.minfo.E != -1  ||  dctxt.minfo.partsz > 0  ||  dctxt.minfo.totsz > 0 ) {
+   if ( dctxt->minfo.N != -1  ||  dctxt->minfo.E != -1  ||  dctxt->minfo.partsz > 0  ||  dctxt->minfo.totsz > 0 ) {
       // we're no in do-or-die mode for source caching
       // we have some values -- ensure we have all of them
       char fatalerror = 0;
-      if ( dctxt.minfo.N == -1 ) {
+      if ( dctxt->minfo.N == -1 ) {
          LOG( LOG_ERR, "missing source cache 'N' definition\n" );
          fatalerror = 1;
       }
-      if ( dctxt.minfo.E == -1 ) {
+      if ( dctxt->minfo.E == -1 ) {
          LOG( LOG_ERR, "missing source cache 'E' definition\n" );
          fatalerror = 1;
       }
-      if ( dctxt.minfo.partsz <= 0 ) {
+      if ( dctxt->minfo.partsz <= 0 ) {
          LOG( LOG_ERR, "missing source cache 'PSZ' definition\n" );
          fatalerror = 1;
       }
-      if ( dctxt.minfo.totsz <= 0 ) {
+      if ( dctxt->minfo.totsz <= 0 ) {
          LOG( LOG_ERR, "missing source cache 'max_size' definition\n" );
          fatalerror = 1;
       }
@@ -518,19 +518,20 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
       }
 
       // allocate and populate our primary data buffer
-      dctxt->c_data =  calloc( 1, dctxt->versz );
+      dctxt->c_data =  calloc( 1, dctxt->minfo.versz );
       if ( dctxt->c_data == NULL ) {
          LOG( LOG_ERR, "failed to allocate cached data buffer\n" );
          noop_cleanup(ndal);
          return NULL;
       }
-      size_t datasize = dctxt->versz - sizeof(uint32_t);
+      size_t datasize = dctxt->minfo.versz - sizeof(uint32_t);
       uint32_t crcval = crc32_ieee_base(CRC_SEED, dctxt->c_data, datasize);
       *(uint32_t*)( dctxt->c_data + datasize ) = crcval;
 
       // calculate our blocksize
       size_t totalwritten = dctxt->minfo.totsz; // note the total volume of data to be contained in this object
-      totalwritten += totalwritten % (dctxt->minfo.partsz * dctxt->minfo.N); // account for erasure stripe alignment
+      totalwritten += (dctxt->minfo.partsz * dctxt->minfo.N)
+                        - (totalwritten % (dctxt->minfo.partsz * dctxt->minfo.N)); // account for erasure stripe alignment
       size_t iocnt = totalwritten / (datasize * dctxt->minfo.N); // calculate the number of buffers required to store this info
       dctxt->minfo.blocksz = iocnt * dctxt->minfo.versz; // record blocksz based on number of complete I/O buffers
       uint32_t tail_crcval = 0;

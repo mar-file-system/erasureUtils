@@ -296,3 +296,41 @@ int dal_set_meta_helper( int (*meta_writer)(BLOCK_CTXT handle, const char *meta_
 }
 
 
+
+/* ------------------------------   META INFO MANIPULATION   ------------------------------ */
+
+
+/**
+ * Duplicates info from one meta_info struct to another (excluding CRCSUM!)
+ * @param meta_info* target : Target struct reference
+ * @param meta_info* source : Source struct reference
+ */
+void cpy_minfo( meta_info* target, meta_info* source ) {
+   target->N = source->N;
+   target->E = source->E;
+   target->O = source->O;
+   target->partsz = source->partsz;
+   target->versz = source->versz;
+   target->blocksz = source->blocksz;
+   target->totsz = source->totsz;
+}
+
+/**
+ * Compares the values of two meta_info structs (excluding CRCSUM!)
+ * @param meta_info* minfo1 : First struct reference
+ * @param meta_info* minfo2 : Second struct reference
+ * @return int : A zero value if the structures match, non-zero otherwise
+ */
+int cmp_minfo( meta_info* minfo1, meta_info* minfo2 ) {
+   if ( minfo1->N != minfo2->N ) { return -1; }
+   if ( minfo1->E != minfo2->E ) { return -1; }
+   if ( minfo1->O != minfo2->O ) { return -1; }
+   if ( minfo1->partsz != minfo2->partsz ) { return -1; }
+   if ( minfo1->versz != minfo2->versz ) { return -1; }
+   if ( minfo1->blocksz != minfo2->blocksz ) { return -1; }
+   if ( minfo1->totsz != minfo2->totsz ) { return -1; }
+   return 0;
+}
+
+
+

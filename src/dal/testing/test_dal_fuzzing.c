@@ -160,7 +160,7 @@ int main(int argc, char **argv)
       printf("error: get_meta returned an unexpected value\n");
       return -1;
    }
-   else if (strncmp(meta_val, readbuffer, 22))
+   else if (cmp_minfo(&meta_val, &readmeta))
    {
       printf("error: retrieved meta value does not match written!\n");
       return -1;

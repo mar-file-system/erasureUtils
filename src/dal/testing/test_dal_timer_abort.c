@@ -125,7 +125,6 @@ int main(int argc, char **argv)
       printf("error: put did not return expected value\n");
       return -1;
    }
-   char *meta_val = "this is a meta value!\n";
    meta_info meta_val = { .N = 3, .E = 1, .O = 3, .partsz = 4096, .versz = 1048576, .blocksz = 10485760, .crcsum = 1234567, .totsz = 7654321 };
    if (dal->set_meta(block, &meta_val))
    {

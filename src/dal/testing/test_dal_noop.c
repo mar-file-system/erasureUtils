@@ -65,6 +65,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 int main(int argc, char **argv)
 {
 
+   DAL_location maxloc = {.pod = 1, .block = 12, .cap = 2, .scatter = 124};
+   DAL_location curloc = {.pod = 0, .block = 0, .cap = 1, .scatter = 123};
+
    xmlDoc *doc = NULL;
    xmlNode *root_element = NULL;
 
@@ -105,6 +108,19 @@ int main(int argc, char **argv)
       return -1;
    }
 
+   // allocate some buffers
+   void* writebuffer = calloc(1024, 1024);
+   if (writebuffer == NULL)
+   {
+      printf("error: failed to allocate write buffer\n");
+      return -1;
+   }
+   void* readbuffer = calloc(1024,1024);
+   if (readbuffer == NULL)
+   {
+      printf("error: failed to allocate read buffer\n");
+      return -1;
+   }
 
    // Open, write to, and set meta info for a specific block
    curloc.block = 2;
@@ -133,7 +149,7 @@ int main(int argc, char **argv)
 
    // Open and verify each block of a completely different object
    curloc.block = 0;
-   meta_info check_meta = { .N = 10, .E = 2, .O = 0, .partsz = 1048572, .versz = 1048576, .blocksz = 10485760, .crcsum = 334597019559, .totsz = 1073741824 };
+   meta_info check_meta = { .N = 10, .E = 2, .O = 0, .partsz = 1048572, .versz = 1048576, .blocksz = 108003328, .crcsum = 334597019559, .totsz = 1073741824 };
    while( curloc.block < maxloc.block ) {
       block = dal->open(dal->ctxt, DAL_READ, curloc, "completely-random-obj");
       if (block == NULL)
@@ -147,7 +163,8 @@ int main(int argc, char **argv)
          printf("error: get 1 from block %d did not return expected value %d\n", curloc.block, ret);
          return -1;
       }
-      if (memcmp(writebuffer, readbuffer, (1024 * 1024)))
+      // compare all but the inserted crc
+      if (memcmp(writebuffer, readbuffer, (1024 * 1024) - 4))
       {
          printf("error: retrieved data 1 from block %d does not match written!\n", curloc.block);
          return -1;
@@ -157,7 +174,7 @@ int main(int argc, char **argv)
          printf("error: get 2 from block %d did not return expected value %d\n", curloc.block, ret);
          return -1;
       }
-      if (memcmp(writebuffer, readbuffer, (1024 * 1024)))
+      if (memcmp(writebuffer, readbuffer, (1024 * 1024) - 4))
       {
          printf("error: retrieved data 2 from block %d does not match written!\n", curloc.block);
          return -1;
@@ -199,7 +216,6 @@ int main(int argc, char **argv)
    /*free buffers */
    free(writebuffer);
    free(readbuffer);
-   free(metabuffer);
 
    return 0;
 }

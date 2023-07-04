@@ -370,7 +370,7 @@ int fuzzing_set_meta(BLOCK_CTXT ctxt, const meta_info* source)
 	return bctxt->global_ctxt->under_dal->set_meta(bctxt->bctxt, source);
 }
 
-ssize_t fuzzing_get_meta(BLOCK_CTXT ctxt, meta_info* target)
+int fuzzing_get_meta(BLOCK_CTXT ctxt, meta_info* target)
 {
 	if (ctxt == NULL)
 	{

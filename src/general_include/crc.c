@@ -65,6 +65,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #define CRC_SEED 57
 
+#include <stdint.h>
+
 /* The following function was copied from Intel's ISA-L (https://github.com/intel/isa-l/blob/v2.30.0/crc/crc_base.c).
    The associated Copyright info has been reproduced below */
 
@@ -164,7 +166,7 @@ static const uint32_t crc32_table_ieee_norm[256] = {
 	0xbcb4666d, 0xb8757bda, 0xb5365d03, 0xb1f740b4
 };
 
-uint32_t crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len)
+static uint32_t crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len)
 {
 	unsigned int crc = ~seed;
 

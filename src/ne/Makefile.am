@@ -68,7 +68,7 @@ include_HEADERS = ne.h
 lib_LTLIBRARIES = libne.la
 
 libne_la_SOURCES = ne.c
-libne_la_LIBADD  = ../logging/liblog.la ../dal/libdal.la ../io/libioqueue.la ../io/libiothreads.la ../io/libmetainfo.la ../thread_queue/libTQ.la
+libne_la_LIBADD  = ../logging/liblog.la ../dal/libdal.la ../io/libioqueue.la ../io/libiothreads.la ../thread_queue/libTQ.la
 libne_la_CFLAGS  = $(XML_CFLAGS)
 NE_LIBS = libne.la
 

@@ -1740,7 +1740,7 @@ int posix_set_meta(BLOCK_CTXT ctxt, const meta_info* source )
 
 int posix_get_meta(BLOCK_CTXT ctxt, meta_info* target )
 {
-   return dal_get_meta_helper( posix_get_meta_internal, ctxt, source );
+   return dal_get_meta_helper( posix_get_meta_internal, ctxt, target );
 }
 
 int posix_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
