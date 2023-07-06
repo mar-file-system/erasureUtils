@@ -77,26 +77,26 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 typedef struct fuzzing_dal_context_struct
 {
-	DAL under_dal; // Underlying DAL
-	int *verify;	 // fuzzing behavior of each function. If a list for
-	int *migrate;	 // an operation includes -1, then the operation
-	int *del;			 // always fails. A positive number means always
-	int *stat;		 // fails for the block that corresponds to the
-	int *cleanup;	 // number - 1. A null pointer means do not fuzz
-	int *open;		 // operation.
-	int *set_meta;
-	int *get_meta;
-	int *put;
-	int *get;
-	int *abort;
-	int *close;
+   DAL under_dal; // Underlying DAL
+   int *verify;   // fuzzing behavior of each function. If a list for
+   int *migrate;  // an operation includes -1, then the operation
+   int *del;      // always fails. A positive number means always
+   int *stat;     // fails for the block that corresponds to the
+   int *cleanup;  // number - 1. A null pointer means do not fuzz
+   int *open;     // operation.
+   int *set_meta;
+   int *get_meta;
+   int *put;
+   int *get;
+   int *abort;
+   int *close;
 } * FUZZING_DAL_CTXT;
 
 typedef struct fuzzing_block_context_struct
 {
-	FUZZING_DAL_CTXT global_ctxt; // Global context
-	DAL_location loc;							// Location of block
-	BLOCK_CTXT bctxt;							// Block context to be passed to underlying dal
+   FUZZING_DAL_CTXT global_ctxt; // Global context
+   DAL_location loc;             // Location of block
+   BLOCK_CTXT bctxt;             // Block context to be passed to underlying dal
 } * FUZZING_BLOCK_CTXT;
 
 /**
@@ -107,29 +107,29 @@ typedef struct fuzzing_block_context_struct
  */
 int check_fuzz(int *fuzz, int block)
 {
-	int i = 0;
-	// Empty list means nothing to fuzz
-	if (fuzz == NULL)
-	{
-		return 0;
-	}
-	// Check valid (positive) entries in list
-	while (i < FZ_LN)
-	{
-		// Fuzz this block
-		if (fuzz[i] < 0 || fuzz[i] == block + 1)
-		{
-			errno = -1;
-			return -1;
-		}
-		// Run out of valid entries
-		else if (fuzz[i] == 0)
-		{
-			return 0;
-		}
-		i++;
-	}
-	return 0;
+   int i = 0;
+   // Empty list means nothing to fuzz
+   if (fuzz == NULL)
+   {
+      return 0;
+   }
+   // Check valid (positive) entries in list
+   while (i < FZ_LN)
+   {
+      // Fuzz this block
+      if (fuzz[i] < 0 || fuzz[i] == block + 1)
+      {
+         errno = -1;
+         return -1;
+      }
+      // Run out of valid entries
+      else if (fuzz[i] == 0)
+      {
+         return 0;
+      }
+      i++;
+   }
+   return 0;
 }
 /**
  * Form list of block numbers to fuzz from string
@@ -139,75 +139,75 @@ int check_fuzz(int *fuzz, int block)
  */
 int parse_fuzz(char *parse, int **fuzz)
 {
-	// Create new list of block numbers and check for success
-	int *blocks = calloc(FZ_LN, sizeof(int));
-	if (blocks == NULL)
-	{
-		return -1;
-	}
+   // Create new list of block numbers and check for success
+   int *blocks = calloc(FZ_LN, sizeof(int));
+   if (blocks == NULL)
+   {
+      return -1;
+   }
 
-	int ind = 0;
-	int tot = 0;
-	int allocate = 0;
-	int valid = 0;
-	// Parse through string, removing whitespace and extra commas
-	while (*parse != '\0')
-	{
-		switch (*parse)
-		{
-		// List will fuzz every block
-		case '-':
-			blocks[0] = -1;
-			*fuzz = blocks;
-			return 0;
-			break;
+   int ind = 0;
+   int tot = 0;
+   int allocate = 0;
+   int valid = 0;
+   // Parse through string, removing whitespace and extra commas
+   while (*parse != '\0')
+   {
+      switch (*parse)
+      {
+      // List will fuzz every block
+      case '-':
+         blocks[0] = -1;
+         *fuzz = blocks;
+         return 0;
+         break;
 
-		case '0' ... '9':
-			tot = (tot * 10) + (*parse - '0');
-			allocate++;
-			valid++;
-			break;
+      case '0' ... '9':
+         tot = (tot * 10) + (*parse - '0');
+         allocate++;
+         valid++;
+         break;
 
-		// Append new value to list
-		case ',':
-			if (valid)
-			{
-				blocks[ind++] = tot + 1;
-				tot = 0;
-			}
-			valid = 0;
-			break;
+      // Append new value to list
+      case ',':
+         if (valid)
+         {
+            blocks[ind++] = tot + 1;
+            tot = 0;
+         }
+         valid = 0;
+         break;
 
-		case ' ':
-			break;
+      case ' ':
+         break;
 
-		// Invalid character
-		default:
-			free(blocks);
-			return -1;
-		}
-		// String contained too many blocks
-		if (ind == FZ_LN)
-		{
-			free(blocks);
-			return -1;
-		}
-		parse++;
-	}
-	// Append last block number (if not already)
-	if (valid)
-	{
-		blocks[ind] = tot + 1;
-	}
+      // Invalid character
+      default:
+         free(blocks);
+         return -1;
+      }
+      // String contained too many blocks
+      if (ind == FZ_LN)
+      {
+         free(blocks);
+         return -1;
+      }
+      parse++;
+   }
+   // Append last block number (if not already)
+   if (valid)
+   {
+      blocks[ind] = tot + 1;
+   }
 
-	// Point destination to list
-	if (allocate)
-	{
-		*fuzz = blocks;
-		return 0;
-	}
-	free(blocks);
-	return 0;
+   // Point destination to list
+   if (allocate)
+   {
+      *fuzz = blocks;
+      return 0;
+   }
+   free(blocks);
+   return 0;
 }
 
 /**
@@ -216,10 +216,10 @@ int parse_fuzz(char *parse, int **fuzz)
  */
 void try_free(int *ptr)
 {
-	if (ptr != NULL)
-	{
-		free(ptr);
-	}
+   if (ptr != NULL)
+   {
+      free(ptr);
+   }
 }
 
 /**
@@ -228,460 +228,476 @@ void try_free(int *ptr)
  */
 void free_fuzz(FUZZING_DAL_CTXT dctxt)
 {
-	try_free(dctxt->verify);
-	try_free(dctxt->migrate);
-	try_free(dctxt->del);
-	try_free(dctxt->stat);
-	try_free(dctxt->cleanup);
-	try_free(dctxt->open);
-	try_free(dctxt->set_meta);
-	try_free(dctxt->get_meta);
-	try_free(dctxt->put);
-	try_free(dctxt->get);
-	try_free(dctxt->abort);
-	try_free(dctxt->close);
-	free(dctxt);
+   try_free(dctxt->verify);
+   try_free(dctxt->migrate);
+   try_free(dctxt->del);
+   try_free(dctxt->stat);
+   try_free(dctxt->cleanup);
+   try_free(dctxt->open);
+   try_free(dctxt->set_meta);
+   try_free(dctxt->get_meta);
+   try_free(dctxt->put);
+   try_free(dctxt->get);
+   try_free(dctxt->abort);
+   try_free(dctxt->close);
+   free(dctxt);
 }
 
 //   -------------    FUZZING IMPLEMENTATION    -------------
 
 int fuzzing_verify(DAL_CTXT ctxt, char fix)
 {
-	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
+   FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
 
-	if (check_fuzz(dctxt->verify, -1))
-	{
-		LOG(LOG_ERR, "Fuzzing DAL: fuzzing verify\n");
-		return -2;
-	}
+   if (check_fuzz(dctxt->verify, -1))
+   {
+      LOG(LOG_ERR, "Fuzzing DAL: fuzzing verify\n");
+      return -2;
+   }
 
-	return dctxt->under_dal->verify(dctxt->under_dal->ctxt, fix);
+   return dctxt->under_dal->verify(dctxt->under_dal->ctxt, fix);
 }
 
 int fuzzing_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_location dest, char offline)
 {
-	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
+   FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
 
-	if (check_fuzz(dctxt->migrate, src.block))
-	{
-		LOG(LOG_ERR, "Fuzzing DAL: fuzzing migrate source block %d\n", src.block);
-		return -1;
-	}
-	if (check_fuzz(dctxt->migrate, dest.block))
-	{
-		LOG(LOG_ERR, "Fuzzing DAL: fuzzing migrate destination block %d\n", dest.block);
-		return -1;
-	}
+   if (check_fuzz(dctxt->migrate, src.block))
+   {
+      LOG(LOG_ERR, "Fuzzing DAL: fuzzing migrate source block %d\n", src.block);
+      return -1;
+   }
+   if (check_fuzz(dctxt->migrate, dest.block))
+   {
+      LOG(LOG_ERR, "Fuzzing DAL: fuzzing migrate destination block %d\n", dest.block);
+      return -1;
+   }
 
-	return dctxt->under_dal->migrate(dctxt->under_dal->ctxt, objID, src, dest, offline);
+   return dctxt->under_dal->migrate(dctxt->under_dal->ctxt, objID, src, dest, offline);
 }
 
 int fuzzing_del(DAL_CTXT ctxt, DAL_location location, const char *objID)
 {
-	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
+   FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
 
-	if (check_fuzz(dctxt->del, location.block))
-	{
-		LOG(LOG_ERR, "Fuzzing DAL: fuzzing del block %d\n", location.block);
-		return -2;
-	}
+   if (check_fuzz(dctxt->del, location.block))
+   {
+      LOG(LOG_ERR, "Fuzzing DAL: fuzzing del block %d\n", location.block);
+      return -2;
+   }
 
-	return dctxt->under_dal->del(dctxt->under_dal->ctxt, location, objID);
+   return dctxt->under_dal->del(dctxt->under_dal->ctxt, location, objID);
 }
 
 int fuzzing_stat(DAL_CTXT ctxt, DAL_location location, const char *objID)
 {
-	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
+   FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
 
-	if (check_fuzz(dctxt->stat, location.block))
-	{
-		LOG(LOG_ERR, "Fuzzing DAL: fuzzing stat block %d\n", location.block);
-		return -2;
-	}
+   if (check_fuzz(dctxt->stat, location.block))
+   {
+      LOG(LOG_ERR, "Fuzzing DAL: fuzzing stat block %d\n", location.block);
+      return -2;
+   }
 
-	return dctxt->under_dal->stat(dctxt->under_dal->ctxt, location, objID);
+   return dctxt->under_dal->stat(dctxt->under_dal->ctxt, location, objID);
 }
 
 int fuzzing_cleanup(DAL dal)
 {
-	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)dal->ctxt;
+   FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)dal->ctxt;
 
-	if (check_fuzz(dctxt->cleanup, -1))
-	{
-		LOG(LOG_ERR, "Fuzzing DAL: fuzzing cleanup\n");
-		return -2;
-	}
+   if (check_fuzz(dctxt->cleanup, -1))
+   {
+      LOG(LOG_ERR, "Fuzzing DAL: fuzzing cleanup\n");
+      return -2;
+   }
 
-	int res = dctxt->under_dal->cleanup(dctxt->under_dal);
-	free_fuzz(dctxt);
+   int res = dctxt->under_dal->cleanup(dctxt->under_dal);
+   free_fuzz(dctxt);
 
-	free(dal);
-	return res;
+   free(dal);
+   return res;
 }
 
 BLOCK_CTXT fuzzing_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char *objID)
 {
-	FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
+   FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
 
-	if (check_fuzz(dctxt->open, location.block))
-	{
-		LOG(LOG_ERR, "Fuzzing DAL: fuzzing open block %d\n", location.block);
-		return NULL;
-	}
+   if (check_fuzz(dctxt->open, location.block))
+   {
+      LOG(LOG_ERR, "Fuzzing DAL: fuzzing open block %d\n", location.block);
+      return NULL;
+   }
 
-	FUZZING_BLOCK_CTXT bctxt = malloc(sizeof(struct fuzzing_block_context_struct));
-	if (bctxt == NULL)
-	{
-		return NULL;
-	}
+   FUZZING_BLOCK_CTXT bctxt = malloc(sizeof(struct fuzzing_block_context_struct));
+   if (bctxt == NULL)
+   {
+      return NULL;
+   }
 
-	bctxt->global_ctxt = dctxt;
-	if (memcpy(&(bctxt->loc), &location, sizeof(struct DAL_location_struct)) != &(bctxt->loc))
-	{
-		free(bctxt);
-		return NULL;
-	}
-	bctxt->bctxt = dctxt->under_dal->open(dctxt->under_dal->ctxt, mode, location, objID);
-	if (bctxt->bctxt == NULL)
-	{
-		free(bctxt);
-		return NULL;
-	}
+   bctxt->global_ctxt = dctxt;
+   if (memcpy(&(bctxt->loc), &location, sizeof(struct DAL_location_struct)) != &(bctxt->loc))
+   {
+      free(bctxt);
+      return NULL;
+   }
+   bctxt->bctxt = dctxt->under_dal->open(dctxt->under_dal->ctxt, mode, location, objID);
+   if (bctxt->bctxt == NULL)
+   {
+      free(bctxt);
+      return NULL;
+   }
 
-	return bctxt;
+   return bctxt;
 }
 
 int fuzzing_set_meta(BLOCK_CTXT ctxt, const meta_info* source)
 {
-	if (ctxt == NULL)
-	{
-		LOG(LOG_ERR, "received a NULL block context!\n");
-		return -1;
-	}
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
 
-	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
+   FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
-	if (check_fuzz(bctxt->global_ctxt->set_meta, bctxt->loc.block))
-	{
-		LOG(LOG_ERR, "Fuzzing DAL: fuzzing set_meta block %d\n", bctxt->loc.block);
-		return -2;
-	}
+   if (check_fuzz(bctxt->global_ctxt->set_meta, bctxt->loc.block))
+   {
+      LOG(LOG_ERR, "Fuzzing DAL: fuzzing set_meta block %d\n", bctxt->loc.block);
+      return -2;
+   }
 
-	return bctxt->global_ctxt->under_dal->set_meta(bctxt->bctxt, source);
+   return bctxt->global_ctxt->under_dal->set_meta(bctxt->bctxt, source);
 }
 
 int fuzzing_get_meta(BLOCK_CTXT ctxt, meta_info* target)
 {
-	if (ctxt == NULL)
-	{
-		LOG(LOG_ERR, "received a NULL block context!\n");
-		return -1;
-	}
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
 
-	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
+   FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
-	if (check_fuzz(bctxt->global_ctxt->get_meta, bctxt->loc.block))
-	{
-		LOG(LOG_ERR, "Fuzzing DAL: fuzzing get_meta block %d\n", bctxt->loc.block);
-		return -2;
-	}
+   if (check_fuzz(bctxt->global_ctxt->get_meta, bctxt->loc.block))
+   {
+      LOG(LOG_ERR, "Fuzzing DAL: fuzzing get_meta block %d\n", bctxt->loc.block);
+      return -2;
+   }
 
-	return bctxt->global_ctxt->under_dal->get_meta(bctxt->bctxt, target);
+   return bctxt->global_ctxt->under_dal->get_meta(bctxt->bctxt, target);
 }
 
 int fuzzing_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
 {
-	if (ctxt == NULL)
-	{
-		LOG(LOG_ERR, "received a NULL block context!\n");
-		return -1;
-	}
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
 
-	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
+   FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
-	if (check_fuzz(bctxt->global_ctxt->put, bctxt->loc.block))
-	{
-		LOG(LOG_ERR, "Fuzzing DAL: fuzzing put block %d\n", bctxt->loc.block);
-		return -2;
-	}
+   if (check_fuzz(bctxt->global_ctxt->put, bctxt->loc.block))
+   {
+      LOG(LOG_ERR, "Fuzzing DAL: fuzzing put block %d\n", bctxt->loc.block);
+      return -2;
+   }
 
-	return bctxt->global_ctxt->under_dal->put(bctxt->bctxt, buf, size);
+   return bctxt->global_ctxt->under_dal->put(bctxt->bctxt, buf, size);
 }
 
 ssize_t fuzzing_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
 {
-	if (ctxt == NULL)
-	{
-		LOG(LOG_ERR, "received a NULL block context!\n");
-		return -1;
-	}
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
 
-	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
+   FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
-	if (check_fuzz(bctxt->global_ctxt->get, bctxt->loc.block))
-	{
-		LOG(LOG_ERR, "Fuzzing DAL: fuzzing get block %d\n", bctxt->loc.block);
-		return -2;
-	}
+   if (check_fuzz(bctxt->global_ctxt->get, bctxt->loc.block))
+   {
+      LOG(LOG_ERR, "Fuzzing DAL: fuzzing get block %d\n", bctxt->loc.block);
+      return -2;
+   }
 
-	return bctxt->global_ctxt->under_dal->get(bctxt->bctxt, buf, size, offset);
+   return bctxt->global_ctxt->under_dal->get(bctxt->bctxt, buf, size, offset);
 }
 
 int fuzzing_abort(BLOCK_CTXT ctxt)
 {
-	if (ctxt == NULL)
-	{
-		LOG(LOG_ERR, "received a NULL block context!\n");
-		return -1;
-	}
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
 
-	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
+   FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
-	if (check_fuzz(bctxt->global_ctxt->abort, bctxt->loc.block))
-	{
-		LOG(LOG_ERR, "Fuzzing DAL: fuzzing abort block %d\n", bctxt->loc.block);
-		return -2;
-	}
+   if (check_fuzz(bctxt->global_ctxt->abort, bctxt->loc.block))
+   {
+      LOG(LOG_ERR, "Fuzzing DAL: fuzzing abort block %d\n", bctxt->loc.block);
+      return -2;
+   }
 
-	int res = bctxt->global_ctxt->under_dal->abort(bctxt->bctxt);
-	if (res)
-	{
-		return res;
-	}
+   int res = bctxt->global_ctxt->under_dal->abort(bctxt->bctxt);
+   if (res)
+   {
+      return res;
+   }
 
-	free(bctxt);
-	return 0;
+   free(bctxt);
+   return 0;
 }
 
 int fuzzing_close(BLOCK_CTXT ctxt)
 {
-	if (ctxt == NULL)
-	{
-		LOG(LOG_ERR, "received a NULL block context!\n");
-		return -1;
-	}
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
 
-	FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
+   FUZZING_BLOCK_CTXT bctxt = (FUZZING_BLOCK_CTXT)ctxt;
 
-	if (check_fuzz(bctxt->global_ctxt->close, bctxt->loc.block))
-	{
-		LOG(LOG_ERR, "Fuzzing DAL: fuzzing close block %d\n", bctxt->loc.block);
-		return -2;
-	}
+   if (check_fuzz(bctxt->global_ctxt->close, bctxt->loc.block))
+   {
+      LOG(LOG_ERR, "Fuzzing DAL: fuzzing close block %d\n", bctxt->loc.block);
+      return -2;
+   }
 
-	int res = bctxt->global_ctxt->under_dal->close(bctxt->bctxt);
-	if (res)
-	{
-		return res;
-	}
+   int res = bctxt->global_ctxt->under_dal->close(bctxt->bctxt);
+   if (res)
+   {
+      return res;
+   }
 
-	free(bctxt);
-	return 0;
+   free(bctxt);
+   return 0;
 }
 
 //   -------------    FUZZING INITIALIZATION    -------------
 
 DAL fuzzing_dal_init(xmlNode *root, DAL_location max_loc)
 {
-	// allocate space for our context struct
-	FUZZING_DAL_CTXT dctxt = malloc(sizeof(struct fuzzing_dal_context_struct));
-	if (dctxt == NULL)
-	{
-		return NULL;
-	}
-	dctxt->verify = NULL;
-	dctxt->migrate = NULL;
-	dctxt->del = NULL;
-	dctxt->stat = NULL;
-	dctxt->cleanup = NULL;
-	dctxt->open = NULL;
-	dctxt->set_meta = NULL;
-	dctxt->get_meta = NULL;
-	dctxt->put = NULL;
-	dctxt->get = NULL;
-	dctxt->abort = NULL;
-	dctxt->close = NULL;
+   // allocate space for our context struct
+   FUZZING_DAL_CTXT dctxt = malloc(sizeof(struct fuzzing_dal_context_struct));
+   if (dctxt == NULL)
+   {
+      return NULL;
+   }
+   dctxt->verify = NULL;
+   dctxt->migrate = NULL;
+   dctxt->del = NULL;
+   dctxt->stat = NULL;
+   dctxt->cleanup = NULL;
+   dctxt->open = NULL;
+   dctxt->set_meta = NULL;
+   dctxt->get_meta = NULL;
+   dctxt->put = NULL;
+   dctxt->get = NULL;
+   dctxt->abort = NULL;
+   dctxt->close = NULL;
 
-	if (root->type != XML_ELEMENT_NODE || strncmp((char *)root->name, "DAL", 4) != 0)
-	{
-		free(dctxt);
-		errno = EINVAL;
-		return NULL;
-	}
+   // find the fuzzing data and the sub-DAL definition
+   xmlNode* fnode = NULL;
+   xmlNode* dnode = NULL;
+   for ( ; root != NULL; root = root->next ) {
+      if ( root->type == XML_ELEMENT_NODE ) {
+         if ( strncmp((char *)root->name, "fuzzing", 8) == 0 ) {
+            if ( fnode ) {
+               LOG( LOG_ERR, "Detected duplicate fuzzing node definition\n" );
+               break;
+            }
+            fnode = root;
+         }
+         if ( strncmp((char *)root->name, "DAL", 4) == 0 ) {
+            if ( dnode ) {
+               LOG( LOG_ERR, "Detected duplicate sub-DAL node definition\n" );
+               break;
+            }
+            dnode = root;
+         }
+      }
+   }
+   if (root) // catch 'break' case from above
+   {
+      free(dctxt);
+      errno = EINVAL;
+      return NULL;
+   }
+   if ( fnode == NULL  ||  dnode == NULL ) {
+      LOG( LOG_ERR, "missing 'fuzzing' defintions and/or sub-DAL node\n" );
+      free(dctxt);
+      errno = EINVAL;
+      return NULL;
+   }
 
-	// initialize underlying DAL
-	dctxt->under_dal = init_dal(root, max_loc);
-	if (dctxt->under_dal == NULL)
-	{
-		free(dctxt);
-		errno = EINVAL;
-		return NULL;
-	}
+   // initialize underlying DAL
+   dctxt->under_dal = init_dal(dnode, max_loc);
+   if (dctxt->under_dal == NULL)
+   {
+      LOG( LOG_ERR, "Failed to initialize sub-DAL\n" );
+      free(dctxt);
+      errno = EINVAL;
+      return NULL;
+   }
 
-	// find the fuzzing data. Fail if there is none
-	while (root->type != XML_ELEMENT_NODE || strncmp((char *)root->name, "fuzzing", 8) != 0)
-	{
-		root = root->next;
-		if (root == NULL)
-		{
-			free(dctxt);
-			errno = EINVAL;
-			return NULL;
-		}
-	}
-
-	// parse fuzzing data to context struct
-	xmlNode *child = root->children;
-	while (child != NULL)
-	{
-		if (child->children == NULL || child->children->type != XML_TEXT_NODE)
-		{
-			LOG(LOG_ERR, "the \"%s\" node is expected to contain a fuzzing state\n", (char *)child->name);
-		}
-		else if (strncmp((char *)child->name, "verify", 7) == 0)
-		{
-			if (parse_fuzz((char *)child->children->content, &dctxt->verify))
-			{
-				free_fuzz(dctxt);
-				errno = EINVAL;
-				return NULL;
-			}
-		}
-		else if (strncmp((char *)child->name, "migrate", 8) == 0)
-		{
-			if (parse_fuzz((char *)child->children->content, &dctxt->migrate))
-			{
-				free_fuzz(dctxt);
-				errno = EINVAL;
-				return NULL;
-			}
-		}
-		else if (strncmp((char *)child->name, "del", 4) == 0)
-		{
-			if (parse_fuzz((char *)child->children->content, &dctxt->del))
-			{
-				free_fuzz(dctxt);
-				errno = EINVAL;
-				return NULL;
-			}
-		}
-		else if (strncmp((char *)child->name, "stat", 5) == 0)
-		{
-			if (parse_fuzz((char *)child->children->content, &dctxt->stat))
-			{
-				free_fuzz(dctxt);
-				errno = EINVAL;
-				return NULL;
-			}
-		}
-		else if (strncmp((char *)child->name, "cleanup", 8) == 0)
-		{
-			if (parse_fuzz((char *)child->children->content, &dctxt->cleanup))
-			{
-				free_fuzz(dctxt);
-				errno = EINVAL;
-				return NULL;
-			}
-		}
-		else if (strncmp((char *)child->name, "open", 5) == 0)
-		{
-			if (parse_fuzz((char *)child->children->content, &dctxt->open))
-			{
-				free_fuzz(dctxt);
-				return NULL;
-			}
-		}
-		else if (strncmp((char *)child->name, "set_meta", 9) == 0)
-		{
-			if (parse_fuzz((char *)child->children->content, &dctxt->set_meta))
-			{
-				free_fuzz(dctxt);
-				errno = EINVAL;
-				return NULL;
-			}
-		}
-		else if (strncmp((char *)child->name, "get_meta", 9) == 0)
-		{
-			if (parse_fuzz((char *)child->children->content, &dctxt->get_meta))
-			{
-				free_fuzz(dctxt);
-				errno = EINVAL;
-				return NULL;
-			}
-		}
-		else if (strncmp((char *)child->name, "put", 4) == 0)
-		{
-			if (parse_fuzz((char *)child->children->content, &dctxt->put))
-			{
-				free_fuzz(dctxt);
-				errno = EINVAL;
-				return NULL;
-			}
-		}
-		else if (strncmp((char *)child->name, "get", 4) == 0)
-		{
-			if (parse_fuzz((char *)child->children->content, &dctxt->get))
-			{
-				free_fuzz(dctxt);
-				errno = EINVAL;
-				return NULL;
-			}
-		}
-		else if (strncmp((char *)child->name, "abort", 6) == 0)
-		{
-			if (parse_fuzz((char *)child->children->content, &dctxt->abort))
-			{
-				free_fuzz(dctxt);
-				errno = EINVAL;
-				return NULL;
-			}
-		}
-		else if (strncmp((char *)child->name, "close", 6) == 0)
-		{
-			if (parse_fuzz((char *)child->children->content, &dctxt->close))
-			{
-				free_fuzz(dctxt);
-				errno = EINVAL;
-				return NULL;
-			}
-		}
-		else if (strncmp((char *)child->name, "init", 5) == 0)
-		{
-			free_fuzz(dctxt);
-			errno = -1;
-			return NULL;
-		}
-		else
-		{
-			LOG(LOG_ERR, "the \"%s\" node is expected to be named after a method of the dal interface\n", (char *)child->name);
-			free_fuzz(dctxt);
-			errno = EINVAL;
-			return NULL;
-		}
-		child = child->next;
-	}
-	// allocate and populate a new DAL structure
-	DAL fdal = malloc(sizeof(struct DAL_struct));
-	if (fdal == NULL)
-	{
-		LOG(LOG_ERR, "failed to allocate space for a DAL_struct\n");
-		free_fuzz(dctxt);
-		return NULL;
-	}
-	fdal->name = "fuzzing";
-	fdal->ctxt = (DAL_CTXT)dctxt;
-	fdal->io_size = dctxt->under_dal->io_size;
-	fdal->verify = fuzzing_verify;
-	fdal->migrate = fuzzing_migrate;
-	fdal->open = fuzzing_open;
-	fdal->set_meta = fuzzing_set_meta;
-	fdal->get_meta = fuzzing_get_meta;
-	fdal->put = fuzzing_put;
-	fdal->get = fuzzing_get;
-	fdal->abort = fuzzing_abort;
-	fdal->close = fuzzing_close;
-	fdal->del = fuzzing_del;
-	fdal->stat = fuzzing_stat;
-	fdal->cleanup = fuzzing_cleanup;
-	return fdal;
+   // parse fuzzing data to context struct
+   xmlNode *child = fnode->children;
+   while (child != NULL)
+   {
+      if (child->children == NULL || child->children->type != XML_TEXT_NODE)
+      {
+         LOG(LOG_ERR, "the \"%s\" node is expected to contain a fuzzing state\n", (char *)child->name);
+      }
+      else if (strncmp((char *)child->name, "verify", 7) == 0)
+      {
+         if (parse_fuzz((char *)child->children->content, &dctxt->verify))
+         {
+            free_fuzz(dctxt);
+            errno = EINVAL;
+            return NULL;
+         }
+      }
+      else if (strncmp((char *)child->name, "migrate", 8) == 0)
+      {
+         if (parse_fuzz((char *)child->children->content, &dctxt->migrate))
+         {
+            free_fuzz(dctxt);
+            errno = EINVAL;
+            return NULL;
+         }
+      }
+      else if (strncmp((char *)child->name, "del", 4) == 0)
+      {
+         if (parse_fuzz((char *)child->children->content, &dctxt->del))
+         {
+            free_fuzz(dctxt);
+            errno = EINVAL;
+            return NULL;
+         }
+      }
+      else if (strncmp((char *)child->name, "stat", 5) == 0)
+      {
+         if (parse_fuzz((char *)child->children->content, &dctxt->stat))
+         {
+            free_fuzz(dctxt);
+            errno = EINVAL;
+            return NULL;
+         }
+      }
+      else if (strncmp((char *)child->name, "cleanup", 8) == 0)
+      {
+         if (parse_fuzz((char *)child->children->content, &dctxt->cleanup))
+         {
+            free_fuzz(dctxt);
+            errno = EINVAL;
+            return NULL;
+         }
+      }
+      else if (strncmp((char *)child->name, "open", 5) == 0)
+      {
+         if (parse_fuzz((char *)child->children->content, &dctxt->open))
+         {
+            free_fuzz(dctxt);
+            return NULL;
+         }
+      }
+      else if (strncmp((char *)child->name, "set_meta", 9) == 0)
+      {
+         if (parse_fuzz((char *)child->children->content, &dctxt->set_meta))
+         {
+            free_fuzz(dctxt);
+            errno = EINVAL;
+            return NULL;
+         }
+      }
+      else if (strncmp((char *)child->name, "get_meta", 9) == 0)
+      {
+         if (parse_fuzz((char *)child->children->content, &dctxt->get_meta))
+         {
+            free_fuzz(dctxt);
+            errno = EINVAL;
+            return NULL;
+         }
+      }
+      else if (strncmp((char *)child->name, "put", 4) == 0)
+      {
+         if (parse_fuzz((char *)child->children->content, &dctxt->put))
+         {
+            free_fuzz(dctxt);
+            errno = EINVAL;
+            return NULL;
+         }
+      }
+      else if (strncmp((char *)child->name, "get", 4) == 0)
+      {
+         if (parse_fuzz((char *)child->children->content, &dctxt->get))
+         {
+            free_fuzz(dctxt);
+            errno = EINVAL;
+            return NULL;
+         }
+      }
+      else if (strncmp((char *)child->name, "abort", 6) == 0)
+      {
+         if (parse_fuzz((char *)child->children->content, &dctxt->abort))
+         {
+            free_fuzz(dctxt);
+            errno = EINVAL;
+            return NULL;
+         }
+      }
+      else if (strncmp((char *)child->name, "close", 6) == 0)
+      {
+         if (parse_fuzz((char *)child->children->content, &dctxt->close))
+         {
+            free_fuzz(dctxt);
+            errno = EINVAL;
+            return NULL;
+         }
+      }
+      else if (strncmp((char *)child->name, "init", 5) == 0)
+      {
+         free_fuzz(dctxt);
+         errno = -1;
+         return NULL;
+      }
+      else
+      {
+         LOG(LOG_ERR, "the \"%s\" node is expected to be named after a method of the dal interface\n", (char *)child->name);
+         free_fuzz(dctxt);
+         errno = EINVAL;
+         return NULL;
+      }
+      child = child->next;
+   }
+   // allocate and populate a new DAL structure
+   DAL fdal = malloc(sizeof(struct DAL_struct));
+   if (fdal == NULL)
+   {
+      LOG(LOG_ERR, "failed to allocate space for a DAL_struct\n");
+      free_fuzz(dctxt);
+      return NULL;
+   }
+   fdal->name = dctxt->under_dal->name;
+   fdal->ctxt = (DAL_CTXT)dctxt;
+   fdal->io_size = dctxt->under_dal->io_size;
+   fdal->verify = fuzzing_verify;
+   fdal->migrate = fuzzing_migrate;
+   fdal->open = fuzzing_open;
+   fdal->set_meta = fuzzing_set_meta;
+   fdal->get_meta = fuzzing_get_meta;
+   fdal->put = fuzzing_put;
+   fdal->get = fuzzing_get;
+   fdal->abort = fuzzing_abort;
+   fdal->close = fuzzing_close;
+   fdal->del = fuzzing_del;
+   fdal->stat = fuzzing_stat;
+   fdal->cleanup = fuzzing_cleanup;
+   return fdal;
 }
