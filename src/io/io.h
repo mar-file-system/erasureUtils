@@ -205,6 +205,7 @@ typedef struct global_state_struct
    char meta_error;
    char data_error;
    ioqueue *ioq;
+   pthread_mutex_t* erasurelock;
 } gthread_state;
 
 // Write thread internal state struct

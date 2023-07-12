@@ -112,8 +112,8 @@ underlying skt_etc() functions.
 #include "io/io.h"
 #include "thread_queue/thread_queue.h"
 #include "dal/dal.h"
-#include "general_include/crc.c"
 
+#include <isa-l.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -271,8 +271,22 @@ int write_consume(void** state, void** work_todo) {
    }
 
    if (datasz > 0) {
+      // critical section : we are now going to call some inlined assembly erasure funcs
+      if ( pthread_mutex_lock( gstate->erasurelock ) ) {
+         LOG(LOG_ERR, "Block %d failed to acquire erasurelock\n", gstate->location.block);
+         gstate->data_error = 1;
+         release_ioblock(gstate->ioq);
+         return -1;
+      }
       // calculate a CRC for this data and append it to the buffer
-      *(uint32_t*)(datasrc + datasz) = crc32_ieee_base(CRC_SEED, datasrc, datasz);
+      *(uint32_t*)(datasrc + datasz) = crc32_ieee(CRC_SEED, datasrc, datasz);
+      // exiting critical section
+      if ( pthread_mutex_unlock( gstate->erasurelock ) ) {
+         LOG(LOG_ERR, "Block %d failed to release erasurelock\n", gstate->location.block);
+         gstate->data_error = 1;
+         release_ioblock(gstate->ioq);
+         return -1;
+      }
       gstate->minfo.crcsum += *((uint32_t*)(datasrc + datasz));
       datasz += CRC_BYTES;
       // increment our block size
@@ -340,6 +354,7 @@ int read_produce(void** state, void** work_tofill) {
       // check for an error condition
       if (resres == -1) {
          LOG(LOG_ERR, "Failed to reserve an ioblock!\n");
+         gstate->data_error = 1;
          return -1;
       }
       // check if our ioblock is full, and ready to be pushed
@@ -375,13 +390,28 @@ int read_produce(void** state, void** work_tofill) {
       to_read -= CRC_BYTES;
       // check the crc
       if (data_err == 0) {
-         uint32_t crc = crc32_ieee_base(CRC_SEED, store_tgt, to_read);
+         uint32_t crc = 0;
          uint32_t scrc = *((uint32_t*)(store_tgt + to_read));
          tstate->crcsumchk += scrc; // track our global crc, for reference
-         if (crc != scrc) {
-            LOG(LOG_ERR, "Calculated CRC of data (%u) does not match stored CRC: %u\n", crc, scrc);
+         // critical section : we are now going to call some inlined assembly erasure funcs
+         if ( pthread_mutex_lock( gstate->erasurelock ) ) {
+            LOG(LOG_ERR, "Block %d failed to acquire erasurelock\n", gstate->location.block);
             gstate->data_error = 1;
             data_err = 1;
+         }
+         else {
+            crc = crc32_ieee(CRC_SEED, store_tgt, to_read);
+            // exiting critical section
+            if ( pthread_mutex_unlock( gstate->erasurelock ) ) {
+               LOG(LOG_ERR, "Block %d failed to release erasurelock\n", gstate->location.block);
+               gstate->data_error = 1;
+               return -1; // force an abort
+            }
+            if (crc != scrc) {
+               LOG(LOG_ERR, "Calculated CRC of data (%u) does not match stored CRC: %u\n", crc, scrc);
+               gstate->data_error = 1;
+               data_err = 1;
+            }
          }
       }
       // note how much REAL data (no CRC) we've stored to the ioblock

@@ -427,6 +427,7 @@ ne_handle allocate_handle(ne_ctxt ctxt, const char* objID, ne_location loc, meta
    int i;
    for (i = 0; i < num_blocks; i++) {
       // assign values to thread states
+      handle->thread_states[i].erasurelock = handle->ctxt->erasurelock;
       // object attributes
       handle->thread_states[i].objID = handle->objID;
       handle->thread_states[i].location.pod = loc.pod;
@@ -1985,6 +1986,7 @@ int ne_rebuild(ne_handle handle, ne_erasure* epat, ne_state* sref) {
    // assign values to thread states
    int i;
    for (i = 0; i < N + E; i++) {
+      outstates[i].erasurelock = handle->ctxt->erasurelock;
       // object attributes
       outstates[i].objID = handle->objID;
       outstates[i].location.pod = handle->loc.pod;
