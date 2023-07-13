@@ -1740,6 +1740,7 @@ int ne_close(ne_handle handle, ne_erasure* epat, ne_state* sref) {
       if (numerrs > 0 && numerrs > (handle->epat.E - MIN_PROTECTION)) {
          LOG(LOG_ERR, "Errors exceed safety threshold!\n");
          ne_delete(handle->ctxt, handle->objID, handle->loc);
+         errno = EIO;
          ret_val = -1;
       }
    }
