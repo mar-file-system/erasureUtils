@@ -81,6 +81,8 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #define IO_SIZE 1048576 // Preferred I/O Size
 
+static uint32_t crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len); // forward decl of 'base' crc32 func
+
 //   -------------    NO-OP CONTEXT    -------------
 
 typedef struct noop_dal_context_struct
