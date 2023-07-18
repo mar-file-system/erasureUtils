@@ -87,16 +87,15 @@ static uint32_t crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len); // 
 
 typedef struct noop_dal_context_struct
 {
-   meta_info*  minfo;  // meta info values to be returned to the caller
-   void*      c_data;  // cached data buffer(s), representing each 'complete' I/O
-   void* c_data_tail;  // cached data buffer(s), representing a trailing 'partial' I/O ( if any )
+   meta_info   minfo;  // meta info values to be returned to the caller
+   void*      c_data;  // cached data buffer, representing each 'complete' I/O
+   void* c_data_tail;  // cached data buffer, representing a trailing 'partial' I/O ( if any )
    size_t  tail_size;  // size of the c_data_tail buffer
 } * NOOP_DAL_CTXT;
 
 typedef struct noop_block_context_struct
 {
    NOOP_DAL_CTXT dctxt; // Global DAL context
-   DAL_location    loc; // Location value for this block
    DAL_MODE       mode; // Mode of this block ctxt
 } * NOOP_BLOCK_CTXT;
 
@@ -242,7 +241,6 @@ int noop_cleanup(DAL dal)
    }
    NOOP_DAL_CTXT dctxt = (NOOP_DAL_CTXT)dal->ctxt; // Should have been passed a DAL context
    // Free DAL and its context state
-   if ( dctxt->minfo ) { free( dctxt->minfo ); }
    if ( dctxt->c_data ) { free( dctxt->c_data ); }
    if ( dctxt->c_data_tail ) { free( dctxt->c_data_tail ); }
    free(dctxt);
@@ -267,7 +265,6 @@ BLOCK_CTXT noop_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const 
    }
    // populate values and global ctxt reference
    bctxt->dctxt = dctxt;
-   bctxt->loc = location;
    bctxt->mode = mode;
    return bctxt;
 }
@@ -306,7 +303,7 @@ int noop_get_meta(BLOCK_CTXT ctxt, meta_info* dest )
       return -1;
    }
    // Return cached metadata
-   cpy_minfo(dest, bctxt->dctxt->minfo + bctxt->loc.block);
+   memcpy(dest, &(bctxt->dctxt->minfo), sizeof(struct meta_info_struct));
    return 0;
 }
 
@@ -345,40 +342,36 @@ ssize_t noop_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
    // Return cached data, if present
    if (bctxt->dctxt->c_data)
    {
-      // get references for all of our per-block buffers
-      meta_info* minfo = bctxt->dctxt->minfo + bctxt->loc.block;
-      void* c_data = bctxt->dctxt->c_data + ( minfo->versz * bctxt->loc.block );
-      void* c_data_tail = bctxt->dctxt->c_data_tail + ( bctxt->dctxt->tail_size * bctxt->loc.block );
       // validate offset
-      if ( offset > minfo->blocksz ) {
-         LOG( LOG_ERR, "offset %zd is beyond EOF at %zu\n", offset, minfo->blocksz );
+      if ( offset > bctxt->dctxt->minfo.blocksz ) {
+         LOG( LOG_ERR, "offset %zd is beyond EOF at %zu\n", offset, bctxt->dctxt->minfo.blocksz );
          errno = EINVAL;
          return -1;
       }
 
       // copy from our primary data buff first
-      size_t maxcopy = ( size > (minfo->blocksz - offset) ) ? (minfo->blocksz - offset) : size;
+      size_t maxcopy = ( size > (bctxt->dctxt->minfo.blocksz - offset) ) ? (bctxt->dctxt->minfo.blocksz - offset) : size;
       size_t copied = 0;
-      while ( copied < maxcopy  &&  offset < (minfo->blocksz - bctxt->dctxt->tail_size) ) {
+      while ( copied < maxcopy  &&  offset < (bctxt->dctxt->minfo.blocksz - bctxt->dctxt->tail_size) ) {
          // calculate the offset and size to pull from our buffer
-         off_t suboffset = offset % minfo->versz; // get an offset in terms of this buffer iteration
+         off_t suboffset = offset % bctxt->dctxt->minfo.versz; // get an offset in terms of this buffer iteration
          size_t copysize = maxcopy - copied; // start with the total remaining bytes
-         if ( copysize > minfo->versz ) // reduce to our buffer size, at most
-            copysize = minfo->versz;
+         if ( copysize > bctxt->dctxt->minfo.versz ) // reduce to our buffer size, at most
+            copysize = bctxt->dctxt->minfo.versz;
          copysize -= suboffset; // exclude our starting offset
-         memcpy(buf + copied, c_data + suboffset, copysize);
+         memcpy(buf + copied, bctxt->dctxt->c_data + suboffset, copysize);
          // increment our offset and copied count to include the newly copied data
          copied += copysize;
          offset += copysize;
       }
       // fill any remaining from our tail buffer
       if ( copied < maxcopy ) {
-         off_t suboffset = offset % minfo->versz; // get an offset in terms of this buffer iteration
+         off_t suboffset = offset % bctxt->dctxt->minfo.versz; // get an offset in terms of this buffer iteration
          size_t copysize = maxcopy - copied; // start with the total remaining bytes
          if ( copysize > bctxt->dctxt->tail_size ) // reduce to our buffer size, at most
             copysize = bctxt->dctxt->tail_size;
          copysize -= suboffset; // exclude our starting offset
-         memcpy(buf + copied, c_data_tail + suboffset, copysize);
+         memcpy(buf + copied, bctxt->dctxt->c_data_tail + suboffset, copysize);
          copied += copysize;
       }
       return copied; // return however many bytes were provided
@@ -425,11 +418,10 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
       return NULL;
    }
    // initialize values to indicate absence
-   meta_info minfo = {0};
-   minfo.N = -1;
-   minfo.E = -1;
+   dctxt->minfo.N = -1;
+   dctxt->minfo.E = -1;
    // initialize versz to match io size
-   minfo.versz = IO_SIZE;
+   dctxt->minfo.versz = IO_SIZE;
 
    // allocate and populate a new DAL structure
    DAL ndal = malloc(sizeof(struct DAL_struct));
@@ -467,25 +459,25 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
          break;
       }
       if ( strncmp( (char*)root->name, "N", 2 ) == 0 ) {
-         if( parse_int_node( &(minfo.N), root ) ) {
+         if( parse_int_node( &(dctxt->minfo.N), root ) ) {
             LOG( LOG_ERR, "failed to parse 'N' value\n" );
             break;
          }
       }
       else if ( strncmp( (char*)root->name, "E", 2 ) == 0 ) {
-         if( parse_int_node( &(minfo.E), root ) ) {
+         if( parse_int_node( &(dctxt->minfo.E), root ) ) {
             LOG( LOG_ERR, "failed to parse 'E' value\n" );
             break;
          }
       }
       else if ( strncmp( (char*)root->name, "PSZ", 4 ) == 0 ) {
-         if( parse_size_node( &(minfo.partsz), root ) ) {
+         if( parse_size_node( &(dctxt->minfo.partsz), root ) ) {
             LOG( LOG_ERR, "failed to parse 'PSZ' value\n" );
             break;
          }
       }
       else if ( strncmp( (char*)root->name, "max_size", 9 ) == 0 ) {
-         if( parse_size_node( &(minfo.totsz), root ) ) {
+         if( parse_size_node( &(dctxt->minfo.totsz), root ) ) {
             LOG( LOG_ERR, "failed to parse 'max_size' value\n" );
             break;
          }
@@ -503,23 +495,23 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
       return NULL;
    }
    // validate and ingest any cache source
-   if ( minfo.N != -1  ||  minfo.E != -1  ||  minfo.partsz > 0  ||  minfo.totsz > 0 ) {
+   if ( dctxt->minfo.N != -1  ||  dctxt->minfo.E != -1  ||  dctxt->minfo.partsz > 0  ||  dctxt->minfo.totsz > 0 ) {
       // we're no in do-or-die mode for source caching
       // we have some values -- ensure we have all of them
       char fatalerror = 0;
-      if ( minfo.N == -1 ) {
+      if ( dctxt->minfo.N == -1 ) {
          LOG( LOG_ERR, "missing source cache 'N' definition\n" );
          fatalerror = 1;
       }
-      if ( minfo.E == -1 ) {
+      if ( dctxt->minfo.E == -1 ) {
          LOG( LOG_ERR, "missing source cache 'E' definition\n" );
          fatalerror = 1;
       }
-      if ( minfo.partsz <= 0 ) {
+      if ( dctxt->minfo.partsz <= 0 ) {
          LOG( LOG_ERR, "missing source cache 'PSZ' definition\n" );
          fatalerror = 1;
       }
-      if ( minfo.totsz <= 0 ) {
+      if ( dctxt->minfo.totsz <= 0 ) {
          LOG( LOG_ERR, "missing source cache 'max_size' definition\n" );
          fatalerror = 1;
       }
@@ -529,36 +521,36 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
       }
 
       // allocate and populate our primary data buffer
-      dctxt->c_data =  calloc( minfo.N + minfo.E, minfo.versz );
+      dctxt->c_data =  calloc( 1, dctxt->minfo.versz );
       if ( dctxt->c_data == NULL ) {
          LOG( LOG_ERR, "failed to allocate cached data buffer\n" );
          noop_cleanup(ndal);
          return NULL;
       }
-      size_t datasize = minfo.versz - sizeof(uint32_t);
+      size_t datasize = dctxt->minfo.versz - sizeof(uint32_t);
       uint32_t crcval = crc32_ieee_base(CRC_SEED, dctxt->c_data, datasize);
       *(uint32_t*)( dctxt->c_data + datasize ) = crcval;
 
       // calculate our blocksize
-      size_t totalwritten = minfo.totsz; // note the total volume of data to be contained in this object
-      totalwritten += (minfo.partsz * minfo.N)
-                        - (totalwritten % (minfo.partsz * minfo.N)); // account for erasure stripe alignment
-      size_t iocnt = totalwritten / (datasize * minfo.N); // calculate the number of buffers required to store this info
-      minfo.blocksz = iocnt * minfo.versz; // record blocksz based on number of complete I/O buffers
+      size_t totalwritten = dctxt->minfo.totsz; // note the total volume of data to be contained in this object
+      totalwritten += (dctxt->minfo.partsz * dctxt->minfo.N)
+                        - (totalwritten % (dctxt->minfo.partsz * dctxt->minfo.N)); // account for erasure stripe alignment
+      size_t iocnt = totalwritten / (datasize * dctxt->minfo.N); // calculate the number of buffers required to store this info
+      dctxt->minfo.blocksz = iocnt * dctxt->minfo.versz; // record blocksz based on number of complete I/O buffers
       uint32_t tail_crcval = 0;
-      if ( totalwritten % (datasize * minfo.N) ) { // account for misalignment
+      if ( totalwritten % (datasize * dctxt->minfo.N) ) { // account for misalignment
          // populate our 'tail' data buffer info
-         size_t remainder = totalwritten % (datasize * minfo.N);
-         if ( remainder % minfo.N ) { // sanity check
+         size_t remainder = totalwritten % (datasize * dctxt->minfo.N);
+         if ( remainder % dctxt->minfo.N ) { // sanity check
             LOG( LOG_ERR, "Remainder value of %zu is not cleanly divisible by N=%d ( tell 'gransom' that he doesn't understand math )\n",
-                          remainder, minfo.N );
+                          remainder, dctxt->minfo.N );
             noop_cleanup(ndal);
             return NULL;
          }
-         remainder /= minfo.N;
+         remainder /= dctxt->minfo.N;
          dctxt->tail_size = remainder + sizeof(uint32_t);
-         minfo.blocksz += dctxt->tail_size;
-         dctxt->c_data_tail = calloc( minfo.N + minfo.E, dctxt->tail_size );
+         dctxt->minfo.blocksz += dctxt->tail_size;
+         dctxt->c_data_tail = calloc( 1, dctxt->tail_size );
          if ( dctxt->c_data_tail == NULL ) {
             LOG( LOG_ERR, "Failed to allocate c_data_tail buffer\n" );
             noop_cleanup(ndal);
@@ -571,30 +563,10 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
       // calculate our crcsum
       size_t ioindex = 0;
       for ( ; ioindex < iocnt; ioindex++ ) {
-         minfo.crcsum += crcval;
+         dctxt->minfo.crcsum += crcval;
       }
-      minfo.crcsum += tail_crcval;
- 
-      // allocate and populate our meta info array
-      dctxt->minfo = calloc( minfo.N + minfo.E, sizeof(struct meta_info_struct) );
-      if ( dctxt->minfo == NULL ) {
-         LOG( LOG_ERR, "Failed to allocate meta_info buffer\n" );
-         noop_cleanup(ndal);
-         return NULL;
-      }
-      int i;
-      for ( i = 0; i < minfo.N + minfo.E; i++ ) {
-         cpy_minfo( dctxt->minfo + i, &(minfo) );
-      }
-
-      // populate our independent data buffers
-      for ( i = 1; i < minfo.N + minfo.E; i++ ) {
-         memcpy( dctxt->c_data + ( i * minfo.versz ), dctxt->c_data, minfo.versz );
-         if ( dctxt->c_data_tail ) {
-            memcpy( dctxt->c_data_tail + ( i * dctxt->tail_size ), dctxt->c_data_tail, dctxt->tail_size );
-         }
-      }
-  }
+      dctxt->minfo.crcsum += tail_crcval;
+   }
    // NOTE -- no source cache defs is valid ( all reads will fail )
    //         only 'some', but not all source defs will result in init() error
 
