@@ -112,7 +112,9 @@ underlying skt_etc() functions.
 #include "io/io.h"
 #include "thread_queue/thread_queue.h"
 #include "dal/dal.h"
+#include "general_include/crc.c"
 
+#include <isa-l.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -125,15 +127,6 @@ underlying skt_etc() functions.
 #include <assert.h>
 #include <pthread.h>
 
-/* The following are defined here, so as to hide them from users of the library */
-// erasure functions
-#ifdef HAVE_LIBISAL
-extern uint32_t crc32_ieee(uint32_t seed, uint8_t* buf, uint64_t len);
-extern void ec_encode_data(int len, int srcs, int dests, unsigned char* v, unsigned char** src, unsigned char** dest);
-#else
-extern uint32_t crc32_ieee_base(uint32_t seed, uint8_t* buf, uint64_t len);
-extern void ec_encode_data_base(int len, int srcs, int dests, unsigned char* v, unsigned char** src, unsigned char** dest);
-#endif
 
 /* ------------------------------   THREAD BEHAVIOR FUNCTIONS   ------------------------------ */
 
@@ -237,7 +230,7 @@ int read_init(unsigned int tID, void* global_state, void** state) {
    // skip setting minfo values if they already appear to be set
    if (gstate->minfo.totsz == 0) {
       // populate our minfo struct with obj meta values
-      if (dal_get_minfo(dal, tstate->handle, &gstate->minfo) != 0) {
+      if (dal->get_meta(tstate->handle, &gstate->minfo) != 0) {
          LOG(LOG_ERR, "Failed to populate all expected meta_info values!\n");
          gstate->meta_error = 1;
       }
@@ -279,8 +272,22 @@ int write_consume(void** state, void** work_todo) {
    }
 
    if (datasz > 0) {
+      // critical section : we are now going to call some inlined assembly erasure funcs
+      if ( pthread_mutex_lock( gstate->erasurelock ) ) {
+         LOG(LOG_ERR, "Block %d failed to acquire erasurelock\n", gstate->location.block);
+         gstate->data_error = 1;
+         release_ioblock(gstate->ioq);
+         return -1;
+      }
       // calculate a CRC for this data and append it to the buffer
       *(uint32_t*)(datasrc + datasz) = crc32_ieee(CRC_SEED, datasrc, datasz);
+      // exiting critical section
+      if ( pthread_mutex_unlock( gstate->erasurelock ) ) {
+         LOG(LOG_ERR, "Block %d failed to release erasurelock\n", gstate->location.block);
+         gstate->data_error = 1;
+         release_ioblock(gstate->ioq);
+         return -1;
+      }
       gstate->minfo.crcsum += *((uint32_t*)(datasrc + datasz));
       datasz += CRC_BYTES;
       // increment our block size
@@ -348,6 +355,7 @@ int read_produce(void** state, void** work_tofill) {
       // check for an error condition
       if (resres == -1) {
          LOG(LOG_ERR, "Failed to reserve an ioblock!\n");
+         gstate->data_error = 1;
          return -1;
       }
       // check if our ioblock is full, and ready to be pushed
@@ -365,6 +373,11 @@ int read_produce(void** state, void** work_tofill) {
          tstate->iob = NULL;
          break;
       }
+      if ( to_read <= CRC_BYTES ) {
+         LOG( LOG_ERR, "Remaining data at offset %zu of block %d ( %zd ) is <= CRC_BYTES!\n", tstate->offset, gstate->location.block, to_read );
+         gstate->data_error = 1;
+         return -1; // force an abort
+      }
       void* store_tgt = ioblock_write_target(tstate->iob);
       char data_err = 0;
       LOG(LOG_INFO, "Reading %zd bytes from offset %zu of block %d\n", to_read, tstate->offset, gstate->location.block);
@@ -378,13 +391,28 @@ int read_produce(void** state, void** work_tofill) {
       to_read -= CRC_BYTES;
       // check the crc
       if (data_err == 0) {
-         uint32_t crc = crc32_ieee(CRC_SEED, store_tgt, to_read);
+         uint32_t crc = 0;
          uint32_t scrc = *((uint32_t*)(store_tgt + to_read));
          tstate->crcsumchk += scrc; // track our global crc, for reference
-         if (crc != scrc) {
-            LOG(LOG_ERR, "Calculated CRC of data (%u) does not match stored CRC: %u\n", crc, scrc);
+         // critical section : we are now going to call some inlined assembly erasure funcs
+         if ( pthread_mutex_lock( gstate->erasurelock ) ) {
+            LOG(LOG_ERR, "Block %d failed to acquire erasurelock\n", gstate->location.block);
             gstate->data_error = 1;
             data_err = 1;
+         }
+         else {
+            crc = crc32_ieee(CRC_SEED, store_tgt, to_read);
+            // exiting critical section
+            if ( pthread_mutex_unlock( gstate->erasurelock ) ) {
+               LOG(LOG_ERR, "Block %d failed to release erasurelock\n", gstate->location.block);
+               gstate->data_error = 1;
+               return -1; // force an abort
+            }
+            if (crc != scrc) {
+               LOG(LOG_ERR, "Calculated CRC of data (%u) does not match stored CRC: %u\n", crc, scrc);
+               gstate->data_error = 1;
+               data_err = 1;
+            }
          }
       }
       // note how much REAL data (no CRC) we've stored to the ioblock
@@ -545,7 +573,7 @@ void write_term(void** state, void** prev_work, TQ_Control_Flags flg) {
    }
 
    // attempt to write out meta info
-   if (dal_set_minfo(gstate->dal, tstate->handle, &(gstate->minfo))) {
+   if (gstate->dal->set_meta(tstate->handle, &(gstate->minfo))) {
       LOG(LOG_ERR, "Failed to set meta value for block %d!\n", gstate->location.block);
       gstate->meta_error = 1;
    }
@@ -627,3 +655,4 @@ void read_term(void** state, void** prev_work, TQ_Control_Flags flg) {
 
    // NOTE -- it is up to the master / consumer proc to destroy our IOQueue
 }
+

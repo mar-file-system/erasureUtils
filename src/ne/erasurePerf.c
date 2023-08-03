@@ -137,7 +137,7 @@ int main(int argc, const char **argv)
   root_element = xmlDocGetRootElement(doc);
 
   // Initialize libne
-  ne_ctxt ctxt = ne_init(root_element, loc, epat.N + epat.E);
+  ne_ctxt ctxt = ne_init(root_element, loc, epat.N + epat.E, NULL);
   if (ctxt == NULL)
   {
     printf("ERROR: Failed to initialize ne_ctxt!\n");

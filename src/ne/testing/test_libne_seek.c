@@ -97,7 +97,7 @@ int main( int argc, char** argv ) {
       .O = 0,
       .partsz = 100
    };
-   ne_ctxt ctxt = ne_init( root_element, maxloc, erasure.N + erasure.E );
+   ne_ctxt ctxt = ne_init( root_element, maxloc, erasure.N + erasure.E , NULL);
    if ( ctxt == NULL ) {
       printf( "failed to initialize libne instance\n" );
       return -1;

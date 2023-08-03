@@ -59,6 +59,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #include "erasureUtils_auto_config.h"
 
+// NOTE -- this tool is specific to the POSIX DAL implementation
+#include "posix_dal.c"
+#include "../thread_queue/thread_queue.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -72,9 +75,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include <libxml/tree.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-
-#include "posix_dal.c"
-#include "../thread_queue/thread_queue.h"
 
 #define preFMT "%s: "
 

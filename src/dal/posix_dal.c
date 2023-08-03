@@ -58,6 +58,8 @@ LANL contributions is found at https://github.com/jti-lanl/aws4c.
 GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
+#define _GNU_SOURCE // for O_DIRECT
+
 #include "erasureUtils_auto_config.h"
 #ifdef DEBUG_DAL
 #define DEBUG DEBUG_DAL
@@ -68,6 +70,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 #include "logging/logging.h"
 
 #include "dal.h"
+#include "metainfo.h"
 
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -100,7 +103,6 @@ typedef struct posix_block_context_struct
    int sfd;        // Secure Root File Descriptor (if open)
    char *filepath; // File Path (if open)
    int filelen;    // Length of filepath string
-   off_t offset;   // Current file offset (only relevant when reading)
    DAL_MODE mode;  // Mode in which this block was opened
 } * POSIX_BLOCK_CTXT;
 
@@ -111,6 +113,8 @@ typedef struct posix_dal_context_struct
    DAL_location max_loc; // Maximum pod/cap/block/scatter values
    int dirpad;           // Number of chars by which dirtmp may expand via substitutions
    int sec_root;         // Handle of secure root directory
+   int dataflags;        // Any additional flag values to be passed to open() of data files
+   int metaflags;        // Any additional flag values to be passed to open() of meta files
 } * POSIX_DAL_CTXT;
 
 /* For emergency rebuild. This indicates all the combinations of locations that either need to be rebuilt,
@@ -196,6 +200,48 @@ static int num_digits(int value)
    }
    // only support values up to 5 digits long
    return -1;
+}
+
+/** (INTERNAL HELPER FUNCTION)
+ * Parse a comma-separated string of open() flag values and add them to the referenced flag set
+ * @param const char* flagstr : String to be parsed
+ * @param int* oflags : Reference to the flag values to be updated
+ * @return int : Zero on success, or -1 on failure
+ */
+static int parse_open_flags( const char* flagstr, int* oflags ) {
+   if ( flagstr == NULL ) {
+      LOG( LOG_ERR, "Received a NULL open flag value string\n" );
+      return -1;
+   }
+   int tmpflags = 0;
+   while ( *flagstr != '\0' ) {
+      // before doing anything else, find the end of the current flag element
+      const char* readahead = flagstr;
+      while ( *readahead != '\0'  &&  *readahead != ',' ) { readahead++; }
+      // note that these string comparisions DO NOT include the NULL-terminator, as the parsed string may not have one yet
+      if ( (readahead - flagstr) == 9  &&  strncasecmp( flagstr, "O_NOATIME", 9 ) == 0 ) {
+         tmpflags |= O_NOATIME;
+      }
+      else if ( (readahead - flagstr) == 8  &&  strncasecmp( flagstr, "O_DIRECT", 8 ) == 0 ) {
+         tmpflags |= O_DIRECT;
+      }
+      else if ( (readahead - flagstr) == 7  &&  strncasecmp( flagstr, "O_DSYNC", 7 ) == 0 ) {
+         tmpflags |= O_DSYNC;
+      }
+      else if ( (readahead - flagstr) == 6  &&  strncasecmp( flagstr, "O_SYNC", 6 ) == 0 ) {
+         tmpflags |= O_SYNC;
+      }
+      else if ( readahead - flagstr ) { // only complain if this element was populated at all
+         LOG( LOG_ERR, "POSIX DAL def contains unrecognized open() flag value: \"%.*s\"\n", (int)(readahead - flagstr), flagstr );
+         return -1;
+      }
+      // update to the next flag element
+      flagstr = readahead;
+      while ( *flagstr == ',' ) { flagstr++; } // skip over any number of repeated commas
+   }
+   // update our *actual* flags
+   *oflags |= tmpflags;
+   return 0;
 }
 
 static char *expand_path(const char *parse, char *fill, DAL_location loc, DAL_location *loc_flags, int dir)
@@ -342,7 +388,10 @@ static int expand_dir_template(POSIX_DAL_CTXT dctxt, POSIX_BLOCK_CTXT bctxt, DAL
    // allocate string to hold the dirpath
    // NOTE -- allocation size is an estimate, based on the above pod/block/cap/scat limits
    bctxt->filepath = malloc(sizeof(char) * (dctxt->tmplen + dctxt->dirpad + strlen(objID) + SFX_PADDING + 1));
-
+   if ( bctxt->filepath == NULL ) {
+      LOG( LOG_ERR, "Failed to allocate filepath string of length %d\n", (dctxt->tmplen + dctxt->dirpad + strlen(objID) + SFX_PADDING + 1) );
+      return -1;
+   } // malloc will set errno
    // parse through the directory template string, populating filepath as we go
    const char *parse = dctxt->dirtmp;
    char *fill = bctxt->filepath;
@@ -790,14 +839,79 @@ normal:
    return num_err;
 }
 
+/** (INTERNAL HELPER FUNCTION)
+ * Set meta info as an xattr of the given block
+ * @param BLOCK_CTXT ctxt : Reference to the target block
+ * @param const char* meta_buf : Reference to the source buffer
+ * @param size_t size : Size of the source buffer
+ * @return int : Zero on success, or -1 on failure
+ */
+int posix_set_meta_internal(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
+{
+
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
+   POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
+
+   // reseek to the start of the sidecar file
+   if ( lseek( bctxt->mfd, 0, SEEK_SET ) ) {
+      LOG( LOG_ERR, "failed to reseek to start of meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
+      return -1;
+   }
+   // write the provided buffer out to the sidecar file
+   if (write(bctxt->mfd, meta_buf, size) != size)
+   {
+      LOG(LOG_ERR, "failed to write buffer to meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
+      return -1;
+   }
+
+   return 0;
+}
+
+/** (INTERNAL HELPER FUNCTION)
+ * Get meta info from the xattr of the given block
+ * @param BLOCK_CTXT ctxt : Reference to the target block
+ * @param const char* meta_buf : Reference to the buffer to be populated
+ * @param size_t size : Size of the dest buffer
+ * @return ssize_t : Total meta info size for the block, or -1 on failure
+ */
+ssize_t posix_get_meta_internal(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
+{
+   if (ctxt == NULL)
+   {
+      LOG(LOG_ERR, "received a NULL block context!\n");
+      return -1;
+   }
+   POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
+
+   // reseek to the start of the sidecar file
+   if ( lseek( bctxt->mfd, 0, SEEK_SET ) ) {
+      LOG( LOG_ERR, "failed to reseek to start of meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
+      return -1;
+   }
+   ssize_t result = read(bctxt->mfd, meta_buf, size);
+   // potentially indicate excess meta information
+   if ( result == size ) {
+      // we need to stat this sidecar file to get the total meta info length
+      struct stat stval;
+      if ( fstat(bctxt->mfd, &stval) ) {
+         LOG( LOG_ERR, "failed to stat meta file \"%s\" to check for possible excess meta length (%s)\n", bctxt->filepath, strerror(errno) );
+         return -1;
+      }
+      // increase result to match the total meta info size, if appropriate
+      if ( result < stval.st_size ) { result = stval.st_size; }
+   }
+   return result;
+}
+
+
 // forward-declarations to allow these functions to be used in manual_migrate
 int posix_del(DAL_CTXT ctxt, DAL_location location, const char *objID);
 
 BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char *objID);
-
-int posix_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size);
-
-ssize_t posix_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size);
 
 int posix_put(BLOCK_CTXT ctxt, const void *buf, size_t size);
 
@@ -850,22 +964,24 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
 
    // move data file from source location to destination location
    ssize_t res;
-   int off = 0;
+   off_t off = 0;
    do
    {
       res = posix_get((BLOCK_CTXT)src_ctxt, data_buf, IO_SIZE, off);
       if (res < 0)
       {
          posix_abort((BLOCK_CTXT)src_ctxt);
+         block_delete(dest_ctxt, 0);  // delete any in-progress output
          posix_abort((BLOCK_CTXT)dest_ctxt);
          free(data_buf);
          free(meta_buf);
          return -1;
       }
-      off = src_ctxt->offset;
+      off += res;
       if (posix_put((BLOCK_CTXT)dest_ctxt, data_buf, res))
       {
          posix_abort((BLOCK_CTXT)src_ctxt);
+         block_delete(dest_ctxt, 0);  // delete any in-progress output
          posix_abort((BLOCK_CTXT)dest_ctxt);
          free(data_buf);
          free(meta_buf);
@@ -874,18 +990,20 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
    } while (res > 0);
 
    // move meta file from source location to destination location
-   res = posix_get_meta((BLOCK_CTXT)src_ctxt, meta_buf, IO_SIZE);
+   res = posix_get_meta_internal((BLOCK_CTXT)src_ctxt, meta_buf, IO_SIZE);
    if (res < 0)
    {
       posix_abort((BLOCK_CTXT)src_ctxt);
+      block_delete(dest_ctxt, 0);  // delete any in-progress output
       posix_abort((BLOCK_CTXT)dest_ctxt);
       free(data_buf);
       free(meta_buf);
       return -1;
    }
-   if (posix_set_meta((BLOCK_CTXT)dest_ctxt, meta_buf, res))
+   if (posix_set_meta_internal((BLOCK_CTXT)dest_ctxt, meta_buf, res))
    {
       posix_abort((BLOCK_CTXT)src_ctxt);
+      block_delete(dest_ctxt, 0);  // delete any in-progress output
       posix_abort((BLOCK_CTXT)dest_ctxt);
       free(data_buf);
       free(meta_buf);
@@ -898,6 +1016,7 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
    // close both locations
    if (posix_close((BLOCK_CTXT)src_ctxt))
    {
+      block_delete(dest_ctxt, 0);  // delete any in-progress output
       posix_abort((BLOCK_CTXT)dest_ctxt);
       return -1;
    }
@@ -1472,12 +1591,12 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    POSIX_DAL_CTXT dctxt = (POSIX_DAL_CTXT)ctxt; // should have been passed a posix context
 
    // allocate space for a new BLOCK context
-   POSIX_BLOCK_CTXT bctxt = malloc(sizeof(struct posix_block_context_struct));
+   POSIX_BLOCK_CTXT bctxt = calloc( 1, sizeof(struct posix_block_context_struct));
    if (bctxt == NULL)
    {
       LOG( LOG_ERR, "Failed to allocate a new block ctxt struct\n" );
       return NULL;
-   } // malloc will set errno
+   } // calloc will set errno
 
    // popultate the full file path for this object
    if (expand_dir_template(dctxt, bctxt, location, objID) != 0)
@@ -1487,7 +1606,6 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    }
 
    // populate other BLOCK context fields
-   bctxt->offset = 0;
    bctxt->mode = mode;
 
    char *res = NULL;
@@ -1505,7 +1623,7 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
 
    int metalen = strlen(META_SFX);
 
-   int oflags = O_WRONLY | O_CREAT | O_TRUNC;
+   int oflags = O_WRONLY | O_CREAT | O_EXCL;
    if (mode == DAL_READ)
    {
       LOG(LOG_INFO, "Open for READ\n");
@@ -1540,7 +1658,12 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
 
    // open the meta file and check for success
    mode_t mask = umask(0);
-   bctxt->mfd = openat(dctxt->sec_root, bctxt->filepath, oflags, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
+   bctxt->mfd = openat(dctxt->sec_root, bctxt->filepath, oflags | dctxt->metaflags, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
+   if (bctxt->mfd < 0  &&  errno == EEXIST  &&  mode != DAL_READ  &&  mode != DAL_METAREAD ) {
+      // specifically for a write EEXIST error, unlink the dest path and retry once
+      unlinkat( dctxt->sec_root, bctxt->filepath, 0 ); // don't bother checking for this failure, only the open result matters
+      bctxt->mfd = openat(dctxt->sec_root, bctxt->filepath, oflags | dctxt->metaflags, S_IRWXU | S_IRWXG | S_IRWXO);
+   }
    if (bctxt->mfd < 0)
    {
       LOG(LOG_ERR, "failed to open meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
@@ -1573,6 +1696,7 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
       {
          LOG(LOG_ERR, "failed to append suffix to file path!\n");
          errno = EBADF;
+         close(bctxt->mfd);
          umask(mask);
          free(bctxt->filepath);
          free(bctxt);
@@ -1583,10 +1707,16 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    if (mode != DAL_METAREAD)
    {
       // open the file and check for success
-      bctxt->fd = openat(dctxt->sec_root, bctxt->filepath, oflags, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
+      bctxt->fd = openat(dctxt->sec_root, bctxt->filepath, oflags | dctxt->dataflags, S_IRWXU | S_IRWXG | S_IRWXO); // mode arg should be harmlessly ignored if reading
+      if (bctxt->fd < 0  &&  errno == EEXIST  &&  mode != DAL_READ ) {
+         // specifically for a write EEXIST error, unlink the dest path and retry once
+         unlinkat( dctxt->sec_root, bctxt->filepath, 0 ); // don't bother checking for this failure, only the open result matters
+         bctxt->fd = openat(dctxt->sec_root, bctxt->filepath, oflags | dctxt->metaflags, S_IRWXU | S_IRWXG | S_IRWXO);
+      }
       if (bctxt->fd < 0)
       {
          LOG(LOG_ERR, "failed to open file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
+         close(bctxt->mfd);
          umask(mask);
          free(bctxt->filepath);
          free(bctxt);
@@ -1603,58 +1733,14 @@ BLOCK_CTXT posix_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
    return bctxt;
 }
 
-int posix_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
+int posix_set_meta(BLOCK_CTXT ctxt, const meta_info* source )
 {
-
-   if (ctxt == NULL)
-   {
-      LOG(LOG_ERR, "received a NULL block context!\n");
-      return -1;
-   }
-   POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
-
-   // reseek to the start of the sidecar file
-   if ( lseek( bctxt->mfd, 0, SEEK_SET ) ) {
-      LOG( LOG_ERR, "failed to reseek to start of meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
-      return -1;
-   }
-   // write the provided buffer out to the sidecar file
-   if (write(bctxt->mfd, meta_buf, size) != size)
-   {
-      LOG(LOG_ERR, "failed to write buffer to meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno));
-      return -1;
-   }
-
-   return 0;
+   return dal_set_meta_helper( posix_set_meta_internal, ctxt, source );
 }
 
-ssize_t posix_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
+int posix_get_meta(BLOCK_CTXT ctxt, meta_info* target )
 {
-   if (ctxt == NULL)
-   {
-      LOG(LOG_ERR, "received a NULL block context!\n");
-      return -1;
-   }
-   POSIX_BLOCK_CTXT bctxt = (POSIX_BLOCK_CTXT)ctxt; // should have been passed a posix context
-
-   // reseek to the start of the sidecar file
-   if ( lseek( bctxt->mfd, 0, SEEK_SET ) ) {
-      LOG( LOG_ERR, "failed to reseek to start of meta file: \"%s\" (%s)\n", bctxt->filepath, strerror(errno) );
-      return -1;
-   }
-   ssize_t result = read(bctxt->mfd, meta_buf, size);
-   // potentially indicate excess meta information
-   if ( result == size ) {
-      // we need to stat this sidecar file to get the total meta info length
-      struct stat stval;
-      if ( fstat(bctxt->mfd, &stval) ) {
-         LOG( LOG_ERR, "failed to stat meta file \"%s\" to check for possible excess meta length (%s)\n", bctxt->filepath, strerror(errno) );
-         return -1;
-      }
-      // increase result to match the total meta info size, if appropriate
-      if ( result < stval.st_size ) { result = stval.st_size; }
-   }
-   return result;
+   return dal_get_meta_helper( posix_get_meta_internal, ctxt, target );
 }
 
 int posix_put(BLOCK_CTXT ctxt, const void *buf, size_t size)
@@ -1692,27 +1778,18 @@ ssize_t posix_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
       return -1;
    }
 
-   // check if we need to seek
-   if (offset != bctxt->offset)
+   // always reseek ( minimal performance impact and a bit more explicitly safe )
+   LOG(LOG_INFO, "Performing seek to offset of %zd\n", offset);
+   off_t newoff = lseek(bctxt->fd, offset, SEEK_SET);
+   // make sure our new offset makes sense
+   if (newoff != offset)
    {
-      LOG(LOG_INFO, "Performing seek to new offset of %zd\n", offset);
-      bctxt->offset = lseek(bctxt->fd, offset, SEEK_SET);
-      // make sure our new offset makes sense
-      if (bctxt->offset != offset)
-      {
-         LOG(LOG_ERR, "failed to seek to offset %zd of file \"%s\" (%s)\n", offset, bctxt->filepath, strerror(errno));
-         return -1;
-      }
+      LOG(LOG_ERR, "failed to seek to offset %zd of file \"%s\" (%s)\n", offset, bctxt->filepath, strerror(errno));
+      return -1;
    }
 
    // just a read from our pre-opened FD
    ssize_t res = read(bctxt->fd, buf, size);
-
-   // adjust our offset value
-   if (res > 0)
-   {
-      bctxt->offset += res;
-   }
 
    return res;
 }
@@ -1735,11 +1812,6 @@ int posix_abort(BLOCK_CTXT ctxt)
    if (close(bctxt->mfd) != 0)
    {
       LOG(LOG_WARNING, "failed to close meta file \"%s%s\" during abort (%s)\n", bctxt->filepath, META_SFX, strerror(errno));
-   }
-   if (block_delete(bctxt, 0))
-   {
-      LOG(LOG_ERR, "failed to delete data file \"%s\" during abort (%s)\n", bctxt->filepath, strerror(errno));
-      retval = 1;
    }
 
    // free state
@@ -1889,15 +1961,17 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
    }
 
    // allocate space for our context struct
-   POSIX_DAL_CTXT dctxt = malloc(sizeof(struct posix_dal_context_struct));
+   POSIX_DAL_CTXT dctxt = calloc(1,sizeof(struct posix_dal_context_struct));
    if (dctxt == NULL)
    {
       return NULL;
-   } // malloc will set errno
+   } // calloc will set errno
 
    // initialize some vals
    dctxt->dirtmp = NULL;
    dctxt->sec_root = AT_FDCWD;
+   dctxt->dataflags = 0;
+   dctxt->metaflags = 0;
    size_t io_size = IO_SIZE;
 
    int origerrno = errno;
@@ -1983,14 +2057,41 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
             dctxt->sec_root = open((char *)root->children->content, O_DIRECTORY | O_RDONLY );
          }
       }
-      else if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "io_size", 8) == 0)
+      else if (root->type == XML_ELEMENT_NODE && strncmp((char *)root->name, "io", 3) == 0)
       {
-         if (atol((char *)root->children->content))
-         {
-            io_size = atol((char *)root->children->content);
+         // loop through and parse all 'io' attribute values
+         xmlAttr* attr = root->properties;
+         for ( ; attr; attr = attr->next ) {
+            if ( attr->type != XML_ATTRIBUTE_NODE ) {
+               LOG( LOG_ERR, "Encountered unrecognized property type of POSIX DAL 'io' definition\n" );
+               break;
+            }
+            if ( attr->children == NULL  ||  attr->children->type != XML_TEXT_NODE  ||  attr->children->content == NULL ) {
+               LOG( LOG_ERR, "Encountered a \"%s\" property of POSIX DAL 'io' definition with no associated value\n", (char*)attr->name );
+               break;
+            }
+            if ( strncasecmp( (char*)attr->name, "size", 5 ) == 0 ) {
+               if (atol((char *)attr->children->content))
+               {
+                  io_size = atol((char *)attr->children->content);
+               }
+               else {
+                  LOG( LOG_ERR, "Failed to parse POSIX DAL 'io' size value: \"%s\"\n", (char *)attr->children->content );
+                  break;
+               }
+            }
+            else if ( strncasecmp( (char*)attr->name, "dataflags", 10 ) == 0 ) {
+               if ( parse_open_flags( (const char*)attr->children->content, &(dctxt->dataflags) ) ) { break; }
+            }
+            else if ( strncasecmp( (char*)attr->name, "metaflags", 10 ) == 0 ) {
+               if ( parse_open_flags( (const char*)attr->children->content, &(dctxt->metaflags) ) ) { break; }
+            }
+            else {
+               LOG( LOG_ERR, "Encountered an unrecognized \"%s\" property of POSIX DAL 'io' definition\n", (char*)attr->name );
+               break;
+            }
          }
-         else {
-            LOG( LOG_ERR, "Failed to parse 'io_size' value: \"%s\"\n", (char *)root->children->content );
+         if ( attr ) { // indicates a 'break' from the above loop
             if ( dctxt->sec_root > 0 ) { close( dctxt->sec_root ); }
             if ( dctxt->dirtmp ) { free( dctxt->dirtmp ); }
             free( dctxt );
@@ -2025,7 +2126,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
    }
 
    // allocate and populate a new DAL structure
-   DAL pdal = malloc(sizeof(struct DAL_struct));
+   DAL pdal = calloc( 1, sizeof(struct DAL_struct) );
    if (pdal == NULL)
    {
       LOG(LOG_ERR, "failed to allocate space for a DAL_struct\n");
@@ -2033,7 +2134,7 @@ DAL posix_dal_init(xmlNode *root, DAL_location max_loc)
       free( dctxt->dirtmp );
       free(dctxt);
       return NULL;
-   } // malloc will set errno
+   } // calloc will set errno
    pdal->name = "posix";
    pdal->ctxt = (DAL_CTXT)dctxt;
    pdal->io_size = io_size;

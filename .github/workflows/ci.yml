@@ -50,6 +50,6 @@ jobs:
         ./configure --prefix=$PWD/install
         make check
         make install
-        
+
     - name: Return to workspace root
       run: cd $GITHUB_WORKSPACE

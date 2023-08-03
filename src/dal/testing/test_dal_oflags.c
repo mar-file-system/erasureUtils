@@ -11,7 +11,7 @@ SECURITY, LLC MAKES ANY WARRANTY, EXPRESS OR IMPLIED, OR ASSUMES ANY LIABILITY
 FOR THE USE OF THIS SOFTWARE.  If software is modified to produce derivative
 works, such modified software should be clearly marked, so as not to confuse it
 with the version available from LANL.
- 
+
 Additionally, redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
 1. Redistributions of source code must retain the above copyright notice, this
@@ -58,30 +58,15 @@ LANL contributions is found at https://github.com/jti-lanl/aws4c.
 GNU licenses can be found at http://www.gnu.org/licenses/.
 */
 
-
-#include "io/io.h"
 #include "dal/dal.h"
 #include <unistd.h>
 #include <stdio.h>
 
-
-int main( int argc, char** argv ) {
-   // create a meta info struct
-   meta_info minfo_ref;
-   minfo_ref.N = 10;
-   minfo_ref.E = 2;
-   minfo_ref.O = 5;
-   minfo_ref.partsz = 4096;
-   minfo_ref.versz = 1048580;
-   minfo_ref.blocksz = 104858000;
-   minfo_ref.crcsum = 123456789;
-   minfo_ref.totsz = 1048576000;
-
-   meta_info minfo_fill;
+int main(int argc, char **argv)
+{
 
    xmlDoc *doc = NULL;
    xmlNode *root_element = NULL;
-
 
    /*
    * this initialize the library and check potential ABI mismatches
@@ -91,19 +76,20 @@ int main( int argc, char** argv ) {
    LIBXML_TEST_VERSION
 
    /*parse the file and get the DOM */
-   doc = xmlReadFile("./testing/config.xml", NULL, XML_PARSE_NOBLANKS);
+   doc = xmlReadFile("./testing/oflags_config.xml", NULL, XML_PARSE_NOBLANKS);
 
-   if (doc == NULL) {
-     printf("error: could not parse file %s\n", "./dal/testing/config.xml");
-     return -1;
+   if (doc == NULL)
+   {
+      printf("error: could not parse file %s\n", "./dal/testing/config.xml");
+      return -1;
    }
 
    /*Get the root element node */
    root_element = xmlDocGetRootElement(doc);
 
    // Initialize a posix dal instance
-   DAL_location maxloc = { .pod = 1, .block = 1, .cap = 1, .scatter = 1 };
-   DAL dal = init_dal( root_element, maxloc );
+   DAL_location maxloc = {.pod = 1, .block = 1, .cap = 1, .scatter = 1};
+   DAL dal = init_dal(root_element, maxloc);
 
    /* Free the xml Doc */
    xmlFreeDoc(doc);
@@ -114,79 +100,107 @@ int main( int argc, char** argv ) {
    xmlCleanupParser();
 
    // check that initialization succeeded
-   if ( dal == NULL ) {
-      printf( "error: failed to initialize DAL: %s\n", strerror(errno) );
+   if (dal == NULL)
+   {
+      printf("error: failed to initialize DAL: %s\n", strerror(errno));
       return -1;
    }
 
-   // get a block context on which to set meta info
-   BLOCK_CTXT block = dal->open( dal->ctxt, DAL_WRITE, maxloc, "" );
-   if ( block == NULL ) { printf( "error: failed to open block context for write: %s\n", strerror(errno) ); return -1; }
-
-   // attempt to set meta info from our ref struct
-   if ( dal_set_minfo( dal, block, &(minfo_ref) ) ) {
-      printf( "error: failed to set meta info on block: %s\n", strerror(errno) );
+   // validate the io size of the new DAL
+   if ( dal->io_size != 4096 ) {
+      printf( "error: unexpected io-size value of new DAL: %zd\n", dal->io_size );
       return -1;
    }
 
-   // close the empty block ref
-   if ( dal->close( block ) ) { printf( "error: failed to close block write context: %s\n", strerror(errno) ); return -1; }
-
-   // get a block context on which to get meta info
-   block = dal->open( dal->ctxt, DAL_READ, maxloc, "" );
-   if ( block == NULL ) { printf( "error: failed to open block context for write: %s\n", strerror(errno) ); return -1; }
-
-   // attempt to retrieve meta info into our fill struct
-   if ( dal_get_minfo( dal, block, &(minfo_fill) ) ) {
-      printf( "error: failed to get meta info on block: %s\n", strerror(errno) );
+   // Open, write to, and set meta info for a specific block
+   void *writebuffer = aligned_alloc(4 * 1024, 4 * 1024);
+   if (writebuffer == NULL)
+   {
+      printf("error: failed to allocate write buffer\n");
+      return -1;
+   }
+   bzero( writebuffer, 4 * 1024 );
+   BLOCK_CTXT block = dal->open(dal->ctxt, DAL_WRITE, maxloc, "");
+   if (block == NULL)
+   {
+      printf("error: failed to open block context for write: %s\n", strerror(errno));
+      return -1;
+   }
+   if (dal->put(block, writebuffer, (4 * 1024)))
+   {
+      printf("error: put did not return expected value\n");
+      return -1;
+   }
+   meta_info meta_val = { .N = 3, .E = 1, .O = 3, .partsz = 4096, .versz = 1048576, .blocksz = 10485760, .crcsum = 1234567, .totsz = 7654321 };
+   if (dal->set_meta(block, &meta_val))
+   {
+      printf("error: set_meta did not return expected value\n");
+      return -1;
+   }
+   if (dal->close(block))
+   {
+      printf("error: failed to close block write context: %s\n", strerror(errno));
       return -1;
    }
 
-   // close the empty block ref
-   if ( dal->close( block ) ) { printf( "error: failed to close block read context: %s\n", strerror(errno) ); return -1; }
+   // Open the same block for read and verify all values
+   void *readbuffer = aligned_alloc(4 * 1024, 4 * 1024);
+   if (readbuffer == NULL)
+   {
+      printf("error: failed to allocate read buffer\n");
+      return -1;
+   }
+   bzero( readbuffer, 4 * 1024 );
+   block = dal->open(dal->ctxt, DAL_READ, maxloc, "");
+   if (block == NULL)
+   {
+      printf("error: failed to open block context for read: %s\n", strerror(errno));
+      return -1;
+   }
+   if (dal->get(block, readbuffer, (4 * 1024), 0) != (4 * 1024))
+   {
+      printf("error: get did not return expected value\n");
+      return -1;
+   }
+   if (memcmp(writebuffer, readbuffer, (4 * 1024)))
+   {
+      printf("error: retrieved data does not match written!\n");
+      return -1;
+   }
+   meta_info readmeta;
+   if (dal->get_meta(block, &readmeta))
+   {
+      printf("error: get_meta returned an unexpected value\n");
+      return -1;
+   }
+   if (cmp_minfo(&meta_val, &readmeta))
+   {
+      printf("error: retrieved meta value does not match written!\n");
+      return -1;
+   }
+   if (dal->close(block))
+   {
+      printf("error: failed to close block read context: %s\n", strerror(errno));
+      return -1;
+   }
 
    // Delete the block we created
-   if ( dal->del( dal->ctxt, maxloc, "" ) ) { printf( "warning: del failed!\n" ); }
+   if (dal->del(dal->ctxt, maxloc, ""))
+   {
+      printf("error: del failed!\n");
+      return -1;
+   }
 
    // Free the DAL
-   if ( dal->cleanup( dal ) ) { printf( "error: failed to cleanup DAL\n" ); return -1; }
-
-   // Finally, compare our structs
-   int retval=0;
-   if ( minfo_ref.N != minfo_fill.N ) {
-      printf( "error: set (%d) and retrieved (%d) meta info 'N' values do not match!\n", minfo_ref.N, minfo_fill.N );
-      retval=-1;
-   }
-   if ( minfo_ref.E != minfo_fill.E ) {
-      printf( "error: set (%d) and retrieved (%d) meta info 'E' values do not match!\n", minfo_ref.E, minfo_fill.E );
-      retval=-1;
-   }
-   if ( minfo_ref.O != minfo_fill.O ) {
-      printf( "error: set (%d) and retrieved (%d) meta info 'O' values do not match!\n", minfo_ref.O, minfo_fill.O );
-      retval=-1;
-   }
-   if ( minfo_ref.partsz != minfo_fill.partsz ) {
-      printf( "error: set (%zd) and retrieved (%zd) meta info 'partsz' values do not match!\n", minfo_ref.partsz, minfo_fill.partsz );
-      retval=-1;
-   }
-   if ( minfo_ref.versz != minfo_fill.versz ) {
-      printf( "error: set (%zd) and retrieved (%zd) meta info 'versz' values do not match!\n", minfo_ref.versz, minfo_fill.versz );
-      retval=-1;
-   }
-   if ( minfo_ref.blocksz != minfo_fill.blocksz ) {
-      printf( "error: set (%zd) and retrieved (%zd) meta info 'blocksz' values do not match!\n", minfo_ref.blocksz, minfo_fill.blocksz );
-      retval=-1;
-   }
-   if ( minfo_ref.crcsum != minfo_fill.crcsum ) {
-      printf( "error: set (%lld) and retrieved (%lld) meta info 'crcsum' values do not match!\n", minfo_ref.crcsum, minfo_fill.crcsum );
-      retval=-1;
-   }
-   if ( minfo_ref.totsz != minfo_fill.totsz ) {
-      printf( "error: set (%zd) and retrieved (%zd) meta info 'totsz' values do not match!\n", minfo_ref.totsz, minfo_fill.totsz );
-      retval=-1;
+   if (dal->cleanup(dal))
+   {
+      printf("error: failed to cleanup DAL\n");
+      return -1;
    }
 
-   return retval;
+   /*free the document */
+   free(writebuffer);
+   free(readbuffer);
+
+   return 0;
 }
-
-

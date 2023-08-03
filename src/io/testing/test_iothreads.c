@@ -65,6 +65,7 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #include <unistd.h>
 #include <stdio.h>
+#include <pthread.h>
 
 
 int main( int argc, char** argv ) {
@@ -113,6 +114,12 @@ int main( int argc, char** argv ) {
    
    // create a global state struct
    gthread_state gstate;
+   pthread_mutex_t erasurelock;
+   gstate.erasurelock = &erasurelock;
+   if ( pthread_mutex_init( gstate.erasurelock, NULL ) ) {
+      printf( "failed to initialize erasurelock\n" );
+      return -1;
+   }
    gstate.objID = "";
    gstate.location = maxloc;
    gstate.dmode = DAL_WRITE;
@@ -303,6 +310,9 @@ int main( int argc, char** argv ) {
 
    // Delete the block we created
    if ( dal->del( dal->ctxt, maxloc, "" ) ) { printf( "warning: del failed!\n" ); }
+
+   // destroy our erasurelock
+   pthread_mutex_destroy( gstate.erasurelock );
 
    // Free the DAL
    if ( dal->cleanup( dal ) ) { printf( "error: failed to cleanup DAL\n" ); return -1; }

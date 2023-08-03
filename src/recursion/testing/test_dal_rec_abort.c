@@ -124,8 +124,8 @@ int main(int argc, char **argv)
   {
     printf("warning: put did not return expected value\n");
   }
-  char *meta_val = "this is a meta value!\n";
-  if (dal->set_meta(block, meta_val, 22))
+  meta_info meta_val = { .N = 3, .E = 1, .O = 3, .partsz = 4096, .versz = 1048576, .blocksz = 10485760, .crcsum = 1234567, .totsz = 7654321 };
+  if (dal->set_meta(block, &meta_val))
   {
     printf("warning: set_meta did not return expected value\n");
   }
@@ -156,11 +156,12 @@ int main(int argc, char **argv)
   {
     printf("warning: retrieved data does not match written!\n");
   }
-  if (dal->get_meta(block, readbuffer, (10 * 1024)) != 22)
+  meta_info readmeta;
+  if (dal->get_meta(block, &readmeta))
   {
     printf("warning: get_meta returned an unexpected value\n");
   }
-  if (strncmp(meta_val, readbuffer, 22))
+  if (cmp_minfo(&meta_val, &readmeta))
   {
     printf("warning: retrieved meta value does not match written!\n");
   }
@@ -205,8 +206,8 @@ int main(int argc, char **argv)
   {
     printf("warning: put did not return expected value\n");
   }
-  char *meta_val_2 = "this is another meta value!\n";
-  if (dal->set_meta(block, meta_val_2, 28))
+  meta_info meta_val_2 = { .N = 3, .E = 1, .O = 4, .partsz = 14096, .versz = 10576, .blocksz = 1048570, .crcsum = 1234567, .totsz = 7654321 };
+  if (dal->set_meta(block, &meta_val_2))
   {
     printf("warning: set_meta did not return expected value\n");
   }
@@ -239,14 +240,14 @@ int main(int argc, char **argv)
   {
     printf("warning: retrieved data does not match written!\n");
   }
-  int gmres = dal->get_meta(block, readbuffer, (10 * 1024));
-  if (gmres != 22)
+  int gmres = dal->get_meta(block, &readmeta);
+  if (gmres)
   {
     printf("error: get_meta returned an unexpected value: %d, %s\n", gmres, (char *)readbuffer);
     return -1;
     ;
   }
-  if (strncmp(meta_val, readbuffer, 22))
+  if (cmp_minfo(&meta_val, &readmeta))
   {
     printf("warning: retrieved meta value does not match written! \n");
   }

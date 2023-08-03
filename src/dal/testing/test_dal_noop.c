@@ -65,6 +65,9 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 int main(int argc, char **argv)
 {
 
+   DAL_location maxloc = {.pod = 1, .block = 12, .cap = 2, .scatter = 124};
+   DAL_location curloc = {.pod = 0, .block = 0, .cap = 1, .scatter = 123};
+
    xmlDoc *doc = NULL;
    xmlNode *root_element = NULL;
 
@@ -87,12 +90,21 @@ int main(int argc, char **argv)
    /*Get the root element node */
    root_element = xmlDocGetRootElement(doc);
 
-   // Initialize a posix dal instance ( blindly assume it's the first child element )
-   DAL_location maxloc = {.pod = 1, .block = 3, .cap = 2, .scatter = 124};
-   DAL_location curloc = {.pod = 0, .block = 0, .cap = 1, .scatter = 123};
-   DAL posixdal = init_dal(root_element->children, maxloc);
-   if ( posixdal == NULL ) {
-      printf( "failed to init posix source dal\n" );
+   // initialize our noop dal
+   DAL dal = init_dal( root_element, maxloc );
+
+   /* Free the xml Doc */
+   xmlFreeDoc(doc);
+   /*
+    *Free the global variables that may
+    *have been allocated by the parser.
+    */
+   xmlCleanupParser();
+
+   // check that initialization succeeded
+   if (dal == NULL)
+   {
+      printf("error: failed to initialize NoOp DAL: %s\n", strerror(errno));
       return -1;
    }
 
@@ -109,71 +121,6 @@ int main(int argc, char **argv)
       printf("error: failed to allocate read buffer\n");
       return -1;
    }
-   void* metabuffer = calloc( 1024, sizeof(char) );
-   if ( metabuffer == NULL ) {
-      printf("error: failed to allocate meta buffer\n");
-      return -1;
-   }
-
-
-   // populate source blocks
-   while ( curloc.block < maxloc.block ) {
-      BLOCK_CTXT block = posixdal->open(posixdal->ctxt, DAL_WRITE, curloc, "noopsource");
-      if ( block == NULL ) {
-         printf( "failed to open posix block %d for write\n", curloc.block );
-         return -1;
-      }
-      if ( posixdal->put(block, writebuffer, 1024 * 1024 ) ) {
-         printf( "failure of write 1 to posix block %d\n", curloc.block );
-         return -1;
-      }
-      if ( posixdal->put(block, writebuffer, 1024 * 1024 ) ) {
-         printf( "failure of write 2 to posix block %d\n", curloc.block );
-         return -1;
-      }
-      int metalen = snprintf( metabuffer, 1024, "Meta-%d", curloc.block );
-      if ( posixdal->set_meta( block, metabuffer, metalen + 1 ) ) {
-         printf( "failed to set meta on posix block %d\n", curloc.block );
-         return -1;
-      }
-      if ( posixdal->close(block) ) {
-         printf( "failed to close posix block %d\n", curloc.block );
-         return -1;
-      }
-      curloc.block++;
-   }
-
-   // finally, initialize our noop dal
-   DAL dal = init_dal( root_element, maxloc );
-
-   /* Free the xml Doc */
-   xmlFreeDoc(doc);
-   /*
-    *Free the global variables that may
-    *have been allocated by the parser.
-    */
-   xmlCleanupParser();
-
-   // cleanup our cache source obj
-   for ( curloc.block = 0; curloc.block < maxloc.block; curloc.block++ ) {
-      if (posixdal->del(posixdal->ctxt, curloc, "noopsource"))
-      {
-         printf("warning: del failed!\n");
-      }
-   }
-   if ( posixdal->cleanup( posixdal ) ) {
-      printf( "failed to destroy posixdal ref\n" );
-      return -1;
-   }
-
-
-   // check that initialization succeeded
-   if (dal == NULL)
-   {
-      printf("error: failed to initialize NoOp DAL: %s\n", strerror(errno));
-      return -1;
-   }
-
 
    // Open, write to, and set meta info for a specific block
    curloc.block = 2;
@@ -185,12 +132,14 @@ int main(int argc, char **argv)
    }
    if (dal->put(block, writebuffer, (10 * 1024)))
    {
-      printf("warning: put did not return expected value\n");
+      printf("error: put did not return expected value\n");
+      return -1;
    }
-   char *meta_val = "this is a meta value!\n";
-   if (dal->set_meta(block, meta_val, 22))
+   meta_info meta_val = { .N = 3, .E = 1, .O = 3, .partsz = 4096, .versz = 1048576, .blocksz = 108003328, .crcsum = 1234567, .totsz = 7654321 };
+   if (dal->set_meta(block, &meta_val))
    {
-      printf("warning: set_meta did not return expected value\n");
+      printf("error: set_meta did not return expected value\n");
+      return -1;
    }
    if (dal->close(block))
    {
@@ -200,6 +149,7 @@ int main(int argc, char **argv)
 
    // Open and verify each block of a completely different object
    curloc.block = 0;
+   meta_info check_meta = { .N = 10, .E = 2, .O = 0, .partsz = 1048572, .versz = 1048576, .blocksz = 108003328, .crcsum = 334597019559, .totsz = 1073741824 };
    while( curloc.block < maxloc.block ) {
       block = dal->open(dal->ctxt, DAL_READ, curloc, "completely-random-obj");
       if (block == NULL)
@@ -210,28 +160,35 @@ int main(int argc, char **argv)
       int ret;
       if ((ret = dal->get(block, readbuffer, (1024 * 1024), 0)) != (1024 * 1024))
       {
-         printf("warning: get 1 from block %d did not return expected value %d\n", curloc.block, ret);
+         printf("error: get 1 from block %d did not return expected value %d\n", curloc.block, ret);
+         return -1;
       }
-      if (memcmp(writebuffer, readbuffer, (1024 * 1024)))
+      // compare all but the inserted crc
+      if (memcmp(writebuffer, readbuffer, (1024 * 1024) - 4))
       {
-         printf("warning: retrieved data 1 from block %d does not match written!\n", curloc.block);
+         printf("error: retrieved data 1 from block %d does not match written!\n", curloc.block);
+         return -1;
       }
       if ((ret = dal->get(block, readbuffer, (1024 * 1024), 1024*1024)) != (1024 * 1024))
       {
-         printf("warning: get 2 from block %d did not return expected value %d\n", curloc.block, ret);
+         printf("error: get 2 from block %d did not return expected value %d\n", curloc.block, ret);
+         return -1;
       }
-      if (memcmp(writebuffer, readbuffer, (1024 * 1024)))
+      if (memcmp(writebuffer, readbuffer, (1024 * 1024) - 4))
       {
-         printf("warning: retrieved data 2 from block %d does not match written!\n", curloc.block);
+         printf("error: retrieved data 2 from block %d does not match written!\n", curloc.block);
+         return -1;
       }
-      int metalen = snprintf( metabuffer, 1024, "Meta-%d", curloc.block );
-      if ((ret = dal->get_meta(block, readbuffer, (10 * 1024))) != metalen + 1)
+      meta_info readmeta;
+      if ((ret = dal->get_meta(block, &readmeta)))
       {
-         printf("warning: get_meta from block %d returned an unexpected value %d\n", curloc.block, ret);
+         printf("error: get_meta from block %d returned an unexpected value %d\n", curloc.block, ret);
+         return -1;
       }
-      if (strncmp(metabuffer, readbuffer, metalen + 1))
+      if (cmp_minfo(&check_meta, &readmeta))
       {
-         printf("warning: retrieved meta value from block %d does not match written!\n", curloc.block);
+         printf("error: retrieved meta value from block %d does not match written!\n", curloc.block);
+         return -1;
       }
       if (dal->close(block))
       {
@@ -245,7 +202,8 @@ int main(int argc, char **argv)
    curloc.block = 1;
    if (dal->del(dal->ctxt, curloc, "junk"))
    {
-      printf("warning: del failed!\n");
+      printf("error: del failed!\n");
+      return -1;
    }
 
    // Free the DAL
@@ -258,7 +216,6 @@ int main(int argc, char **argv)
    /*free buffers */
    free(writebuffer);
    free(readbuffer);
-   free(metabuffer);
 
    return 0;
 }

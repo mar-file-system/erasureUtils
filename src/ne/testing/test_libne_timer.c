@@ -285,7 +285,7 @@ int test_values(xmlNode *root_element, ne_erasure *epat, size_t iosz, size_t par
 
   // create a new libne ctxt
   ne_location cur_loc = {.pod = 0, .cap = 0, .scatter = 0};
-  ne_ctxt ctxt = ne_init(root_element, cur_loc, epat->N + epat->E);
+  ne_ctxt ctxt = ne_init(root_element, cur_loc, epat->N + epat->E, NULL);
   if (ctxt == NULL)
   {
     printf("ERROR: Failed to initialize ne_ctxt!\n");

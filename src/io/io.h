@@ -74,64 +74,6 @@ GNU licenses can be found at http://www.gnu.org/licenses/.
 
 #define SUPER_BLOCK_CNT 4
 #define CRC_BYTES 4 // DO NOT decrease without adjusting CRC gen and block creation code!
-#define CRC_SEED 57
-#define MINFO_VER 1
-
-// forward declaration of DAL references (anything actually using this file will need to include "dal.h" as well!)
-// typedef BLOCK_CTXT;
-// typedef struct DAL_location_struct DAL_location;
-// typedef enum DAL_MODE_enum DAL_MODE;
-// typedef struct DAL_struct* DAL;
-
-/* ------------------------------   META INFO   ------------------------------ */
-
-// This struct is intended to allow read threads to pass
-// meta-file/xattr info back to the ne_open() function
-typedef struct meta_info_struct
-{
-   int N;
-   int E;
-   int O;
-   ssize_t partsz;
-   ssize_t versz;
-   ssize_t blocksz;
-   long long crcsum;
-   ssize_t totsz;
-} meta_info;
-
-/**
- * Perform a DAL get_meta call and parse the resulting string
- * into the provided meta_info_struct reference.
- * @param DAL dal : Dal on which to perfrom the get_meta operation
- * @param int block : Block on which this operation is being performed (for logging only)
- * @param meta_info* minfo : meta_info reference to populate with values
- * @return int : Zero on success, the number of
- */
-int dal_get_minfo(DAL dal, BLOCK_CTXT handle, meta_info *minfo);
-
-/**
- * Convert a meta_info struct to string format and perform a DAL set_meta call
- * @param DAL dal : Dal on which to perfrom the get_meta operation
- * @param BLOCK_CTXT handle : Block on which this operation is being performed
- * @param meta_info* minfo : meta_info reference to populate with values
- * @return int : Zero on success, or a negative value if an error occurred
- */
-int dal_set_minfo(DAL dal, BLOCK_CTXT handle, meta_info *minfo);
-
-/*
- * Duplicates info from one meta_info struct to another
- * @param meta_info* target : Target struct reference
- * @param meta_info* source : Source struct reference
- */
-void cpy_minfo(meta_info *target, meta_info *source);
-
-/**
- * Compares the values of two meta_info structs (excluding CRCSUM!)
- * @param meta_info* minfo1 : First struct reference
- * @param meta_info* minfo2 : Second struct reference
- * @return int : A zero value if the structures match, non-zero otherwise
- */
-int cmp_minfo(meta_info *minfo1, meta_info *minfo2);
 
 /* ------------------------------   IO QUEUE   ------------------------------ */
 
@@ -263,6 +205,7 @@ typedef struct global_state_struct
    char meta_error;
    char data_error;
    ioqueue *ioq;
+   pthread_mutex_t* erasurelock;
 } gthread_state;
 
 // Write thread internal state struct

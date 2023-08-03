@@ -732,7 +732,7 @@ BLOCK_CTXT timer_open(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const
   return bctxt;
 }
 
-int timer_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
+int timer_set_meta(BLOCK_CTXT ctxt, const meta_info* source)
 {
   if (ctxt == NULL)
   {
@@ -746,7 +746,7 @@ int timer_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
   struct timeval beg;
   gettimeofday(&beg, NULL);
 
-  int ret = bctxt->global_ctxt->under_dal->set_meta(bctxt->bctxt, meta_buf, size);
+  int ret = bctxt->global_ctxt->under_dal->set_meta(bctxt->bctxt, source);
 
   // get end time
   struct timeval end;
@@ -760,7 +760,7 @@ int timer_set_meta(BLOCK_CTXT ctxt, const char *meta_buf, size_t size)
   return ret;
 }
 
-ssize_t timer_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
+int timer_get_meta(BLOCK_CTXT ctxt, meta_info* target)
 {
   if (ctxt == NULL)
   {
@@ -774,7 +774,7 @@ ssize_t timer_get_meta(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
   struct timeval beg;
   gettimeofday(&beg, NULL);
 
-  ssize_t ret = bctxt->global_ctxt->under_dal->get_meta(bctxt->bctxt, meta_buf, size);
+  ssize_t ret = bctxt->global_ctxt->under_dal->get_meta(bctxt->bctxt, target);
 
   // get end time
   struct timeval end;

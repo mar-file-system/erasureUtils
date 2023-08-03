@@ -93,6 +93,35 @@ typedef enum DAL_MODE_enum
    DAL_METAREAD = 4 // retrieve the meta info of an object
 } DAL_MODE;
 
+// meta information which can be attached to DAL objects
+typedef struct meta_info_struct
+{
+   int N;
+   int E;
+   int O;
+   ssize_t partsz;
+   ssize_t versz;
+   ssize_t blocksz;
+   long long crcsum;
+   ssize_t totsz;
+} meta_info;
+
+/**
+ * Duplicates info from one meta_info struct to another (excluding CRCSUM!)
+ * @param meta_info* target : Target struct reference
+ * @param meta_info* source : Source struct reference
+ */
+void cpy_minfo( meta_info* target, meta_info* source );
+
+/**
+ * Compares the values of two meta_info structs (excluding CRCSUM!)
+ * @param meta_info* minfo1 : First struct reference
+ * @param meta_info* minfo2 : Second struct reference
+ * @return int : A zero value if the structures match, non-zero otherwise
+ */
+int cmp_minfo( meta_info* minfo1, meta_info* minfo2 );
+
+
 typedef struct DAL_struct
 {
    // Name -- Used to identify and configure the DAL
@@ -143,18 +172,17 @@ typedef struct DAL_struct
    //  individually.
    // Return Values:
    //  Zero on success, Non-zero if the operation could not be completed
-   BLOCK_CTXT(*open)
-   (DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char *objID);
+   BLOCK_CTXT(*open)(DAL_CTXT ctxt, DAL_MODE mode, DAL_location location, const char *objID);
    // Description:
    //  Open a READ/WRITE/REBUILD/META_READ handle for accessing the specified object.
    // Return Values:
    //  Non-NULL on success, NULL if the operation could not be completed
-   int (*set_meta)(BLOCK_CTXT ctxt, const char *meta_buf, size_t size);
+   int (*set_meta)(BLOCK_CTXT ctxt, const meta_info* source);
    // Description:
    //  Attach the provided meta information to the object associated with the given WRITE/REBUILD BLOCK_CTXT.
    // Return Values:
    //  Zero on success, Non-zero if the operation could not be completed
-   ssize_t (*get_meta)(BLOCK_CTXT ctxt, char *meta_buf, size_t size);
+   int (*get_meta)(BLOCK_CTXT ctxt, meta_info* target);
    // Description:
    //  Retrieve the meta information of the object associated with the given READ/META_READ BLOCK_CTXT.
    // Return Values:

@@ -717,7 +717,7 @@ int main(int argc, const char** argv) {
          return -1;
       }
 
-      ctxt = ne_init(root, neloc, N + E);
+      ctxt = ne_init(root, neloc, N + E, NULL);
 
       /* Free the xml Doc */
       xmlFreeDoc(doc);
@@ -728,7 +728,7 @@ int main(int argc, const char** argv) {
       xmlCleanupParser();
    }
    else {
-      ctxt = ne_path_init(erasure_path, neloc, N + E);
+      ctxt = ne_path_init(erasure_path, neloc, N + E, NULL);
    }
    if (!ctxt) {
       PRINTout("Failed to establish an ne_ctxt!\n");
