@@ -328,7 +328,7 @@ int read_produce(void** state, void** work_tofill) {
       // if we haven't hit any data errors AND we haven't reseeked, verify our global CRC
       if (gstate->data_error == 0 && tstate->continuous && !(gstate->meta_error)) {
          if (tstate->crcsumchk != gstate->minfo.crcsum) {
-            LOG(LOG_ERR, "Block %d data CRC sum (%llu) does not match meta CRC sum!\n",
+            LOG(LOG_ERR, "Block %d data CRC sum (%llu) does not match meta CRC sum (%llu)\n",
                gstate->location.block, tstate->crcsumchk, gstate->minfo.crcsum);
             gstate->data_error = 1;
          }

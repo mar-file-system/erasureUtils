@@ -88,9 +88,9 @@ static uint32_t crc32_ieee_base(uint32_t seed, uint8_t * buf, uint64_t len); // 
 typedef struct noop_dal_context_struct
 {
    meta_info   minfo;  // meta info values to be returned to the caller
-   void*      c_data;  // cached data buffer, representing each 'complete' I/O
-   void* c_data_tail;  // cached data buffer, representing a trailing 'partial' I/O ( if any )
-   size_t  tail_size;  // size of the c_data_tail buffer
+   uint32_t full_crc;  // cached CRC value associated with each 'complete' I/O
+   uint32_t tail_crc;  // cached CRC value associated with a trailing 'partial' I/O ( if any )
+   size_t  tail_size;  // size of any trailing 'partial' I/O ( if any )
 } * NOOP_DAL_CTXT;
 
 typedef struct noop_block_context_struct
@@ -241,8 +241,6 @@ int noop_cleanup(DAL dal)
    }
    NOOP_DAL_CTXT dctxt = (NOOP_DAL_CTXT)dal->ctxt; // Should have been passed a DAL context
    // Free DAL and its context state
-   if ( dctxt->c_data ) { free( dctxt->c_data ); }
-   if ( dctxt->c_data_tail ) { free( dctxt->c_data_tail ); }
    free(dctxt);
    free(dal);
    return 0;
@@ -303,7 +301,8 @@ int noop_get_meta(BLOCK_CTXT ctxt, meta_info* dest )
       return -1;
    }
    // Return cached metadata
-   memcpy(dest, &(bctxt->dctxt->minfo), sizeof(struct meta_info_struct));
+   cpy_minfo(dest, &(bctxt->dctxt->minfo));
+   dest->crcsum = bctxt->dctxt->minfo.crcsum; // manually copy crcsum, as it is excluded from the above call
    return 0;
 }
 
@@ -340,7 +339,7 @@ ssize_t noop_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
       return -1;
    }
    // Return cached data, if present
-   if (bctxt->dctxt->c_data)
+   if (bctxt->dctxt->minfo.totsz)
    {
       // validate offset
       if ( offset > bctxt->dctxt->minfo.blocksz ) {
@@ -353,26 +352,54 @@ ssize_t noop_get(BLOCK_CTXT ctxt, void *buf, size_t size, off_t offset)
       size_t maxcopy = ( size > (bctxt->dctxt->minfo.blocksz - offset) ) ? (bctxt->dctxt->minfo.blocksz - offset) : size;
       size_t copied = 0;
       while ( copied < maxcopy  &&  offset < (bctxt->dctxt->minfo.blocksz - bctxt->dctxt->tail_size) ) {
-         // calculate the offset and size to pull from our buffer
+         // calculate the offset and size to clear from the target buffer
          off_t suboffset = offset % bctxt->dctxt->minfo.versz; // get an offset in terms of this buffer iteration
          size_t copysize = maxcopy - copied; // start with the total remaining bytes
          if ( copysize > bctxt->dctxt->minfo.versz ) // reduce to our buffer size, at most
             copysize = bctxt->dctxt->minfo.versz;
          copysize -= suboffset; // exclude our starting offset
-         memcpy(buf + copied, bctxt->dctxt->c_data + suboffset, copysize);
-         // increment our offset and copied count to include the newly copied data
-         copied += copysize;
-         offset += copysize;
+         // potentially zero out a portion of the target buffer
+         if ( suboffset < ( bctxt->dctxt->minfo.versz - sizeof(uint32_t) ) ) {
+            size_t nullsize = copysize;
+            if ( nullsize + suboffset > ( bctxt->dctxt->minfo.versz - sizeof(uint32_t) ) ) {
+               nullsize = ( bctxt->dctxt->minfo.versz - sizeof(uint32_t) ) - suboffset;
+            }
+            bzero( buf + copied, nullsize );
+            copied += nullsize;
+            offset += nullsize;
+            suboffset += nullsize;
+            copysize -= nullsize;
+         }
+         // potentially copy from our cached CRC value
+         if ( suboffset >= ( bctxt->dctxt->minfo.versz - sizeof(uint32_t) ) ) {
+            memcpy(buf + copied, ( (void*) &(bctxt->dctxt->full_crc) ) + ( suboffset - ( bctxt->dctxt->minfo.versz - sizeof(uint32_t) ) ), copysize);
+            copied += copysize;
+            offset += copysize;
+         }
       }
       // fill any remaining from our tail buffer
       if ( copied < maxcopy ) {
          off_t suboffset = offset % bctxt->dctxt->minfo.versz; // get an offset in terms of this buffer iteration
          size_t copysize = maxcopy - copied; // start with the total remaining bytes
-         if ( copysize > bctxt->dctxt->tail_size ) // reduce to our buffer size, at most
+         if ( copysize > bctxt->dctxt->tail_size ) // reduce to our tail buffer size, at most
             copysize = bctxt->dctxt->tail_size;
          copysize -= suboffset; // exclude our starting offset
-         memcpy(buf + copied, bctxt->dctxt->c_data_tail + suboffset, copysize);
-         copied += copysize;
+         // potentially zero out a portion of the target buffer
+         if ( suboffset < ( bctxt->dctxt->tail_size - sizeof(uint32_t) ) ) {
+            size_t nullsize = copysize;
+            if ( nullsize + suboffset > ( bctxt->dctxt->tail_size - sizeof(uint32_t) ) ) {
+               nullsize = ( bctxt->dctxt->tail_size - sizeof(uint32_t) ) - suboffset;
+            }
+            bzero( buf + copied, nullsize );
+            copied += nullsize;
+            suboffset += nullsize;
+            copysize -= nullsize;
+         }
+         // potentially copy from our cached CRC value
+         if ( suboffset >= ( bctxt->dctxt->tail_size - sizeof(uint32_t) ) ) {
+            memcpy(buf + copied, ( (void*) &(bctxt->dctxt->tail_crc) ) + ( suboffset - ( bctxt->dctxt->tail_size - sizeof(uint32_t) ) ), copysize);
+            copied += copysize;
+         }
       }
       return copied; // return however many bytes were provided
    }
@@ -521,15 +548,14 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
       }
 
       // allocate and populate our primary data buffer
-      dctxt->c_data =  calloc( 1, dctxt->minfo.versz );
-      if ( dctxt->c_data == NULL ) {
+      void* c_data =  calloc( 1, dctxt->minfo.versz );
+      if ( c_data == NULL ) {
          LOG( LOG_ERR, "failed to allocate cached data buffer\n" );
          noop_cleanup(ndal);
          return NULL;
       }
       size_t datasize = dctxt->minfo.versz - sizeof(uint32_t);
-      uint32_t crcval = crc32_ieee_base(CRC_SEED, dctxt->c_data, datasize);
-      *(uint32_t*)( dctxt->c_data + datasize ) = crcval;
+      dctxt->full_crc = crc32_ieee_base(CRC_SEED, c_data, datasize);
 
       // calculate our blocksize
       size_t totalwritten = dctxt->minfo.totsz; // note the total volume of data to be contained in this object
@@ -537,35 +563,29 @@ DAL noop_dal_init(xmlNode *root, DAL_location max_loc)
                         - (totalwritten % (dctxt->minfo.partsz * dctxt->minfo.N)); // account for erasure stripe alignment
       size_t iocnt = totalwritten / (datasize * dctxt->minfo.N); // calculate the number of buffers required to store this info
       dctxt->minfo.blocksz = iocnt * dctxt->minfo.versz; // record blocksz based on number of complete I/O buffers
-      uint32_t tail_crcval = 0;
       if ( totalwritten % (datasize * dctxt->minfo.N) ) { // account for misalignment
          // populate our 'tail' data buffer info
          size_t remainder = totalwritten % (datasize * dctxt->minfo.N);
          if ( remainder % dctxt->minfo.N ) { // sanity check
             LOG( LOG_ERR, "Remainder value of %zu is not cleanly divisible by N=%d ( tell 'gransom' that he doesn't understand math )\n",
                           remainder, dctxt->minfo.N );
+            free( c_data );
             noop_cleanup(ndal);
             return NULL;
          }
          remainder /= dctxt->minfo.N;
          dctxt->tail_size = remainder + sizeof(uint32_t);
          dctxt->minfo.blocksz += dctxt->tail_size;
-         dctxt->c_data_tail = calloc( 1, dctxt->tail_size );
-         if ( dctxt->c_data_tail == NULL ) {
-            LOG( LOG_ERR, "Failed to allocate c_data_tail buffer\n" );
-            noop_cleanup(ndal);
-            return NULL;
-         }
-         tail_crcval = crc32_ieee_base(CRC_SEED, dctxt->c_data_tail, remainder);
-         *(uint32_t*)( dctxt->c_data_tail + remainder ) = tail_crcval;
+         dctxt->tail_crc = crc32_ieee_base(CRC_SEED, c_data, remainder);
       }
+      free( c_data );
 
       // calculate our crcsum
       size_t ioindex = 0;
       for ( ; ioindex < iocnt; ioindex++ ) {
-         dctxt->minfo.crcsum += crcval;
+         dctxt->minfo.crcsum += dctxt->full_crc;
       }
-      dctxt->minfo.crcsum += tail_crcval;
+      dctxt->minfo.crcsum += dctxt->tail_crc;
    }
    // NOTE -- no source cache defs is valid ( all reads will fail )
    //         only 'some', but not all source defs will result in init() error
