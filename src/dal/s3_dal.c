@@ -686,8 +686,10 @@ ssize_t s3_get_meta_internal(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
 
 //   -------------    S3 IMPLEMENTATION    -------------
 
-int s3_verify(DAL_CTXT ctxt, char fix)
+int s3_verify(DAL_CTXT ctxt, int flags)
 {
+   int fix = flags & CFG_FIX;
+
    if (ctxt == NULL)
    {
       LOG(LOG_ERR, "received a NULL dal context!\n");
