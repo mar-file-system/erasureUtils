@@ -315,7 +315,7 @@ ssize_t rec_get_meta_internal(BLOCK_CTXT ctxt, char *meta_buf, size_t size)
 
 //   -------------    REC IMPLEMENTATION    -------------
 
-int rec_verify(DAL_CTXT ctxt, char fix)
+int rec_verify(DAL_CTXT ctxt, int flags)
 {
   errno = ENOSYS;
   return -1;

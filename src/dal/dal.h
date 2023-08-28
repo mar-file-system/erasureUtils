@@ -121,6 +121,17 @@ void cpy_minfo( meta_info* target, meta_info* source );
  */
 int cmp_minfo( meta_info* minfo1, meta_info* minfo2 );
 
+// flags for DAL verify
+//  these flags should stay in sync with the flags in marfs/src/config/config.h
+//  so that the same flags value can be passed from the MarFS code to the
+//  libNE verify functions.
+enum {
+   CFG_FIX         = 0x1, // fix any problems found during verification
+   CFG_OWNERCHECK  = 0x2  // check that the owner of the security directory matches current user
+   // 0x4 used
+   // 0x8 used
+   // 0x10 used
+};
 
 typedef struct DAL_struct
 {
@@ -134,10 +145,10 @@ typedef struct DAL_struct
    size_t io_size;
 
    // DAL Functions --
-   int (*verify)(DAL_CTXT ctxt, char fix);
+   int (*verify)(DAL_CTXT ctxt, int flags);
    // Description:
    //  Ensure that the DAL is properly configured, functional, and secure.  Log any problems encountered.
-   //  If the 'fix' argument is non-zero, attempt to correct such problems.
+   //  If the 'flags' argument includes CFG_FIX, attempt to correct such problems.
    //  Note - the specifics of this implementaiton will depend GREATLY on the nature of the DAL.
    // Return Values:
    //  Zero on success, Non-zero if unresolved problems were found

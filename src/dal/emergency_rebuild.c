@@ -1172,7 +1172,7 @@ int main(int argc, char** argv) {
 
         // Create our data directory tree, along with rebuild symlinks and
         // rebuild directories
-        _posix_verify(dal->ctxt, 1, tgt, dist);
+        _posix_verify(dal->ctxt, CFG_FIX, tgt, dist);
 
         close(fd);
 

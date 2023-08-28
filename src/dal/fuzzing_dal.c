@@ -245,7 +245,7 @@ void free_fuzz(FUZZING_DAL_CTXT dctxt)
 
 //   -------------    FUZZING IMPLEMENTATION    -------------
 
-int fuzzing_verify(DAL_CTXT ctxt, char fix)
+int fuzzing_verify(DAL_CTXT ctxt, int flags)
 {
    FUZZING_DAL_CTXT dctxt = (FUZZING_DAL_CTXT)ctxt;
 
@@ -255,7 +255,7 @@ int fuzzing_verify(DAL_CTXT ctxt, char fix)
       return -2;
    }
 
-   return dctxt->under_dal->verify(dctxt->under_dal->ctxt, fix);
+   return dctxt->under_dal->verify(dctxt->under_dal->ctxt, flags);
 }
 
 int fuzzing_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_location dest, char offline)

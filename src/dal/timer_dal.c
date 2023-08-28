@@ -499,7 +499,7 @@ void try_free_bctxt(TIMER_BLOCK_CTXT bctxt)
 
 //   -------------    TIMER IMPLEMENTATION    -------------
 
-int timer_verify(DAL_CTXT ctxt, char fix)
+int timer_verify(DAL_CTXT ctxt, int flags)
 {
   if (ctxt == NULL)
   {
@@ -513,7 +513,7 @@ int timer_verify(DAL_CTXT ctxt, char fix)
   struct timeval beg;
   gettimeofday(&beg, NULL);
 
-  int ret = dctxt->under_dal->verify(dctxt->under_dal->ctxt, fix);
+  int ret = dctxt->under_dal->verify(dctxt->under_dal->ctxt, flags);
 
   // get end time
   // get end time
