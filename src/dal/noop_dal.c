@@ -188,7 +188,7 @@ int parse_size_node( ssize_t* target, xmlNode* node ) {
 
 //   -------------    NO-OP IMPLEMENTATION    -------------
 
-int noop_verify(DAL_CTXT ctxt, char fix)
+int noop_verify(DAL_CTXT ctxt, int flags)
 {
    if (ctxt == NULL)
    {

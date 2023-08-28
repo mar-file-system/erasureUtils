@@ -1037,14 +1037,18 @@ int manual_migrate(POSIX_DAL_CTXT dctxt, const char *objID, DAL_location src, DA
 /** (INTERNAL HELPER FUNCTION)
  * Ensure that the DAL is properly configured, functional, and secure. Log any problems encountered
  * @param DAL_CTXT ctxt : Context reference of the current POSIX DAL
- * @param char fix : If non-zero, attempt to correct any problems encountered
+ * @param int flags : flags for verify - if CFG_FIX is true, then attempt to fix problems
+ *                                       if CFG_OWNERCHECK is true, then check UID/GID of parent dir(s)
  * @param POSIX_REBUILD_LOC tgt : List of rebuild location targets that should
  * be directed to a distribution location, or NULL
  * @param POSIX_REBUILD_LOC dist : List of distribution locations that target
  * locations could point to. Only valid if tgt != NULL
  * @return int : Zero on success, Non-zero if unresolved problems were found
  */
-int _posix_verify(DAL_CTXT ctxt, char fix, POSIX_REBUILD_LOC tgt, POSIX_REBUILD_LOC dist) {
+int _posix_verify(DAL_CTXT ctxt, int flags, POSIX_REBUILD_LOC tgt, POSIX_REBUILD_LOC dist) {
+   int fix = flags & CFG_FIX;
+   int check_owner = flags & CFG_OWNERCHECK;
+
    // NOTE: fix arg is forced high when rebuilding
    if (!tgt != !dist) {
       LOG(LOG_ERR, "received incomplete rebuild locations!\n");
@@ -1080,7 +1084,7 @@ int _posix_verify(DAL_CTXT ctxt, char fix, POSIX_REBUILD_LOC tgt, POSIX_REBUILD_
          return -1;
       }
 
-      if ( st.st_uid != uid || st.st_gid != gid)
+      if ( check_owner && (st.st_uid != uid || st.st_gid != gid) )
       {
          LOG(LOG_ERR, "secure root does not have ownership matching this process\n");
          if (fix)
@@ -1144,7 +1148,8 @@ int _posix_verify(DAL_CTXT ctxt, char fix, POSIX_REBUILD_LOC tgt, POSIX_REBUILD_
             break;
          }
 
-         if (st.st_uid == uid && st.st_gid == gid && (st.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO)) == S_IRWXU)
+         if ((!check_owner || (st.st_uid == uid && st.st_gid == gid)) &&
+             (st.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO)) == S_IRWXU)
          {
             close(w_fd);
             o_ino = -1;
@@ -1244,8 +1249,8 @@ int _posix_verify(DAL_CTXT ctxt, char fix, POSIX_REBUILD_LOC tgt, POSIX_REBUILD_
 
 //   -------------    POSIX IMPLEMENTATION    -------------
 
-int posix_verify(DAL_CTXT ctxt, char fix) {
-   return _posix_verify(ctxt, fix, NULL, NULL);
+int posix_verify(DAL_CTXT ctxt, int flags) {
+   return _posix_verify(ctxt, flags, NULL, NULL);
 }
 
 int posix_migrate(DAL_CTXT ctxt, const char *objID, DAL_location src, DAL_location dest, char offline)
